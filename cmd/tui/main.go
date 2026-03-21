@@ -1,20 +1,44 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
+	"syscall"
 
-	"github.com/charmbracelet/bubbletea"
+	"go-llm-demo/config"
+	"go-llm-demo/internal/server/infra/provider"
 	"go-llm-demo/internal/tui/core"
 	"go-llm-demo/internal/tui/infra"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
+	setUTF8Mode()
 	loadDotEnv(".env")
 
-	persona := loadPersonaPrompt(os.Getenv("PERSONA_FILE_PATH"))
+	scanner := bufio.NewScanner(os.Stdin)
+	ready, err := ensureAPIKeyInteractive(context.Background(), scanner, "config.yaml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "初始化配置失败: %v\n", err)
+		os.Exit(1)
+	}
+	if !ready {
+		fmt.Println("已退出 NeoCode")
+		return
+	}
+
+	if err := config.LoadAppConfig("config.yaml"); err != nil {
+		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	persona := loadPersonaPrompt(config.GlobalAppConfig.Persona.FilePath)
 
 	client, err := infra.NewLocalChatClient()
 	if err != nil {
@@ -23,14 +47,182 @@ func main() {
 	}
 
 	model := core.NewModel(client, persona)
-
-	p := tea.NewProgram(model,
-		tea.WithAltScreen(),
-	)
-
+	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "运行失败: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, configPath string) (bool, error) {
+	apiKey := os.Getenv("AI_API_KEY")
+
+	if apiKey != "" && config.GlobalAppConfig != nil {
+		config.GlobalAppConfig.AI.APIKey = apiKey
+		return true, nil
+	}
+
+	cfg, created, err := config.EnsureConfigFile(configPath)
+	if err != nil {
+		return false, err
+	}
+	if created {
+		fmt.Printf("已创建 %s\n", configPath)
+	}
+
+	if apiKey != "" {
+		cfg.AI.APIKey = apiKey
+	}
+
+	for {
+		apiKey := strings.TrimSpace(cfg.AI.APIKey)
+		if apiKey == "" {
+			fmt.Println("No API key configured. Enter your API key, or type /exit to quit.")
+			input, ok, inputErr := readInteractiveLine(scanner, "api_key> ")
+			if inputErr != nil {
+				return false, inputErr
+			}
+			if !ok {
+				return false, nil
+			}
+			cfg.AI.APIKey = input
+		}
+
+		if err := provider.ValidateChatAPIKey(ctx, cfg); err == nil {
+			if saveErr := config.WriteAppConfig(configPath, cfg); saveErr != nil {
+				return false, saveErr
+			}
+			fmt.Println("API key 验证通过并已保存。")
+			return true, nil
+		} else if errors.Is(err, provider.ErrInvalidAPIKey) {
+			fmt.Printf("API key 无效: %v\n", err)
+			cfg.AI.APIKey = ""
+			continue
+		} else if errors.Is(err, provider.ErrAPIKeyValidationSoft) {
+			fmt.Printf("无法确认 API key 有效性: %v\n", err)
+			result, handleErr := handleSetupDecision(scanner, cfg, true, configPath)
+			if handleErr != nil {
+				return false, handleErr
+			}
+			if result == setupExit {
+				return false, nil
+			}
+			if result == setupContinue {
+				config.GlobalAppConfig = cfg
+				return true, nil
+			}
+			continue
+		} else {
+			fmt.Printf("模型验证失败: %v\n", err)
+			result, handleErr := handleSetupDecision(scanner, cfg, false, configPath)
+			if handleErr != nil {
+				return false, handleErr
+			}
+			if result == setupExit {
+				return false, nil
+			}
+			if result == setupContinue {
+				config.GlobalAppConfig = cfg
+				return true, nil
+			}
+		}
+	}
+}
+
+type setupDecision int
+
+const (
+	setupRetry setupDecision = iota
+	setupContinue
+	setupExit
+)
+
+func handleSetupDecision(scanner *bufio.Scanner, cfg *config.AppConfiguration, allowContinue bool, configPath string) (setupDecision, error) {
+	for {
+		prompt := "选择 /retry, /models, /switch <model>, 或 /exit > "
+		if allowContinue {
+			prompt = "选择 /retry, /continue, /models, /switch <model>, 或 /exit > "
+		}
+		decision, ok, inputErr := readInteractiveLine(scanner, prompt)
+		if inputErr != nil {
+			return setupExit, inputErr
+		}
+		if !ok {
+			return setupExit, nil
+		}
+
+		fields := strings.Fields(strings.TrimSpace(decision))
+		if len(fields) == 0 {
+			continue
+		}
+
+		switch strings.ToLower(fields[0]) {
+		case "/retry":
+			return setupRetry, nil
+		case "/continue":
+			if !allowContinue {
+				fmt.Println("/continue 仅在网络或服务问题导致无法确认时可用。")
+				continue
+			}
+			if saveErr := config.WriteAppConfig(configPath, cfg); saveErr != nil {
+				return setupExit, saveErr
+			}
+			fmt.Println("继续启动，使用当前 API key 和模型。")
+			return setupContinue, nil
+		case "/models":
+			printAvailableModels()
+		case "/switch":
+			if len(fields) < 2 {
+				fmt.Println("用法: /switch <model>")
+				printAvailableModels()
+				continue
+			}
+			target := fields[1]
+			if !provider.IsSupportedModel(target) {
+				fmt.Printf("模型 %q 不受支持\n", target)
+				printAvailableModels()
+				continue
+			}
+			cfg.AI.Model = target
+			fmt.Printf("已切换到模型: %s\n", target)
+			return setupRetry, nil
+		case "/exit":
+			return setupExit, nil
+		default:
+			if allowContinue {
+				fmt.Println("请输入 /retry, /continue, /models, /switch <model>, 或 /exit。")
+			} else {
+				fmt.Println("请输入 /retry, /models, /switch <model>, 或 /exit。")
+			}
+		}
+	}
+}
+
+func readInteractiveLine(scanner *bufio.Scanner, prompt string) (string, bool, error) {
+	for {
+		fmt.Print(prompt)
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return "", false, err
+			}
+			return "", false, nil
+		}
+		input := strings.TrimSpace(scanner.Text())
+		if input == "" {
+			fmt.Println("输入不能为空。")
+			continue
+		}
+		if input == "/exit" {
+			return "", false, nil
+		}
+		return input, true, nil
+	}
+}
+
+func printAvailableModels() {
+	fmt.Println("可用模型:")
+	for _, model := range provider.SupportedModels() {
+		fmt.Printf("  %s\n", model)
 	}
 }
 
@@ -62,9 +254,7 @@ func loadDotEnv(path string) error {
 		}
 
 		value = strings.Trim(value, `"'`)
-		if err := os.Setenv(key, value); err != nil {
-			return err
-		}
+		os.Setenv(key, value)
 	}
 
 	return nil
@@ -77,26 +267,23 @@ func loadPersonaPrompt(path string) string {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return ""
-		}
 		return ""
 	}
 
 	return strings.TrimSpace(string(data))
 }
 
-type ctxKey string
-
-const ctxModelKey ctxKey = "model"
-
-func withModel(ctx context.Context, model string) context.Context {
-	return context.WithValue(ctx, ctxModelKey, model)
+func setUTF8Mode() {
+	if runtime.GOOS == "windows" {
+		setWindowsUTF8()
+	}
 }
 
-func getModel(ctx context.Context) string {
-	if v := ctx.Value(ctxModelKey); v != nil {
-		return v.(string)
-	}
-	return ""
+func setWindowsUTF8() {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	setConsoleOutputCP := kernel32.NewProc("SetConsoleOutputCP")
+	setConsoleCP := kernel32.NewProc("SetConsoleCP")
+
+	setConsoleOutputCP.Call(uintptr(65001))
+	setConsoleCP.Call(uintptr(65001))
 }
