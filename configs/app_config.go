@@ -9,6 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const DefaultAPIKeyEnvVar = "AI_API_KEY"
+
 type ModelDetail struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
@@ -55,12 +57,13 @@ type AppConfiguration struct {
 
 var GlobalAppConfig *AppConfiguration
 
+// DefaultAppConfig 返回内置的应用默认配置。
 func DefaultAppConfig() *AppConfiguration {
 	cfg := &AppConfiguration{}
 	cfg.App.Name = "NeoCode"
 	cfg.App.Version = "1.0.0"
 	cfg.AI.Provider = "modelscope"
-	cfg.AI.APIKey = ""
+	cfg.AI.APIKey = DefaultAPIKeyEnvVar
 	cfg.AI.Model = "Qwen/Qwen3-Coder-480B-A35B-Instruct"
 	cfg.Memory.TopK = 5
 	cfg.Memory.MinMatchScore = 2.2
@@ -80,6 +83,7 @@ func DefaultAppConfig() *AppConfiguration {
 	return cfg
 }
 
+// LoadAppConfig 加载运行时配置并保存到全局变量。
 func LoadAppConfig(filePath string) error {
 	cfg, err := LoadBootstrapConfig(filePath)
 	if err != nil {
@@ -92,6 +96,7 @@ func LoadAppConfig(filePath string) error {
 	return nil
 }
 
+// LoadBootstrapConfig 加载不依赖运行时密钥的基础配置。
 func LoadBootstrapConfig(filePath string) (*AppConfiguration, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -108,6 +113,7 @@ func LoadBootstrapConfig(filePath string) (*AppConfiguration, error) {
 	return cfg, nil
 }
 
+// EnsureConfigFile 加载已有配置文件，或在缺失时写入默认配置。
 func EnsureConfigFile(filePath string) (*AppConfiguration, bool, error) {
 	if _, err := os.Stat(filePath); err == nil {
 		cfg, loadErr := LoadBootstrapConfig(filePath)
@@ -123,11 +129,14 @@ func EnsureConfigFile(filePath string) (*AppConfiguration, bool, error) {
 	return cfg, true, nil
 }
 
+// WriteAppConfig 将应用配置写入磁盘。
 func WriteAppConfig(filePath string, cfg *AppConfiguration) error {
 	if cfg == nil {
 		return fmt.Errorf("app config is nil")
 	}
-	data, err := yaml.Marshal(cfg)
+	cfgCopy := *cfg
+	cfgCopy.AI.APIKey = strings.TrimSpace(cfgCopy.AI.APIKey)
+	data, err := yaml.Marshal(&cfgCopy)
 	if err != nil {
 		return fmt.Errorf("failed to marshal app config YAML: %w", err)
 	}
@@ -137,10 +146,12 @@ func WriteAppConfig(filePath string, cfg *AppConfiguration) error {
 	return nil
 }
 
+// Validate 检查配置是否满足运行时要求。
 func (c *AppConfiguration) Validate() error {
 	return c.ValidateRuntime()
 }
 
+// ValidateBase 检查不包含密钥的基础配置是否合法。
 func (c *AppConfiguration) ValidateBase() error {
 	if c == nil {
 		return fmt.Errorf("app config is nil")
@@ -186,16 +197,51 @@ func (c *AppConfiguration) ValidateBase() error {
 	return nil
 }
 
+// ValidateRuntime 检查配置字段和运行时必需的环境变量。
 func (c *AppConfiguration) ValidateRuntime() error {
 	if err := c.ValidateBase(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(c.AI.APIKey) == "" {
-		return fmt.Errorf("invalid config: ai.api_key is required")
+	envVarName := c.APIKeyEnvVarName()
+	if c.RuntimeAPIKey() == "" {
+		return fmt.Errorf("invalid runtime: %s environment variable is required", envVarName)
 	}
 	return nil
 }
 
+// APIKeyEnvVarName 返回当前配置使用的 API Key 环境变量名。
+func (c *AppConfiguration) APIKeyEnvVarName() string {
+	if c == nil {
+		return DefaultAPIKeyEnvVar
+	}
+	if name := strings.TrimSpace(c.AI.APIKey); name != "" {
+		return name
+	}
+	return DefaultAPIKeyEnvVar
+}
+
+// RuntimeAPIKey 返回配置指向的环境变量中的 API Key，并去掉首尾空白。
+func (c *AppConfiguration) RuntimeAPIKey() string {
+	return strings.TrimSpace(os.Getenv(c.APIKeyEnvVarName()))
+}
+
+// RuntimeAPIKeyEnvVarName 返回全局配置当前使用的 API Key 环境变量名。
+func RuntimeAPIKeyEnvVarName() string {
+	if GlobalAppConfig != nil {
+		return GlobalAppConfig.APIKeyEnvVarName()
+	}
+	return DefaultAPIKeyEnvVar
+}
+
+// RuntimeAPIKey 返回全局配置指向的环境变量中的 API Key，并去掉首尾空白。
+func RuntimeAPIKey() string {
+	if GlobalAppConfig != nil {
+		return GlobalAppConfig.RuntimeAPIKey()
+	}
+	return strings.TrimSpace(os.Getenv(DefaultAPIKeyEnvVar))
+}
+
+// GetChatModelURL 从全局配置中查找聊天模型对应的 URL。
 func GetChatModelURL(modelName string) (string, bool) {
 	if GlobalAppConfig == nil {
 		return "", false
@@ -203,6 +249,7 @@ func GetChatModelURL(modelName string) (string, bool) {
 	return GetChatModelURLFromConfig(GlobalAppConfig, modelName)
 }
 
+// GetChatModelURLFromConfig 从指定配置中查找聊天模型对应的 URL。
 func GetChatModelURLFromConfig(cfg *AppConfiguration, modelName string) (string, bool) {
 	if cfg == nil {
 		return "", false
@@ -215,6 +262,7 @@ func GetChatModelURLFromConfig(cfg *AppConfiguration, modelName string) (string,
 	return "", false
 }
 
+// GetDefaultChatModel 返回全局配置中的默认聊天模型。
 func GetDefaultChatModel() string {
 	if GlobalAppConfig == nil {
 		return ""

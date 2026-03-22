@@ -8,19 +8,47 @@ import (
 )
 
 func TestAppConfigurationValidate(t *testing.T) {
+	t.Setenv(DefaultAPIKeyEnvVar, "env-chat-key")
 	cfg := validConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected valid config, got error: %v", err)
 	}
 }
 
-func TestAppConfigurationValidateMissingAIKey(t *testing.T) {
+func TestAppConfigurationValidateMissingEnvAPIKey(t *testing.T) {
+	t.Setenv(DefaultAPIKeyEnvVar, "")
+	cfg := validConfig()
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), DefaultAPIKeyEnvVar) {
+		t.Fatalf("expected %s validation error, got: %v", DefaultAPIKeyEnvVar, err)
+	}
+}
+
+func TestAppConfigurationValidateUsesCustomEnvVarName(t *testing.T) {
+	t.Setenv(DefaultAPIKeyEnvVar, "")
+	t.Setenv("CUSTOM_CHAT_KEY", "env-chat-key")
+	cfg := validConfig()
+	cfg.AI.APIKey = "CUSTOM_CHAT_KEY"
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected custom env var to validate, got: %v", err)
+	}
+	if got := cfg.RuntimeAPIKey(); got != "env-chat-key" {
+		t.Fatalf("expected runtime api key from custom env, got %q", got)
+	}
+}
+
+func TestAppConfigurationValidateFallsBackToDefaultEnvVarName(t *testing.T) {
+	t.Setenv(DefaultAPIKeyEnvVar, "fallback-key")
 	cfg := validConfig()
 	cfg.AI.APIKey = ""
 
-	err := cfg.Validate()
-	if err == nil || !strings.Contains(err.Error(), "ai.api_key") {
-		t.Fatalf("expected ai.api_key validation error, got: %v", err)
+	if got := cfg.APIKeyEnvVarName(); got != DefaultAPIKeyEnvVar {
+		t.Fatalf("expected fallback env var name %q, got %q", DefaultAPIKeyEnvVar, got)
+	}
+	if got := cfg.RuntimeAPIKey(); got != "fallback-key" {
+		t.Fatalf("expected fallback runtime api key, got %q", got)
 	}
 }
 
@@ -34,6 +62,7 @@ func TestAppConfigurationValidateBaseAllowsMissingAIKey(t *testing.T) {
 }
 
 func TestLoadAppConfig(t *testing.T) {
+	t.Setenv("CUSTOM_CHAT_KEY", "env-chat-key")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := []byte(`app:
@@ -41,7 +70,7 @@ func TestLoadAppConfig(t *testing.T) {
   version: "1.0.0"
 ai:
   provider: "modelscope"
-  api_key: "chat-key"
+  api_key: "CUSTOM_CHAT_KEY"
   model: "chat-model"
 memory:
   top_k: 5
@@ -72,9 +101,16 @@ models:
 	if GlobalAppConfig == nil || GlobalAppConfig.AI.Model != "chat-model" {
 		t.Fatalf("expected loaded config, got %+v", GlobalAppConfig)
 	}
+	if GlobalAppConfig.AI.APIKey != "CUSTOM_CHAT_KEY" {
+		t.Fatalf("expected config api key env name to persist, got %q", GlobalAppConfig.AI.APIKey)
+	}
+	if got := GlobalAppConfig.RuntimeAPIKey(); got != "env-chat-key" {
+		t.Fatalf("expected runtime api key from custom env, got %q", got)
+	}
 }
 
 func TestAppConfigurationValidateMissingMemoryStoragePath(t *testing.T) {
+	t.Setenv(DefaultAPIKeyEnvVar, "env-chat-key")
 	cfg := validConfig()
 	cfg.Memory.StoragePath = ""
 	err := cfg.Validate()
@@ -100,8 +136,8 @@ func TestEnsureConfigFileCreatesDefault(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected config file on disk: %v", err)
 	}
-	if strings.TrimSpace(cfg.AI.APIKey) != "" {
-		t.Fatalf("expected default api key to be empty, got %q", cfg.AI.APIKey)
+	if strings.TrimSpace(cfg.AI.APIKey) != DefaultAPIKeyEnvVar {
+		t.Fatalf("expected default api key env name %q, got %q", DefaultAPIKeyEnvVar, cfg.AI.APIKey)
 	}
 }
 
@@ -133,6 +169,9 @@ func TestWriteAppConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load bootstrap config: %v", err)
 	}
+	if got.AI.APIKey != want.AI.APIKey {
+		t.Fatalf("expected written config api key env name %q, got %q", want.AI.APIKey, got.AI.APIKey)
+	}
 	if got.AI.Model != want.AI.Model {
 		t.Fatalf("expected model %q, got %q", want.AI.Model, got.AI.Model)
 	}
@@ -144,7 +183,7 @@ func TestWriteAppConfigRoundTrip(t *testing.T) {
 func validConfig() *AppConfiguration {
 	cfg := &AppConfiguration{}
 	cfg.AI.Provider = "modelscope"
-	cfg.AI.APIKey = "chat-key"
+	cfg.AI.APIKey = DefaultAPIKeyEnvVar
 	cfg.AI.Model = "chat-model"
 	cfg.Memory.TopK = 5
 	cfg.Memory.MinMatchScore = 2.2

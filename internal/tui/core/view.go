@@ -240,6 +240,7 @@ func RenderHelp(width int) string {
 		desc string
 	}{
 		{"/help", "显示帮助"},
+		{"/apikey <env_name>", "切换 API Key 变量名"},
 		{"/switch <model>", "切换模型"},
 		{"/models", "列出可用模型"},
 		{"/run <code>", "执行代码"},

@@ -39,6 +39,6 @@
 ## Security & Configuration Tips
 - 将 `.env` 或类似文件视为本地配置；不要提交密钥。如果需要共享值，请在README或本指南中记录它们。
 - 将API密钥保留在源文件之外；优先在运行时通过环境变量传递。
-- API Key必须放在系统环境变量 `AI_API_KEY` 中，不再写入 `config.yaml`。
+- `config.yaml` 中的 `ai.api_key` 保存的是 API Key 的环境变量名；为空时默认回退到 `AI_API_KEY`。
 - `config.yaml` 已在 `.gitignore` 中忽略，不应提交真实密钥。
 - `data/` 已在 `.gitignore` 中忽略，本地记忆不会默认入库。
