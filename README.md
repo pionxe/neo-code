@@ -12,6 +12,7 @@
 6. 人设文件注入
 7. 启动时校验环境变量 API Key
 8. `/memory`、`/clear-memory confirm`、`/clear-context`
+9. 工作区目录感知（`--workspace` / `NEOCODE_WORKSPACE` / 当前目录）
 
 ## 配置方式
 
@@ -70,6 +71,21 @@ set AI_API_KEY=your-api-key
 ```bash
 go run ./cmd/tui
 ```
+
+也可以显式指定工作区目录（工具读写和工作记忆都会基于该目录）：
+
+```bash
+go run ./cmd/tui --workspace ./
+```
+
+或者通过环境变量指定：
+
+```bash
+set NEOCODE_WORKSPACE=F:\\Qiniu\\test1
+go run ./cmd/tui
+```
+
+工作区解析优先级：`--workspace` > `NEOCODE_WORKSPACE` > 启动时当前目录。
 
 示例：
 
@@ -153,6 +169,7 @@ go run ./cmd/server
 - `/apikey <env_name>`：切换当前读取的 API Key 环境变量名并立即校验
 - `/switch <model>`：切换当前聊天模型
 - `/memory`：查看长期记忆和 session memory 状态，以及各类型统计
+- `/pwd` 或 `/workspace`：查看当前工作区目录
 - `/clear-memory confirm`：确认后清空长期结构化记忆
 - `/clear-context`：清空当前短期上下文和 session memory
 - `/help`：查看帮助
