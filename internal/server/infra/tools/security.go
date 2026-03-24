@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"go-llm-demo/internal/server/domain"
@@ -10,6 +11,9 @@ import (
 var (
 	securityCheckerMu sync.RWMutex
 	securityChecker   domain.SecurityChecker
+
+	securityAskApprovalMu sync.Mutex
+	securityAskApprovals  = map[string]int{}
 )
 
 // SetSecurityChecker 设置工具执行前使用的安全检查器。
@@ -25,6 +29,46 @@ func getSecurityChecker() domain.SecurityChecker {
 	checker := securityChecker
 	securityCheckerMu.RUnlock()
 	return checker
+}
+
+// ApproveSecurityAsk 为指定的安全询问发放一次性放行许可。
+// 该许可会在下一次匹配到同一 (toolType, target) 时被消费。
+func ApproveSecurityAsk(toolType, target string) {
+	key := securityApprovalKey(toolType, target)
+	if key == "" {
+		return
+	}
+	securityAskApprovalMu.Lock()
+	securityAskApprovals[key]++
+	securityAskApprovalMu.Unlock()
+}
+
+func consumeSecurityAskApproval(toolType, target string) bool {
+	key := securityApprovalKey(toolType, target)
+	if key == "" {
+		return false
+	}
+	securityAskApprovalMu.Lock()
+	defer securityAskApprovalMu.Unlock()
+	count := securityAskApprovals[key]
+	if count <= 0 {
+		return false
+	}
+	if count == 1 {
+		delete(securityAskApprovals, key)
+		return true
+	}
+	securityAskApprovals[key] = count - 1
+	return true
+}
+
+func securityApprovalKey(toolType, target string) string {
+	normalizedType := strings.ToLower(strings.TrimSpace(toolType))
+	normalizedTarget := strings.TrimSpace(target)
+	if normalizedType == "" || normalizedTarget == "" {
+		return ""
+	}
+	return normalizedType + "\x00" + normalizedTarget
 }
 
 func guardToolExecution(toolType, target, toolName string) *ToolResult {
@@ -51,6 +95,9 @@ func guardToolExecution(toolType, target, toolName string) *ToolResult {
 			Metadata: metadata,
 		}
 	case domain.ActionAsk:
+		if consumeSecurityAskApproval(toolType, target) {
+			return nil
+		}
 		return &ToolResult{
 			ToolName: toolName,
 			Success:  false,
@@ -59,6 +106,9 @@ func guardToolExecution(toolType, target, toolName string) *ToolResult {
 		}
 	default:
 		metadata["securityAction"] = string(domain.ActionAsk)
+		if consumeSecurityAskApproval(toolType, target) {
+			return nil
+		}
 		return &ToolResult{
 			ToolName: toolName,
 			Success:  false,
