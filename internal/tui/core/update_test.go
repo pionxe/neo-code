@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"go-llm-demo/internal/tui/infra"
+	"go-llm-demo/internal/tui/state"
 )
 
 type fakeChatClient struct{}
@@ -33,7 +34,7 @@ func (fakeChatClient) DefaultModel() string {
 
 func TestBuildMessagesSkipsEmptyAssistantPlaceholder(t *testing.T) {
 	m := Model{
-		messages: []Message{
+		messages: []state.Message{
 			{Role: "system", Content: "persona"},
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: ""},
@@ -55,7 +56,7 @@ func TestBuildMessagesSkipsEmptyAssistantPlaceholder(t *testing.T) {
 func TestStreamErrorReplacesTrailingPlaceholder(t *testing.T) {
 	m := Model{
 		historyTurns: 6,
-		messages: []Message{
+		messages: []state.Message{
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: ""},
 		},
@@ -76,7 +77,7 @@ func TestClearContextDoesNotReinjectStalePersonaMessage(t *testing.T) {
 		client:      fakeChatClient{},
 		persona:     "stale persona",
 		apiKeyReady: true,
-		messages: []Message{
+		messages: []state.Message{
 			{Role: "system", Content: "stale persona"},
 			{Role: "user", Content: "hello"},
 		},
@@ -94,7 +95,7 @@ func TestClearContextDoesNotReinjectStalePersonaMessage(t *testing.T) {
 
 func TestBuildMessagesSkipsTransientToolStatusMessage(t *testing.T) {
 	m := Model{
-		messages: []Message{
+		messages: []state.Message{
 			{Role: "user", Content: "hello"},
 			{Role: "system", Content: "[TOOL_STATUS] tool=read file=README.md"},
 			{Role: "assistant", Content: "ok"},
@@ -114,11 +115,11 @@ func TestBuildMessagesSkipsTransientToolStatusMessage(t *testing.T) {
 
 func TestBuildMessagesKeepsOnlyRecentToolContextMessages(t *testing.T) {
 	m := Model{}
-	m.messages = append(m.messages, Message{Role: "user", Content: "step 1"})
+	m.messages = append(m.messages, state.Message{Role: "user", Content: "step 1"})
 	for i := 1; i <= 5; i++ {
-		m.messages = append(m.messages, Message{Role: "system", Content: "[TOOL_CONTEXT]\ntool=read\nsuccess=true\noutput:\nchunk " + string(rune('0'+i))})
+		m.messages = append(m.messages, state.Message{Role: "system", Content: "[TOOL_CONTEXT]\ntool=read\nsuccess=true\noutput:\nchunk " + string(rune('0'+i))})
 	}
-	m.messages = append(m.messages, Message{Role: "assistant", Content: "done"})
+	m.messages = append(m.messages, state.Message{Role: "assistant", Content: "done"})
 
 	got := m.buildMessages()
 	toolCtxCount := 0

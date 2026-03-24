@@ -7,6 +7,7 @@ import (
 
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/tui/infra"
+	"go-llm-demo/internal/tui/state"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -30,7 +31,7 @@ type Model struct {
 	mode    Mode
 	focused string
 
-	messages     []Message
+	messages     []state.Message
 	historyTurns int
 
 	generating  bool
@@ -56,13 +57,6 @@ type Model struct {
 	autoScroll bool
 
 	mu *sync.Mutex
-}
-
-type Message struct {
-	Role      string
-	Content   string
-	Timestamp time.Time
-	Streaming bool
 }
 
 // NewModel 创建 TUI 状态模型。
@@ -101,7 +95,7 @@ func NewModel(client infra.ChatClient, persona string, historyTurns int, configP
 	return Model{
 		mode:           ModeChat,
 		focused:        "input",
-		messages:       make([]Message, 0),
+		messages:       make([]state.Message, 0),
 		historyTurns:   historyTurns,
 		activeModel:    client.DefaultModel(),
 		memoryStats:    *stats,
@@ -146,7 +140,7 @@ func (m *Model) AddMessage(role, content string) {
 	mu := m.mutex()
 	mu.Lock()
 	defer mu.Unlock()
-	m.messages = append(m.messages, Message{
+	m.messages = append(m.messages, state.Message{
 		Role:      role,
 		Content:   content,
 		Timestamp: time.Now(),
@@ -182,8 +176,8 @@ func (m *Model) TrimHistory(maxTurns int) {
 		return
 	}
 
-	var system []Message
-	var others []Message
+	var system []state.Message
+	var others []state.Message
 
 	for _, msg := range m.messages {
 		if msg.Role == "system" {

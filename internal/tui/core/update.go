@@ -14,6 +14,7 @@ import (
 	"go-llm-demo/internal/server/infra/provider"
 	"go-llm-demo/internal/server/infra/tools"
 	"go-llm-demo/internal/tui/infra"
+	"go-llm-demo/internal/tui/state"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -609,7 +610,7 @@ func isToolContextMessage(content string) bool {
 	return strings.HasPrefix(strings.TrimSpace(content), toolContextPrefix)
 }
 
-func recentToolContextIndexes(messages []Message, keep int) map[int]struct{} {
+func recentToolContextIndexes(messages []state.Message, keep int) map[int]struct{} {
 	result := map[int]struct{}{}
 	if keep <= 0 || len(messages) == 0 {
 		return result
