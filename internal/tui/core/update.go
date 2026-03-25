@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"go-llm-demo/configs"
+	"go-llm-demo/internal/tui/components"
 	"go-llm-demo/internal/tui/services"
 	"go-llm-demo/internal/tui/state"
 	"go-llm-demo/internal/tui/todo"
@@ -49,6 +50,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
+		if handled := m.handleMouseClick(msg); handled {
+			m.refreshViewport()
+			return m, nil
+		}
 		var vpCmd tea.Cmd
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		m.ui.AutoScroll = m.viewport.AtBottom()
@@ -112,7 +117,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							mu.Lock()
 							m.chat.ToolExecuting = false
 							mu.Unlock()
-							return ToolErrorMsg{Err: fmt.Errorf("工具执行失败: 空返回")}
+							return ToolErrorMsg{Err: fmt.Errorf("tool execution failed: empty result")}
 						}
 						return ToolResultMsg{Result: result, Call: call}
 					}
@@ -132,14 +137,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.chat.Messages) > 0 {
 			lastMsg := &m.chat.Messages[len(m.chat.Messages)-1]
 			if lastMsg.Role == "assistant" && strings.TrimSpace(lastMsg.Content) == "" {
-				lastMsg.Content = fmt.Sprintf("错误: %v", msg.Err)
+				lastMsg.Content = fmt.Sprintf("Error: %v", msg.Err)
 				lastMsg.Streaming = false
 				replacedPlaceholder = true
 			}
 		}
 		mu.Unlock()
 		if !replacedPlaceholder {
-			m.AddMessage("assistant", fmt.Sprintf("错误: %v", msg.Err))
+			m.AddMessage("assistant", fmt.Sprintf("Error: %v", msg.Err))
 		}
 		m.TrimHistory(m.chat.HistoryTurns)
 		m.refreshViewport()
@@ -280,6 +285,56 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return *m, inputCmd
 }
 
+func (m *Model) handleMouseClick(msg tea.MouseMsg) bool {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return false
+	}
+	contentRow, contentCol, ok := m.chatContentPosition(msg)
+	if !ok {
+		return false
+	}
+	region, found := findClickableRegion(m.chatLayout.Regions, contentRow, contentCol)
+	if !found || region.Kind != "copy" {
+		return false
+	}
+	if err := m.copyCodeBlock(region.CodeBlock); err != nil {
+		m.ui.CopyStatus = fmt.Sprintf("Copy failed: %v", err)
+		return true
+	}
+	m.ui.CopyStatus = components.FormatCopyNotice(region.CodeBlock)
+	return true
+}
+
+func (m *Model) chatContentPosition(msg tea.MouseMsg) (int, int, bool) {
+	statusHeight := 1
+	chatTop := statusHeight
+	chatBottom := chatTop + m.viewport.Height
+	if msg.Y < chatTop || msg.Y >= chatBottom {
+		return 0, 0, false
+	}
+	return m.viewport.YOffset + (msg.Y - chatTop), msg.X, true
+}
+
+func findClickableRegion(regions []components.ClickableRegion, row, col int) (components.ClickableRegion, bool) {
+	for _, region := range regions {
+		if row < region.StartRow || row > region.EndRow {
+			continue
+		}
+		if col < region.StartCol || col > region.EndCol {
+			continue
+		}
+		return region, true
+	}
+	return components.ClickableRegion{}, false
+}
+
+func (m *Model) copyCodeBlock(ref components.CodeBlockRef) error {
+	if m.copyToClipboard == nil {
+		return fmt.Errorf("clipboard unavailable")
+	}
+	return m.copyToClipboard(ref.Code)
+}
+
 func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	input := strings.TrimSpace(m.textarea.Value())
 	m.textarea.Reset()
@@ -300,7 +355,7 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 		return m.handleCommand(input)
 	}
 	if !m.chat.APIKeyReady {
-		m.AddMessage("assistant", "当前 API Key 未通过校验，请使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置，或 /exit 退出。")
+		m.AddMessage("assistant", "The current API Key could not be validated. Use /apikey <env_name>, /provider <name>, or /switch <model> to update the configuration, or /exit to quit.")
 		return *m, nil
 	}
 
@@ -333,7 +388,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	cmd := fields[0]
 	args := fields[1:]
 	if !m.chat.APIKeyReady && !isAPIKeyRecoveryCommand(cmd) {
-		m.AddMessage("assistant", "当前 API Key 未通过校验，仅支持 /apikey <env_name>、/provider <name>、/help、/switch <model>、/pwd（/workspace）或 /exit。")
+		m.AddMessage("assistant", "The current API Key could not be validated. Only /apikey <env_name>, /provider <name>, /help, /switch <model>, /pwd (/workspace), and /exit are available.")
 		return *m, nil
 	}
 
@@ -409,12 +464,12 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return *m, tea.Quit
 	case "/apikey":
 		if len(args) == 0 {
-			m.AddMessage("assistant", "用法: /apikey <env_name>")
+			m.AddMessage("assistant", "Usage: /apikey <env_name>")
 			return *m, nil
 		}
 		cfg := configs.GlobalAppConfig
 		if cfg == nil {
-			m.AddMessage("assistant", "当前配置未加载，无法切换 API Key 环境变量名")
+			m.AddMessage("assistant", "The current configuration is not loaded, so the API key environment variable name cannot be changed.")
 			return *m, nil
 		}
 		previousEnvName := cfg.AI.APIKey
@@ -422,7 +477,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		envName := cfg.APIKeyEnvVarName()
 		if cfg.RuntimeAPIKey() == "" {
 			m.chat.APIKeyReady = false
-			m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 未设置。请继续使用 /apikey <env_name> 切换，或 /exit 退出。", envName))
+			m.AddMessage("assistant", fmt.Sprintf("Environment variable %s is not set. Use /apikey <env_name> to switch to another one, or /exit to quit.", envName))
 			return *m, nil
 		}
 		err := validateChatAPIKey(context.Background(), cfg)
@@ -430,90 +485,90 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			if writeErr := writeAppConfig(m.chat.ConfigPath, cfg); writeErr != nil {
 				cfg.AI.APIKey = previousEnvName
 				m.chat.APIKeyReady = configs.RuntimeAPIKey() != ""
-				m.AddMessage("assistant", fmt.Sprintf("切换 API Key 环境变量名失败: %v", writeErr))
+				m.AddMessage("assistant", fmt.Sprintf("Failed to switch the API key environment variable name: %v", writeErr))
 				return *m, nil
 			}
 			m.chat.APIKeyReady = true
-			m.AddMessage("assistant", fmt.Sprintf("已切换 API Key 环境变量名为 %s，并通过校验。", envName))
+			m.AddMessage("assistant", fmt.Sprintf("Switched the API key environment variable name to %s and validated it successfully.", envName))
 			return *m, nil
 		}
 		m.chat.APIKeyReady = false
 		if errors.Is(err, services.ErrInvalidAPIKey) {
-			m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 中的 API Key 无效：%v。请继续使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置，或 /exit 退出。", envName, err))
+			m.AddMessage("assistant", fmt.Sprintf("The API key in environment variable %s is invalid: %v. Use /apikey <env_name>, /provider <name>, or /switch <model> to update the configuration, or /exit to quit.", envName, err))
 			return *m, nil
 		}
-		m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 的 API Key 未通过校验：%v。请继续使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置，或 /exit 退出。", envName, err))
+		m.AddMessage("assistant", fmt.Sprintf("The API key in environment variable %s could not be validated: %v. Use /apikey <env_name>, /provider <name>, or /switch <model> to update the configuration, or /exit to quit.", envName, err))
 		return *m, nil
 	case "/provider":
 		if len(args) == 0 {
-			m.AddMessage("assistant", fmt.Sprintf("用法: /provider <name>\n可用提供商:\n  - %s", strings.Join(services.SupportedProviders(), "\n  - ")))
+			m.AddMessage("assistant", fmt.Sprintf("Usage: /provider <name>\nSupported providers:\n  - %s", strings.Join(services.SupportedProviders(), "\n  - ")))
 			return *m, nil
 		}
 		cfg := configs.GlobalAppConfig
 		if cfg == nil {
-			m.AddMessage("assistant", "当前配置未加载，无法切换提供商")
+			m.AddMessage("assistant", "The current configuration is not loaded, so the provider cannot be changed.")
 			return *m, nil
 		}
 		providerName, ok := services.NormalizeProviderName(strings.Join(args, " "))
 		if !ok {
-			m.AddMessage("assistant", fmt.Sprintf("不支持的提供商: %s\n可用提供商:\n  - %s", strings.Join(args, " "), strings.Join(services.SupportedProviders(), "\n  - ")))
+			m.AddMessage("assistant", fmt.Sprintf("Unsupported provider: %s\nSupported providers:\n  - %s", strings.Join(args, " "), strings.Join(services.SupportedProviders(), "\n  - ")))
 			return *m, nil
 		}
 		cfg.AI.Provider = providerName
 		cfg.AI.Model = services.DefaultModelForProvider(providerName)
 		m.chat.ActiveModel = cfg.AI.Model
 		if writeErr := writeAppConfig(m.chat.ConfigPath, cfg); writeErr != nil {
-			m.AddMessage("assistant", fmt.Sprintf("切换提供商失败: %v", writeErr))
+			m.AddMessage("assistant", fmt.Sprintf("Failed to switch provider: %v", writeErr))
 			return *m, nil
 		}
 		if cfg.RuntimeAPIKey() == "" {
 			m.chat.APIKeyReady = false
-			m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s，但当前环境变量 %s 未设置。请使用 /apikey <env_name> 或设置该环境变量。", providerName, cfg.APIKeyEnvVarName()))
+			m.AddMessage("assistant", fmt.Sprintf("Switched provider to %s, but environment variable %s is not set. Use /apikey <env_name> or set that environment variable.", providerName, cfg.APIKeyEnvVarName()))
 			return *m, nil
 		}
 		if err := validateChatAPIKey(context.Background(), cfg); err == nil {
 			m.chat.APIKeyReady = true
-			m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s，当前模型已重置为默认值: %s。", providerName, cfg.AI.Model))
+			m.AddMessage("assistant", fmt.Sprintf("Switched provider to %s. The current model was reset to the default: %s.", providerName, cfg.AI.Model))
 			return *m, nil
 		} else {
 			m.chat.APIKeyReady = false
-			m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s，但 API Key 未通过校验：%v。可继续使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置。", providerName, err))
+			m.AddMessage("assistant", fmt.Sprintf("Switched provider to %s, but the API key could not be validated: %v. You can continue using /apikey <env_name>, /provider <name>, or /switch <model> to adjust the configuration.", providerName, err))
 			return *m, nil
 		}
 	case "/switch":
 		if len(args) == 0 {
-			m.AddMessage("assistant", "用法: /switch <model>")
+			m.AddMessage("assistant", "Usage: /switch <model>")
 			return *m, nil
 		}
 		cfg := configs.GlobalAppConfig
 		if cfg == nil {
-			m.AddMessage("assistant", "当前配置未加载，无法切换模型")
+			m.AddMessage("assistant", "The current configuration is not loaded, so the model cannot be changed.")
 			return *m, nil
 		}
 		target := strings.Join(args, " ")
 		cfg.AI.Model = target
 		if writeErr := writeAppConfig(m.chat.ConfigPath, cfg); writeErr != nil {
-			m.AddMessage("assistant", fmt.Sprintf("切换模型失败: %v", writeErr))
+			m.AddMessage("assistant", fmt.Sprintf("Failed to switch model: %v", writeErr))
 			return *m, nil
 		}
 		m.chat.ActiveModel = target
 		if cfg.RuntimeAPIKey() == "" {
 			m.chat.APIKeyReady = false
-			m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s，但当前环境变量 %s 未设置。", target, cfg.APIKeyEnvVarName()))
+			m.AddMessage("assistant", fmt.Sprintf("Switched model to %s, but environment variable %s is not set.", target, cfg.APIKeyEnvVarName()))
 			return *m, nil
 		}
 		if err := validateChatAPIKey(context.Background(), cfg); err == nil {
 			m.chat.APIKeyReady = true
-			m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s", target))
+			m.AddMessage("assistant", fmt.Sprintf("Switched model to: %s", target))
 			return *m, nil
 		} else {
 			m.chat.APIKeyReady = false
-			m.AddMessage("assistant", fmt.Sprintf("已切换到模型 %s，但 API Key 未通过校验：%v。", target, err))
+			m.AddMessage("assistant", fmt.Sprintf("Switched model to %s, but the API key could not be validated: %v.", target, err))
 			return *m, nil
 		}
 	case "/pwd", "/workspace":
 		if len(args) > 0 {
-			m.AddMessage("assistant", "用法: /pwd 或 /workspace")
+			m.AddMessage("assistant", "Usage: /pwd or /workspace")
 			return *m, nil
 		}
 		root := strings.TrimSpace(m.chat.WorkspaceRoot)
@@ -521,35 +576,35 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			root = getWorkspaceRoot()
 		}
 		if strings.TrimSpace(root) == "" {
-			m.AddMessage("assistant", "当前工作区: 未知")
+			m.AddMessage("assistant", "Current workspace: unknown")
 			return *m, nil
 		}
-		m.AddMessage("assistant", fmt.Sprintf("当前工作区: %s", root))
+		m.AddMessage("assistant", fmt.Sprintf("Current workspace: %s", root))
 	case "/memory":
 		stats, err := m.client.GetMemoryStats(context.Background())
 		if err != nil {
-			m.AddMessage("assistant", fmt.Sprintf("读取记忆统计失败: %v", err))
+			m.AddMessage("assistant", fmt.Sprintf("Failed to read memory stats: %v", err))
 			return *m, nil
 		}
 		m.chat.MemoryStats = *stats
 		m.AddMessage("assistant", fmt.Sprintf(
-			"记忆统计:\n  长期: %d\n  会话: %d\n  总计: %d\n  TopK: %d\n  最小分数: %.2f\n  文件: %s\n  类型: %s",
+			"Memory stats:\n  Persistent: %d\n  Session: %d\n  Total: %d\n  TopK: %d\n  Min score: %.2f\n  File: %s\n  Types: %s",
 			stats.PersistentItems, stats.SessionItems, stats.TotalItems, stats.TopK, stats.MinScore, stats.Path, formatTypeStats(stats.ByType),
 		))
 	case "/clear-memory":
 		if len(args) == 0 || args[0] != "confirm" {
-			m.AddMessage("assistant", "此命令会清空长期记忆。请使用 /clear-memory confirm")
+			m.AddMessage("assistant", "This command will clear persistent memory. Use /clear-memory confirm")
 			return *m, nil
 		}
 		if err := m.client.ClearMemory(context.Background()); err != nil {
-			m.AddMessage("assistant", fmt.Sprintf("清空长期记忆失败: %v", err))
+			m.AddMessage("assistant", fmt.Sprintf("Failed to clear persistent memory: %v", err))
 			return *m, nil
 		}
 		stats, _ := m.client.GetMemoryStats(context.Background())
 		if stats != nil {
 			m.chat.MemoryStats = *stats
 		}
-		m.AddMessage("assistant", "已清空本地长期记忆")
+		m.AddMessage("assistant", "Cleared local persistent memory")
 	case "/todo":
 		if len(args) == 0 {
 			m.ui.Mode = state.ModeTodo
@@ -584,7 +639,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		}
 	case "/clear-context":
 		if err := m.client.ClearSessionMemory(context.Background()); err != nil {
-			m.AddMessage("assistant", fmt.Sprintf("清空会话记忆失败: %v", err))
+			m.AddMessage("assistant", fmt.Sprintf("Failed to clear session memory: %v", err))
 			return *m, nil
 		}
 		m.chat.Messages = nil
@@ -592,12 +647,12 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		if stats != nil {
 			m.chat.MemoryStats = *stats
 		}
-		m.AddMessage("assistant", "已清空当前会话上下文")
+		m.AddMessage("assistant", "Cleared the current session context")
 	case "/run":
 		if len(args) > 0 {
 			code := strings.Join(args, " ")
 			return *m, tea.Batch(
-				tea.Printf("\n--- 运行代码 ---\n"),
+				tea.Printf("\n--- Running code ---\n"),
 				runCodeCmd(code),
 			)
 		}
@@ -608,7 +663,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		return *m, nil
 	default:
-		m.AddMessage("assistant", fmt.Sprintf("未知命令: %s，输入 /help 查看帮助", cmd))
+		m.AddMessage("assistant", fmt.Sprintf("Unknown command: %s. Enter /help to view the available commands.", cmd))
 	}
 	m.refreshViewport()
 
@@ -702,7 +757,7 @@ func containsModel(models []string, target string) bool {
 
 func formatTypeStats(byType map[string]int) string {
 	if len(byType) == 0 {
-		return "无"
+		return "none"
 	}
 	ordered := []string{
 		services.TypeUserPreference,
@@ -718,7 +773,7 @@ func formatTypeStats(byType map[string]int) string {
 		}
 	}
 	if len(parts) == 0 {
-		return "无"
+		return "none"
 	}
 	return strings.Join(parts, ", ")
 }
@@ -786,7 +841,7 @@ func (m *Model) streamResponseFromChannel() tea.Cmd {
 }
 
 func (m *Model) sendCodeToAI(code string) tea.Cmd {
-	prompt := fmt.Sprintf("请解释以下代码：\n```\n%s\n```", code)
+	prompt := fmt.Sprintf("Please explain the following code:\n```\n%s\n```", code)
 	m.AddMessage("user", prompt)
 	m.AddMessage("assistant", "")
 	m.TrimHistory(m.chat.HistoryTurns)
@@ -925,17 +980,17 @@ func runCodeCmd(code string) tea.Cmd {
 	return func() tea.Msg {
 		ext, runner := detectLanguage(code)
 		if ext == "" {
-			return StreamErrorMsg{Err: fmt.Errorf("无法识别代码语言")}
+			return StreamErrorMsg{Err: fmt.Errorf("could not detect the code language")}
 		}
 
 		tmpFile, err := os.CreateTemp("", "neocode-*."+ext)
 		if err != nil {
-			return StreamErrorMsg{Err: fmt.Errorf("创建临时文件失败: %w", err)}
+			return StreamErrorMsg{Err: fmt.Errorf("failed to create a temporary file: %w", err)}
 		}
 		defer os.Remove(tmpFile.Name())
 
 		if _, err := tmpFile.WriteString(code); err != nil {
-			return StreamErrorMsg{Err: fmt.Errorf("写入临时文件失败: %w", err)}
+			return StreamErrorMsg{Err: fmt.Errorf("failed to write the temporary file: %w", err)}
 		}
 		tmpFile.Close()
 

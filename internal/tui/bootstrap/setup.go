@@ -49,14 +49,14 @@ func EnsureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 		return false, err
 	}
 	if created {
-		fmt.Printf("已创建 %s\n", configPath)
+		fmt.Printf("Created %s\n", configPath)
 	}
 
 	for {
 		if cfg.RuntimeAPIKey() == "" {
 			envName := cfg.APIKeyEnvVarName()
-			fmt.Printf("未检测到环境变量 %s。可使用 /apikey <env_name>、/provider <name>、/switch <model> 切换配置，或先设置该环境变量后再 /retry。\n", envName)
-			fmt.Printf("Windows 示例: setx %s \"your-api-key\"\n", envName)
+			fmt.Printf("Environment variable %s is not set. Use /apikey <env_name>, /provider <name>, or /switch <model> to change the configuration, or set the variable and then run /retry.\n", envName)
+			fmt.Printf("Windows example: setx %s \"your-api-key\"\n", envName)
 			result, handleErr := handleSetupDecision(scanner, cfg, false, configPath)
 			if handleErr != nil {
 				return false, handleErr
@@ -72,10 +72,10 @@ func EnsureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 				return false, saveErr
 			}
 			configs.GlobalAppConfig = cfg
-			fmt.Println("API key 验证通过。")
+			fmt.Println("API key validation passed.")
 			return true, nil
 		} else if errors.Is(err, services.ErrInvalidAPIKey) {
-			fmt.Printf("环境变量 %s 中的 API key 无效: %v\n", cfg.APIKeyEnvVarName(), err)
+			fmt.Printf("The API key in environment variable %s is invalid: %v\n", cfg.APIKeyEnvVarName(), err)
 			result, handleErr := handleSetupDecision(scanner, cfg, false, configPath)
 			if handleErr != nil {
 				return false, handleErr
@@ -85,7 +85,7 @@ func EnsureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 			}
 			continue
 		} else if errors.Is(err, services.ErrAPIKeyValidationSoft) {
-			fmt.Printf("无法确认环境变量 %s 中的 API key 有效性: %v\n", cfg.APIKeyEnvVarName(), err)
+			fmt.Printf("Could not verify the API key in environment variable %s: %v\n", cfg.APIKeyEnvVarName(), err)
 			result, handleErr := handleSetupDecision(scanner, cfg, true, configPath)
 			if handleErr != nil {
 				return false, handleErr
@@ -99,7 +99,7 @@ func EnsureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 			}
 			continue
 		} else {
-			fmt.Printf("模型验证失败: %v\n", err)
+			fmt.Printf("Model validation failed: %v\n", err)
 			result, handleErr := handleSetupDecision(scanner, cfg, false, configPath)
 			if handleErr != nil {
 				return false, handleErr
@@ -117,9 +117,9 @@ func EnsureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 
 func handleSetupDecision(scanner *bufio.Scanner, cfg *configs.AppConfiguration, allowContinue bool, configPath string) (setupDecision, error) {
 	for {
-		prompt := "选择 /retry, /apikey <env_name>, /provider <name>, /switch <model>, 或 /exit > "
+		prompt := "Choose /retry, /apikey <env_name>, /provider <name>, /switch <model>, or /exit > "
 		if allowContinue {
-			prompt = "选择 /retry, /continue, /apikey <env_name>, /provider <name>, /switch <model>, 或 /exit > "
+			prompt = "Choose /retry, /continue, /apikey <env_name>, /provider <name>, /switch <model>, or /exit > "
 		}
 		decision, ok, inputErr := readInteractiveLine(scanner, prompt)
 		if inputErr != nil {
@@ -139,55 +139,55 @@ func handleSetupDecision(scanner *bufio.Scanner, cfg *configs.AppConfiguration, 
 			return setupRetry, nil
 		case "/apikey":
 			if len(fields) < 2 {
-				fmt.Println("用法: /apikey <env_name>")
+				fmt.Println("Usage: /apikey <env_name>")
 				continue
 			}
 			applyAPIKeyEnvName(cfg, fields[1])
-			fmt.Printf("已切换 API Key 环境变量名为: %s\n", cfg.APIKeyEnvVarName())
+			fmt.Printf("Switched the API key environment variable name to: %s\n", cfg.APIKeyEnvVarName())
 			return setupRetry, nil
 		case "/continue":
 			if !allowContinue {
-				fmt.Println("/continue 仅在网络或服务问题导致无法确认时可用。")
+				fmt.Println("/continue is only available when the API key cannot be verified due to a network or service issue.")
 				continue
 			}
 			if saveErr := writeAppConfig(configPath, cfg); saveErr != nil {
 				return setupExit, saveErr
 			}
-			fmt.Println("继续启动，使用当前 API key 和模型。")
+			fmt.Println("Continuing with the current API key and model.")
 			return setupContinue, nil
 		case "/provider":
 			if len(fields) < 2 {
-				fmt.Println("用法: /provider <name>")
+				fmt.Println("Usage: /provider <name>")
 				printSupportedProviders()
 				continue
 			}
 			providerName, ok := services.NormalizeProviderName(fields[1])
 			if !ok {
-				fmt.Printf("不支持的提供商 %q\n", fields[1])
+				fmt.Printf("Unsupported provider %q\n", fields[1])
 				printSupportedProviders()
 				continue
 			}
 			cfg.AI.Provider = providerName
 			cfg.AI.Model = services.DefaultModelForProvider(providerName)
-			fmt.Printf("已切换到提供商: %s\n", providerName)
-			fmt.Printf("当前模型已重置为默认值: %s\n", cfg.AI.Model)
+			fmt.Printf("Switched provider to: %s\n", providerName)
+			fmt.Printf("Reset the current model to the default: %s\n", cfg.AI.Model)
 			return setupRetry, nil
 		case "/switch":
 			if len(fields) < 2 {
-				fmt.Println("用法: /switch <model>")
+				fmt.Println("Usage: /switch <model>")
 				continue
 			}
 			target := strings.Join(fields[1:], " ")
 			cfg.AI.Model = target
-			fmt.Printf("已切换到模型: %s\n", target)
+			fmt.Printf("Switched model to: %s\n", target)
 			return setupRetry, nil
 		case "/exit":
 			return setupExit, nil
 		default:
 			if allowContinue {
-				fmt.Println("请输入 /retry, /continue, /apikey <env_name>, /provider <name>, /switch <model>, 或 /exit。")
+				fmt.Println("Enter /retry, /continue, /apikey <env_name>, /provider <name>, /switch <model>, or /exit.")
 			} else {
-				fmt.Println("请输入 /retry, /apikey <env_name>, /provider <name>, /switch <model>, 或 /exit。")
+				fmt.Println("Enter /retry, /apikey <env_name>, /provider <name>, /switch <model>, or /exit.")
 			}
 		}
 	}
@@ -211,7 +211,7 @@ func readInteractiveLine(scanner *bufio.Scanner, prompt string) (string, bool, e
 		}
 		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
-			fmt.Println("输入不能为空。")
+			fmt.Println("Input cannot be empty.")
 			continue
 		}
 		if input == "/exit" {
@@ -222,7 +222,7 @@ func readInteractiveLine(scanner *bufio.Scanner, prompt string) (string, bool, e
 }
 
 func printSupportedProviders() {
-	fmt.Println("可用提供商:")
+	fmt.Println("Supported providers:")
 	for _, name := range services.SupportedProviders() {
 		fmt.Printf("  %s\n", name)
 	}

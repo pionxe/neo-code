@@ -17,14 +17,14 @@ const (
 	PageSize = 10
 
 	// 状态文本
-	StatusPending    = "待办"
-	StatusInProgress = "进行中"
-	StatusCompleted  = "已完成"
+	StatusPending    = "Pending"
+	StatusInProgress = "In Progress"
+	StatusCompleted  = "Completed"
 
 	// 优先级文本
-	PriorityHigh   = "高"
-	PriorityMedium = "中"
-	PriorityLow    = "低"
+	PriorityHigh   = "High"
+	PriorityMedium = "Medium"
+	PriorityLow    = "Low"
 
 	// 状态图标
 	IconPending    = "[ ]"
@@ -47,16 +47,16 @@ var (
 
 // 文本配置
 const (
-	TitleText      = "--- 待办清单 ---"
-	EmptyText      = "当前没有任何待办事项。使用 /todo add <内容> [优先级] 或在待办模式下按 'a' 新增。"
-	HelpFooterText = "↑/↓: 浏览  Enter: 切换状态  x: 删除  a: 返回并新增  Esc: 返回聊天"
+	TitleText      = "--- Todo List ---"
+	EmptyText      = "There are no todos yet. Use /todo add <content> [priority] or press 'a' in todo mode to add one."
+	HelpFooterText = "↑/↓: move  Enter: toggle status  x: delete  a: return and add  Esc: back to chat"
 
 	// 交互提示消息
-	MsgUsageAdd      = "用法: /todo add <内容> [优先级(high/medium/low)]"
-	MsgAddSuccess    = "已添加待办: %s"
-	MsgAddFailed     = "添加待办失败: %v"
-	MsgUnknownSubCmd = "未知待办子命令: %s"
-	MsgPromptAdd     = "请使用 /todo add <内容> [优先级] 来添加新任务。"
+	MsgUsageAdd      = "Usage: /todo add <content> [priority(high/medium/low)]"
+	MsgAddSuccess    = "Added todo: %s"
+	MsgAddFailed     = "Failed to add todo: %v"
+	MsgUnknownSubCmd = "Unknown todo subcommand: %s"
+	MsgPromptAdd     = "Use /todo add <content> [priority] to add a new task."
 )
 
 // 按键绑定
@@ -72,26 +72,26 @@ type KeyMap struct {
 var Keys = KeyMap{
 	Up: key.NewBinding(
 		key.WithKeys("up", "k"),
-		key.WithHelp("↑/k", "上移"),
+		key.WithHelp("↑/k", "up"),
 	),
 	Down: key.NewBinding(
 		key.WithKeys("down", "j"),
-		key.WithHelp("↓/j", "下移"),
+		key.WithHelp("↓/j", "down"),
 	),
 	Add: key.NewBinding(
 		key.WithKeys("a", "n"),
-		key.WithHelp("a/n", "新增"),
+		key.WithHelp("a/n", "add"),
 	),
 	Done: key.NewBinding(
 		key.WithKeys("enter", " "),
-		key.WithHelp("enter/space", "切换状态"),
+		key.WithHelp("enter/space", "toggle"),
 	),
 	Delete: key.NewBinding(
 		key.WithKeys("x", "delete"),
-		key.WithHelp("x/del", "删除"),
+		key.WithHelp("x/del", "delete"),
 	),
 	Back: key.NewBinding(
 		key.WithKeys("esc", "q"),
-		key.WithHelp("esc/q", "返回"),
+		key.WithHelp("esc/q", "back"),
 	),
 }

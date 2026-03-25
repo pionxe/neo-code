@@ -9,7 +9,7 @@ import (
 func TestRenderHelpContainsKeyCommands(t *testing.T) {
 	rendered := RenderHelp(80)
 
-	for _, want := range []string{"NeoCode 帮助", "/help", "/provider <name>", "按 Esc 或 /help 关闭"} {
+	for _, want := range []string{"NeoCode Help", "/help", "/provider <name>", "Press Esc or /help to close"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected help to contain %q, got %q", want, rendered)
 		}
@@ -18,15 +18,18 @@ func TestRenderHelpContainsKeyCommands(t *testing.T) {
 
 func TestInputBoxRenderChangesFooterByGeneratingState(t *testing.T) {
 	idle := InputBox{Body: "body", Generating: false}.Render()
-	if !strings.Contains(idle, "Ctrl+V粘贴") {
+	if !strings.Contains(idle, "Ctrl+V: paste") {
 		t.Fatalf("expected idle footer to mention paste, got %q", idle)
+	}
+	if !strings.Contains(idle, "click [Copy]: copy") {
+		t.Fatalf("expected idle footer to mention copy action, got %q", idle)
 	}
 
 	busy := InputBox{Body: "body", Generating: true}.Render()
-	if strings.Contains(busy, "Ctrl+V粘贴") {
+	if strings.Contains(busy, "Ctrl+V: paste") {
 		t.Fatalf("expected generating footer to omit paste hint, got %q", busy)
 	}
-	if !strings.Contains(busy, "F5/F8发送") {
+	if !strings.Contains(busy, "F5/F8: send") {
 		t.Fatalf("expected busy footer to keep send hint, got %q", busy)
 	}
 }
@@ -41,7 +44,7 @@ func TestMessageListRenderIncludesRoleSpecificLabels(t *testing.T) {
 		},
 	}.Render()
 
-	for _, want := range []string{"你 [1]:", "Neo [2]:", "[系统]", "hello", "world", "note"} {
+	for _, want := range []string{"You [1]:", "Neo [2]:", "[System]", "hello", "world", "note"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered list to contain %q, got %q", want, rendered)
 		}
@@ -51,5 +54,26 @@ func TestMessageListRenderIncludesRoleSpecificLabels(t *testing.T) {
 func TestMessageListRenderReturnsEmptyForNoMessages(t *testing.T) {
 	if got := (MessageList{Width: 40}).Render(); got != "" {
 		t.Fatalf("expected empty render, got %q", got)
+	}
+}
+
+func TestMessageListRenderLayoutIncludesCopyRegions(t *testing.T) {
+	layout := MessageList{
+		Width:    60,
+		Messages: []Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```", Timestamp: time.Unix(1, 0)}},
+	}.RenderLayout()
+
+	if !strings.Contains(layout.Content, "[Copy] go") {
+		t.Fatalf("expected copy action in layout, got %q", layout.Content)
+	}
+	if len(layout.Regions) != 1 {
+		t.Fatalf("expected one clickable region, got %d", len(layout.Regions))
+	}
+	region := layout.Regions[0]
+	if region.Kind != "copy" || region.StartRow != 1 || region.StartCol != 1 || region.EndCol != len(CopyActionLabel()) {
+		t.Fatalf("unexpected region: %+v", region)
+	}
+	if region.CodeBlock.Code != "fmt.Println(1)" {
+		t.Fatalf("expected copied code, got %+v", region.CodeBlock)
 	}
 }

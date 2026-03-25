@@ -53,7 +53,7 @@ func TestViewShowsSmallWindowMessage(t *testing.T) {
 	m.ui.Width = 10
 	m.ui.Height = 5
 
-	if got := m.View(); got != "窗口太小" {
+	if got := m.View(); got != "Window too small" {
 		t.Fatalf("expected small window warning, got %q", got)
 	}
 }
@@ -65,7 +65,7 @@ func TestViewRendersHelpPanelInHelpMode(t *testing.T) {
 	m.ui.Mode = state.ModeHelp
 
 	rendered := m.View()
-	if !strings.Contains(rendered, "NeoCode 帮助") {
+	if !strings.Contains(rendered, "NeoCode Help") {
 		t.Fatalf("expected help panel in view, got %q", rendered)
 	}
 	if !strings.Contains(rendered, "/help") {

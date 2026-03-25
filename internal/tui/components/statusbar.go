@@ -36,7 +36,7 @@ func (s StatusBar) Render() string {
 	timeStr := time.Now().Format("15:04")
 	timestampStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#5C6370"))
 
-	memText := fmt.Sprintf("记忆: %d", s.MemoryCnt)
+	memText := fmt.Sprintf("Memory: %d", s.MemoryCnt)
 	space := s.Width - len(s.Model) - len(memText) - len(timeStr) - 10
 	if space < 0 {
 		space = 0

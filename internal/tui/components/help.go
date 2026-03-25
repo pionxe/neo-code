@@ -12,7 +12,7 @@ func RenderHelp(width int) string {
 	title := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#61AFEF")).
 		Bold(true).
-		Render("NeoCode 帮助")
+		Render("NeoCode Help")
 
 	b.WriteString(title)
 	b.WriteString("\n\n")
@@ -21,18 +21,17 @@ func RenderHelp(width int) string {
 		cmd  string
 		desc string
 	}{
-		{"/help", "显示帮助"},
-		{"/pwd | /workspace", "显示当前工作区目录"},
-		{"/apikey <env_name>", "切换 API Key 变量名"},
-		{"/provider <name>", "切换模型提供商"},
-		{"/switch <model>", "切换模型"},
-		{"/todo [add|list]", "管理待办清单"},
-		{"/run <code>", "执行代码"},
-		{"/explain <code>", "解释代码"},
-		{"/memory", "显示记忆统计"},
-		{"/clear-memory confirm", "清空长期记忆"},
-		{"/clear-context", "清空会话上下文"},
-		{"/exit", "退出程序"},
+		{"/help", "Show help"},
+		{"/pwd | /workspace", "Show the current workspace path"},
+		{"/apikey <env_name>", "Switch the API key environment variable"},
+		{"/provider <name>", "Switch the model provider"},
+		{"/switch <model>", "Switch the active model"},
+		{"/run <code>", "Run code"},
+		{"/explain <code>", "Explain code"},
+		{"/memory", "Show memory stats"},
+		{"/clear-memory confirm", "Clear persistent memory"},
+		{"/clear-context", "Clear the session context"},
+		{"/exit", "Exit the app"},
 	}
 
 	cmdStyle := lipgloss.NewStyle().
@@ -55,14 +54,14 @@ func RenderHelp(width int) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("输入框支持光标、粘贴、滚动，F5/F8 发送"))
+	b.WriteString(helpStyle.Render("Input supports cursor movement, paste, and scrolling. Press F5/F8 to send."))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("聊天区支持 PgUp/PgDn 和鼠标滚轮"))
+	b.WriteString(helpStyle.Render("Chat supports PgUp/PgDn, the mouse wheel, and clicking [Copy] on code blocks."))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("取消: Ctrl+C"))
+	b.WriteString(helpStyle.Render("Cancel: Ctrl+C"))
 
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("按 Esc 或 /help 关闭"))
+	b.WriteString(dimStyle.Render("Press Esc or /help to close"))
 
 	return lipgloss.NewStyle().MaxWidth(width).Render(b.String())
 }

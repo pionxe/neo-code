@@ -283,7 +283,7 @@ func TestHandleCommandAPIKeyRequiresLoadedConfig(t *testing.T) {
 
 	updated, _ := m.handleCommand("/apikey TEST_ENV")
 	got := updated.(Model)
-	assertLastMessageContains(t, got, "配置")
+	assertLastMessageContains(t, got, "configuration")
 }
 
 func TestHandleCommandAPIKeyEnvStillMissing(t *testing.T) {
@@ -461,7 +461,7 @@ func TestHandleCommandProviderRequiresLoadedConfig(t *testing.T) {
 
 	updated, _ := m.handleCommand("/provider openai")
 	got := updated.(Model)
-	assertLastMessageContains(t, got, "配置")
+	assertLastMessageContains(t, got, "configuration")
 }
 
 func TestHandleCommandProviderWriteFailure(t *testing.T) {
@@ -562,7 +562,7 @@ func TestHandleCommandSwitchRequiresLoadedConfig(t *testing.T) {
 
 	updated, _ := m.handleCommand("/switch gpt-5.4")
 	got := updated.(Model)
-	assertLastMessageContains(t, got, "配置")
+	assertLastMessageContains(t, got, "configuration")
 }
 
 func TestHandleCommandSwitchWriteFailure(t *testing.T) {
@@ -838,6 +838,76 @@ func TestMouseMsgUpdatesViewport(t *testing.T) {
 
 	updated, _ := m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
 	_ = updated.(Model)
+}
+
+func TestMouseClickCopiesCodeBlock(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.chat.Messages = []state.Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```"}}
+	m.refreshViewport()
+
+	var copied string
+	m.copyToClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: 2})
+	got := updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected no follow-up command")
+	}
+	if copied != "fmt.Println(1)" {
+		t.Fatalf("expected code to be copied, got %q", copied)
+	}
+	if !strings.Contains(got.ui.CopyStatus, "Copied go code block") {
+		t.Fatalf("expected copy status, got %q", got.ui.CopyStatus)
+	}
+}
+
+func TestMouseClickCopyFailureShowsEnglishStatus(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.chat.Messages = []state.Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```"}}
+	m.refreshViewport()
+
+	m.copyToClipboard = func(string) error {
+		return errors.New("clipboard unavailable")
+	}
+
+	updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: 2})
+	got := updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected no follow-up command")
+	}
+	if !strings.Contains(got.ui.CopyStatus, "Copy failed: clipboard unavailable") {
+		t.Fatalf("expected english copy failure status, got %q", got.ui.CopyStatus)
+	}
+}
+
+func TestMouseClickOutsideCopyRegionDoesNotCopy(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.chat.Messages = []state.Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```"}}
+	m.refreshViewport()
+
+	called := false
+	m.copyToClipboard = func(string) error {
+		called = true
+		return nil
+	}
+
+	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 20, Y: 2})
+	got := updated.(Model)
+
+	if called {
+		t.Fatal("expected copy not to trigger")
+	}
+	if got.ui.CopyStatus != "" {
+		t.Fatalf("expected copy status to remain empty, got %q", got.ui.CopyStatus)
+	}
 }
 
 func TestStreamChunkMsgNoOpWhenNotGenerating(t *testing.T) {
