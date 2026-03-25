@@ -74,11 +74,13 @@ func (m Model) renderInputArea() string {
 	return components.InputBox{
 		Body:       m.textarea.View(),
 		Generating: m.chat.Generating,
+		Status:     m.ui.CopyStatus,
 	}.Render()
 }
 
-func (m Model) renderChatContent() string {
+func (m *Model) renderChatContent() string {
 	if m.ui.Mode == state.ModeTodo {
+		m.chatLayout = components.RenderedChatLayout{}
 		return components.TodoList{
 			Todos:   m.todos,
 			Cursor:  m.todoCursor,
@@ -86,7 +88,9 @@ func (m Model) renderChatContent() string {
 			Focused: true,
 		}.Render()
 	}
-	return components.MessageList{Messages: m.toComponentMessages(), Width: m.viewport.Width}.Render()
+	layout := components.MessageList{Messages: m.toComponentMessages(), Width: m.viewport.Width}.RenderLayout()
+	m.chatLayout = layout
+	return layout.Content
 }
 
 func (m Model) toComponentMessages() []components.Message {

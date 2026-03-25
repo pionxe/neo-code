@@ -840,6 +840,55 @@ func TestMouseMsgUpdatesViewport(t *testing.T) {
 	_ = updated.(Model)
 }
 
+func TestMouseClickCopiesCodeBlock(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.chat.Messages = []state.Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```"}}
+	m.refreshViewport()
+
+	var copied string
+	m.copyToClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: 2})
+	got := updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected no follow-up command")
+	}
+	if copied != "fmt.Println(1)" {
+		t.Fatalf("expected code to be copied, got %q", copied)
+	}
+	if !strings.Contains(got.ui.CopyStatus, "已复制 go 代码块") {
+		t.Fatalf("expected copy status, got %q", got.ui.CopyStatus)
+	}
+}
+
+func TestMouseClickOutsideCopyRegionDoesNotCopy(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.chat.Messages = []state.Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```"}}
+	m.refreshViewport()
+
+	called := false
+	m.copyToClipboard = func(string) error {
+		called = true
+		return nil
+	}
+
+	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 20, Y: 2})
+	got := updated.(Model)
+
+	if called {
+		t.Fatal("expected copy not to trigger")
+	}
+	if got.ui.CopyStatus != "" {
+		t.Fatalf("expected copy status to remain empty, got %q", got.ui.CopyStatus)
+	}
+}
+
 func TestStreamChunkMsgNoOpWhenNotGenerating(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)

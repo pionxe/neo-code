@@ -85,6 +85,29 @@ func TestRenderContentSupportsIndentedFence(t *testing.T) {
 	}
 }
 
+func TestParseContentSegmentsExtractsTextAndCodeBlocks(t *testing.T) {
+	segments := ParseContentSegments("before\n```go\nfmt.Println(1)\n```\nafter")
+	if len(segments) != 3 {
+		t.Fatalf("expected 3 segments, got %d", len(segments))
+	}
+	if segments[0].Type != SegmentText || segments[0].Text != "before" {
+		t.Fatalf("unexpected first segment: %+v", segments[0])
+	}
+	if segments[1].Type != SegmentCodeBlock || segments[1].Lang != "go" || segments[1].Code != "fmt.Println(1)" || !segments[1].Closed {
+		t.Fatalf("unexpected code segment: %+v", segments[1])
+	}
+	if segments[2].Type != SegmentText || segments[2].Text != "after" {
+		t.Fatalf("unexpected last segment: %+v", segments[2])
+	}
+}
+
+func TestRenderCodeBlockIncludesCopyHeader(t *testing.T) {
+	rendered := RenderCodeBlock(ContentSegment{Type: SegmentCodeBlock, Lang: "go", Code: "fmt.Println(1)", Closed: true}, 80, CopyActionLabel())
+	if !strings.Contains(rendered, "[Copy] go") {
+		t.Fatalf("expected copy header, got %q", rendered)
+	}
+}
+
 func TestHighlightCodePreservesNewlines(t *testing.T) {
 	code := "def bubble_sort(arr):\n    for i in range(len(arr)):\n        pass"
 	highlighted := HighlightCode(code, "python")

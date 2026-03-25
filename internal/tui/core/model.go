@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"go-llm-demo/configs"
+	"go-llm-demo/internal/tui/components"
 	"go-llm-demo/internal/tui/services"
 	"go-llm-demo/internal/tui/state"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -23,9 +25,11 @@ type Model struct {
 	client  services.ChatClient
 	persona string
 
-	streamChan <-chan string
-	textarea   textarea.Model
-	viewport   viewport.Model
+	streamChan      <-chan string
+	textarea        textarea.Model
+	viewport        viewport.Model
+	chatLayout      components.RenderedChatLayout
+	copyToClipboard func(string) error
 
 	mu *sync.Mutex
 
@@ -84,11 +88,12 @@ func NewModel(client services.ChatClient, persona string, historyTurns int, conf
 			APIKeyReady:    configs.RuntimeAPIKey() != "",
 			ConfigPath:     configPath,
 		},
-		client:   client,
-		persona:  persona,
-		textarea: input,
-		viewport: vp,
-		mu:       &sync.Mutex{},
+		client:          client,
+		persona:         persona,
+		textarea:        input,
+		viewport:        vp,
+		copyToClipboard: clipboard.WriteAll,
+		mu:              &sync.Mutex{},
 	}
 }
 

@@ -57,7 +57,7 @@ func RenderHelp(width int) string {
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("输入框支持光标、粘贴、滚动，F5/F8 发送"))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("聊天区支持 PgUp/PgDn 和鼠标滚轮"))
+	b.WriteString(helpStyle.Render("聊天区支持 PgUp/PgDn、鼠标滚轮，以及点击代码块 [Copy] 复制"))
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("取消: Ctrl+C"))
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"go-llm-demo/configs"
+	"go-llm-demo/internal/tui/components"
 	"go-llm-demo/internal/tui/services"
 	"go-llm-demo/internal/tui/state"
 	"go-llm-demo/internal/tui/todo"
@@ -49,6 +50,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
+		if handled := m.handleMouseClick(msg); handled {
+			m.refreshViewport()
+			return m, nil
+		}
 		var vpCmd tea.Cmd
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		m.ui.AutoScroll = m.viewport.AtBottom()
@@ -278,6 +283,56 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ui.AutoScroll = true
 	}
 	return *m, inputCmd
+}
+
+func (m *Model) handleMouseClick(msg tea.MouseMsg) bool {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return false
+	}
+	contentRow, contentCol, ok := m.chatContentPosition(msg)
+	if !ok {
+		return false
+	}
+	region, found := findClickableRegion(m.chatLayout.Regions, contentRow, contentCol)
+	if !found || region.Kind != "copy" {
+		return false
+	}
+	if err := m.copyCodeBlock(region.CodeBlock); err != nil {
+		m.ui.CopyStatus = fmt.Sprintf("复制失败: %v", err)
+		return true
+	}
+	m.ui.CopyStatus = components.FormatCopyNotice(region.CodeBlock)
+	return true
+}
+
+func (m *Model) chatContentPosition(msg tea.MouseMsg) (int, int, bool) {
+	statusHeight := 1
+	chatTop := statusHeight
+	chatBottom := chatTop + m.viewport.Height
+	if msg.Y < chatTop || msg.Y >= chatBottom {
+		return 0, 0, false
+	}
+	return m.viewport.YOffset + (msg.Y - chatTop), msg.X, true
+}
+
+func findClickableRegion(regions []components.ClickableRegion, row, col int) (components.ClickableRegion, bool) {
+	for _, region := range regions {
+		if row < region.StartRow || row > region.EndRow {
+			continue
+		}
+		if col < region.StartCol || col > region.EndCol {
+			continue
+		}
+		return region, true
+	}
+	return components.ClickableRegion{}, false
+}
+
+func (m *Model) copyCodeBlock(ref components.CodeBlockRef) error {
+	if m.copyToClipboard == nil {
+		return fmt.Errorf("clipboard unavailable")
+	}
+	return m.copyToClipboard(ref.Code)
 }
 
 func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {

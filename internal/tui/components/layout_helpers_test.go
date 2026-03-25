@@ -21,6 +21,9 @@ func TestInputBoxRenderChangesFooterByGeneratingState(t *testing.T) {
 	if !strings.Contains(idle, "Ctrl+V粘贴") {
 		t.Fatalf("expected idle footer to mention paste, got %q", idle)
 	}
+	if !strings.Contains(idle, "鼠标点[Copy]复制") {
+		t.Fatalf("expected idle footer to mention copy action, got %q", idle)
+	}
 
 	busy := InputBox{Body: "body", Generating: true}.Render()
 	if strings.Contains(busy, "Ctrl+V粘贴") {
@@ -51,5 +54,26 @@ func TestMessageListRenderIncludesRoleSpecificLabels(t *testing.T) {
 func TestMessageListRenderReturnsEmptyForNoMessages(t *testing.T) {
 	if got := (MessageList{Width: 40}).Render(); got != "" {
 		t.Fatalf("expected empty render, got %q", got)
+	}
+}
+
+func TestMessageListRenderLayoutIncludesCopyRegions(t *testing.T) {
+	layout := MessageList{
+		Width:    60,
+		Messages: []Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```", Timestamp: time.Unix(1, 0)}},
+	}.RenderLayout()
+
+	if !strings.Contains(layout.Content, "[Copy] go") {
+		t.Fatalf("expected copy action in layout, got %q", layout.Content)
+	}
+	if len(layout.Regions) != 1 {
+		t.Fatalf("expected one clickable region, got %d", len(layout.Regions))
+	}
+	region := layout.Regions[0]
+	if region.Kind != "copy" || region.StartRow != 1 || region.StartCol != 1 || region.EndCol != len(CopyActionLabel()) {
+		t.Fatalf("unexpected region: %+v", region)
+	}
+	if region.CodeBlock.Code != "fmt.Println(1)" {
+		t.Fatalf("expected copied code, got %+v", region.CodeBlock)
 	}
 }
