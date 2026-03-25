@@ -15,12 +15,12 @@ type BashTool struct{}
 func (b *BashTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "bash",
-		Description: "在工作区内执行 bash 命令。支持可选 workdir 和 timeout，默认 120000ms。",
+		Description: "Execute a bash command in the workspace. Supports optional workdir and timeout, default is 120000ms.",
 		Parameters: []ToolParamSpec{
-			{Name: "command", Type: "string", Required: true, Description: "要执行的 bash 命令。"},
-			{Name: "workdir", Type: "string", Description: "工作区内命令执行目录，默认工作区根目录。"},
-			{Name: "timeout", Type: "integer", Description: "命令超时时间，单位毫秒，默认 120000。"},
-			{Name: "description", Type: "string", Description: "对命令目的的简短说明，便于日志和审计。"},
+			{Name: "command", Type: "string", Required: true, Description: "The bash command to execute."},
+			{Name: "workdir", Type: "string", Description: "Directory within the workspace to execute the command, defaults to workspace root."},
+			{Name: "timeout", Type: "integer", Description: "Command timeout in milliseconds, default 120000."},
+			{Name: "description", Type: "string", Description: "A brief explanation of the command purpose for logs and auditing."},
 		},
 	}
 }
@@ -40,7 +40,7 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
 		return errRes
 	}
 	if timeoutMs < 1 {
-		return &ToolResult{ToolName: b.Definition().Name, Success: false, Error: "timeout 必须 >= 1"}
+		return &ToolResult{ToolName: b.Definition().Name, Success: false, Error: "timeout must be >= 1"}
 	}
 	workdir, errRes := optionalString(params, "workdir", ".")
 	if errRes != nil {
@@ -61,11 +61,11 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
 	var shellArgs []string
 	switch runtime.GOOS {
 	case "linux", "darwin":
-		// Linux/macOS: 使用 bash
+		// Linux/macOS: use bash
 		shell = "bash"
 		shellArgs = []string{"-lc", command}
 	case "windows":
-		// Windows: 使用 PowerShell
+		// Windows: use PowerShell
 		shell = "powershell"
 		shellArgs = []string{"-Command", command}
 	default:
@@ -73,7 +73,7 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
 		shellArgs = []string{"-lc", command}
 	}
 
-	// 使用动态选择的 shell 和参数创建命令
+	// Use dynamically selected shell and args to create the command
 	shell, shellArgs = preferredShellCommand(runtime.GOOS, command, exec.LookPath, shell, shellArgs)
 	cmd := exec.CommandContext(ctx, shell, shellArgs...)
 	cmd.Dir = workdir
@@ -85,11 +85,11 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
 	if err != nil {
 		if ctx.Err() != nil {
 			result.Success = false
-			result.Error = fmt.Sprintf("命令在 %dms 后超时", timeoutMs)
+			result.Error = fmt.Sprintf("command timed out after %dms", timeoutMs)
 			return result
 		}
 		result.Success = false
-		result.Error = fmt.Sprintf("命令执行失败: %v", err)
+		result.Error = fmt.Sprintf("command execution failed: %v", err)
 		if stderrBuf.Len() > 0 {
 			result.Error += ": " + stderrBuf.String()
 		}

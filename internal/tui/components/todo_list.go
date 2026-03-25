@@ -36,21 +36,21 @@ func (tl TodoList) Render() string {
 	b.WriteString("\n")
 
 	for i, t := range tl.Todos {
-		cursor := "  "
+		cursor := todo.IconNoCursor
 		itemStyle := lipgloss.NewStyle()
 		if i == tl.Cursor && tl.Focused {
-			cursor = "> "
+			cursor = todo.IconCursor
 			itemStyle = itemStyle.Background(todo.ColorSelection).Foreground(lipgloss.Color("#FFFFFF"))
 		}
 
-		statusIcon := "[ ]"
+		statusIcon := todo.IconPending
 		statusStyle := lipgloss.NewStyle().Foreground(todo.ColorPending)
 		switch t.Status {
 		case services.TodoInProgress:
-			statusIcon = "[-]"
+			statusIcon = todo.IconInProgress
 			statusStyle = lipgloss.NewStyle().Foreground(todo.ColorInProgress)
 		case services.TodoCompleted:
-			statusIcon = "[x]"
+			statusIcon = todo.IconCompleted
 			statusStyle = lipgloss.NewStyle().Foreground(todo.ColorCompleted)
 		}
 

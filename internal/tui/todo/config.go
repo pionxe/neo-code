@@ -25,6 +25,13 @@ const (
 	PriorityHigh   = "高"
 	PriorityMedium = "中"
 	PriorityLow    = "低"
+
+	// 状态图标
+	IconPending    = "[ ]"
+	IconInProgress = "[-]"
+	IconCompleted  = "[x]"
+	IconCursor     = "> "
+	IconNoCursor   = "  "
 )
 
 // UI 颜色配置

@@ -11,8 +11,8 @@ type ListTool struct{}
 func (l *ListTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "list",
-		Description: "列出工作区内目录内容。每行一个条目，子目录后缀为 '/'.",
-		Parameters:  []ToolParamSpec{{Name: "path", Type: "string", Description: "工作区内待列出的目录，默认当前工作区根目录。"}},
+		Description: "List directory contents in the workspace. One entry per line, subdirectories suffixed with '/'.",
+		Parameters:  []ToolParamSpec{{Name: "path", Type: "string", Description: "Directory within the workspace to list, defaults to workspace root."}},
 	}
 }
 
@@ -30,12 +30,12 @@ func (l *ListTool) Run(params map[string]interface{}) *ToolResult {
 
 	file, err := os.Open(path)
 	if err != nil {
-		return &ToolResult{ToolName: l.Definition().Name, Success: false, Error: fmt.Sprintf("打开目录失败: %v", err)}
+		return &ToolResult{ToolName: l.Definition().Name, Success: false, Error: fmt.Sprintf("failed to open directory: %v", err)}
 	}
 	defer file.Close()
 	entries, err := file.Readdir(-1)
 	if err != nil {
-		return &ToolResult{ToolName: l.Definition().Name, Success: false, Error: fmt.Sprintf("读取目录失败: %v", err)}
+		return &ToolResult{ToolName: l.Definition().Name, Success: false, Error: fmt.Sprintf("failed to read directory: %v", err)}
 	}
 	output := ""
 	for _, entry := range entries {

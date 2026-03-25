@@ -30,7 +30,7 @@ func TestBashTool_Run_DeniedBySecurity(t *testing.T) {
 	if result.Success {
 		t.Fatal("expected bash execution to be denied")
 	}
-	if !strings.Contains(result.Error, "安全策略拒绝执行") {
+	if !strings.Contains(result.Error, "Security policy denied execution") {
 		t.Fatalf("unexpected error: %s", result.Error)
 	}
 	if result.Metadata["securityAction"] != string(domain.ActionDeny) {
@@ -52,7 +52,7 @@ func TestBashTool_Run_AskBySecurity(t *testing.T) {
 	if result.Success {
 		t.Fatal("expected bash execution to require confirmation")
 	}
-	if !strings.Contains(result.Error, "需要用户确认") {
+	if !strings.Contains(result.Error, "requires user confirmation") {
 		t.Fatalf("unexpected error: %s", result.Error)
 	}
 	if result.Metadata["securityAction"] != string(domain.ActionAsk) {

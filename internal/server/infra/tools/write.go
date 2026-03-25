@@ -9,10 +9,10 @@ type WriteTool struct{}
 func (w *WriteTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "write",
-		Description: "在工作区内写入整个文件内容。若父目录不存在则自动创建。",
+		Description: "Write entire file content in the workspace. Automatically creates parent directories if they do not exist.",
 		Parameters: []ToolParamSpec{
-			{Name: "filePath", Type: "string", Required: true, Description: "工作区内目标文件路径。"},
-			{Name: "content", Type: "string", Required: true, Description: "将完整写入文件的新内容。"},
+			{Name: "filePath", Type: "string", Required: true, Description: "Target file path within the workspace."},
+			{Name: "content", Type: "string", Required: true, Description: "The complete new content to be written to the file."},
 		},
 	}
 }
@@ -35,7 +35,7 @@ func (w *WriteTool) Run(params map[string]interface{}) *ToolResult {
 	}
 
 	if err := AtomicWrite(filePath, []byte(content)); err != nil {
-		return &ToolResult{ToolName: w.Definition().Name, Success: false, Error: fmt.Sprintf("写入文件失败: %v", err)}
+		return &ToolResult{ToolName: w.Definition().Name, Success: false, Error: fmt.Sprintf("failed to write file: %v", err)}
 	}
-	return &ToolResult{ToolName: w.Definition().Name, Success: true, Output: fmt.Sprintf("成功写入 %s", filePath), Metadata: map[string]interface{}{"filePath": filePath, "bytesWritten": len(content)}}
+	return &ToolResult{ToolName: w.Definition().Name, Success: true, Output: fmt.Sprintf("Successfully wrote to %s", filePath), Metadata: map[string]interface{}{"filePath": filePath, "bytesWritten": len(content)}}
 }

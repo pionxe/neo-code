@@ -14,11 +14,11 @@ type GrepTool struct{}
 func (g *GrepTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "grep",
-		Description: "在工作区内递归搜索文件内容并返回所有命中的文件、行号和行文本。",
+		Description: "Recursively search for file content in the workspace using regular expressions and return all matches with file, line number, and text.",
 		Parameters: []ToolParamSpec{
-			{Name: "pattern", Type: "string", Required: true, Description: "要搜索的正则表达式。"},
-			{Name: "path", Type: "string", Description: "工作区内的搜索根目录，默认当前工作区。"},
-			{Name: "include", Type: "string", Description: "可选的文件名 glob 过滤，例如 '*.go'。"},
+			{Name: "pattern", Type: "string", Required: true, Description: "The regular expression to search for."},
+			{Name: "path", Type: "string", Description: "Search root directory within the workspace, defaults to workspace root."},
+			{Name: "include", Type: "string", Description: "Optional filename glob filter, e.g., '*.go'."},
 		},
 	}
 }
@@ -31,7 +31,7 @@ func (g *GrepTool) Run(params map[string]interface{}) *ToolResult {
 	}
 	regex, err := regexp.Compile(pattern)
 	if err != nil {
-		return &ToolResult{ToolName: g.Definition().Name, Success: false, Error: fmt.Sprintf("无效的正则表达式模式: %v", err)}
+		return &ToolResult{ToolName: g.Definition().Name, Success: false, Error: fmt.Sprintf("invalid regex pattern: %v", err)}
 	}
 	searchPath, errRes := optionalString(params, "path", ".")
 	if errRes != nil {
@@ -84,7 +84,7 @@ func (g *GrepTool) Run(params map[string]interface{}) *ToolResult {
 		return &ToolResult{ToolName: g.Definition().Name, Success: false, Error: walkErr.Error()}
 	}
 	if matchCount == 0 {
-		return &ToolResult{ToolName: g.Definition().Name, Success: true, Output: "未找到匹配项。", Metadata: map[string]interface{}{"pattern": pattern, "path": searchPath, "include": includePattern, "matches": 0}}
+		return &ToolResult{ToolName: g.Definition().Name, Success: true, Output: "No matches found.", Metadata: map[string]interface{}{"pattern": pattern, "path": searchPath, "include": includePattern, "matches": 0}}
 	}
 	return &ToolResult{ToolName: g.Definition().Name, Success: true, Output: strings.Join(lines, "\n") + "\n", Metadata: map[string]interface{}{"pattern": pattern, "path": searchPath, "include": includePattern, "matches": matchCount}}
 }

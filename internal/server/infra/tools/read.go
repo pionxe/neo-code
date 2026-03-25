@@ -12,16 +12,16 @@ type ReadTool struct{}
 func (r *ReadTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "read",
-		Description: "读取工作区内的文件或目录。读取文件时支持 offset/limit 分页，读取目录时返回目录项列表。",
+		Description: "Read a file or directory in the workspace. Supports offset/limit pagination for files, returns directory entries for directories.",
 		Parameters: []ToolParamSpec{
-			{Name: "filePath", Type: "string", Required: true, Description: "工作区内的目标文件或目录路径。支持相对路径。"},
-			{Name: "offset", Type: "integer", Description: "读取文件时的起始行号，1 开始，默认 1。"},
-			{Name: "limit", Type: "integer", Description: "读取文件时的最大返回行数，默认 2000。"},
+			{Name: "filePath", Type: "string", Required: true, Description: "Path to the target file or directory in the workspace. Supports relative paths."},
+			{Name: "offset", Type: "integer", Description: "Starting line number for reading a file, 1-based, default 1."},
+			{Name: "limit", Type: "integer", Description: "Maximum number of lines to return for a file, default 2000."},
 		},
 	}
 }
 
-// Run 执行读取工具。
+// Run executes the read tool.
 func (r *ReadTool) Run(params map[string]interface{}) *ToolResult {
 	filePath, errRes := requiredString(params, "filePath")
 	if errRes != nil {
@@ -45,27 +45,27 @@ func (r *ReadTool) Run(params map[string]interface{}) *ToolResult {
 		return errRes
 	}
 	if offset < 1 {
-		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: "offset 必须 >= 1"}
+		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: "offset must be >= 1"}
 	}
 	if limit < 1 {
-		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: "limit 必须 >= 1"}
+		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: "limit must be >= 1"}
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: fmt.Sprintf("打开文件失败: %v", err)}
+		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: fmt.Sprintf("failed to open file: %v", err)}
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: fmt.Sprintf("获取文件状态失败: %v", err)}
+		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: fmt.Sprintf("failed to get file status: %v", err)}
 	}
 
 	if info.IsDir() {
 		entries, err := os.ReadDir(filePath)
 		if err != nil {
-			return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: fmt.Sprintf("读取目录失败: %v", err)}
+			return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: fmt.Sprintf("failed to read directory: %v", err)}
 		}
 		output := ""
 		for _, entry := range entries {
@@ -89,7 +89,7 @@ func (r *ReadTool) Run(params map[string]interface{}) *ToolResult {
 		currentLine++
 	}
 	if err := scanner.Err(); err != nil {
-		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: fmt.Sprintf("读取文件错误: %v", err)}
+		return &ToolResult{ToolName: r.Definition().Name, Success: false, Error: fmt.Sprintf("error reading file: %v", err)}
 	}
 
 	output := ""
