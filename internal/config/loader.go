@@ -31,6 +31,7 @@ type persistedConfig struct {
 	Shell             string             `yaml:"shell"`
 	MaxLoops          int                `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec    int                `yaml:"tool_timeout_sec,omitempty"`
+	Tools             ToolsConfig        `yaml:"tools,omitempty"`
 
 	// Legacy read-only field. New saves never emit it.
 	Providers []ProviderConfig `yaml:"providers,omitempty"`
@@ -134,6 +135,7 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 		Shell:             snapshot.Shell,
 		MaxLoops:          snapshot.MaxLoops,
 		ToolTimeoutSec:    snapshot.ToolTimeoutSec,
+		Tools:             snapshot.Tools,
 	}
 
 	data, err := yaml.Marshal(&file)
@@ -228,6 +230,7 @@ func parseCurrentConfig(data []byte, defaults Config) (*Config, error) {
 		Shell:            strings.TrimSpace(file.Shell),
 		MaxLoops:         file.MaxLoops,
 		ToolTimeoutSec:   file.ToolTimeoutSec,
+		Tools:            file.Tools,
 	}
 
 	switch {
