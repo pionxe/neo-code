@@ -71,6 +71,32 @@ func TestMergeToolCallDeltas(t *testing.T) {
 	}
 }
 
+func TestProviderDescriptorMarksOpenAIAsMVPSupported(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(config.ProviderConfig{
+		Name:      config.ProviderOpenAI,
+		Type:      config.ProviderOpenAI,
+		BaseURL:   config.DefaultOpenAIBaseURL,
+		Model:     "gpt-5.4",
+		APIKeyEnv: config.DefaultOpenAIAPIKeyEnv,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	desc := p.Descriptor()
+	if desc.SupportLevel != domain.SupportLevelMVP || !desc.Available || !desc.MVPVisible {
+		t.Fatalf("unexpected descriptor: %+v", desc)
+	}
+	if desc.DisplayName != "OpenAI-compatible" {
+		t.Fatalf("expected display name OpenAI-compatible, got %q", desc.DisplayName)
+	}
+	if len(desc.Models) == 0 {
+		t.Fatalf("expected at least one model option in descriptor")
+	}
+}
+
 func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {
 	t.Setenv(config.DefaultOpenAIAPIKeyEnv, "test-key")
 

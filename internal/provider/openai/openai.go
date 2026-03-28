@@ -39,6 +39,31 @@ func (p *Provider) Name() string {
 	return p.cfg.Name
 }
 
+func (p *Provider) Descriptor() domain.ProviderDescriptor {
+	models := []domain.ModelOption{
+		{Name: config.DefaultOpenAIModel, Description: "Stable OpenAI-compatible default model"},
+		{Name: "gpt-4o", Description: "Fast general-purpose OpenAI-compatible model"},
+		{Name: "gpt-5.3-codex", Description: "Code-focused OpenAI-compatible model"},
+		{Name: "gpt-5.4", Description: "Frontier reasoning and coding model"},
+	}
+	if configured := strings.TrimSpace(p.cfg.Model); configured != "" {
+		models = append(models, domain.ModelOption{
+			Name:        configured,
+			Description: "Configured default model",
+		})
+	}
+
+	return domain.ProviderDescriptor{
+		Name:         p.cfg.Name,
+		DisplayName:  "OpenAI-compatible",
+		SupportLevel: domain.SupportLevelMVP,
+		MVPVisible:   true,
+		Available:    true,
+		Summary:      "The only officially supported provider in the current MVP.",
+		Models:       models,
+	}
+}
+
 func (p *Provider) Chat(ctx context.Context, req domain.ChatRequest, events chan<- domain.StreamEvent) (domain.ChatResponse, error) {
 	apiKey, err := p.cfg.ResolveAPIKey()
 	if err != nil {

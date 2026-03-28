@@ -7,6 +7,7 @@ import (
 	"github.com/dust/neo-code/internal/config"
 	"github.com/dust/neo-code/internal/provider"
 	"github.com/dust/neo-code/internal/provider/anthropic"
+	"github.com/dust/neo-code/internal/provider/gemini"
 	"github.com/dust/neo-code/internal/provider/openai"
 )
 
@@ -30,11 +31,19 @@ func TestRegistryRegisterAndGet(t *testing.T) {
 		Model:     config.DefaultAnthropicModel,
 		APIKeyEnv: config.DefaultAnthropicAPIKeyEnv,
 	})
+	geminiProvider := gemini.New(config.ProviderConfig{
+		Name:      config.ProviderGemini,
+		Type:      config.ProviderGemini,
+		BaseURL:   config.DefaultGeminiBaseURL,
+		Model:     config.DefaultGeminiModel,
+		APIKeyEnv: config.DefaultGeminiAPIKeyEnv,
+	})
 
 	registry := provider.NewRegistry()
 	registry.Register(nil)
 	registry.Register(openAIProvider)
 	registry.Register(anthropicProvider)
+	registry.Register(geminiProvider)
 
 	tests := []struct {
 		name       string
@@ -76,5 +85,61 @@ func TestRegistryGetMissingProvider(t *testing.T) {
 	_, err := registry.Get("missing")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
+func TestRegistryDescriptorsFiltersSupportSurface(t *testing.T) {
+	t.Parallel()
+
+	openAIProvider, err := openai.New(config.ProviderConfig{
+		Name:      config.ProviderOpenAI,
+		Type:      config.ProviderOpenAI,
+		BaseURL:   config.DefaultOpenAIBaseURL,
+		Model:     config.DefaultOpenAIModel,
+		APIKeyEnv: config.DefaultOpenAIAPIKeyEnv,
+	})
+	if err != nil {
+		t.Fatalf("openai.New() error = %v", err)
+	}
+
+	registry := provider.NewRegistry()
+	registry.Register(openAIProvider)
+	registry.Register(anthropic.New(config.ProviderConfig{
+		Name:      config.ProviderAnthropic,
+		Type:      config.ProviderAnthropic,
+		BaseURL:   config.DefaultAnthropicBaseURL,
+		Model:     config.DefaultAnthropicModel,
+		APIKeyEnv: config.DefaultAnthropicAPIKeyEnv,
+	}))
+	registry.Register(gemini.New(config.ProviderConfig{
+		Name:      config.ProviderGemini,
+		Type:      config.ProviderGemini,
+		BaseURL:   config.DefaultGeminiBaseURL,
+		Model:     config.DefaultGeminiModel,
+		APIKeyEnv: config.DefaultGeminiAPIKeyEnv,
+	}))
+
+	all := registry.Descriptors()
+	if len(all) != 3 {
+		t.Fatalf("expected 3 descriptors, got %d", len(all))
+	}
+
+	mvp := registry.MVPDescriptors()
+	if len(mvp) != 1 {
+		t.Fatalf("expected 1 MVP descriptor, got %d", len(mvp))
+	}
+	if mvp[0].Name != config.ProviderOpenAI {
+		t.Fatalf("expected MVP provider %q, got %q", config.ProviderOpenAI, mvp[0].Name)
+	}
+	if mvp[0].SupportLevel != provider.SupportLevelMVP || !mvp[0].Available || !mvp[0].MVPVisible {
+		t.Fatalf("unexpected MVP descriptor: %+v", mvp[0])
+	}
+
+	available := registry.AvailableDescriptors()
+	if len(available) != 1 {
+		t.Fatalf("expected 1 available descriptor, got %d", len(available))
+	}
+	if available[0].Name != config.ProviderOpenAI {
+		t.Fatalf("expected available provider %q, got %q", config.ProviderOpenAI, available[0].Name)
 	}
 }
