@@ -13,6 +13,7 @@ import (
 
 const maxContextTurns = 10
 
+// Runtime coordinates agent execution, session persistence, and event delivery.
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
 	Events() <-chan RuntimeEvent
@@ -20,8 +21,11 @@ type Runtime interface {
 	LoadSession(ctx context.Context, id string) (Session, error)
 }
 
+// UserInput describes a single user turn. RunID is supplied by the caller and
+// is echoed on all runtime events produced while handling this input.
 type UserInput struct {
 	SessionID string
+	RunID     string
 	Content   string
 }
 
@@ -58,8 +62,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content)
 	if err != nil {
-		s.emit(EventError, "", err.Error())
-		return err
+		return s.handleRunError(input.RunID, input.SessionID, err)
 	}
 
 	userMessage := provider.Message{
@@ -69,12 +72,15 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	session.Messages = append(session.Messages, userMessage)
 	session.UpdatedAt = time.Now()
 	if err := s.sessionStore.Save(ctx, &session); err != nil {
-		s.emit(EventError, session.ID, err.Error())
-		return err
+		return s.handleRunError(input.RunID, session.ID, err)
 	}
-	s.emit(EventUserMessage, session.ID, userMessage)
+	s.emit(EventUserMessage, input.RunID, session.ID, userMessage)
 
 	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return s.handleRunError(input.RunID, session.ID, err)
+		}
+
 		cfg := s.configManager.Get()
 		maxLoops := cfg.MaxLoops
 		if maxLoops <= 0 {
@@ -82,7 +88,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		}
 		if attempt >= maxLoops {
 			err := errors.New("runtime: max loop reached")
-			s.emit(EventError, session.ID, err.Error())
+			s.emit(EventError, input.RunID, session.ID, err.Error())
 			return err
 		}
 
@@ -94,13 +100,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 		modelProvider, err := s.providerFactory.Build(ctx, resolvedProvider)
 		if err != nil {
-			s.emit(EventError, session.ID, err.Error())
+			s.emit(EventError, input.RunID, session.ID, err.Error())
 			return err
 		}
 
 		streamEvents := make(chan provider.StreamEvent, 32)
 		streamDone := make(chan struct{})
-		go s.forwardProviderEvents(session.ID, streamEvents, streamDone)
+		go s.forwardProviderEvents(input.RunID, session.ID, streamEvents, streamDone)
 
 		resp, err := modelProvider.Chat(ctx, provider.ChatRequest{
 			Model:        cfg.CurrentModel,
@@ -111,8 +117,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		close(streamEvents)
 		<-streamDone
 		if err != nil {
-			s.emit(EventError, session.ID, err.Error())
-			return err
+			return s.handleRunError(input.RunID, session.ID, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return s.handleRunError(input.RunID, session.ID, err)
 		}
 
 		assistant := resp.Message
@@ -124,18 +132,23 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			session.Messages = append(session.Messages, assistant)
 			session.UpdatedAt = time.Now()
 			if err := s.sessionStore.Save(ctx, &session); err != nil {
-				s.emit(EventError, session.ID, err.Error())
-				return err
+				return s.handleRunError(input.RunID, session.ID, err)
 			}
 		}
 
+		if err := ctx.Err(); err != nil {
+			return s.handleRunError(input.RunID, session.ID, err)
+		}
 		if len(assistant.ToolCalls) == 0 {
-			s.emit(EventAgentDone, session.ID, assistant)
+			s.emit(EventAgentDone, input.RunID, session.ID, assistant)
 			return nil
 		}
 
 		for _, call := range assistant.ToolCalls {
-			s.emit(EventToolStart, session.ID, call)
+			if err := ctx.Err(); err != nil {
+				return s.handleRunError(input.RunID, session.ID, err)
+			}
+			s.emit(EventToolStart, input.RunID, session.ID, call)
 
 			runCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.ToolTimeoutSec)*time.Second)
 			result, execErr := s.toolRegistry.Execute(runCtx, tools.ToolCallInput{
@@ -145,10 +158,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 				Workdir:   cfg.Workdir,
 				SessionID: session.ID,
 				EmitChunk: func(chunk []byte) {
-					s.emit(EventToolChunk, session.ID, string(chunk))
+					s.emit(EventToolChunk, input.RunID, session.ID, string(chunk))
 				},
 			})
 			cancel()
+			if s.isRunCanceled(execErr) {
+				return s.handleRunError(input.RunID, session.ID, execErr)
+			}
+			if execErr == nil {
+				if err := ctx.Err(); err != nil {
+					return s.handleRunError(input.RunID, session.ID, err)
+				}
+			}
 
 			if execErr != nil && strings.TrimSpace(result.Content) == "" {
 				result.Content = execErr.Error()
@@ -163,11 +184,23 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			session.Messages = append(session.Messages, toolMessage)
 			session.UpdatedAt = time.Now()
 			if err := s.sessionStore.Save(ctx, &session); err != nil {
-				s.emit(EventError, session.ID, err.Error())
-				return err
+				if execErr != nil && errors.Is(err, context.Canceled) {
+					s.emit(EventToolResult, input.RunID, session.ID, result)
+				}
+				return s.handleRunError(input.RunID, session.ID, err)
+			}
+			if err := ctx.Err(); err != nil {
+				if execErr == nil {
+					return s.handleRunError(input.RunID, session.ID, err)
+				}
 			}
 
-			s.emit(EventToolResult, session.ID, result)
+			s.emit(EventToolResult, input.RunID, session.ID, result)
+			if execErr != nil {
+				if err := ctx.Err(); err != nil {
+					return s.handleRunError(input.RunID, session.ID, err)
+				}
+			}
 		}
 	}
 }
@@ -195,22 +228,37 @@ func (s *Service) loadOrCreateSession(ctx context.Context, sessionID string, tit
 	return s.sessionStore.Load(ctx, sessionID)
 }
 
-func (s *Service) emit(kind EventType, sessionID string, payload any) {
+func (s *Service) emit(kind EventType, runID string, sessionID string, payload any) {
 	s.events <- RuntimeEvent{
 		Type:      kind,
+		RunID:     runID,
 		SessionID: sessionID,
 		Payload:   payload,
 	}
 }
 
-func (s *Service) forwardProviderEvents(sessionID string, input <-chan provider.StreamEvent, done chan<- struct{}) {
+func (s *Service) forwardProviderEvents(runID string, sessionID string, input <-chan provider.StreamEvent, done chan<- struct{}) {
 	defer close(done)
 	for event := range input {
 		switch event.Type {
 		case provider.StreamEventTextDelta:
-			s.emit(EventAgentChunk, sessionID, event.Text)
+			s.emit(EventAgentChunk, runID, sessionID, event.Text)
 		}
 	}
+}
+
+func (s *Service) handleRunError(runID string, sessionID string, err error) error {
+	if s.isRunCanceled(err) {
+		s.emit(EventRunCanceled, runID, sessionID, nil)
+		return context.Canceled
+	}
+
+	s.emit(EventError, runID, sessionID, err.Error())
+	return err
+}
+
+func (s *Service) isRunCanceled(err error) bool {
+	return errors.Is(err, context.Canceled)
 }
 
 func (s *Service) trimMessages(messages []provider.Message) []provider.Message {

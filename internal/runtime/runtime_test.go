@@ -20,8 +20,30 @@ type memoryStore struct {
 	saves    int
 }
 
+type failingStore struct {
+	Store
+	saveErr          error
+	failOnSave       int
+	saveCalls        int
+	ignoreContextErr bool
+}
+
 func newMemoryStore() *memoryStore {
 	return &memoryStore{sessions: map[string]Session{}}
+}
+
+func (s *failingStore) Save(ctx context.Context, session *Session) error {
+	s.saveCalls++
+	if s.failOnSave > 0 && s.saveCalls == s.failOnSave {
+		return s.saveErr
+	}
+	if s.ignoreContextErr && s.saveErr != nil {
+		return s.saveErr
+	}
+	if s.Store == nil {
+		return nil
+	}
+	return s.Store.Save(ctx, session)
 }
 
 func (s *memoryStore) Save(ctx context.Context, session *Session) error {
@@ -68,6 +90,7 @@ type scriptedProvider struct {
 	streams   [][]provider.StreamEvent
 	requests  []provider.ChatRequest
 	callCount int
+	chatFn    func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error)
 }
 
 func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
@@ -75,6 +98,10 @@ func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest, e
 
 	callIndex := p.callCount
 	p.callCount++
+
+	if p.chatFn != nil {
+		return p.chatFn(ctx, req, events)
+	}
 
 	if callIndex < len(p.streams) {
 		for _, event := range p.streams[callIndex] {
@@ -113,6 +140,7 @@ type stubTool struct {
 	err       error
 	callCount int
 	lastInput tools.ToolCallInput
+	executeFn func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error)
 }
 
 func (t *stubTool) Name() string {
@@ -130,6 +158,9 @@ func (t *stubTool) Schema() map[string]any {
 func (t *stubTool) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	t.callCount++
 	t.lastInput = input
+	if t.executeFn != nil {
+		return t.executeFn(ctx, input)
+	}
 	if input.EmitChunk != nil {
 		input.EmitChunk([]byte("chunk"))
 	}
@@ -155,7 +186,7 @@ func TestServiceRun(t *testing.T) {
 	}{
 		{
 			name:  "normal dialogue exits after final assistant reply",
-			input: UserInput{Content: "hello"},
+			input: UserInput{RunID: "run-normal", Content: "hello"},
 			providerResponses: []provider.ChatResponse{
 				{
 					Message: provider.Message{
@@ -190,7 +221,7 @@ func TestServiceRun(t *testing.T) {
 		},
 		{
 			name:  "tool call triggers execute and follow-up provider round",
-			input: UserInput{Content: "edit file"},
+			input: UserInput{RunID: "run-tool", Content: "edit file"},
 			providerResponses: []provider.ChatResponse{
 				{
 					Message: provider.Message{
@@ -298,6 +329,7 @@ func TestServiceRun(t *testing.T) {
 
 			events := collectRuntimeEvents(service.Events())
 			assertEventSequence(t, events, tt.expectEventTypes)
+			assertEventsRunID(t, events, tt.input.RunID)
 
 			if tt.assert != nil {
 				tt.assert(t, store, scripted, registeredTool)
@@ -443,7 +475,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 		},
 		{
 			name:     "max loops reached after repeated tool cycles",
-			input:    UserInput{Content: "loop"},
+			input:    UserInput{RunID: "run-max-loops", Content: "loop"},
 			maxLoops: 1,
 			provider: &scriptedProvider{
 				responses: []provider.ChatResponse{
@@ -474,7 +506,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 		},
 		{
 			name:       "provider factory error emits runtime error",
-			input:      UserInput{Content: "hello"},
+			input:      UserInput{RunID: "run-factory-error", Content: "hello"},
 			factoryErr: errors.New("factory failed"),
 			expectErr:  "factory failed",
 			expectEvents: []EventType{
@@ -486,6 +518,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			name: "existing session is reused",
 			input: UserInput{
 				SessionID: "existing-session",
+				RunID:     "run-existing-session",
 				Content:   "continue",
 			},
 			provider: &scriptedProvider{
@@ -562,12 +595,324 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			}
 
 			if len(tt.expectEvents) > 0 {
-				assertEventSequence(t, collectRuntimeEvents(service.Events()), tt.expectEvents)
+				events := collectRuntimeEvents(service.Events())
+				assertEventSequence(t, events, tt.expectEvents)
+				if tt.input.RunID != "" {
+					assertEventsRunID(t, events, tt.input.RunID)
+				}
 			}
 			if tt.assert != nil {
 				tt.assert(t, store, tt.provider, tt.registerTool)
 			}
 		})
+	}
+}
+
+func TestServiceRunCanceledByProvider(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	started := make(chan struct{})
+	scripted := &scriptedProvider{
+		name: "blocking-provider",
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+			close(started)
+			<-ctx.Done()
+			return provider.ChatResponse{}, ctx.Err()
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	input := UserInput{RunID: "run-provider-cancel", Content: "hello"}
+
+	go func() {
+		errCh <- service.Run(ctx, input)
+	}()
+
+	<-started
+	cancel()
+
+	err := <-errCh
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventRunCanceled})
+	assertNoEventType(t, events, EventError)
+	assertEventsRunID(t, events, input.RunID)
+
+	session := onlySession(t, store)
+	if len(session.Messages) != 1 || session.Messages[0].Role != "user" {
+		t.Fatalf("expected only the user message to persist, got %+v", session.Messages)
+	}
+}
+
+func TestServiceRunPreservesProviderErrorAfterCancel(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	started := make(chan struct{})
+	providerErr := errors.New("provider failed after cancel")
+	scripted := &scriptedProvider{
+		name: "provider-error-after-cancel",
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+			close(started)
+			<-ctx.Done()
+			return provider.ChatResponse{}, providerErr
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	input := UserInput{RunID: "run-provider-error-after-cancel", Content: "hello"}
+
+	go func() {
+		errCh <- service.Run(ctx, input)
+	}()
+
+	<-started
+	cancel()
+
+	err := <-errCh
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("expected provider error %q, got %v", providerErr, err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventError})
+	assertNoEventType(t, events, EventRunCanceled)
+	assertEventsRunID(t, events, input.RunID)
+}
+
+func TestServiceRunCanceledDuringToolExecution(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	toolStarted := make(chan struct{})
+	blockingTool := &stubTool{
+		name: "filesystem_edit",
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			if input.EmitChunk != nil {
+				input.EmitChunk([]byte("chunk"))
+			}
+			close(toolStarted)
+			<-ctx.Done()
+			return tools.ToolResult{Name: "filesystem_edit"}, ctx.Err()
+		},
+	}
+	registry.Register(blockingTool)
+
+	scripted := &scriptedProvider{
+		name: "tool-cancel-provider",
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "cancel-call", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	input := UserInput{RunID: "run-tool-cancel", Content: "edit file"}
+
+	go func() {
+		errCh <- service.Run(ctx, input)
+	}()
+
+	<-toolStarted
+	cancel()
+
+	err := <-errCh
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventToolStart, EventToolChunk, EventRunCanceled})
+	assertNoEventType(t, events, EventToolResult)
+	assertNoEventType(t, events, EventError)
+	assertEventsRunID(t, events, input.RunID)
+
+	session := onlySession(t, store)
+	if len(session.Messages) != 2 {
+		t.Fatalf("expected user and assistant tool-call messages before cancel, got %+v", session.Messages)
+	}
+}
+
+func TestServiceRunPreservesToolErrorAfterCancel(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	toolStarted := make(chan struct{})
+	toolErr := errors.New("tool failed after cancel")
+	blockingTool := &stubTool{
+		name: "filesystem_edit",
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			if input.EmitChunk != nil {
+				input.EmitChunk([]byte("chunk"))
+			}
+			close(toolStarted)
+			<-ctx.Done()
+			return tools.ToolResult{Name: "filesystem_edit"}, toolErr
+		},
+	}
+	registry.Register(blockingTool)
+
+	scripted := &scriptedProvider{
+		name: "tool-error-after-cancel-provider",
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "tool-error-call", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	input := UserInput{RunID: "run-tool-error-after-cancel", Content: "edit file"}
+
+	go func() {
+		errCh <- service.Run(ctx, input)
+	}()
+
+	<-toolStarted
+	cancel()
+
+	err := <-errCh
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled after tool error is preserved, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventToolStart, EventToolChunk, EventToolResult, EventRunCanceled})
+	assertNoEventType(t, events, EventError)
+	assertEventsRunID(t, events, input.RunID)
+
+	session := onlySession(t, store)
+	if len(session.Messages) != 2 {
+		t.Fatalf("expected user and assistant tool-call messages to persist before cancel, got %+v", session.Messages)
+	}
+}
+
+func TestServiceRunPreservesSessionSaveErrorAfterCancel(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	baseStore := newMemoryStore()
+	saveErr := errors.New("session save failed")
+	store := &failingStore{
+		Store:            baseStore,
+		saveErr:          saveErr,
+		failOnSave:       1,
+		ignoreContextErr: true,
+	}
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{
+		provider: &scriptedProvider{name: "unused"},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	input := UserInput{RunID: "run-save-error-after-cancel", Content: "hello"}
+	err := service.Run(ctx, input)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("expected save error %q, got %v", saveErr, err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventError})
+	assertNoEventType(t, events, EventRunCanceled)
+	assertEventsRunID(t, events, input.RunID)
+}
+
+func TestServiceRunToolTimeoutIsNotCancellation(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.ToolTimeoutSec = 0
+		return nil
+	}); err != nil {
+		t.Fatalf("update tool timeout: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	timeoutTool := &stubTool{
+		name: "filesystem_edit",
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			<-ctx.Done()
+			return tools.ToolResult{Name: "filesystem_edit"}, ctx.Err()
+		},
+	}
+	registry.Register(timeoutTool)
+
+	scripted := &scriptedProvider{
+		name: "timeout-provider",
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "timeout-call", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: "done after timeout",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	input := UserInput{RunID: "run-tool-timeout", Content: "edit file"}
+	if err := service.Run(context.Background(), input); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventToolStart, EventToolResult, EventAgentDone})
+	assertNoEventType(t, events, EventRunCanceled)
+	assertEventsRunID(t, events, input.RunID)
+
+	session := onlySession(t, store)
+	if len(session.Messages) != 4 {
+		t.Fatalf("expected user, assistant, tool, assistant messages, got %+v", session.Messages)
+	}
+	if !session.Messages[2].IsError {
+		t.Fatalf("expected timed out tool result to be marked as error")
 	}
 }
 
@@ -680,6 +1025,24 @@ func assertEventSequence(t *testing.T, events []RuntimeEvent, expected []EventTy
 		}
 		if !found {
 			t.Fatalf("expected event %q in %+v", eventType, events)
+		}
+	}
+}
+
+func assertNoEventType(t *testing.T, events []RuntimeEvent, unexpected EventType) {
+	t.Helper()
+	for _, event := range events {
+		if event.Type == unexpected {
+			t.Fatalf("did not expect event %q in %+v", unexpected, events)
+		}
+	}
+}
+
+func assertEventsRunID(t *testing.T, events []RuntimeEvent, runID string) {
+	t.Helper()
+	for _, event := range events {
+		if event.RunID != runID {
+			t.Fatalf("expected run id %q, got %+v", runID, events)
 		}
 	}
 }
