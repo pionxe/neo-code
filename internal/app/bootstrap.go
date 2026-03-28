@@ -25,14 +25,7 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 		return nil, err
 	}
 
-	toolRegistry := tools.NewRegistry()
-	toolRegistry.Register(filesystem.New(cfg.Workdir))
-	toolRegistry.Register(filesystem.NewWrite(cfg.Workdir))
-	toolRegistry.Register(filesystem.NewGrep(cfg.Workdir))
-	toolRegistry.Register(filesystem.NewGlob(cfg.Workdir))
-	toolRegistry.Register(filesystem.NewEdit(cfg.Workdir))
-	toolRegistry.Register(bash.New(cfg.Workdir, cfg.Shell, time.Duration(cfg.ToolTimeoutSec)*time.Second))
-	toolRegistry.Register(webfetch.New(time.Duration(cfg.ToolTimeoutSec) * time.Second))
+	toolRegistry := buildToolRegistry(cfg)
 
 	providerRegistry, err := builtin.NewRegistry()
 	if err != nil {
@@ -52,4 +45,20 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	), nil
+}
+
+func buildToolRegistry(cfg config.Config) *tools.Registry {
+	toolRegistry := tools.NewRegistry()
+	toolRegistry.Register(filesystem.New(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewWrite(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewGrep(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewGlob(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewEdit(cfg.Workdir))
+	toolRegistry.Register(bash.New(cfg.Workdir, cfg.Shell, time.Duration(cfg.ToolTimeoutSec)*time.Second))
+	toolRegistry.Register(webfetch.New(webfetch.Config{
+		Timeout:               time.Duration(cfg.ToolTimeoutSec) * time.Second,
+		MaxResponseBytes:      cfg.Tools.WebFetch.MaxResponseBytes,
+		SupportedContentTypes: cfg.Tools.WebFetch.SupportedContentTypes,
+	}))
+	return toolRegistry
 }
