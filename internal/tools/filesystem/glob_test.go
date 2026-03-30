@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -104,5 +105,79 @@ func TestBuildGlobMatcherRejectsInvalidUTF8(t *testing.T) {
 	_, err := buildGlobMatcher(string([]byte{0xff}))
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "utf-8") {
 		t.Fatalf("expected invalid utf-8 error, got %v", err)
+	}
+}
+
+func TestGlobToolErrorFormattingAndTruncation(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	for i := 0; i < 1500; i++ {
+		mustWriteFile(t, filepath.Join(workspace, "many", strings.Repeat("a", 20), strings.Repeat("b", 20), "file"+strconv.Itoa(i)+".txt"), "x")
+	}
+
+	tool := NewGlob(workspace)
+	tests := []struct {
+		name           string
+		ctx            func() context.Context
+		arguments      []byte
+		expectErr      string
+		expectContent  []string
+		expectTruncate bool
+	}{
+		{
+			name:          "invalid json arguments",
+			ctx:           context.Background,
+			arguments:     []byte(`{invalid`),
+			expectErr:     "invalid character",
+			expectContent: []string{"tool error", "tool: filesystem_glob", "reason: invalid arguments"},
+		},
+		{
+			name: "canceled context",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			arguments:     mustMarshalFSArgs(t, map[string]string{"pattern": "**/*.txt"}),
+			expectErr:     "context canceled",
+			expectContent: []string{"tool error", "tool: filesystem_glob", "reason: context canceled"},
+		},
+		{
+			name:           "long output is truncated",
+			ctx:            context.Background,
+			arguments:      mustMarshalFSArgs(t, map[string]string{"pattern": "**/*.txt"}),
+			expectContent:  []string{"...[truncated]"},
+			expectTruncate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := tool.Execute(tt.ctx(), tools.ToolCallInput{
+				Name:      tool.Name(),
+				Arguments: tt.arguments,
+				Workdir:   workspace,
+			})
+
+			if tt.expectErr != "" {
+				if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.expectErr)) {
+					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, fragment := range tt.expectContent {
+				if !strings.Contains(result.Content, fragment) {
+					t.Fatalf("expected content containing %q, got %q", fragment, result.Content)
+				}
+			}
+			if truncated, _ := result.Metadata["truncated"].(bool); truncated != tt.expectTruncate {
+				t.Fatalf("expected truncated=%v, got %#v", tt.expectTruncate, result.Metadata["truncated"])
+			}
+		})
 	}
 }

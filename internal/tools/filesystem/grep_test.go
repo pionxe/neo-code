@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -101,6 +102,80 @@ func TestGrepToolExecute(t *testing.T) {
 			}
 			if strings.Contains(result.Content, "dependency") {
 				t.Fatalf("expected node_modules content to be skipped, got %q", result.Content)
+			}
+		})
+	}
+}
+
+func TestGrepToolErrorFormattingAndTruncation(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	for i := 0; i < 180; i++ {
+		mustWriteFile(t, filepath.Join(workspace, "bulk", "file"+strconv.Itoa(i)+".txt"), "needle "+strings.Repeat("x", 500)+"\n")
+	}
+
+	tool := NewGrep(workspace)
+	tests := []struct {
+		name           string
+		ctx            func() context.Context
+		arguments      []byte
+		expectErr      string
+		expectContent  []string
+		expectTruncate bool
+	}{
+		{
+			name:          "invalid json arguments",
+			ctx:           context.Background,
+			arguments:     []byte(`{invalid`),
+			expectErr:     "invalid character",
+			expectContent: []string{"tool error", "tool: filesystem_grep", "reason: invalid arguments"},
+		},
+		{
+			name: "canceled context",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			arguments:     mustMarshalFSArgs(t, map[string]any{"pattern": "needle"}),
+			expectErr:     "context canceled",
+			expectContent: []string{"tool error", "tool: filesystem_grep", "reason: context canceled"},
+		},
+		{
+			name:           "long result is truncated",
+			ctx:            context.Background,
+			arguments:      mustMarshalFSArgs(t, map[string]any{"pattern": "needle"}),
+			expectContent:  []string{"...[truncated]"},
+			expectTruncate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := tool.Execute(tt.ctx(), tools.ToolCallInput{
+				Name:      tool.Name(),
+				Arguments: tt.arguments,
+				Workdir:   workspace,
+			})
+
+			if tt.expectErr != "" {
+				if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.expectErr)) {
+					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, fragment := range tt.expectContent {
+				if !strings.Contains(result.Content, fragment) {
+					t.Fatalf("expected content containing %q, got %q", fragment, result.Content)
+				}
+			}
+			if truncated, _ := result.Metadata["truncated"].(bool); truncated != tt.expectTruncate {
+				t.Fatalf("expected truncated=%v, got %#v", tt.expectTruncate, result.Metadata["truncated"])
 			}
 		})
 	}

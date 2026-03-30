@@ -142,3 +142,77 @@ func TestEditToolSearchStringNotFound(t *testing.T) {
 		t.Fatalf("expected search_string not found error, got %v", execErr)
 	}
 }
+
+func TestEditToolErrorFormattingAndContext(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "main.go"), "package main\n")
+
+	tool := NewEdit(workspace)
+	tests := []struct {
+		name          string
+		ctx           func() context.Context
+		arguments     []byte
+		expectErr     string
+		expectContent []string
+	}{
+		{
+			name:          "invalid json arguments",
+			ctx:           context.Background,
+			arguments:     []byte(`{invalid`),
+			expectErr:     "invalid character",
+			expectContent: []string{"tool error", "tool: filesystem_edit", "reason: invalid arguments"},
+		},
+		{
+			name: "empty search string",
+			ctx:  context.Background,
+			arguments: mustMarshalFSArgs(t, map[string]string{
+				"path":           "main.go",
+				"search_string":  "",
+				"replace_string": "new",
+			}),
+			expectErr:     "search_string is required",
+			expectContent: []string{"tool error", "tool: filesystem_edit", "reason: search_string is required"},
+		},
+		{
+			name: "canceled context",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			arguments: mustMarshalFSArgs(t, map[string]string{
+				"path":           "main.go",
+				"search_string":  "package",
+				"replace_string": "module",
+			}),
+			expectErr:     "context canceled",
+			expectContent: []string{"tool error", "tool: filesystem_edit", "reason: context canceled"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := tool.Execute(tt.ctx(), tools.ToolCallInput{
+				Name:      tool.Name(),
+				Arguments: tt.arguments,
+				Workdir:   workspace,
+			})
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.expectErr)) {
+				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+			}
+			for _, fragment := range tt.expectContent {
+				if !strings.Contains(result.Content, fragment) {
+					t.Fatalf("expected content containing %q, got %q", fragment, result.Content)
+				}
+			}
+			if !result.IsError {
+				t.Fatalf("expected error result, got %#v", result)
+			}
+		})
+	}
+}

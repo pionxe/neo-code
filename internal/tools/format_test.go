@@ -61,6 +61,17 @@ func TestApplyOutputLimit(t *testing.T) {
 			wantTruncated:   true,
 			wantMetadataNil: false,
 		},
+		{
+			name: "existing truncated false is overwritten",
+			result: ToolResult{
+				Content:  "hello world",
+				Metadata: map[string]any{"truncated": false},
+			},
+			limit:           5,
+			wantContent:     "hello" + truncatedSuffix,
+			wantTruncated:   true,
+			wantMetadataNil: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -131,6 +142,15 @@ func TestFormatHelpers(t *testing.T) {
 			err:        nil,
 			wantReason: "",
 			wantBody:   []string{"tool error"},
+		},
+		{
+			name:       "tool name empty keeps raw reason",
+			toolName:   "",
+			reason:     "boom",
+			details:    "",
+			err:        errors.New("bash: failed"),
+			wantReason: "bash: failed",
+			wantBody:   []string{"tool error", "reason: boom"},
 		},
 	}
 
