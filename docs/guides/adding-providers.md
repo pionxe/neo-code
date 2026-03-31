@@ -4,121 +4,143 @@
 
 ## 架构概览
 
-NeoCode 的 provider 分为两层：
+NeoCode 的 provider 架构采用**集中式配置 + 驱动复用**的设计：
 
-- **配置层**（`ProviderConfig`）：提供 `base_url`、模型列表、API Key 环境变量等元数据
-- **驱动层**（`DriverDefinition`）：负责实际的 API 协议差异
+### 两层分离
 
-一个驱动可被多个 provider 复用（如 `gemini` 和 `openll` 都复用 `openai` 驱动）。
+- **配置层**（`internal/config/builtin_providers.go`）：集中管理所有 provider 的元数据
+  - Provider 名称、Driver 名称
+  - Base URL、默认模型、模型列表
+  - API Key 环境变量名
 
-## 方式一：复用已有驱动（推荐）
+- **驱动层**（`internal/provider/openai/` 等）：负责实际的 API 协议实现
+  - 请求构造、响应解析
+  - 流式输出、Tool Call 处理
 
-适用于 OpenAI 兼容接口。只需添加配置文件，无需编写新的驱动代码。
+### 驱动复用
 
-### 示例：添加 DeepSeek
-
-**1. 创建 `internal/provider/deepseek/deepseek.go`：**
+一个驱动可被多个 provider 复用。当前所有内置 provider 都复用 `openai` 驱动：
 
 ```go
-package deepseek
+// internal/config/builtin_providers.go
+OpenAIProvider()   // Driver: "openai"
+GeminiProvider()   // Driver: "openai" (OpenAI-compatible API)
+OpenLLProvider()   // Driver: "openai" (OpenAI-compatible API)
+```
 
-import (
-    "neo-code/internal/config"
-)
+## 方式一：添加 OpenAI 兼容 Provider（推荐）
 
+适用于 OpenAI 兼容接口（大多数第三方服务）。只需在配置层添加，无需编写新驱动。
+
+### 步骤：添加 DeepSeek
+
+**1. 在 `internal/config/builtin_providers.go` 添加常量和配置：**
+
+```go
 const (
-    Name             = "deepseek"
-    DriverName       = "openai"                      // 复用 openai 驱动
-    DefaultBaseURL   = "https://api.deepseek.com/v1"
-    DefaultModel     = "deepseek-chat"
-    DefaultAPIKeyEnv = "DEEPSEEK_API_KEY"
+    // ... 现有常量 ...
+
+    DeepSeekName             = "deepseek"
+    DeepSeekDefaultBaseURL   = "https://api.deepseek.com/v1"
+    DeepSeekDefaultModel     = "deepseek-chat"
+    DeepSeekDefaultAPIKeyEnv = "DEEPSEEK_API_KEY"
 )
 
-var builtinModels = []string{
-    DefaultModel,
+var deepSeekModels = []string{
+    DeepSeekDefaultModel,
     "deepseek-coder",
 }
 
-// BuiltinConfig 返回该 provider 的内建配置。
-func BuiltinConfig() config.ProviderConfig {
-    return config.ProviderConfig{
-        Name:      Name,
-        Driver:    DriverName,
-        BaseURL:   DefaultBaseURL,
-        Model:     DefaultModel,
-        Models:    append([]string(nil), builtinModels...),
-        APIKeyEnv: DefaultAPIKeyEnv,
+// DeepSeekProvider 返回 DeepSeek provider 的默认配置。
+func DeepSeekProvider() ProviderConfig {
+    return ProviderConfig{
+        Name:      DeepSeekName,
+        Driver:    "openai",                    // 复用 openai 驱动
+        BaseURL:   DeepSeekDefaultBaseURL,
+        Model:     DeepSeekDefaultModel,
+        Models:    append([]string(nil), deepSeekModels...),
+        APIKeyEnv: DeepSeekDefaultAPIKeyEnv,
     }
 }
 ```
 
-**2. 在 `internal/provider/builtin/builtin.go` 中添加该 provider：**
+**2. 在 `DefaultProviders()` 中注册：**
 
 ```go
-import "neo-code/internal/provider/deepseek"
-
-func DefaultConfig() *config.Config {
-    cfg := config.Default()
-    defaultProvider := openai.BuiltinConfig()
-    cfg.Providers = []config.ProviderConfig{
-        defaultProvider,
-        gemini.BuiltinConfig(),
-        openll.BuiltinConfig(),
-        deepseek.BuiltinConfig(),  // 新增
+func DefaultProviders() []ProviderConfig {
+    return []ProviderConfig{
+        OpenAIProvider(),
+        GeminiProvider(),
+        OpenLLProvider(),
+        DeepSeekProvider(),  // 新增
     }
-    // ...
 }
 ```
+
+**3. 设置环境变量并测试：**
+
+```bash
+export DEEPSEEK_API_KEY="your-api-key"
+go run ./cmd/neocode
+```
+
+### 优点
+
+- ✅ 无需编写新代码，只需配置
+- ✅ 自动继承 openai 驱动的所有功能（流式、Tool Call）
+- ✅ 配置集中管理，易于维护
+- ✅ 用户无需修改 YAML 文件
 
 ## 方式二：实现新驱动
 
 适用于协议不兼容的厂商（如 Anthropic、Google 原生 API）。
 
-### 示例：添加 Anthropic
+### 步骤：添加 Anthropic
 
-**1. 在 `internal/provider/anthropic/anthropic.go` 中实现核心类型：**
+**1. 在 `internal/provider/anthropic/anthropic.go` 实现驱动：**
 
 ```go
 package anthropic
 
 import (
     "context"
+    "net/http"
+    
     "neo-code/internal/config"
     domain "neo-code/internal/provider"
 )
 
 const (
-    Name             = "anthropic"
-    DriverName       = "anthropic"
-    DefaultBaseURL   = "https://api.anthropic.com/v1"
-    DefaultModel     = "claude-sonnet-4-20250514"
-    DefaultAPIKeyEnv = "ANTHROPIC_API_KEY"
+    Name           = "anthropic"
+    DefaultBaseURL = "https://api.anthropic.com/v1"
 )
 
+// Provider 实现 domain.Provider 接口
 type Provider struct {
     cfg    config.ResolvedProviderConfig
     client *http.Client
 }
 
-// New 构造函数，接收已解析的配置。
+// New 构造函数
 func New(cfg config.ResolvedProviderConfig) (*Provider, error) {
     if err := cfg.Validate(); err != nil {
         return nil, fmt.Errorf("anthropic provider: %w", err)
     }
-    // ...
-    return &Provider{cfg: cfg, client: &http.Client{}}, nil
+    return &Provider{
+        cfg:    cfg,
+        client: &http.Client{Timeout: 60 * time.Second},
+    }, nil
 }
 
-// Chat 实现 domain.Provider 接口。
-// 必须支持流式输出（通过 events channel）和 tool calls。
+// Chat 实现流式对话接口
 func (p *Provider) Chat(ctx context.Context, req domain.ChatRequest, events chan<- domain.StreamEvent) (domain.ChatResponse, error) {
-    // 1. 将 domain.ChatRequest 转换为厂商特定的请求格式
-    // 2. 调用厂商 API（流式 SSE）
+    // 1. 将 domain.ChatRequest 转换为 Anthropic API 格式
+    // 2. 调用 Anthropic API（流式 SSE）
     // 3. 解析响应，推送 StreamEventTextDelta / StreamEventToolCallStart
     // 4. 返回 domain.ChatResponse
 }
 
-// Driver 返回驱动定义，供 Registry 注册使用。
+// Driver 返回驱动定义
 func Driver() domain.DriverDefinition {
     return domain.DriverDefinition{
         Name: Name,
@@ -127,24 +149,15 @@ func Driver() domain.DriverDefinition {
         },
     }
 }
-
-// BuiltinConfig 返回内建配置。
-func BuiltinConfig() config.ProviderConfig {
-    return config.ProviderConfig{
-        Name:      Name,
-        Driver:    DriverName,
-        BaseURL:   DefaultBaseURL,
-        Model:     DefaultModel,
-        Models:    []string{DefaultModel, "claude-opus-4-20250514"},
-        APIKeyEnv: DefaultAPIKeyEnv,
-    }
-}
 ```
 
-**2. 在 `internal/provider/builtin/builtin.go` 中注册驱动：**
+**2. 在 `internal/provider/builtin/builtin.go` 注册驱动：**
 
 ```go
-import "neo-code/internal/provider/anthropic"
+import (
+    "neo-code/internal/provider/anthropic"
+    "neo-code/internal/provider/openai"
+)
 
 func Register(registry *provider.Registry) error {
     if registry == nil {
@@ -153,33 +166,120 @@ func Register(registry *provider.Registry) error {
     if err := registry.Register(openai.Driver()); err != nil {
         return err
     }
-    return registry.Register(anthropic.Driver())  // 新增驱动注册
+    return registry.Register(anthropic.Driver())  // 新增
+}
+```
+
+**3. 在 `internal/config/builtin_providers.go` 添加配置：**
+
+```go
+const (
+    // ... 现有常量 ...
+
+    AnthropicName             = "anthropic"
+    AnthropicDefaultBaseURL   = "https://api.anthropic.com/v1"
+    AnthropicDefaultModel     = "claude-sonnet-4-20250514"
+    AnthropicDefaultAPIKeyEnv = "ANTHROPIC_API_KEY"
+)
+
+var anthropicModels = []string{
+    AnthropicDefaultModel,
+    "claude-opus-4-20250514",
+    "claude-3-5-sonnet-20241022",
+}
+
+func AnthropicProvider() ProviderConfig {
+    return ProviderConfig{
+        Name:      AnthropicName,
+        Driver:    "anthropic",               // 使用新的 anthropic 驱动
+        BaseURL:   AnthropicDefaultBaseURL,
+        Model:     AnthropicDefaultModel,
+        Models:    append([]string(nil), anthropicModels...),
+        APIKeyEnv: AnthropicDefaultAPIKeyEnv,
+    }
+}
+
+func DefaultProviders() []ProviderConfig {
+    return []ProviderConfig{
+        OpenAIProvider(),
+        GeminiProvider(),
+        OpenLLProvider(),
+        AnthropicProvider(),  // 新增
+    }
 }
 ```
 
 ## 关键接口与类型
 
+### 核心接口
+
 | 类型 | 位置 | 说明 |
 |------|------|------|
-| `Provider` 接口 | `internal/provider/provider.go` | 核心接口，定义 `Chat` 方法 |
-| `ChatRequest` | `internal/provider/types.go` | 请求结构：`Model`、`SystemPrompt`、`Messages`、`Tools` |
-| `ChatResponse` | `internal/provider/types.go` | 响应结构：`Message`、`FinishReason`、`Usage` |
-| `StreamEvent` | `internal/provider/provider.go` | 流式事件：`text_delta` 和 `tool_call_start` |
-| `ProviderConfig` | `internal/config/model.go` | 配置层：`Name`、`Driver`、`BaseURL`、`Model`、`Models`、`APIKeyEnv` |
-| `DriverDefinition` | `internal/provider/registry.go` | 驱动层：`Name` + `Build` 构造函数 |
+| `Provider` | `internal/provider/types.go` | 核心接口，定义 `Chat` 方法 |
+| `DriverDefinition` | `internal/provider/registry.go` | 驱动定义：`Name` + `Build` 构造函数 |
 | `Registry` | `internal/provider/registry.go` | 驱动注册中心 |
+
+### 数据结构
+
+| 类型 | 位置 | 说明 |
+|------|------|------|
+| `ChatRequest` | `internal/provider/types.go` | 请求：`Model`、`SystemPrompt`、`Messages`、`Tools` |
+| `ChatResponse` | `internal/provider/types.go` | 响应：`Message`、`FinishReason`、`Usage` |
+| `StreamEvent` | `internal/provider/types.go` | 流式事件：`TextDelta`、`ToolCallStart` |
+| `ProviderConfig` | `internal/config/model.go` | 配置：`Name`、`Driver`、`BaseURL`、`Model`、`Models`、`APIKeyEnv` |
 
 ## 设计约束
 
-**必须遵守**：
+### 必须遵守
 
-- **API Key 只从环境变量读取**，不写入 `config.yaml`，不硬编码在源码中
-- **驱动层不持有模型列表**，`Models` 完全由配置层（`ProviderConfig.Models`）控制
-- **厂商差异收敛在 `internal/provider/` 内**，`runtime`、`tui` 等上层模块只依赖统一的 `Provider` 接口
-- **`base_url` 不向用户暴露**，用户在 TUI 中只能看到 provider 名称和模型列表
+✅ **配置集中管理**
+- 所有内置 provider 配置统一在 `internal/config/builtin_providers.go`
+- 不再为每个 provider 创建独立的包
+
+✅ **API Key 安全**
+- 只从环境变量读取，不写入 `config.yaml`
+- 不硬编码在源码中
+
+✅ **驱动职责清晰**
+- 驱动只负责协议构造与响应解析
+- 不持有模型列表、base_url 等配置信息
+
+✅ **架构分层**
+- 厂商差异收敛在 `internal/provider/` 内
+- `runtime`、`tui` 等上层模块只依赖统一的 `Provider` 接口
+- `base_url` 不在 TUI 中展示给用户
+
+### 最佳实践
+
+1. **优先复用现有驱动**
+   - 大多数 OpenAI 兼容服务无需编写新驱动
+   - 只需在配置层添加即可
+
+2. **配置即代码**
+   - provider 配置随代码版本发布
+   - 用户无需手动配置 providers 列表
+
+3. **测试覆盖**
+   - 新驱动必须添加完整的单元测试
+   - 使用 `httptest.NewServer` 模拟 HTTP 调用
+   - 不使用真实 API Key
+
+## 示例：当前内置 Provider
+
+```go
+// internal/config/builtin_providers.go
+
+func DefaultProviders() []ProviderConfig {
+    return []ProviderConfig{
+        OpenAIProvider(),  // OpenAI 官方 API
+        GeminiProvider(),  // Google Gemini (OpenAI-compatible)
+        OpenLLProvider(),  // OpenLL 服务 (OpenAI-compatible)
+    }
+}
+```
+
+所有内置 provider 都复用 `openai` 驱动，配置集中在 `builtin_providers.go`。
 
 ## 相关文档
 
-- [Provider Interface Target Design](../provider-interface-target-design.md)
-- [Provider Module Interface](../provider-module-interface.md)
-- [Provider Schema Strategy](../provider-schema-strategy.md)
+- [Provider Architecture Optimization PR](../provider-architecture-optimization-pr.md)
