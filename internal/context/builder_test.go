@@ -17,12 +17,7 @@ func TestDefaultBuilderBuild(t *testing.T) {
 		Messages: []provider.Message{
 			{Role: "user", Content: "hello"},
 		},
-		Metadata: Metadata{
-			Workdir:  t.TempDir(),
-			Shell:    "powershell",
-			Provider: "openai",
-			Model:    "gpt-5.4",
-		},
+		Metadata: testMetadata(t.TempDir()),
 	}
 
 	got, err := builder.Build(stdcontext.Background(), input)

@@ -10,12 +10,7 @@ import (
 func TestCollectSystemStateHandlesGitUnavailable(t *testing.T) {
 	t.Parallel()
 
-	state, err := collectSystemState(context.Background(), Metadata{
-		Workdir:  "/workspace",
-		Shell:    "bash",
-		Provider: "openai",
-		Model:    "gpt-5.4",
-	}, func(ctx context.Context, workdir string, args ...string) (string, error) {
+	state, err := collectSystemState(context.Background(), testMetadata("/workspace"), func(ctx context.Context, workdir string, args ...string) (string, error) {
 		return "", errors.New("git unavailable")
 	})
 	if err != nil {
@@ -46,12 +41,7 @@ func TestCollectSystemStateIncludesGitSummary(t *testing.T) {
 		}
 	}
 
-	state, err := collectSystemState(context.Background(), Metadata{
-		Workdir:  "/workspace",
-		Shell:    "bash",
-		Provider: "openai",
-		Model:    "gpt-5.4",
-	}, runner)
+	state, err := collectSystemState(context.Background(), testMetadata("/workspace"), runner)
 	if err != nil {
 		t.Fatalf("collectSystemState() error = %v", err)
 	}
@@ -81,9 +71,7 @@ func TestCollectSystemStateReturnsContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := collectSystemState(ctx, Metadata{
-		Workdir: "/workspace",
-	}, func(ctx context.Context, workdir string, args ...string) (string, error) {
+	_, err := collectSystemState(ctx, testMetadata("/workspace"), func(ctx context.Context, workdir string, args ...string) (string, error) {
 		return "", ctx.Err()
 	})
 	if !errors.Is(err, context.Canceled) {
