@@ -296,7 +296,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		a.state.ExecutionError = ""
 		a.state.StatusText = statusThinking
 		a.state.CurrentTool = ""
-		a.activeMessages = append(a.activeMessages, provider.Message{Role: roleUser, Content: input})
+		a.activeMessages = append(a.activeMessages, provider.Message{Role: provider.RoleUser, Content: input})
 		a.rebuildTranscript()
 		cmds = append(cmds, runAgent(a.runtime, a.state.ActiveSessionID, input))
 		return a, tea.Batch(cmds...)
@@ -468,7 +468,7 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 		a.state.CurrentTool = ""
 		if payload, ok := event.Payload.(tools.ToolResult); ok {
 			a.activeMessages = append(a.activeMessages, provider.Message{
-				Role:    roleTool,
+				Role:    provider.RoleTool,
 				Content: payload.Content,
 				IsError: payload.IsError,
 			})
@@ -500,7 +500,7 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 			a.state.StatusText = statusReady
 		}
 		if payload, ok := event.Payload.(provider.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
-			a.activeMessages = append(a.activeMessages, provider.Message{Role: roleAssistant, Content: payload.Content})
+			a.activeMessages = append(a.activeMessages, provider.Message{Role: provider.RoleAssistant, Content: payload.Content})
 			transcriptDirty = true
 		}
 	case agentruntime.EventRunCanceled:
@@ -535,8 +535,8 @@ func (a *App) appendAssistantChunk(chunk string) {
 		return
 	}
 
-	if !a.state.StreamingReply || len(a.activeMessages) == 0 || a.activeMessages[len(a.activeMessages)-1].Role != roleAssistant {
-		a.activeMessages = append(a.activeMessages, provider.Message{Role: roleAssistant, Content: chunk})
+	if !a.state.StreamingReply || len(a.activeMessages) == 0 || a.activeMessages[len(a.activeMessages)-1].Role != provider.RoleAssistant {
+		a.activeMessages = append(a.activeMessages, provider.Message{Role: provider.RoleAssistant, Content: chunk})
 		a.state.StreamingReply = true
 		return
 	}
@@ -582,7 +582,7 @@ func (a *App) lastAssistantMatches(content string) bool {
 	}
 
 	last := a.activeMessages[len(a.activeMessages)-1]
-	return last.Role == roleAssistant && strings.TrimSpace(last.Content) == strings.TrimSpace(content)
+	return last.Role == provider.RoleAssistant && strings.TrimSpace(last.Content) == strings.TrimSpace(content)
 }
 
 func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
