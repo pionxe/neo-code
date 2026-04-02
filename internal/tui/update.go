@@ -569,6 +569,9 @@ func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
 
 func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 	if !a.isMouseWithinTranscript(msg) {
+		if msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease {
+			a.pendingCopyID = 0
+		}
 		return false
 	}
 
@@ -579,8 +582,27 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 	case msg.Button == tea.MouseButtonWheelDown && msg.Action == tea.MouseActionPress:
 		a.transcript.LineDown(mouseWheelStepLines)
 		return true
+	case msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion:
+		return false
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
-		return a.handleTranscriptCopyClick(msg)
+		if buttonID, ok := a.copyButtonIDAtMouse(msg); ok {
+			a.pendingCopyID = buttonID
+			return true
+		}
+		a.pendingCopyID = 0
+		return false
+	case msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease:
+		defer func() { a.pendingCopyID = 0 }()
+
+		buttonID, ok := a.copyButtonIDAtMouse(msg)
+		if !ok {
+			return false
+		}
+
+		if a.pendingCopyID != 0 && a.pendingCopyID != buttonID {
+			return false
+		}
+		return a.copyCodeBlockByID(buttonID)
 	default:
 		return false
 	}

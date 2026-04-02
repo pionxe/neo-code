@@ -134,7 +134,19 @@ func TestTranscriptMouseClickCopiesCodeBlock(t *testing.T) {
 		Y:      y + targetY,
 		Button: tea.MouseButtonLeft,
 	}); !handled {
-		t.Fatalf("expected mouse click on copy button to be handled")
+		t.Fatalf("expected mouse press on copy button to be handled")
+	}
+	if copied != "" {
+		t.Fatalf("expected press phase not to copy yet, got %q", copied)
+	}
+
+	if handled := app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + targetX + 1,
+		Y:      y + targetY,
+		Action: tea.MouseActionRelease,
+		Type:   tea.MouseRelease,
+	}); !handled {
+		t.Fatalf("expected mouse release on copy button to be handled")
 	}
 
 	if copied != "fmt.Println(1)" {
@@ -148,8 +160,10 @@ func TestTranscriptMouseClickCopiesCodeBlock(t *testing.T) {
 		X:      x + 60,
 		Y:      y + targetY,
 		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionRelease,
+		Type:   tea.MouseRelease,
 	}); handled {
-		t.Fatalf("expected click outside copy button text to be ignored")
+		t.Fatalf("expected release outside copy button text to be ignored")
 	}
 
 	if handled := app.handleTranscriptMouse(tea.MouseMsg{
@@ -207,7 +221,15 @@ func TestTranscriptMouseCopyFailureSetsError(t *testing.T) {
 		Y:      y + targetY,
 		Button: tea.MouseButtonLeft,
 	}); !handled {
-		t.Fatalf("expected mouse click on copy button to be handled")
+		t.Fatalf("expected mouse press on copy button to be handled")
+	}
+	if handled := app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + targetX + 1,
+		Y:      y + targetY,
+		Action: tea.MouseActionRelease,
+		Type:   tea.MouseRelease,
+	}); !handled {
+		t.Fatalf("expected mouse release on copy button to be handled")
 	}
 
 	if app.state.StatusText != statusCodeCopyError || app.state.ExecutionError == "" {

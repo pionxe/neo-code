@@ -31,6 +31,7 @@ type App struct {
 	input            textarea.Model
 	markdownRenderer markdownContentRenderer
 	codeCopyBlocks   map[int]string
+	pendingCopyID    int
 	activeMessages   []provider.Message
 	activities       []activityEntry
 	fileCandidates   []string

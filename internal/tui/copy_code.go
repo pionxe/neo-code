@@ -219,20 +219,23 @@ func parseCopyCodeButton(line string) (id int, startCol int, endCol int, ok bool
 	return id, startCol, endCol, true
 }
 
-func (a *App) handleTranscriptCopyClick(msg tea.MouseMsg) bool {
+func (a *App) copyButtonIDAtMouse(msg tea.MouseMsg) (int, bool) {
 	line, relativeX, ok := a.transcriptLineAtMouse(msg)
 	if !ok {
-		return false
+		return 0, false
 	}
 
 	buttonID, startCol, endCol, ok := parseCopyCodeButton(line)
 	if !ok {
-		return false
+		return 0, false
 	}
 	if relativeX < startCol || relativeX >= endCol {
-		return false
+		return 0, false
 	}
+	return buttonID, true
+}
 
+func (a *App) copyCodeBlockByID(buttonID int) bool {
 	code, ok := a.codeCopyBlocks[buttonID]
 	if !ok {
 		a.state.ExecutionError = statusCodeCopyError
