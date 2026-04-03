@@ -1298,7 +1298,11 @@ func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
 	store := newMemoryStore()
 	session := newSession("manual")
 	session.ID = "session-manual"
-	session.Messages = []provider.Message{{Role: provider.RoleUser, Content: "before"}}
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older"},
+		{Role: provider.RoleAssistant, Content: "older answer"},
+		{Role: provider.RoleUser, Content: "before"},
+	}
 	store.sessions[session.ID] = cloneSession(session)
 
 	registry := tools.NewRegistry()
@@ -1352,7 +1356,11 @@ func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 	store := newMemoryStore()
 	session := newSession("manual-fail")
 	session.ID = "session-manual-fail"
-	session.Messages = []provider.Message{{Role: provider.RoleUser, Content: "before"}}
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older"},
+		{Role: provider.RoleAssistant, Content: "older answer"},
+		{Role: provider.RoleUser, Content: "before"},
+	}
 	store.sessions[session.ID] = cloneSession(session)
 
 	registry := tools.NewRegistry()
@@ -1373,7 +1381,7 @@ func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load original session: %v", err)
 	}
-	if len(saved.Messages) != 1 || saved.Messages[0].Content != "before" {
+	if len(saved.Messages) != 3 || saved.Messages[2].Content != "before" {
 		t.Fatalf("expected original session untouched, got %+v", saved.Messages)
 	}
 
@@ -1401,7 +1409,11 @@ func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 	session.ID = "session-manual-provider"
 	session.Provider = config.OpenAIName
 	session.Model = "session-model"
-	session.Messages = []provider.Message{{Role: provider.RoleUser, Content: "before"}}
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older"},
+		{Role: provider.RoleAssistant, Content: "older answer"},
+		{Role: provider.RoleUser, Content: "before"},
+	}
 	store.sessions[session.ID] = cloneSession(session)
 
 	registry := tools.NewRegistry()
@@ -1469,7 +1481,11 @@ func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *t
 	store := newMemoryStore()
 	session := newSession("manual-fallback")
 	session.ID = "session-manual-fallback"
-	session.Messages = []provider.Message{{Role: provider.RoleUser, Content: "before"}}
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older"},
+		{Role: provider.RoleAssistant, Content: "older answer"},
+		{Role: provider.RoleUser, Content: "before"},
+	}
 	store.sessions[session.ID] = cloneSession(session)
 
 	registry := tools.NewRegistry()

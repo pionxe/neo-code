@@ -56,11 +56,11 @@ type Input struct {
 
 // SummaryInput describes the historical context that must be summarized.
 type SummaryInput struct {
-	Mode             Mode
-	ArchivedMessages []provider.Message
-	RetainedMessages []provider.Message
-	RemovedSpans     int
-	Config           config.CompactConfig
+	Mode                 Mode
+	ArchivedMessages     []provider.Message
+	RetainedMessages     []provider.Message
+	ArchivedMessageCount int
+	Config               config.CompactConfig
 }
 
 // Metrics reports compact input/output size changes.
@@ -165,25 +165,105 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 	return result, nil
 }
 
-type span struct {
-	start int
-	end   int
+type atomicBlock struct {
+	start        int
+	end          int
+	messageCount int
+	protected    bool
 }
 
-// collectSpans groups assistant tool_calls + following tool results as one span.
-func collectSpans(messages []provider.Message) []span {
-	spans := make([]span, 0, len(messages))
+// collectAtomicBlocks 按“不可拆分块”对消息分组，确保 tool call 与其结果不会被拆开压缩。
+func collectAtomicBlocks(messages []provider.Message) []atomicBlock {
+	blocks := make([]atomicBlock, 0, len(messages))
 	for i := 0; i < len(messages); {
 		start := i
-		i++
+		end := i + 1
 		if messages[start].Role == provider.RoleAssistant && len(messages[start].ToolCalls) > 0 {
-			for i < len(messages) && messages[i].Role == provider.RoleTool {
-				i++
+			for end < len(messages) && messages[end].Role == provider.RoleTool {
+				end++
 			}
 		}
-		spans = append(spans, span{start: start, end: i})
+		blocks = append(blocks, atomicBlock{
+			start:        start,
+			end:          end,
+			messageCount: end - start,
+			protected:    isProtectedThoughtBlock(messages[start:end]),
+		})
+		i = end
 	}
-	return spans
+	if lastUserIndex := lastExplicitUserMessageIndex(messages); lastUserIndex >= 0 {
+		markBlockProtected(blocks, lastUserIndex)
+	}
+	return blocks
+}
+
+// isProtectedThoughtBlock 为未来结构化 thought block 预留保护入口，当前默认不命中。
+func isProtectedThoughtBlock(messages []provider.Message) bool {
+	return false
+}
+
+// lastExplicitUserMessageIndex 返回最后一个非空用户消息的位置，用于保护最近明确指令。
+func lastExplicitUserMessageIndex(messages []provider.Message) int {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role == provider.RoleUser && strings.TrimSpace(messages[index].Content) != "" {
+			return index
+		}
+	}
+	return -1
+}
+
+// markBlockProtected 将包含目标消息的原子块标记为受保护块。
+func markBlockProtected(blocks []atomicBlock, messageIndex int) {
+	for index := range blocks {
+		if messageIndex >= blocks[index].start && messageIndex < blocks[index].end {
+			blocks[index].protected = true
+			return
+		}
+	}
+}
+
+// retainedStartForKeepRecent 计算 keep_recent 模式下需要保留的尾部起点。
+func retainedStartForKeepRecent(blocks []atomicBlock, keepMessages int) int {
+	if len(blocks) == 0 {
+		return 0
+	}
+
+	retainedStart := blocks[0].start
+	retainedMessages := 0
+	for index := len(blocks) - 1; index >= 0; index-- {
+		retainedMessages += blocks[index].messageCount
+		retainedStart = blocks[index].start
+		if retainedMessages >= keepMessages {
+			break
+		}
+	}
+
+	protectedStart, ok := protectedTailStart(blocks)
+	if ok && protectedStart < retainedStart {
+		retainedStart = protectedStart
+	}
+	return retainedStart
+}
+
+// protectedTailStart 返回必须原样保留的受保护尾部起点。
+func protectedTailStart(blocks []atomicBlock) (int, bool) {
+	for index := range blocks {
+		if blocks[index].protected {
+			return blocks[index].start, true
+		}
+	}
+	return 0, false
+}
+
+// splitMessagesAt 按起始下标切分 archived 与 retained 消息，并复制结果以避免共享底层切片。
+func splitMessagesAt(messages []provider.Message, retainedStart int) ([]provider.Message, []provider.Message) {
+	if retainedStart <= 0 {
+		return nil, cloneMessages(messages)
+	}
+	if retainedStart >= len(messages) {
+		return cloneMessages(messages), nil
+	}
+	return cloneMessages(messages[:retainedStart]), cloneMessages(messages[retainedStart:])
 }
 
 func (s *Service) manualCompact(ctx context.Context, messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
@@ -199,16 +279,15 @@ func (s *Service) manualCompact(ctx context.Context, messages []provider.Message
 }
 
 func (s *Service) manualCompactKeepRecent(ctx context.Context, messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
-	spans := collectSpans(messages)
-	if len(spans) <= cfg.ManualKeepRecentSpans {
+	blocks := collectAtomicBlocks(messages)
+	retainedStart := retainedStartForKeepRecent(blocks, cfg.ManualKeepRecentMessages)
+	if retainedStart <= 0 {
 		return cloneMessages(messages), false, nil
 	}
 
-	keepStart := spans[len(spans)-cfg.ManualKeepRecentSpans].start
-	removed := cloneMessages(messages[:keepStart])
-	kept := cloneMessages(messages[keepStart:])
+	removed, kept := splitMessagesAt(messages, retainedStart)
 
-	summary, err := s.buildSummary(ctx, removed, kept, len(spans)-cfg.ManualKeepRecentSpans, cfg)
+	summary, err := s.buildSummary(ctx, removed, kept, len(removed), cfg)
 	if err != nil {
 		return nil, false, err
 	}
@@ -223,20 +302,34 @@ func (s *Service) manualCompactFullReplace(ctx context.Context, messages []provi
 	if len(messages) == 0 {
 		return nil, false, nil
 	}
-	spans := collectSpans(messages)
-	summary, err := s.buildSummary(ctx, cloneMessages(messages), nil, len(spans), cfg)
+
+	blocks := collectAtomicBlocks(messages)
+	retainedStart, hasProtectedTail := protectedTailStart(blocks)
+	if !hasProtectedTail {
+		retainedStart = len(messages)
+	}
+
+	archived, retained := splitMessagesAt(messages, retainedStart)
+	if len(archived) == 0 {
+		return cloneMessages(messages), false, nil
+	}
+
+	summary, err := s.buildSummary(ctx, archived, retained, len(archived), cfg)
 	if err != nil {
 		return nil, false, err
 	}
 
-	return []provider.Message{{Role: provider.RoleAssistant, Content: summary}}, true, nil
+	next := make([]provider.Message, 0, len(retained)+1)
+	next = append(next, provider.Message{Role: provider.RoleAssistant, Content: summary})
+	next = append(next, retained...)
+	return next, true, nil
 }
 
 func (s *Service) buildSummary(
 	ctx context.Context,
 	archived []provider.Message,
 	retained []provider.Message,
-	removedSpans int,
+	archivedMessageCount int,
 	cfg config.CompactConfig,
 ) (string, error) {
 	if s.generator == nil {
@@ -244,11 +337,11 @@ func (s *Service) buildSummary(
 	}
 
 	summary, err := s.generator.Generate(ctx, SummaryInput{
-		Mode:             ModeManual,
-		ArchivedMessages: cloneMessages(archived),
-		RetainedMessages: cloneMessages(retained),
-		RemovedSpans:     removedSpans,
-		Config:           cfg,
+		Mode:                 ModeManual,
+		ArchivedMessages:     cloneMessages(archived),
+		RetainedMessages:     cloneMessages(retained),
+		ArchivedMessageCount: archivedMessageCount,
+		Config:               cfg,
 	})
 	if err != nil {
 		return "", err

@@ -55,8 +55,8 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 		RetainedMessages: []provider.Message{
 			{Role: provider.RoleAssistant, Content: "recent answer"},
 		},
-		RemovedSpans: 2,
-		Config:       manager.Get().Context.Compact,
+		ArchivedMessageCount: 2,
+		Config:               manager.Get().Context.Compact,
 	})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)

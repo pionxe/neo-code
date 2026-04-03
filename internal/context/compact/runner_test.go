@@ -48,7 +48,7 @@ func validSemanticSummary() string {
 	return strings.Join(lines[:len(lines)-1], "\n")
 }
 
-func TestManualCompactAddsSummaryAndKeepsRecentSpans(t *testing.T) {
+func TestManualCompactKeepRecentRetainsRecentMessagesAndWholeToolBlock(t *testing.T) {
 	t.Parallel()
 
 	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
@@ -58,9 +58,17 @@ func TestManualCompactAddsSummaryAndKeepsRecentSpans(t *testing.T) {
 
 	messages := []provider.Message{
 		{Role: provider.RoleUser, Content: "old requirement"},
+		{Role: provider.RoleAssistant, Content: "old answer"},
+		{Role: provider.RoleUser, Content: "middle request"},
 		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call-old", Name: "filesystem_grep", Arguments: "{}"}}},
 		{Role: provider.RoleTool, ToolCallID: "call-old", Content: "old result"},
-		{Role: provider.RoleAssistant, Content: "latest answer"},
+		{Role: provider.RoleAssistant, Content: "after tool"},
+		{Role: provider.RoleUser, Content: "instruction to keep"},
+		{Role: provider.RoleAssistant, Content: "ack"},
+		{Role: provider.RoleUser, Content: "recent follow up"},
+		{Role: provider.RoleAssistant, Content: "recent answer"},
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: provider.RoleAssistant, Content: "latest result"},
 	}
 
 	result, err := runner.Run(context.Background(), Input{
@@ -69,9 +77,9 @@ func TestManualCompactAddsSummaryAndKeepsRecentSpans(t *testing.T) {
 		Workdir:   t.TempDir(),
 		Messages:  messages,
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyKeepRecent,
-			ManualKeepRecentSpans: 1,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 8,
+			MaxSummaryChars:          1200,
 		},
 	})
 	if err != nil {
@@ -80,8 +88,8 @@ func TestManualCompactAddsSummaryAndKeepsRecentSpans(t *testing.T) {
 	if !result.Applied {
 		t.Fatalf("expected manual compact applied")
 	}
-	if len(result.Messages) != 2 {
-		t.Fatalf("expected summary + 1 kept span, got %d", len(result.Messages))
+	if len(result.Messages) != 10 {
+		t.Fatalf("expected summary + 9 retained messages, got %d", len(result.Messages))
 	}
 	if result.Messages[0].Role != provider.RoleAssistant {
 		t.Fatalf("expected summary role assistant, got %q", result.Messages[0].Role)
@@ -91,14 +99,67 @@ func TestManualCompactAddsSummaryAndKeepsRecentSpans(t *testing.T) {
 			t.Fatalf("expected summary to include section %q, got %q", section, result.Messages[0].Content)
 		}
 	}
-	if result.Messages[1].Content != "latest answer" {
-		t.Fatalf("expected newest span kept, got %+v", result.Messages[1])
+	if result.Messages[1].Role != provider.RoleAssistant || len(result.Messages[1].ToolCalls) != 1 {
+		t.Fatalf("expected retained tool call block start, got %+v", result.Messages[1])
+	}
+	if result.Messages[2].Role != provider.RoleTool || result.Messages[2].ToolCallID != "call-old" {
+		t.Fatalf("expected retained tool result, got %+v", result.Messages[2])
 	}
 	if len(generator.calls) != 1 {
 		t.Fatalf("expected generator to run once, got %d", len(generator.calls))
 	}
-	if len(generator.calls[0].ArchivedMessages) != 3 || len(generator.calls[0].RetainedMessages) != 1 {
+	if len(generator.calls[0].ArchivedMessages) != 3 || len(generator.calls[0].RetainedMessages) != 9 {
 		t.Fatalf("unexpected generator input: %+v", generator.calls[0])
+	}
+	if generator.calls[0].ArchivedMessageCount != 3 {
+		t.Fatalf("expected archived message count 3, got %+v", generator.calls[0])
+	}
+}
+
+func TestManualCompactKeepRecentProtectsLatestExplicitUserInstruction(t *testing.T) {
+	t.Parallel()
+
+	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	runner := NewRunner(generator)
+	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "old requirement"},
+		{Role: provider.RoleAssistant, Content: "old answer"},
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: provider.RoleAssistant, Content: "ack"},
+		{Role: provider.RoleAssistant, Content: "follow up 1"},
+		{Role: provider.RoleAssistant, Content: "follow up 2"},
+		{Role: provider.RoleAssistant, Content: "follow up 3"},
+		{Role: provider.RoleAssistant, Content: "follow up 4"},
+		{Role: provider.RoleAssistant, Content: "follow up 5"},
+	}
+
+	result, err := runner.Run(context.Background(), Input{
+		Mode:      ModeManual,
+		SessionID: "session-keep-last-user",
+		Workdir:   t.TempDir(),
+		Messages:  messages,
+		Config: config.CompactConfig{
+			ManualStrategy:           config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 3,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected compact applied")
+	}
+	if len(generator.calls) != 1 {
+		t.Fatalf("expected generator called once, got %d", len(generator.calls))
+	}
+	if len(generator.calls[0].ArchivedMessages) != 2 || len(generator.calls[0].RetainedMessages) != 7 {
+		t.Fatalf("expected protected tail to start at latest user instruction, got %+v", generator.calls[0])
+	}
+	if result.Messages[1].Role != provider.RoleUser || result.Messages[1].Content != "latest explicit instruction" {
+		t.Fatalf("expected retained latest explicit instruction, got %+v", result.Messages[1])
 	}
 }
 
@@ -117,9 +178,9 @@ func TestManualCompactWritesTranscriptJSONL(t *testing.T) {
 			{Role: provider.RoleUser, Content: "hello"},
 		},
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyKeepRecent,
-			ManualKeepRecentSpans: 6,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
 		},
 	})
 	if err != nil {
@@ -156,9 +217,9 @@ func TestManualCompactFailsWhenTranscriptWriteFails(t *testing.T) {
 		Workdir:   t.TempDir(),
 		Messages:  []provider.Message{{Role: provider.RoleUser, Content: "hello"}},
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyKeepRecent,
-			ManualKeepRecentSpans: 6,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
@@ -166,7 +227,7 @@ func TestManualCompactFailsWhenTranscriptWriteFails(t *testing.T) {
 	}
 }
 
-func TestManualCompactFullReplaceRewritesAllMessages(t *testing.T) {
+func TestManualCompactFullReplaceKeepsProtectedTail(t *testing.T) {
 	t.Parallel()
 
 	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
@@ -176,6 +237,8 @@ func TestManualCompactFullReplaceRewritesAllMessages(t *testing.T) {
 
 	messages := []provider.Message{
 		{Role: provider.RoleUser, Content: "old requirement"},
+		{Role: provider.RoleAssistant, Content: "old answer"},
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
 		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call-old", Name: "filesystem_grep", Arguments: "{}"}}},
 		{Role: provider.RoleTool, ToolCallID: "call-old", Content: "old result"},
 		{Role: provider.RoleAssistant, Content: "latest answer"},
@@ -187,9 +250,9 @@ func TestManualCompactFullReplaceRewritesAllMessages(t *testing.T) {
 		Workdir:   t.TempDir(),
 		Messages:  messages,
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyFullReplace,
-			ManualKeepRecentSpans: 6,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
 		},
 	})
 	if err != nil {
@@ -198,14 +261,54 @@ func TestManualCompactFullReplaceRewritesAllMessages(t *testing.T) {
 	if !result.Applied {
 		t.Fatalf("expected full_replace compact applied")
 	}
-	if len(result.Messages) != 1 {
-		t.Fatalf("expected single summary message, got %d", len(result.Messages))
+	if len(result.Messages) != 5 {
+		t.Fatalf("expected summary plus protected tail, got %d", len(result.Messages))
 	}
 	if result.Messages[0].Role != provider.RoleAssistant {
 		t.Fatalf("expected summary role assistant, got %q", result.Messages[0].Role)
 	}
-	if len(generator.calls) != 1 || len(generator.calls[0].RetainedMessages) != 0 {
+	if len(generator.calls) != 1 || len(generator.calls[0].RetainedMessages) != 4 {
 		t.Fatalf("expected full_replace to summarize all messages, got %+v", generator.calls)
+	}
+	if generator.calls[0].ArchivedMessageCount != 2 {
+		t.Fatalf("expected full_replace archived 2 messages, got %+v", generator.calls[0])
+	}
+}
+
+func TestManualCompactFullReplaceWithoutArchivableMessagesSkipsGenerator(t *testing.T) {
+	t.Parallel()
+
+	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	runner := NewRunner(generator)
+	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: provider.RoleAssistant, Content: "latest answer"},
+	}
+
+	result, err := runner.Run(context.Background(), Input{
+		Mode:      ModeManual,
+		SessionID: "session-full-replace-skip",
+		Workdir:   t.TempDir(),
+		Messages:  messages,
+		Config: config.CompactConfig{
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("expected full_replace to skip when nothing can be archived")
+	}
+	if len(generator.calls) != 0 {
+		t.Fatalf("expected generator not to run, got %d calls", len(generator.calls))
+	}
+	if len(result.Messages) != len(messages) {
+		t.Fatalf("expected original messages kept, got %+v", result.Messages)
 	}
 }
 
@@ -223,9 +326,9 @@ func TestRunManualRejectsUnsupportedStrategy(t *testing.T) {
 		Workdir:   t.TempDir(),
 		Messages:  []provider.Message{{Role: provider.RoleUser, Content: "hello"}},
 		Config: config.CompactConfig{
-			ManualStrategy:        "unknown_strategy",
-			ManualKeepRecentSpans: 6,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           "unknown_strategy",
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
@@ -271,9 +374,9 @@ func TestSaveTranscriptUsesUniqueIDWithinSameTimestamp(t *testing.T) {
 			{Role: provider.RoleAssistant, Content: "world"},
 		},
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyFullReplace,
-			ManualKeepRecentSpans: 6,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
 		},
 	}
 
@@ -314,12 +417,14 @@ func TestManualCompactGeneratorInvalidSummaryFails(t *testing.T) {
 		Workdir:   t.TempDir(),
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Content: "older"},
+			{Role: provider.RoleAssistant, Content: "older answer"},
+			{Role: provider.RoleUser, Content: "latest explicit instruction"},
 			{Role: provider.RoleAssistant, Content: "newer"},
 		},
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyFullReplace,
-			ManualKeepRecentSpans: 1,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "missing required section") {
@@ -357,12 +462,14 @@ func TestManualCompactGeneratorEmptyBulletFails(t *testing.T) {
 		Workdir:   t.TempDir(),
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Content: "older"},
+			{Role: provider.RoleAssistant, Content: "older answer"},
+			{Role: provider.RoleUser, Content: "latest explicit instruction"},
 			{Role: provider.RoleAssistant, Content: "newer"},
 		},
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyFullReplace,
-			ManualKeepRecentSpans: 1,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "empty bullet") {
@@ -383,12 +490,14 @@ func TestManualCompactTruncationFailsWhenStructureBreaks(t *testing.T) {
 		Workdir:   t.TempDir(),
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Content: "older"},
+			{Role: provider.RoleAssistant, Content: "older answer"},
+			{Role: provider.RoleUser, Content: "latest explicit instruction"},
 			{Role: provider.RoleAssistant, Content: "newer"},
 		},
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyFullReplace,
-			ManualKeepRecentSpans: 1,
-			MaxSummaryChars:       40,
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          40,
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "missing required section") {
@@ -396,7 +505,7 @@ func TestManualCompactTruncationFailsWhenStructureBreaks(t *testing.T) {
 	}
 }
 
-func TestManualCompactKeepRecentWithoutEnoughSpansSkipsGenerator(t *testing.T) {
+func TestManualCompactKeepRecentWithoutEnoughMessagesSkipsGenerator(t *testing.T) {
 	t.Parallel()
 
 	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
@@ -411,9 +520,9 @@ func TestManualCompactKeepRecentWithoutEnoughSpansSkipsGenerator(t *testing.T) {
 			{Role: provider.RoleUser, Content: "single message"},
 		},
 		Config: config.CompactConfig{
-			ManualStrategy:        config.CompactManualStrategyKeepRecent,
-			ManualKeepRecentSpans: 2,
-			MaxSummaryChars:       1200,
+			ManualStrategy:           config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 2,
+			MaxSummaryChars:          1200,
 		},
 	})
 	if err != nil {

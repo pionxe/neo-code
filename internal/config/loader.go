@@ -38,9 +38,9 @@ type persistedContextConfig struct {
 }
 
 type persistedCompactConfig struct {
-	ManualStrategy        string `yaml:"manual_strategy,omitempty"`
-	ManualKeepRecentSpans int    `yaml:"manual_keep_recent_spans,omitempty"`
-	MaxSummaryChars       int    `yaml:"max_summary_chars,omitempty"`
+	ManualStrategy           string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentMessages int    `yaml:"manual_keep_recent_messages,omitempty"`
+	MaxSummaryChars          int    `yaml:"max_summary_chars,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -214,9 +214,9 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 	return persistedContextConfig{
 		Compact: persistedCompactConfig{
-			ManualStrategy:        cfg.Compact.ManualStrategy,
-			ManualKeepRecentSpans: cfg.Compact.ManualKeepRecentSpans,
-			MaxSummaryChars:       cfg.Compact.MaxSummaryChars,
+			ManualStrategy:           cfg.Compact.ManualStrategy,
+			ManualKeepRecentMessages: cfg.Compact.ManualKeepRecentMessages,
+			MaxSummaryChars:          cfg.Compact.MaxSummaryChars,
 		},
 	}
 }
@@ -225,9 +225,9 @@ func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 func fromPersistedContextConfig(file persistedContextConfig, defaults ContextConfig) ContextConfig {
 	out := ContextConfig{
 		Compact: CompactConfig{
-			ManualStrategy:        strings.TrimSpace(file.Compact.ManualStrategy),
-			ManualKeepRecentSpans: file.Compact.ManualKeepRecentSpans,
-			MaxSummaryChars:       file.Compact.MaxSummaryChars,
+			ManualStrategy:           strings.TrimSpace(file.Compact.ManualStrategy),
+			ManualKeepRecentMessages: file.Compact.ManualKeepRecentMessages,
+			MaxSummaryChars:          file.Compact.MaxSummaryChars,
 		},
 	}
 	out.Compact.ApplyDefaults(defaults.Compact)

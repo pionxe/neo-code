@@ -43,13 +43,13 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 	}
 
 	prompt := agentcontext.BuildCompactPrompt(agentcontext.CompactPromptInput{
-		Mode:                  string(input.Mode),
-		ManualStrategy:        input.Config.ManualStrategy,
-		ManualKeepRecentSpans: input.Config.ManualKeepRecentSpans,
-		RemovedSpans:          input.RemovedSpans,
-		MaxSummaryChars:       input.Config.MaxSummaryChars,
-		ArchivedMessages:      input.ArchivedMessages,
-		RetainedMessages:      input.RetainedMessages,
+		Mode:                     string(input.Mode),
+		ManualStrategy:           input.Config.ManualStrategy,
+		ManualKeepRecentMessages: input.Config.ManualKeepRecentMessages,
+		ArchivedMessageCount:     input.ArchivedMessageCount,
+		MaxSummaryChars:          input.Config.MaxSummaryChars,
+		ArchivedMessages:         input.ArchivedMessages,
+		RetainedMessages:         input.RetainedMessages,
 	})
 
 	modelProvider, err := g.providerFactory.Build(ctx, g.providerConfig)

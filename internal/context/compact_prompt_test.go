@@ -12,11 +12,11 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 	t.Parallel()
 
 	prompt := BuildCompactPrompt(CompactPromptInput{
-		Mode:                  "manual",
-		ManualStrategy:        "keep_recent",
-		ManualKeepRecentSpans: 6,
-		RemovedSpans:          3,
-		MaxSummaryChars:       1200,
+		Mode:                     "manual",
+		ManualStrategy:           "keep_recent",
+		ManualKeepRecentMessages: 10,
+		ArchivedMessageCount:     3,
+		MaxSummaryChars:          1200,
 		ArchivedMessages: []provider.Message{
 			{Role: provider.RoleUser, Content: "legacy request"},
 		},
@@ -53,6 +53,15 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 	}
 	if !strings.Contains(prompt.UserPrompt, "target_max_summary_chars: 1200") {
 		t.Fatalf("expected target max chars in user prompt, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "manual_keep_recent_messages: 10") {
+		t.Fatalf("expected keep recent messages in user prompt, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "archived_message_count: 3") {
+		t.Fatalf("expected archived message count in user prompt, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "latest explicit user instruction") {
+		t.Fatalf("expected retained instruction guidance, got %q", prompt.UserPrompt)
 	}
 }
 
