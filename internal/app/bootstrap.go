@@ -8,8 +8,9 @@ import (
 
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
-	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
+	providercatalog "neo-code/internal/provider/catalog"
+	providerselection "neo-code/internal/provider/selection"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
@@ -35,9 +36,10 @@ func ensureConsoleUTF8() {
 }
 
 func NewProgram(ctx context.Context) (*tea.Program, error) {
-	ensureConsoleUTF8()
 
-	loader := config.NewLoader("", builtin.DefaultConfig())
+	ensureConsoleUTF8()
+	
+    loader := config.NewLoader("", config.DefaultConfig())
 	manager := config.NewManager(loader)
 	if _, err := manager.Load(ctx); err != nil {
 		return nil, err
@@ -47,8 +49,9 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 	if err != nil {
 		return nil, err
 	}
-	providerService := provider.NewService(manager, providerRegistry, nil)
-	if _, err := providerService.EnsureSelection(ctx); err != nil {
+	modelCatalogs := providercatalog.NewService(manager.BaseDir(), providerRegistry, nil)
+	providerSelection := providerselection.NewService(manager, providerRegistry, modelCatalogs)
+	if _, err := providerSelection.EnsureSelection(ctx); err != nil {
 		return nil, err
 	}
 
@@ -65,11 +68,11 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 		manager,
 		toolManager,
 		sessionStore,
-		providerService,
+		providerRegistry,
 		agentcontext.NewBuilder(),
 	)
 
-	tuiApp, err := tui.New(&cfg, manager, runtimeSvc, providerService)
+	tuiApp, err := tui.New(&cfg, manager, runtimeSvc, providerSelection)
 	if err != nil {
 		return nil, err
 	}
