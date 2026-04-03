@@ -17,6 +17,7 @@ const (
 	slashCommandHelp      = "/help"
 	slashCommandExit      = "/exit"
 	slashCommandClear     = "/clear"
+	slashCommandCompact   = "/compact"
 	slashCommandStatus    = "/status"
 	slashCommandProvider  = "/provider"
 	slashCommandModelPick = "/model"
@@ -25,6 +26,7 @@ const (
 	slashUsageHelp     = "/help"
 	slashUsageExit     = "/exit"
 	slashUsageClear    = "/clear"
+	slashUsageCompact  = "/compact"
 	slashUsageStatus   = "/status"
 	slashUsageProvider = "/provider"
 	slashUsageModel    = "/model"
@@ -60,6 +62,7 @@ const (
 	statusApplyingCommand = "Applying local command"
 	statusRunningCommand  = "Running command"
 	statusCommandDone     = "Command finished"
+	statusCompacting      = "Compacting context"
 	statusChooseProvider  = "Choose a provider"
 	statusChooseModel     = "Choose a model"
 
@@ -101,6 +104,7 @@ type statusSnapshot struct {
 	ActiveSessionID    string
 	ActiveSessionTitle string
 	IsAgentRunning     bool
+	IsCompacting       bool
 	CurrentProvider    string
 	CurrentModel       string
 	CurrentWorkdir     string
@@ -114,6 +118,7 @@ type statusSnapshot struct {
 var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageHelp, Description: "Show slash command help"},
 	{Usage: slashUsageClear, Description: "Clear the current draft transcript"},
+	{Usage: slashUsageCompact, Description: "Compact the current session context"},
 	{Usage: slashUsageStatus, Description: "Show current session and agent status"},
 	{Usage: slashUsageWorkdir, Description: "Show or set current session workspace root (/cwd [path])"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
@@ -343,7 +348,7 @@ func executeStatusCommand(snapshot statusSnapshot) string {
 		sessionTitle = draftSessionTitle
 	}
 	running := "no"
-	if snapshot.IsAgentRunning {
+	if snapshot.IsAgentRunning || snapshot.IsCompacting {
 		running = "yes"
 	}
 	currentTool := snapshot.CurrentTool
