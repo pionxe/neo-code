@@ -1832,6 +1832,17 @@ func TestImmediateSlashCommandsAndLayoutBranches(t *testing.T) {
 		t.Fatalf("expected /clear to reset draft state")
 	}
 
+	handled, cmd = app.handleImmediateSlashCommand("/compact")
+	if !handled || cmd != nil {
+		t.Fatalf("expected /compact without session to be handled locally")
+	}
+	if !strings.Contains(app.state.StatusText, "compact requires an existing session") {
+		t.Fatalf("expected missing-session compact hint, got %q", app.state.StatusText)
+	}
+	if len(runtime.compactInputs) != 0 {
+		t.Fatalf("expected no runtime compact call without session, got %+v", runtime.compactInputs)
+	}
+
 	runtime.compactResult = agentruntime.CompactResult{
 		Applied:        true,
 		BeforeChars:    100,

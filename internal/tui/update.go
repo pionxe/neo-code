@@ -1122,6 +1122,14 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 			a.rebuildTranscript()
 			return true, nil
 		}
+		if strings.TrimSpace(a.state.ActiveSessionID) == "" {
+			errText := "compact requires an existing session"
+			a.state.ExecutionError = errText
+			a.state.StatusText = errText
+			a.appendInlineMessage(roleError, errText)
+			a.rebuildTranscript()
+			return true, nil
+		}
 		if a.isBusy() {
 			errText := "compact is already running, please wait"
 			a.state.ExecutionError = errText
