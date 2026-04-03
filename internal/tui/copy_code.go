@@ -40,30 +40,80 @@ func splitMarkdownSegments(content string) []markdownSegment {
 		return splitIndentedCodeSegments(content)
 	}
 
-	parts := strings.Split(content, "```")
-	segments := make([]markdownSegment, 0, len(parts))
-	for i, part := range parts {
-		if i%2 == 0 {
-			if part != "" {
-				segments = append(segments, markdownSegment{Kind: markdownSegmentText, Text: part})
-			}
-			continue
-		}
+	lines := strings.Split(content, "\n")
+	segments := make([]markdownSegment, 0, 8)
+	textLines := make([]string, 0, len(lines))
+	codeLines := make([]string, 0, len(lines))
+	inFence := false
+	fenceInfo := ""
+	sawFence := false
 
-		fenced, code := parseCodeFence(part)
-		if code == "" {
-			continue
+	flushText := func() {
+		if len(textLines) == 0 {
+			return
 		}
+		segments = append(segments, markdownSegment{
+			Kind: markdownSegmentText,
+			Text: strings.Join(textLines, "\n"),
+		})
+		textLines = textLines[:0]
+	}
+	flushCode := func() {
+		if len(codeLines) == 0 {
+			codeLines = codeLines[:0]
+			return
+		}
+		code := strings.Join(codeLines, "\n")
+		code = strings.TrimRight(code, "\n")
+		if strings.TrimSpace(code) == "" {
+			codeLines = codeLines[:0]
+			return
+		}
+		fenced := "```"
+		if fenceInfo != "" {
+			fenced += fenceInfo
+		}
+		fenced += "\n" + code + "\n```"
 		segments = append(segments, markdownSegment{
 			Kind:   markdownSegmentCode,
 			Fenced: fenced,
 			Code:   code,
 		})
+		codeLines = codeLines[:0]
 	}
-	if len(segments) == 0 {
-		return []markdownSegment{{Kind: markdownSegmentText, Text: content}}
+
+	for _, line := range lines {
+		if !inFence {
+			if info, ok := parseFenceOpenLine(line); ok {
+				sawFence = true
+				flushText()
+				inFence = true
+				fenceInfo = info
+				continue
+			}
+			textLines = append(textLines, line)
+			continue
+		}
+
+		if isFenceCloseLine(line) {
+			flushCode()
+			inFence = false
+			fenceInfo = ""
+			continue
+		}
+		codeLines = append(codeLines, line)
 	}
-	return segments
+
+	if inFence {
+		flushCode()
+	}
+	flushText()
+
+	if sawFence && len(segments) > 0 {
+		return segments
+	}
+
+	return splitIndentedCodeSegments(content)
 }
 
 func splitIndentedCodeSegments(content string) []markdownSegment {
@@ -142,41 +192,23 @@ func extractFencedCodeBlocks(content string) []string {
 	blocks := make([]string, 0, len(segments))
 	for _, segment := range segments {
 		if segment.Kind == markdownSegmentCode && strings.TrimSpace(segment.Code) != "" {
-			blocks = append(blocks, strings.TrimSpace(segment.Code))
+			blocks = append(blocks, segment.Code)
 		}
 	}
 	return blocks
 }
 
-func parseCodeFence(raw string) (fenced string, code string) {
-	code = strings.Trim(raw, "\n")
-	if code == "" {
-		return "", ""
+func parseFenceOpenLine(line string) (string, bool) {
+	trimmed := strings.TrimLeft(line, " \t")
+	if !strings.HasPrefix(trimmed, "```") {
+		return "", false
 	}
-	lines := strings.Split(code, "\n")
-	if len(lines) > 1 && isFenceLanguageCandidate(lines[0]) {
-		body := strings.Join(lines[1:], "\n")
-		body = strings.TrimSpace(body)
-		if body == "" {
-			return "", ""
-		}
-		return "```" + lines[0] + "\n" + body + "\n```", body
-	}
-	if len(lines) == 1 && isFenceLanguageCandidate(lines[0]) {
-		// Streaming may temporarily contain only the language marker (e.g. ```go).
-		// Skip until body content arrives.
-		return "", ""
-	}
-
-	code = strings.TrimSpace(code)
-	if code == "" {
-		return "", ""
-	}
-	return "```\n" + code + "\n```", code
+	return strings.TrimSpace(strings.TrimPrefix(trimmed, "```")), true
 }
 
-func isFenceLanguageCandidate(line string) bool {
-	return !strings.Contains(line, " ") && !strings.Contains(line, "\t")
+func isFenceCloseLine(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	return strings.TrimSpace(trimmed) == "```"
 }
 
 func isIndentedCodeLine(line string) bool {

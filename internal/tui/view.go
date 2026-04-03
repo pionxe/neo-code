@@ -390,7 +390,7 @@ func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle l
 			rendered = trimRenderedTrailingWhitespace(rendered)
 			renderedParts = append(renderedParts, bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width))))
 		case markdownSegmentCode:
-			code := strings.TrimSpace(segment.Code)
+			code := strings.TrimRight(segment.Code, "\n")
 			if code == "" {
 				continue
 			}

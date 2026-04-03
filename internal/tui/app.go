@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
@@ -32,6 +33,12 @@ type App struct {
 	markdownRenderer markdownContentRenderer
 	codeCopyBlocks   map[int]string
 	pendingCopyID    int
+	nowFn            func() time.Time
+	lastInputEditAt  time.Time
+	lastPasteLikeAt  time.Time
+	inputBurstStart  time.Time
+	inputBurstCount  int
+	pasteMode        bool
 	activeMessages   []provider.Message
 	activities       []activityEntry
 	fileCandidates   []string
@@ -74,7 +81,7 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 
 	input := textarea.New()
 	input.Placeholder = "Ask NeoCode to inspect, edit, or build. Type / to browse commands."
-	input.CharLimit = 24000
+	input.CharLimit = 0
 	input.ShowLineNumbers = false
 	input.SetPromptFunc(composerPromptWidth, func(line int) string {
 		return "> "
@@ -124,6 +131,7 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 		input:            input,
 		markdownRenderer: markdownRenderer,
 		codeCopyBlocks:   make(map[int]string),
+		nowFn:            time.Now,
 		focus:            panelInput,
 		width:            128,
 		height:           40,

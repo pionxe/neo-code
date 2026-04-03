@@ -24,6 +24,17 @@ func TestExtractFencedCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestExtractFencedCodeBlocksWithoutLanguageKeepsFirstLine(t *testing.T) {
+	content := "before\n```\nSELECT\nFROM users;\n```\nafter"
+	blocks := extractFencedCodeBlocks(content)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 code block, got %d", len(blocks))
+	}
+	if !strings.Contains(blocks[0], "SELECT") || !strings.Contains(blocks[0], "FROM users;") {
+		t.Fatalf("expected full code block content, got %q", blocks[0])
+	}
+}
+
 func TestExtractFencedCodeBlocksFromIndentedMarkdown(t *testing.T) {
 	content := "说明：\n\n    package main\n    import \"fmt\"\n\n结尾。"
 	blocks := extractFencedCodeBlocks(content)
@@ -67,6 +78,24 @@ func TestRenderMessageBlockWithCopyAddsButtons(t *testing.T) {
 	}
 	if len(bindings) != 1 || bindings[0].ID != 1 || bindings[0].Code != "fmt.Println(1)" {
 		t.Fatalf("unexpected bindings: %+v", bindings)
+	}
+}
+
+func TestRenderMessageBlockWithCopyPreservesCodeIndentation(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	content := "```go\nfunc main() {\n\tif true {\n\t\tprintln(\"ok\")\n\t}\n}\n```"
+	_, bindings := app.renderMessageBlockWithCopy(providerMessage(roleAssistant, content), 80, 1)
+	if len(bindings) != 1 {
+		t.Fatalf("expected one copy binding, got %+v", bindings)
+	}
+	if !strings.Contains(bindings[0].Code, "\tif true {") || !strings.Contains(bindings[0].Code, "\t\tprintln(\"ok\")") {
+		t.Fatalf("expected indentation preserved in copied code, got %q", bindings[0].Code)
 	}
 }
 

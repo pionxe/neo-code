@@ -704,6 +704,29 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			},
 		},
 		{
+			name: "tab in non-empty input inserts indentation instead of switching panel",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
+				app.focus = panelInput
+				app.applyFocus()
+				app.input.SetValue("func main() {\n")
+				app.state.InputText = app.input.Value()
+				app.resizeComponents()
+			},
+			msg: tea.KeyMsg{Type: tea.KeyTab},
+			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
+				t.Helper()
+				if app.focus != panelInput {
+					t.Fatalf("expected focus to stay in input, got %v", app.focus)
+				}
+				if !strings.Contains(app.state.InputText, "func main() {") {
+					t.Fatalf("expected existing code to be preserved, got %q", app.state.InputText)
+				}
+				if !strings.HasSuffix(app.state.InputText, "\n\t") && !strings.HasSuffix(app.state.InputText, "\n    ") {
+					t.Fatalf("expected tab indentation at the end, got %q", app.state.InputText)
+				}
+			},
+		},
+		{
 			name: "previous panel moves focus backward",
 			msg:  tea.KeyMsg{Type: tea.KeyShiftTab},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -948,6 +971,215 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			tt.assert(t, app, runtime, manager, collectTeaMessages(cmd))
 		})
 	}
+}
+
+func TestAppUpdatePasteEnterGuard(t *testing.T) {
+	t.Run("paste-like burst keeps enter as newline", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		now := time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC)
+		app.nowFn = func() time.Time { return now }
+
+		for _, r := range []rune("function_name") {
+			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			app = model.(App)
+			_ = collectTeaMessages(cmd)
+			now = now.Add(15 * time.Millisecond)
+		}
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		if len(runtime.runInputs) != 0 {
+			t.Fatalf("expected enter to stay local during paste-like burst, got %+v", runtime.runInputs)
+		}
+		if app.state.InputText != "function_name\n" {
+			t.Fatalf("expected enter to insert newline, got %q", app.state.InputText)
+		}
+		if app.state.IsAgentRunning {
+			t.Fatalf("expected agent to remain idle")
+		}
+	})
+
+	t.Run("normal typing enter still sends", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		now := time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC)
+		app.nowFn = func() time.Time { return now }
+
+		for _, r := range []rune("hello") {
+			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			app = model.(App)
+			_ = collectTeaMessages(cmd)
+			now = now.Add(300 * time.Millisecond)
+		}
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		msgs := collectTeaMessages(cmd)
+
+		if len(runtime.runInputs) != 1 || runtime.runInputs[0].Content != "hello" {
+			t.Fatalf("expected enter to send normal input once, got %+v", runtime.runInputs)
+		}
+		if app.state.InputText != "" {
+			t.Fatalf("expected input to reset after send, got %q", app.state.InputText)
+		}
+		for _, msg := range msgs {
+			model, follow := app.Update(msg)
+			app = model.(App)
+			_ = collectTeaMessages(follow)
+		}
+	})
+
+	t.Run("explicit paste enter inserts newline", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		app.input.SetValue("before")
+		app.state.InputText = "before"
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter, Paste: true})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		if len(runtime.runInputs) != 0 {
+			t.Fatalf("expected paste enter not to send, got %+v", runtime.runInputs)
+		}
+		if app.state.InputText != "before\n" {
+			t.Fatalf("expected paste enter to insert newline, got %q", app.state.InputText)
+		}
+	})
+
+	t.Run("segmented long paste keeps enter as newline across chunks", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		now := time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC)
+		app.nowFn = func() time.Time { return now }
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("package main")})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		now = now.Add(80 * time.Millisecond)
+		model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		now = now.Add(80 * time.Millisecond)
+		model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("func main() {}")})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		now = now.Add(80 * time.Millisecond)
+		model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		if len(runtime.runInputs) != 0 {
+			t.Fatalf("expected segmented paste not to trigger send, got %+v", runtime.runInputs)
+		}
+		if app.state.InputText != "package main\nfunc main() {}\n" {
+			t.Fatalf("expected multiline pasted content, got %q", app.state.InputText)
+		}
+	})
+
+	t.Run("long gap after paste-like input allows immediate send", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		now := time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC)
+		app.nowFn = func() time.Time { return now }
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line1")})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		now = now.Add(2 * time.Second)
+		model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		if len(runtime.runInputs) != 1 || runtime.runInputs[0].Content != "line1" {
+			t.Fatalf("expected enter to send after long gap, got %+v", runtime.runInputs)
+		}
+	})
+
+	t.Run("enter sends after paste session expires", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		now := time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC)
+		app.nowFn = func() time.Time { return now }
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line1\nline2")})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		now = now.Add(pasteSessionGuard + 100*time.Millisecond)
+		model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		if len(runtime.runInputs) != 1 || runtime.runInputs[0].Content != "line1\nline2" {
+			t.Fatalf("expected send after paste session expiry, got %+v", runtime.runInputs)
+		}
+	})
+
+	t.Run("enter sends right after tab indentation in normal input", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		app.input.SetValue("hello")
+		app.state.InputText = app.input.Value()
+		app.focus = panelInput
+		app.applyFocus()
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+		if !strings.Contains(app.state.InputText, "hello") {
+			t.Fatalf("expected tab to keep current input, got %q", app.state.InputText)
+		}
+
+		model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+		if len(runtime.runInputs) != 1 {
+			t.Fatalf("expected enter to send after tab indentation, got %+v", runtime.runInputs)
+		}
+	})
 }
 
 func TestAppUpdateModelPickerEnterAppliesSelection(t *testing.T) {
@@ -1457,6 +1689,88 @@ func TestTranscriptMouseWheelScrollsOnlyInsideTranscript(t *testing.T) {
 	stackX, stackY, _, stackH := app.transcriptBounds()
 	if stackH <= 0 || !app.isMouseWithinTranscript(tea.MouseMsg{X: stackX + 1, Y: stackY + 1}) {
 		t.Fatalf("expected stacked layout transcript bounds to accept mouse hits")
+	}
+}
+
+func TestInputMouseWheelScrollsComposer(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.width = 128
+	app.height = 40
+	app.input.SetValue(strings.Join([]string{
+		"line1", "line2", "line3", "line4", "line5",
+		"line6", "line7", "line8", "line9", "line10",
+		"line11", "line12",
+	}, "\n"))
+	app.state.InputText = app.input.Value()
+	app.resizeComponents()
+	app.focus = panelTranscript
+	app.applyFocus()
+
+	initialLine := app.input.Line()
+	if initialLine < 1 {
+		t.Fatalf("expected cursor line to be >=1 for multiline input, got %d", initialLine)
+	}
+	pageStep := max(1, app.input.Height()-1)
+
+	x, y, _, _ := app.inputBounds()
+	model, cmd := app.Update(tea.MouseMsg{
+		X:      x + 1,
+		Y:      y + 1,
+		Button: tea.MouseButtonWheelUp,
+		Type:   tea.MouseWheelUp,
+	})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+	if app.focus != panelInput {
+		t.Fatalf("expected input wheel to focus input panel, got %v", app.focus)
+	}
+	if initialLine-app.input.Line() < pageStep-1 {
+		t.Fatalf("expected wheel up in input to page-scroll by ~%d lines, got from %d to %d", pageStep, initialLine, app.input.Line())
+	}
+
+	lineAfterUp := app.input.Line()
+	model, cmd = app.Update(tea.MouseMsg{
+		X:      x + 1,
+		Y:      y + 1,
+		Button: tea.MouseButtonWheelDown,
+		Type:   tea.MouseWheelDown,
+	})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+	if app.input.Line()-lineAfterUp < pageStep-1 {
+		t.Fatalf("expected wheel down in input to page-scroll by ~%d lines, got from %d to %d", pageStep, lineAfterUp, app.input.Line())
+	}
+
+	lineBeforeOutside := app.input.Line()
+	model, cmd = app.Update(tea.MouseMsg{
+		X:      0,
+		Y:      0,
+		Button: tea.MouseButtonWheelUp,
+		Type:   tea.MouseWheelUp,
+	})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+	if app.input.Line() != lineBeforeOutside {
+		t.Fatalf("expected wheel outside input to be ignored, got line=%d", app.input.Line())
+	}
+}
+
+func TestInputCharLimitIsUnlimited(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if app.input.CharLimit != 0 {
+		t.Fatalf("expected unlimited input char limit, got %d", app.input.CharLimit)
 	}
 }
 
