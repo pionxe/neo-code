@@ -857,6 +857,116 @@ func TestConstructorsRejectMissingDependencies(t *testing.T) {
 	})
 }
 
+func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
+	tempDir := t.TempDir()
+	loader := NewLoader(tempDir, testDefaultConfig())
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	compactCfg := cfg.Context.Compact
+	if compactCfg.ManualStrategy != CompactManualStrategyKeepRecent {
+		t.Fatalf("expected manual strategy %q, got %q", CompactManualStrategyKeepRecent, compactCfg.ManualStrategy)
+	}
+	if compactCfg.ManualKeepRecentMessages != DefaultCompactManualKeepRecentMessages {
+		t.Fatalf("expected manual_keep_recent_messages=%d, got %d", DefaultCompactManualKeepRecentMessages, compactCfg.ManualKeepRecentMessages)
+	}
+	if compactCfg.MaxSummaryChars != DefaultCompactMaxSummaryChars {
+		t.Fatalf("expected max_summary_chars=%d, got %d", DefaultCompactMaxSummaryChars, compactCfg.MaxSummaryChars)
+	}
+
+	cfg.Context.Compact.ManualStrategy = CompactManualStrategyFullReplace
+	cfg.Context.Compact.ManualKeepRecentMessages = 2
+	cfg.Context.Compact.MaxSummaryChars = 900
+	if err := loader.Save(context.Background(), cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	data, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("read config after save: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "manual_keep_recent_messages: 2") {
+		t.Fatalf("expected persisted config to use manual_keep_recent_messages, got:\n%s", text)
+	}
+	if strings.Contains(text, "manual_keep_recent_spans:") {
+		t.Fatalf("expected persisted config to drop legacy manual_keep_recent_spans key, got:\n%s", text)
+	}
+
+	reloaded, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.Context.Compact.ManualStrategy != CompactManualStrategyFullReplace {
+		t.Fatalf("expected manual strategy to persist, got %q", reloaded.Context.Compact.ManualStrategy)
+	}
+	if reloaded.Context.Compact.ManualKeepRecentMessages != 2 {
+		t.Fatalf("expected manual_keep_recent_messages=2, got %d", reloaded.Context.Compact.ManualKeepRecentMessages)
+	}
+	if reloaded.Context.Compact.MaxSummaryChars != 900 {
+		t.Fatalf("expected max_summary_chars=900, got %d", reloaded.Context.Compact.MaxSummaryChars)
+	}
+}
+
+func TestCompactConfigValidateFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		compact   CompactConfig
+		expectErr string
+	}{
+		{
+			name: "invalid manual strategy",
+			compact: CompactConfig{
+				ManualStrategy:           "invalid",
+				ManualKeepRecentMessages: 10,
+				MaxSummaryChars:          1200,
+			},
+			expectErr: "manual_strategy",
+		},
+		{
+			name: "invalid manual keep messages",
+			compact: CompactConfig{
+				ManualStrategy:           CompactManualStrategyKeepRecent,
+				ManualKeepRecentMessages: 0,
+				MaxSummaryChars:          1200,
+			},
+			expectErr: "manual_keep_recent_messages",
+		},
+		{
+			name: "invalid summary chars",
+			compact: CompactConfig{
+				ManualStrategy:           CompactManualStrategyKeepRecent,
+				ManualKeepRecentMessages: 10,
+				MaxSummaryChars:          0,
+			},
+			expectErr: "max_summary_chars",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.compact.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+			}
+		})
+	}
+}
+
+func TestCompactConfigValidateSupportsFullReplace(t *testing.T) {
+	err := (CompactConfig{
+		ManualStrategy:           CompactManualStrategyFullReplace,
+		ManualKeepRecentMessages: 10,
+		MaxSummaryChars:          1200,
+	}).Validate()
+	if err != nil {
+		t.Fatalf("expected full_replace strategy to validate, got %v", err)
+	}
+}
+
 func restoreEnv(t *testing.T, key string) {
 	t.Helper()
 	value, ok := os.LookupEnv(key)

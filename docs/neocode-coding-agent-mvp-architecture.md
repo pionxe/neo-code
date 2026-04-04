@@ -1,3 +1,6 @@
+# ⚠️ 已过时：旧版 API 文档（DEPRECATED）
+
+
 # NeoCode Coding Agent MVP 架构设计
 
 ## 1. 目标

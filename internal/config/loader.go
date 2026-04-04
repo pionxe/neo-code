@@ -22,14 +22,25 @@ type Loader struct {
 }
 
 type persistedConfig struct {
-	SelectedProvider     string      `yaml:"selected_provider"`
-	CurrentModel         string      `yaml:"current_model"`
-	LegacyDefaultWorkdir *string     `yaml:"default_workdir,omitempty"`
-	LegacyWorkdir        *string     `yaml:"workdir,omitempty"`
-	Shell                string      `yaml:"shell"`
-	MaxLoops             int         `yaml:"max_loops,omitempty"`
-	ToolTimeoutSec       int         `yaml:"tool_timeout_sec,omitempty"`
-	Tools                ToolsConfig `yaml:"tools,omitempty"`
+	SelectedProvider     string                 `yaml:"selected_provider"`
+	CurrentModel         string                 `yaml:"current_model"`
+	LegacyDefaultWorkdir *string                `yaml:"default_workdir,omitempty"`
+	LegacyWorkdir        *string                `yaml:"workdir,omitempty"`
+	Shell                string                 `yaml:"shell"`
+	MaxLoops             int                    `yaml:"max_loops,omitempty"`
+	ToolTimeoutSec       int                    `yaml:"tool_timeout_sec,omitempty"`
+	Context              persistedContextConfig `yaml:"context,omitempty"`
+	Tools                ToolsConfig            `yaml:"tools,omitempty"`
+}
+
+type persistedContextConfig struct {
+	Compact persistedCompactConfig `yaml:"compact,omitempty"`
+}
+
+type persistedCompactConfig struct {
+	ManualStrategy           string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentMessages int    `yaml:"manual_keep_recent_messages,omitempty"`
+	MaxSummaryChars          int    `yaml:"max_summary_chars,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -85,7 +96,7 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 		return nil, fmt.Errorf("config: read config file: %w", err)
 	}
 
-	cfg, err := parseConfig(data)
+	cfg, err := parseConfigWithContextDefaults(data, l.defaults.Context)
 	if err != nil {
 		return nil, fmt.Errorf("config: parse config file: %w", err)
 	}
@@ -141,14 +152,19 @@ func defaultBaseDir() string {
 }
 
 func parseConfig(data []byte) (*Config, error) {
+	return parseConfigWithContextDefaults(data, Default().Context)
+}
+
+// parseConfigWithContextDefaults 负责在解析配置时注入上下文压缩相关默认值。
+func parseConfigWithContextDefaults(data []byte, contextDefaults ContextConfig) (*Config, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return &Config{}, nil
 	}
 
-	return parseCurrentConfig(data)
+	return parseCurrentConfig(data, contextDefaults)
 }
 
-func parseCurrentConfig(data []byte) (*Config, error) {
+func parseCurrentConfig(data []byte, contextDefaults ContextConfig) (*Config, error) {
 	var file persistedConfig
 	if err := yaml.Unmarshal(data, &file); err != nil {
 		return nil, err
@@ -166,6 +182,7 @@ func parseCurrentConfig(data []byte) (*Config, error) {
 		Shell:            strings.TrimSpace(file.Shell),
 		MaxLoops:         file.MaxLoops,
 		ToolTimeoutSec:   file.ToolTimeoutSec,
+		Context:          fromPersistedContextConfig(file.Context, contextDefaults),
 		Tools:            file.Tools,
 	}
 
@@ -179,6 +196,7 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 		Shell:            snapshot.Shell,
 		MaxLoops:         snapshot.MaxLoops,
 		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
+		Context:          newPersistedContextConfig(snapshot.Context),
 		Tools:            snapshot.Tools,
 	}
 
@@ -190,6 +208,30 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 		data = append(data, '\n')
 	}
 	return data, nil
+}
+
+// newPersistedContextConfig 将运行时上下文配置收敛为 YAML 持久化结构。
+func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
+	return persistedContextConfig{
+		Compact: persistedCompactConfig{
+			ManualStrategy:           cfg.Compact.ManualStrategy,
+			ManualKeepRecentMessages: cfg.Compact.ManualKeepRecentMessages,
+			MaxSummaryChars:          cfg.Compact.MaxSummaryChars,
+		},
+	}
+}
+
+// fromPersistedContextConfig 将持久化配置恢复为运行时上下文配置并补齐默认值。
+func fromPersistedContextConfig(file persistedContextConfig, defaults ContextConfig) ContextConfig {
+	out := ContextConfig{
+		Compact: CompactConfig{
+			ManualStrategy:           strings.TrimSpace(file.Compact.ManualStrategy),
+			ManualKeepRecentMessages: file.Compact.ManualKeepRecentMessages,
+			MaxSummaryChars:          file.Compact.MaxSummaryChars,
+		},
+	}
+	out.Compact.ApplyDefaults(defaults.Compact)
+	return out
 }
 
 func persistedConfigDiffers(data []byte, cfg Config) (bool, error) {

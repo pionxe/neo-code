@@ -12,6 +12,7 @@ import (
 
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
+	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	"neo-code/internal/tools"
 )
@@ -124,11 +125,13 @@ func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest, e
 type scriptedProviderFactory struct {
 	provider provider.Provider
 	calls    int
+	configs  []config.ResolvedProviderConfig
 	err      error
 }
 
 func (f *scriptedProviderFactory) Build(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
 	f.calls++
+	f.configs = append(f.configs, cfg)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -405,6 +408,23 @@ func TestServiceRun(t *testing.T) {
 	}
 }
 
+type stubCompactRunner struct {
+	runFn  func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error)
+	calls  []contextcompact.Input
+	result contextcompact.Result
+	err    error
+}
+
+func (r *stubCompactRunner) Run(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
+	cloned := input
+	cloned.Messages = append([]provider.Message(nil), input.Messages...)
+	r.calls = append(r.calls, cloned)
+	if r.runFn != nil {
+		return r.runFn(ctx, input)
+	}
+	return r.result, r.err
+}
+
 func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	t.Parallel()
 
@@ -468,6 +488,89 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	}
 	if len(scripted.requests[0].Messages) != 1 || scripted.requests[0].Messages[0].Content != "delegated message" {
 		t.Fatalf("expected delegated messages, got %+v", scripted.requests[0].Messages)
+	}
+}
+
+func TestServiceRunPersistsSessionProviderAndModel(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{{
+			Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
+			FinishReason: "stop",
+		}},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{RunID: "run-session-provider-model", Content: "hello"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	session := onlySession(t, store)
+	cfg := manager.Get()
+	if session.Provider != cfg.SelectedProvider {
+		t.Fatalf("expected session provider %q, got %q", cfg.SelectedProvider, session.Provider)
+	}
+	if session.Model != cfg.CurrentModel {
+		t.Fatalf("expected session model %q, got %q", cfg.CurrentModel, session.Model)
+	}
+}
+
+func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	setRuntimeProviderEnv(t, config.GeminiDefaultAPIKeyEnv, "gemini-key")
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.SelectedProvider = config.GeminiName
+		cfg.CurrentModel = "gemini-current-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSession("preserve-metadata")
+	session.ID = "session-preserve-metadata"
+	session.Provider = config.OpenAIName
+	session.Model = "openai-original-model"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "earlier"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{
+		err: errors.New("factory failed"),
+	}, nil)
+	err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-preserve-metadata",
+		Content:   "continue",
+	})
+	if err == nil || !containsError(err, "factory failed") {
+		t.Fatalf("expected factory failure, got %v", err)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if saved.Provider != config.OpenAIName {
+		t.Fatalf("expected provider to remain %q, got %q", config.OpenAIName, saved.Provider)
+	}
+	if saved.Model != "openai-original-model" {
+		t.Fatalf("expected model to remain %q, got %q", "openai-original-model", saved.Model)
+	}
+	if len(saved.Messages) != 2 || saved.Messages[1].Content != "continue" {
+		t.Fatalf("expected failed run to append only user message, got %+v", saved.Messages)
 	}
 }
 
@@ -1190,6 +1293,425 @@ func TestServiceRunToolTimeoutIsNotCancellation(t *testing.T) {
 	}
 }
 
+func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("manual")
+	session.ID = "session-manual"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older"},
+		{Role: provider.RoleAssistant, Content: "older answer"},
+		{Role: provider.RoleUser, Content: "before"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Messages: []provider.Message{
+				{Role: provider.RoleAssistant, Content: "[compact_summary]\ndone:\n- ok\n\nin_progress:\n- continue"},
+				{Role: provider.RoleAssistant, Content: "latest"},
+			},
+			Applied: true,
+			Metrics: contextcompact.Metrics{
+				BeforeChars: 80,
+				AfterChars:  30,
+				SavedRatio:  0.625,
+				TriggerMode: string(contextcompact.ModeManual),
+			},
+			TranscriptID:   "transcript_manual",
+			TranscriptPath: "/tmp/manual.jsonl",
+		},
+	}
+
+	result, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual",
+	})
+	if err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	if !result.Applied || result.TriggerMode != string(contextcompact.ModeManual) {
+		t.Fatalf("unexpected compact result: %+v", result)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load compacted session: %v", err)
+	}
+	if len(saved.Messages) != 2 || !strings.Contains(saved.Messages[0].Content, "compact_summary") {
+		t.Fatalf("expected persisted compacted messages, got %+v", saved.Messages)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventCompactStart, EventCompactDone})
+	assertEventsRunID(t, events, "run-manual")
+}
+
+func TestServiceCompactManualFailureReturnsError(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("manual-fail")
+	session.ID = "session-manual-fail"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older"},
+		{Role: provider.RoleAssistant, Content: "older answer"},
+		{Role: provider.RoleUser, Content: "before"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	service.compactRunner = &stubCompactRunner{err: errors.New("manual compact failed")}
+
+	_, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual-fail",
+	})
+	if err == nil || !strings.Contains(err.Error(), "manual compact failed") {
+		t.Fatalf("expected compact failure, got %v", err)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load original session: %v", err)
+	}
+	if len(saved.Messages) != 3 || saved.Messages[2].Content != "before" {
+		t.Fatalf("expected original session untouched, got %+v", saved.Messages)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventCompactStart, EventCompactError})
+	assertNoEventType(t, events, EventCompactDone)
+}
+
+func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	setRuntimeProviderEnv(t, config.GeminiDefaultAPIKeyEnv, "gemini-key")
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.SelectedProvider = config.GeminiName
+		cfg.CurrentModel = "gemini-current-model"
+		cfg.Context.Compact.ManualStrategy = config.CompactManualStrategyFullReplace
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSession("manual-provider")
+	session.ID = "session-manual-provider"
+	session.Provider = config.OpenAIName
+	session.Model = "session-model"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older"},
+		{Role: provider.RoleAssistant, Content: "older answer"},
+		{Role: provider.RoleUser, Content: "before"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{{
+			Message: provider.Message{
+				Role: provider.RoleAssistant,
+				Content: strings.Join([]string{
+					"[compact_summary]",
+					"done:",
+					"- ok",
+					"",
+					"in_progress:",
+					"- continue",
+					"",
+					"decisions:",
+					"- kept existing provider and model",
+					"",
+					"code_changes:",
+					"- none",
+					"",
+					"constraints:",
+					"- none",
+				}, "\n"),
+			},
+		}},
+	}
+	factory := &scriptedProviderFactory{provider: scripted}
+	service := NewWithFactory(manager, registry, store, factory, nil)
+
+	result, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual-session-provider",
+	})
+	if err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected compact to apply")
+	}
+	if len(factory.configs) != 1 || factory.configs[0].Name != config.OpenAIName {
+		t.Fatalf("expected session provider config to be used, got %+v", factory.configs)
+	}
+	if len(scripted.requests) != 1 || scripted.requests[0].Model != "session-model" {
+		t.Fatalf("expected session model to be used, got %+v", scripted.requests)
+	}
+}
+
+func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	setRuntimeProviderEnv(t, config.GeminiDefaultAPIKeyEnv, "gemini-key")
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.SelectedProvider = config.GeminiName
+		cfg.CurrentModel = "gemini-current-model"
+		cfg.Context.Compact.ManualStrategy = config.CompactManualStrategyFullReplace
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSession("manual-fallback")
+	session.ID = "session-manual-fallback"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older"},
+		{Role: provider.RoleAssistant, Content: "older answer"},
+		{Role: provider.RoleUser, Content: "before"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{{
+			Message: provider.Message{
+				Role: provider.RoleAssistant,
+				Content: strings.Join([]string{
+					"[compact_summary]",
+					"done:",
+					"- ok",
+					"",
+					"in_progress:",
+					"- continue",
+					"",
+					"decisions:",
+					"- fallback to current selection",
+					"",
+					"code_changes:",
+					"- none",
+					"",
+					"constraints:",
+					"- none",
+				}, "\n"),
+			},
+		}},
+	}
+	factory := &scriptedProviderFactory{provider: scripted}
+	service := NewWithFactory(manager, registry, store, factory, nil)
+
+	result, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual-fallback-provider",
+	})
+	if err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected compact to apply")
+	}
+	if len(factory.configs) != 1 || factory.configs[0].Name != config.GeminiName {
+		t.Fatalf("expected current selected provider fallback, got %+v", factory.configs)
+	}
+	if len(scripted.requests) != 1 || scripted.requests[0].Model != "gemini-current-model" {
+		t.Fatalf("expected current selected model fallback, got %+v", scripted.requests)
+	}
+}
+
+func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("manual-continue")
+	session.ID = "session-manual-continue"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "legacy request"},
+		{Role: provider.RoleAssistant, Content: "legacy answer"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "filesystem_read_file", content: "file content"}
+	registry.Register(tool)
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"main.go"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	service.compactRunner = &stubCompactRunner{
+		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
+			return contextcompact.Result{
+				Messages: []provider.Message{
+					{Role: provider.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
+					{Role: provider.RoleAssistant, Content: "latest answer"},
+				},
+				Applied: true,
+				Metrics: contextcompact.Metrics{
+					BeforeChars: 40,
+					AfterChars:  20,
+					SavedRatio:  0.5,
+					TriggerMode: string(contextcompact.ModeManual),
+				},
+				TranscriptID:   "transcript_manual_then_run",
+				TranscriptPath: "/tmp/manual-then-run.jsonl",
+			}, nil
+		},
+	}
+
+	if _, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual-first",
+	}); err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-after-manual",
+		Content:   "continue",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if tool.callCount != 1 {
+		t.Fatalf("expected tool to run once after manual compact, got %d", tool.callCount)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if len(saved.Messages) < 6 || !strings.Contains(saved.Messages[0].Content, "compact_summary") {
+		t.Fatalf("expected compacted history + new tool round, got %+v", saved.Messages)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventCompactStart,
+		EventCompactDone,
+		EventUserMessage,
+		EventToolStart,
+		EventToolResult,
+		EventAgentDone,
+	})
+}
+
+func TestServiceSerializesRunAndCompact(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("serialized")
+	session.ID = "session-serialized"
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	providerStarted := make(chan struct{})
+	unblockProvider := make(chan struct{})
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+			select {
+			case <-providerStarted:
+			default:
+				close(providerStarted)
+			}
+			<-unblockProvider
+			return provider.ChatResponse{
+				Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
+				FinishReason: "stop",
+			}, nil
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	compactEntered := make(chan struct{}, 1)
+	service.compactRunner = &stubCompactRunner{
+		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
+			compactEntered <- struct{}{}
+			return contextcompact.Result{
+				Messages: append([]provider.Message(nil), input.Messages...),
+				Metrics: contextcompact.Metrics{
+					BeforeChars: 1,
+					AfterChars:  1,
+					TriggerMode: string(contextcompact.ModeManual),
+				},
+			}, nil
+		},
+	}
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- service.Run(context.Background(), UserInput{
+			SessionID: session.ID,
+			RunID:     "run-serialized",
+			Content:   "hello",
+		})
+	}()
+
+	<-providerStarted
+
+	compactErrCh := make(chan error, 1)
+	go func() {
+		_, err := service.Compact(context.Background(), CompactInput{
+			SessionID: session.ID,
+			RunID:     "compact-serialized",
+		})
+		compactErrCh <- err
+	}()
+
+	select {
+	case <-compactEntered:
+		t.Fatalf("expected compact to wait until run completes")
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	close(unblockProvider)
+
+	if err := <-runErrCh; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := <-compactErrCh; err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+
+	select {
+	case <-compactEntered:
+	default:
+		t.Fatalf("expected compact to execute after run finished")
+	}
+}
+
 func TestServiceConstructorsAndDelegates(t *testing.T) {
 	t.Parallel()
 
@@ -1442,6 +1964,14 @@ func runtimeTestAPIKeyEnv(t *testing.T) string {
 	return "NEOCODE_RUNTIME_TEST_API_KEY_" + suffix
 }
 
+func setRuntimeProviderEnv(t *testing.T, key string, value string) {
+	t.Helper()
+	restoreRuntimeEnv(t, key)
+	if err := os.Setenv(key, value); err != nil {
+		t.Fatalf("set env %s: %v", key, err)
+	}
+}
+
 func restoreRuntimeEnv(t *testing.T, key string) {
 	t.Helper()
 	value, ok := os.LookupEnv(key)
@@ -1463,6 +1993,14 @@ func onlySession(t *testing.T, store *memoryStore) Session {
 		return session
 	}
 	return Session{}
+}
+
+func resolvedProviderForTests(cfg config.Config, providerName string) (config.ResolvedProviderConfig, error) {
+	providerCfg, err := cfg.ProviderByName(providerName)
+	if err != nil {
+		return config.ResolvedProviderConfig{}, err
+	}
+	return providerCfg.Resolve()
 }
 
 func collectRuntimeEvents(events <-chan RuntimeEvent) []RuntimeEvent {

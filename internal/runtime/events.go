@@ -36,4 +36,10 @@ const (
 	// EventProviderRetry is emitted when runtime retries a provider call due to
 	// a retryable error (e.g. 429, 5xx). Payload is a human-readable message.
 	EventProviderRetry EventType = "provider_retry"
+	// EventCompactStart is emitted when a compact cycle starts.
+	EventCompactStart EventType = "compact_start"
+	// EventCompactDone is emitted when a compact cycle completes.
+	EventCompactDone EventType = "compact_done"
+	// EventCompactError is emitted when compact fails.
+	EventCompactError EventType = "compact_error"
 )

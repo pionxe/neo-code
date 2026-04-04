@@ -11,10 +11,17 @@ import (
 )
 
 const (
-	DefaultWorkdir                        = "."
-	DefaultMaxLoops                       = 8
-	DefaultToolTimeoutSec                 = 20
-	DefaultWebFetchMaxResponseBytes int64 = 256 * 1024
+	DefaultWorkdir                               = "."
+	DefaultMaxLoops                              = 8
+	DefaultToolTimeoutSec                        = 20
+	DefaultWebFetchMaxResponseBytes        int64 = 256 * 1024
+	DefaultCompactManualKeepRecentMessages       = 10
+	DefaultCompactMaxSummaryChars                = 1200
+)
+
+const (
+	CompactManualStrategyKeepRecent  = "keep_recent"
+	CompactManualStrategyFullReplace = "full_replace"
 )
 
 var defaultWebFetchSupportedContentTypes = []string{
@@ -34,6 +41,7 @@ type Config struct {
 	Shell            string           `yaml:"shell"`
 	MaxLoops         int              `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
+	Context          ContextConfig    `yaml:"context,omitempty"`
 	Tools            ToolsConfig      `yaml:"tools,omitempty"`
 }
 
@@ -54,6 +62,16 @@ type ToolsConfig struct {
 	WebFetch WebFetchConfig `yaml:"webfetch,omitempty"`
 }
 
+type ContextConfig struct {
+	Compact CompactConfig `yaml:"compact,omitempty"`
+}
+
+type CompactConfig struct {
+	ManualStrategy           string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentMessages int    `yaml:"manual_keep_recent_messages,omitempty"`
+	MaxSummaryChars          int    `yaml:"max_summary_chars,omitempty"`
+}
+
 type WebFetchConfig struct {
 	MaxResponseBytes      int64    `yaml:"max_response_bytes,omitempty"`
 	SupportedContentTypes []string `yaml:"supported_content_types,omitempty"`
@@ -69,6 +87,7 @@ func Default() *Config {
 		Shell:          defaultShell(),
 		MaxLoops:       DefaultMaxLoops,
 		ToolTimeoutSec: DefaultToolTimeoutSec,
+		Context:        defaultContextConfig(),
 		Tools: ToolsConfig{
 			WebFetch: defaultWebFetchConfig(),
 		},
@@ -82,6 +101,7 @@ func (c *Config) Clone() Config {
 
 	clone := *c
 	clone.Providers = cloneProviders(c.Providers)
+	clone.Context = c.Context.Clone()
 	clone.Tools = c.Tools.Clone()
 	return clone
 }
@@ -126,6 +146,7 @@ func (c *Config) ApplyDefaultsFrom(defaults Config) {
 	if c.ToolTimeoutSec <= 0 {
 		c.ToolTimeoutSec = defaults.ToolTimeoutSec
 	}
+	c.Context.ApplyDefaults(defaults.Context)
 	c.Tools.ApplyDefaults(defaults.Tools)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
@@ -188,6 +209,9 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
+	}
+	if err := c.Context.Validate(); err != nil {
+		return fmt.Errorf("config: context: %w", err)
 	}
 
 	return nil
@@ -305,9 +329,32 @@ func defaultWebFetchConfig() WebFetchConfig {
 	}
 }
 
+// defaultContextConfig 返回上下文压缩相关配置的默认值。
+func defaultContextConfig() ContextConfig {
+	return ContextConfig{
+		Compact: defaultCompactConfig(),
+	}
+}
+
+// defaultCompactConfig 返回手动 compact 策略的默认配置。
+func defaultCompactConfig() CompactConfig {
+	return CompactConfig{
+		ManualStrategy:           CompactManualStrategyKeepRecent,
+		ManualKeepRecentMessages: DefaultCompactManualKeepRecentMessages,
+		MaxSummaryChars:          DefaultCompactMaxSummaryChars,
+	}
+}
+
 func (c ToolsConfig) Clone() ToolsConfig {
 	return ToolsConfig{
 		WebFetch: c.WebFetch.Clone(),
+	}
+}
+
+// Clone 返回上下文配置的独立副本，避免后续修改污染原值。
+func (c ContextConfig) Clone() ContextConfig {
+	return ContextConfig{
+		Compact: c.Compact.Clone(),
 	}
 }
 
@@ -319,9 +366,26 @@ func (c *ToolsConfig) ApplyDefaults(defaults ToolsConfig) {
 	c.WebFetch.ApplyDefaults(defaults.WebFetch)
 }
 
+// ApplyDefaults 为上下文配置补齐缺省的 compact 参数。
+func (c *ContextConfig) ApplyDefaults(defaults ContextConfig) {
+	if c == nil {
+		return
+	}
+
+	c.Compact.ApplyDefaults(defaults.Compact)
+}
+
 func (c ToolsConfig) Validate() error {
 	if err := c.WebFetch.Validate(); err != nil {
 		return fmt.Errorf("webfetch: %w", err)
+	}
+	return nil
+}
+
+// Validate 校验上下文压缩配置是否合法。
+func (c ContextConfig) Validate() error {
+	if err := c.Compact.Validate(); err != nil {
+		return fmt.Errorf("compact: %w", err)
 	}
 	return nil
 }
@@ -330,6 +394,11 @@ func (c WebFetchConfig) Clone() WebFetchConfig {
 	clone := c
 	clone.SupportedContentTypes = append([]string(nil), c.SupportedContentTypes...)
 	return clone
+}
+
+// Clone 返回 compact 配置的值副本。
+func (c CompactConfig) Clone() CompactConfig {
+	return c
 }
 
 func (c *WebFetchConfig) ApplyDefaults(defaults WebFetchConfig) {
@@ -341,6 +410,23 @@ func (c *WebFetchConfig) ApplyDefaults(defaults WebFetchConfig) {
 		c.MaxResponseBytes = defaults.MaxResponseBytes
 	}
 	c.SupportedContentTypes = normalizeContentTypes(c.SupportedContentTypes, defaults.SupportedContentTypes)
+}
+
+// ApplyDefaults 为 compact 配置填充缺省策略和阈值。
+func (c *CompactConfig) ApplyDefaults(defaults CompactConfig) {
+	if c == nil {
+		return
+	}
+
+	if strings.TrimSpace(c.ManualStrategy) == "" {
+		c.ManualStrategy = defaults.ManualStrategy
+	}
+	if c.ManualKeepRecentMessages <= 0 {
+		c.ManualKeepRecentMessages = defaults.ManualKeepRecentMessages
+	}
+	if c.MaxSummaryChars <= 0 {
+		c.MaxSummaryChars = defaults.MaxSummaryChars
+	}
 }
 
 func (c WebFetchConfig) Validate() error {
@@ -357,6 +443,23 @@ func (c WebFetchConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+// Validate 校验 compact 配置中的策略和阈值是否可用。
+func (c CompactConfig) Validate() error {
+	if c.ManualKeepRecentMessages <= 0 {
+		return errors.New("manual_keep_recent_messages must be greater than 0")
+	}
+	if c.MaxSummaryChars <= 0 {
+		return errors.New("max_summary_chars must be greater than 0")
+	}
+
+	switch strings.ToLower(strings.TrimSpace(c.ManualStrategy)) {
+	case CompactManualStrategyKeepRecent, CompactManualStrategyFullReplace:
+		return nil
+	default:
+		return fmt.Errorf("manual_strategy %q is not supported", c.ManualStrategy)
+	}
 }
 
 func normalizeContentTypes(values []string, defaults []string) []string {

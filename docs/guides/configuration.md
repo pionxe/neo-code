@@ -302,3 +302,27 @@ echo $OPENAI_API_KEY
 ## 相关文档
 
 - [添加新 Provider](./adding-providers.md)
+
+## Context Compact
+
+以下配置用于控制手动上下文压缩行为。
+
+### 配置示例
+
+```yaml
+context:
+  compact:
+    manual_strategy: keep_recent
+    manual_keep_recent_messages: 10
+    max_summary_chars: 1200
+```
+
+### 字段说明
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `context.compact.manual_strategy` | string | `keep_recent` | 手动 `/compact` 策略，可选 `keep_recent` / `full_replace` |
+| `context.compact.manual_keep_recent_messages` | int | `10` | `keep_recent` 模式下保留最近 N 条消息；会按 tool call 与 tool result 的原子块整体保留 |
+| `context.compact.max_summary_chars` | int | `1200` | compact summary 最大字符数 |
+
+更多行为说明见 [context-compact.md](../context-compact.md)。

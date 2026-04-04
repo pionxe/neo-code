@@ -14,11 +14,10 @@ import (
 
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
+	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	"neo-code/internal/tools"
 )
-
-const maxContextTurns = 10
 
 const (
 	// defaultProviderRetryMax 是 runtime 层对单次 provider.Chat() 的最大重试次数（不含首次调用）。
@@ -39,6 +38,7 @@ var runtimeSessionWorkdirs = struct {
 
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
+	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
@@ -63,11 +63,13 @@ type Service struct {
 	toolManager     tools.Manager        // 工具管理器，统一工具 schema 暴露与执行入口。
 	providerFactory ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
 	contextBuilder  agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
-	events          chan RuntimeEvent    // 事件通道，Runtime 在运行过程中产生的事件都通过该通道发送给 TUI 层消费和展示。
-	runMu           sync.Mutex           // 运行互斥锁，保证同一时间只有一个 Run 在执行。
-	activeRunToken  uint64               // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
-	nextRunToken    uint64               // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
-	activeRunCancel context.CancelFunc   // 当前活跃 Run 的取消函数。
+	compactRunner   contextcompact.Runner
+	events          chan RuntimeEvent
+	operationMu     sync.Mutex         // 运行级互斥：串行化 Run 与 Compact，避免并发写同一会话。
+	runMu           sync.Mutex         // 仅保护 activeRun* 字段的并发读写。
+	activeRunToken  uint64             // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
+	nextRunToken    uint64             // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
+	activeRunCancel context.CancelFunc // 当前活跃 Run 的取消函数。
 }
 
 func NewWithFactory(
@@ -98,6 +100,9 @@ func NewWithFactory(
 }
 
 func (s *Service) Run(ctx context.Context, input UserInput) error {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+
 	runCtx, cancel := context.WithCancel(ctx)
 	runToken := s.startRun(cancel)
 	defer func() {
@@ -177,6 +182,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
+		metadataChanged := session.Provider != cfg.SelectedProvider || session.Model != cfg.CurrentModel
+		session.Provider = cfg.SelectedProvider
+		session.Model = cfg.CurrentModel
+
 		assistant := resp.Message
 		if strings.TrimSpace(assistant.Role) == "" {
 			assistant.Role = provider.RoleAssistant
@@ -184,6 +193,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 		if strings.TrimSpace(assistant.Content) != "" || len(assistant.ToolCalls) > 0 {
 			session.Messages = append(session.Messages, assistant)
+			session.UpdatedAt = time.Now()
+			if err := s.sessionStore.Save(ctx, &session); err != nil {
+				return s.handleRunError(ctx, input.RunID, session.ID, err)
+			}
+		} else if metadataChanged {
 			session.UpdatedAt = time.Now()
 			if err := s.sessionStore.Save(ctx, &session); err != nil {
 				return s.handleRunError(ctx, input.RunID, session.ID, err)

@@ -2,10 +2,10 @@ package context
 
 import "neo-code/internal/provider"
 
-const maxContextTurns = 10
+const maxRetainedMessageSpans = 10
 
 func trimMessages(messages []provider.Message) []provider.Message {
-	if len(messages) <= maxContextTurns {
+	if len(messages) <= maxRetainedMessageSpans {
 		return append([]provider.Message(nil), messages...)
 	}
 
@@ -28,10 +28,10 @@ func trimMessages(messages []provider.Message) []provider.Message {
 		spans = append(spans, span{start: start, end: i})
 	}
 
-	if len(spans) <= maxContextTurns {
+	if len(spans) <= maxRetainedMessageSpans {
 		return append([]provider.Message(nil), messages...)
 	}
 
-	start := spans[len(spans)-maxContextTurns].start
+	start := spans[len(spans)-maxRetainedMessageSpans].start
 	return append([]provider.Message(nil), messages[start:]...)
 }

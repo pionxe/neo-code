@@ -18,8 +18,8 @@ func TestLoadProjectRulesOrdersGlobalToLocal(t *testing.T) {
 		t.Fatalf("mkdir nested: %v", err)
 	}
 
-	rootRules := filepath.Join(root, ruleFileName)
-	localRules := filepath.Join(root, "a", ruleFileName)
+	rootRules := filepath.Join(root, projectRuleFileName)
+	localRules := filepath.Join(root, "a", projectRuleFileName)
 	if err := os.WriteFile(rootRules, []byte("root-rules"), 0o644); err != nil {
 		t.Fatalf("write root rules: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestLoadProjectRulesOnlyMatchesUppercase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "agents.md"), []byte("wrong-case"), 0o644); err != nil {
 		t.Fatalf("write lowercase rules: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(nested, ruleFileName), []byte("right-case"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(nested, projectRuleFileName), []byte("right-case"), 0o644); err != nil {
 		t.Fatalf("write uppercase rules: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestLoadProjectRulesOnlyMatchesUppercase(t *testing.T) {
 	if len(documents) != 1 {
 		t.Fatalf("expected only uppercase AGENTS.md to be loaded, got %+v", documents)
 	}
-	if filepath.Base(documents[0].Path) != ruleFileName {
+	if filepath.Base(documents[0].Path) != projectRuleFileName {
 		t.Fatalf("expected uppercase AGENTS.md match, got %q", documents[0].Path)
 	}
 	if strings.Contains(documents[0].Content, "wrong-case") {
@@ -81,7 +81,7 @@ func TestLoadRuleDocumentsReturnsReadError(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	path := filepath.Join(root, ruleFileName)
+	path := filepath.Join(root, projectRuleFileName)
 	if err := os.WriteFile(path, []byte("rules"), 0o644); err != nil {
 		t.Fatalf("write rules: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestLoadRuleDocumentsReturnsReadError(t *testing.T) {
 	}
 }
 
-func TestDiscoverRuleFilesStopsOnDirectoryReadError(t *testing.T) {
+func TestDiscoverRuleFilesReturnsDirectoryReadError(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -103,8 +103,8 @@ func TestDiscoverRuleFilesStopsOnDirectoryReadError(t *testing.T) {
 		t.Fatalf("mkdir nested: %v", err)
 	}
 
-	rootRules := filepath.Join(root, ruleFileName)
-	localRules := filepath.Join(root, "a", ruleFileName)
+	rootRules := filepath.Join(root, projectRuleFileName)
+	localRules := filepath.Join(root, "a", projectRuleFileName)
 	if err := os.WriteFile(rootRules, []byte("root-rules"), 0o644); err != nil {
 		t.Fatalf("write root rules: %v", err)
 	}
@@ -125,23 +125,23 @@ func TestDiscoverRuleFilesStopsOnDirectoryReadError(t *testing.T) {
 			return "", nil
 		}
 	})
-	if err != nil {
-		t.Fatalf("discoverRuleFilesWithFinder() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), permissionErr.Error()) {
+		t.Fatalf("expected discoverRuleFilesWithFinder() to return permission error, got %v", err)
 	}
-	if len(paths) != 1 || paths[0] != localRules {
-		t.Fatalf("expected traversal to stop after read error and keep collected paths, got %+v", paths)
+	if paths != nil {
+		t.Fatalf("expected no paths on discovery failure, got %+v", paths)
 	}
 }
 
 func TestRenderProjectRulesSectionTruncatesSingleFileAndTotalBudget(t *testing.T) {
 	t.Parallel()
 
-	largeSingle := strings.Repeat("a", maxRuleFileRunes+32)
+	largeSingle := strings.Repeat("a", projectRulePerFileRuneLimit+32)
 	largeTotalA := strings.Repeat("b", 7000)
 	largeTotalB := strings.Repeat("c", 7000)
 
 	section := renderPromptSection(renderProjectRulesSection([]ruleDocument{
-		{Path: "/repo/AGENTS.md", Content: largeSingle[:maxRuleFileRunes], Truncated: true},
+		{Path: "/repo/AGENTS.md", Content: largeSingle[:projectRulePerFileRuneLimit], Truncated: true},
 	}))
 	if !strings.Contains(section, "[truncated to fit per-file limit]") {
 		t.Fatalf("expected per-file truncation marker, got %q", section)
@@ -158,11 +158,11 @@ func TestRenderProjectRulesSectionTruncatesSingleFileAndTotalBudget(t *testing.T
 	if strings.Contains(totalSection, strings.Repeat("c", 6500)) {
 		t.Fatalf("expected total rules section to be truncated")
 	}
-	if runeCount(totalPromptSection.content) > maxTotalRuleRunes {
+	if runeCount(totalPromptSection.content) > projectRuleTotalRuneLimit {
 		t.Fatalf(
 			"expected rendered rules body to respect total rune budget, got %d > %d",
 			runeCount(totalPromptSection.content),
-			maxTotalRuleRunes,
+			projectRuleTotalRuneLimit,
 		)
 	}
 }

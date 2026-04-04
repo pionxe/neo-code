@@ -69,7 +69,7 @@ func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, ruleFileName), []byte("project-rules"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, projectRuleFileName), []byte("project-rules"), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
 func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 	t.Parallel()
 
-	messages := make([]provider.Message, 0, maxContextTurns+4)
+	messages := make([]provider.Message, 0, maxRetainedMessageSpans+4)
 	for i := 0; i < 8; i++ {
 		messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
 	}
@@ -158,8 +158,8 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 		{
 			name: "long message list with limited spans keeps full history",
 			input: func() []provider.Message {
-				messages := make([]provider.Message, 0, maxContextTurns+3)
-				for i := 0; i < maxContextTurns-1; i++ {
+				messages := make([]provider.Message, 0, maxRetainedMessageSpans+3)
+				for i := 0; i < maxRetainedMessageSpans-1; i++ {
 					messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
 				}
 				messages = append(messages,
@@ -174,7 +174,7 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 				)
 				return messages
 			}(),
-			wantLen: maxContextTurns + 2,
+			wantLen: maxRetainedMessageSpans + 2,
 			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
 				t.Helper()
 				if len(trimmed) != len(original) {
@@ -185,8 +185,8 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 		{
 			name: "message count beyond limit trims by span count",
 			input: func() []provider.Message {
-				messages := make([]provider.Message, 0, maxContextTurns+5)
-				for i := 0; i < maxContextTurns+1; i++ {
+				messages := make([]provider.Message, 0, maxRetainedMessageSpans+5)
+				for i := 0; i < maxRetainedMessageSpans+1; i++ {
 					messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
 				}
 				messages = append(messages,
@@ -200,7 +200,7 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 				)
 				return messages
 			}(),
-			wantLen: maxContextTurns + 1,
+			wantLen: maxRetainedMessageSpans + 1,
 			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
 				t.Helper()
 				if trimmed[0].Content != "u-2" {

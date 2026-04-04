@@ -10,9 +10,11 @@ import (
 )
 
 const (
-	ruleFileName      = "AGENTS.md"
-	maxRuleFileRunes  = 4000
-	maxTotalRuleRunes = 12000
+	projectRuleFileName                = "AGENTS.md"
+	projectRulePerFileRuneLimit        = 4000
+	projectRuleTotalRuneLimit          = 12000
+	projectRulePerFileTruncationNotice = "\n[truncated to fit per-file limit]\n"
+	projectRuleTotalTruncationNotice   = "\n[additional project rules truncated to fit total limit]\n"
 )
 
 type ruleDocument struct {
@@ -44,7 +46,7 @@ func loadRuleDocuments(ctx context.Context, paths []string, readFile func(string
 			return nil, fmt.Errorf("context: read %s: %w", path, err)
 		}
 
-		content, truncated := truncateRunes(strings.TrimSpace(string(data)), maxRuleFileRunes)
+		content, truncated := truncateRunes(strings.TrimSpace(string(data)), projectRulePerFileRuneLimit)
 		documents = append(documents, ruleDocument{
 			Path:      path,
 			Content:   content,
@@ -78,7 +80,7 @@ func discoverRuleFilesWithFinder(ctx context.Context, workdir string, finder rul
 
 		match, err := finder(dir)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("context: discover rule file in %s: %w", dir, err)
 		}
 		if match != "" {
 			paths = append(paths, match)
@@ -111,7 +113,7 @@ func findExactRuleFile(dir string) (string, error) {
 		if entry.IsDir() {
 			continue
 		}
-		if entry.Name() == ruleFileName {
+		if entry.Name() == projectRuleFileName {
 			return filepath.Join(dir, entry.Name()), nil
 		}
 	}
@@ -124,11 +126,9 @@ func renderProjectRulesSection(documents []ruleDocument) promptSection {
 		return promptSection{}
 	}
 
-	const totalTruncationNotice = "\n[additional project rules truncated to fit total limit]\n"
-
 	var builder strings.Builder
 
-	remaining := maxTotalRuleRunes
+	remaining := projectRuleTotalRuneLimit
 	totalBudgetTruncated := false
 	for _, document := range documents {
 		if remaining <= 0 {
@@ -146,7 +146,7 @@ func renderProjectRulesSection(documents []ruleDocument) promptSection {
 
 		totalBudgetTruncated = true
 		chunkBudget := remaining
-		if noticeRunes := runeCount(totalTruncationNotice); noticeRunes < chunkBudget {
+		if noticeRunes := runeCount(projectRuleTotalTruncationNotice); noticeRunes < chunkBudget {
 			chunkBudget -= noticeRunes
 		}
 		chunk := renderRuleDocumentChunkWithinBudget(document, chunkBudget)
@@ -156,8 +156,8 @@ func renderProjectRulesSection(documents []ruleDocument) promptSection {
 	}
 
 	if totalBudgetTruncated {
-		if runeCount(totalTruncationNotice) <= remaining {
-			builder.WriteString(totalTruncationNotice)
+		if runeCount(projectRuleTotalTruncationNotice) <= remaining {
+			builder.WriteString(projectRuleTotalTruncationNotice)
 		}
 	}
 
@@ -178,7 +178,7 @@ func renderRuleDocumentChunk(document ruleDocument) string {
 		builder.WriteString("\n")
 	}
 	if document.Truncated {
-		builder.WriteString("\n[truncated to fit per-file limit]\n")
+		builder.WriteString(projectRulePerFileTruncationNotice)
 	}
 
 	return builder.String()
@@ -208,9 +208,8 @@ func renderRuleDocumentChunkWithinBudget(document ruleDocument, budget int) stri
 		body.WriteString("\n")
 	}
 	if document.Truncated {
-		perFileNotice := "\n[truncated to fit per-file limit]\n"
-		if runeCount(body.String())+runeCount(perFileNotice) <= bodyBudget {
-			body.WriteString(perFileNotice)
+		if runeCount(body.String())+runeCount(projectRulePerFileTruncationNotice) <= bodyBudget {
+			body.WriteString(projectRulePerFileTruncationNotice)
 		}
 	}
 
