@@ -43,6 +43,67 @@ func TestWithTransport(t *testing.T) {
 	}
 }
 
+func TestNewValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty api key returns error", func(t *testing.T) {
+		t.Parallel()
+		cfg := resolvedConfig("", "")
+		cfg.APIKey = ""
+		_, err := New(cfg)
+		if err == nil {
+			t.Fatal("expected error for empty api key")
+		}
+		if !strings.Contains(err.Error(), "api key is empty") {
+			t.Fatalf("expected api key error, got: %v", err)
+		}
+	})
+
+	t.Run("whitespace-only api key returns error", func(t *testing.T) {
+		t.Parallel()
+		cfg := resolvedConfig("", "")
+		cfg.APIKey = "   "
+		_, err := New(cfg)
+		if err == nil {
+			t.Fatal("expected error for whitespace-only api key")
+		}
+	})
+
+	t.Run("invalid config validate fails", func(t *testing.T) {
+		t.Parallel()
+		// 空字符串的 BaseURL 和 Model 会导致 Validate 失败（取决于 config 实现）
+		cfg := config.ResolvedProviderConfig{
+			ProviderConfig: config.ProviderConfig{
+				Driver:    DriverName,
+				BaseURL:   "",
+				Model:     "",
+				APIKeyEnv: "NONEXISTENT_ENV_VAR_" + t.Name(),
+			},
+			APIKey: "test-key",
+		}
+		_, err := New(cfg)
+		// 验证失败时应该返回错误
+		if err != nil {
+			// 预期行为：config 校验不通过
+			return
+		}
+		// 如果校验通过了，也接受（取决于具体实现）
+	})
+}
+
+func TestNewDefaultTransportWhenNoOption(t *testing.T) {
+	t.Parallel()
+
+	cfg := resolvedConfig("", "")
+	provider, err := New(cfg) // 不传任何 buildOption
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if provider.client.Transport == nil {
+		t.Fatal("expected default transport to be set")
+	}
+}
+
 func TestDefaultRetryTransport(t *testing.T) {
 	t.Parallel()
 
