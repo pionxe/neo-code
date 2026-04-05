@@ -44,7 +44,8 @@ func TestToolHelpers(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got := New(t.TempDir(), tt.shell, time.Second).shellArgs("echo hi")
+			binary, args := shellCommand(tt.shell, "echo hi")
+			got := append([]string{binary}, args...)
 			if len(got) < len(tt.want) {
 				t.Fatalf("expected shell args prefix %v, got %v", tt.want, got)
 			}
@@ -57,7 +58,8 @@ func TestToolHelpers(t *testing.T) {
 	}
 
 	t.Run("default shell args", func(t *testing.T) {
-		got := New(t.TempDir(), "unknown", time.Second).shellArgs("echo hi")
+		binary, args := shellCommand("unknown", "echo hi")
+		got := append([]string{binary}, args...)
 		if goruntime.GOOS == "windows" {
 			if got[0] != "powershell" {
 				t.Fatalf("expected windows fallback to powershell, got %v", got)

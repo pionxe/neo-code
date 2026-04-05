@@ -4,21 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"time"
 
-	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
 
 type Tool struct {
-	root    string
-	shell   string
-	timeout time.Duration
+	root     string
+	shell    string
+	timeout  time.Duration
+	executor SecurityExecutor
 }
 
 type input struct {
@@ -27,10 +22,25 @@ type input struct {
 }
 
 func New(root string, shell string, timeout time.Duration) *Tool {
+	executor := NewDefaultSecurityExecutor(root, shell, timeout)
 	return &Tool{
-		root:    root,
-		shell:   shell,
-		timeout: timeout,
+		root:     root,
+		shell:    shell,
+		timeout:  timeout,
+		executor: executor,
+	}
+}
+
+// NewWithExecutor creates a bash tool using an injected security executor.
+func NewWithExecutor(root string, shell string, timeout time.Duration, executor SecurityExecutor) *Tool {
+	if executor == nil {
+		executor = NewDefaultSecurityExecutor(root, shell, timeout)
+	}
+	return &Tool{
+		root:     root,
+		shell:    shell,
+		timeout:  timeout,
+		executor: executor,
 	}
 }
 
@@ -64,94 +74,10 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
 		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
-	if strings.TrimSpace(in.Command) == "" {
-		err := errors.New("bash: command is empty")
+	if t.executor == nil {
+		err := errors.New("bash: security executor is nil")
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	base := strings.TrimSpace(call.Workdir)
-	if base == "" {
-		base = t.root
-	}
-	_, workdir, err := tools.ResolveWorkspaceTarget(
-		call,
-		security.TargetTypeDirectory,
-		base,
-		in.Workdir,
-		resolveWorkdir,
-	)
-	if err != nil {
-		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, t.timeout)
-	defer cancel()
-
-	args := t.shellArgs(in.Command)
-	cmd := exec.CommandContext(runCtx, args[0], args[1:]...)
-	cmd.Dir = workdir
-	output, err := cmd.CombinedOutput()
-
-	content := string(output)
-	if err != nil {
-		result := tools.NewErrorResult(
-			t.Name(),
-			tools.NormalizeErrorReason(t.Name(), err),
-			content,
-			map[string]any{"workdir": workdir},
-		)
-		result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
-		return result, err
-	}
-
-	result := tools.ToolResult{
-		Name:    t.Name(),
-		Content: content,
-		Metadata: map[string]any{
-			"workdir": workdir,
-		},
-	}
-	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
-	return result, nil
-}
-
-func (t *Tool) shellArgs(command string) []string {
-	shell := strings.ToLower(strings.TrimSpace(t.shell))
-	switch shell {
-	case "powershell", "pwsh":
-		return []string{"powershell", "-NoProfile", "-Command", command}
-	case "bash":
-		return []string{"bash", "-lc", command}
-	case "sh":
-		return []string{"sh", "-lc", command}
-	}
-	if runtime.GOOS == "windows" {
-		return []string{"powershell", "-NoProfile", "-Command", command}
-	}
-	return []string{"sh", "-lc", command}
-}
-
-func resolveWorkdir(root string, requested string) (string, error) {
-	base, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	target := requested
-	if strings.TrimSpace(target) == "" {
-		target = base
-	} else if !filepath.IsAbs(target) {
-		target = filepath.Join(base, target)
-	}
-	target, err = filepath.Abs(target)
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(base, target)
-	if err != nil {
-		return "", err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", errors.New("bash: workdir escapes workspace root")
-	}
-	return target, nil
+	return t.executor.Execute(ctx, call, in.Command, in.Workdir)
 }
