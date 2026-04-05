@@ -13,6 +13,33 @@ type RuntimeEvent struct {
 	Payload   any
 }
 
+// PermissionRequestPayload 描述一次需要审批的权限请求上下文。
+type PermissionRequestPayload struct {
+	ToolName      string
+	ActionType    string
+	Operation     string
+	TargetType    string
+	Target        string
+	Decision      string
+	Reason        string
+	RuleID        string
+	RememberScope string
+}
+
+// PermissionResolvedPayload 描述权限请求被运行时处理后的最终状态。
+type PermissionResolvedPayload struct {
+	ToolName      string
+	ActionType    string
+	Operation     string
+	TargetType    string
+	Target        string
+	Decision      string
+	Reason        string
+	RuleID        string
+	RememberScope string
+	ResolvedAs    string
+}
+
 const (
 	// EventUserMessage is emitted after the user input has been accepted and saved.
 	EventUserMessage EventType = "user_message"
@@ -36,6 +63,10 @@ const (
 	// EventProviderRetry is emitted when runtime retries a provider call due to
 	// a retryable error (e.g. 429, 5xx). Payload is a human-readable message.
 	EventProviderRetry EventType = "provider_retry"
+	// EventPermissionRequest is emitted when a tool call hits an ask decision.
+	EventPermissionRequest EventType = "permission_request"
+	// EventPermissionResolved is emitted when runtime resolves a permission request or denial.
+	EventPermissionResolved EventType = "permission_resolved"
 	// EventCompactStart is emitted when a compact cycle starts.
 	EventCompactStart EventType = "compact_start"
 	// EventCompactDone is emitted when a compact cycle completes.

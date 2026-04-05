@@ -242,6 +242,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			if execErr != nil && strings.TrimSpace(result.Content) == "" {
 				result.Content = execErr.Error()
 			}
+			if permissionEvent, ok := permissionEventFromError(execErr); ok {
+				if permissionEvent.decision == "ask" {
+					s.emit(ctx, EventPermissionRequest, input.RunID, session.ID, permissionEvent.toRequestPayload())
+				}
+				s.emit(ctx, EventPermissionResolved, input.RunID, session.ID, permissionEvent.toResolvedPayload())
+			}
 
 			toolMessage := provider.Message{
 				Role:       provider.RoleTool,
@@ -561,6 +567,81 @@ func providerRetryBackoff(attempt int) time.Duration {
 
 func (s *Service) isRunCanceled(err error) bool {
 	return errors.Is(err, context.Canceled)
+}
+
+type permissionEventView struct {
+	toolName   string
+	actionType string
+	operation  string
+	targetType string
+	target     string
+	decision   string
+	reason     string
+	ruleID     string
+	resolvedAs string
+}
+
+// permissionEventFromError 从工具权限错误中提取可用于 runtime 事件的结构化信息。
+func permissionEventFromError(err error) (permissionEventView, bool) {
+	var permissionErr *tools.PermissionDecisionError
+	if !errors.As(err, &permissionErr) {
+		return permissionEventView{}, false
+	}
+
+	action := permissionErr.Action()
+	decision := strings.TrimSpace(permissionErr.Decision())
+	reason := strings.TrimSpace(permissionErr.Reason())
+	if reason == "" {
+		reason = strings.TrimSpace(err.Error())
+	}
+
+	resolvedAs := "denied"
+	if strings.EqualFold(decision, "ask") {
+		resolvedAs = "rejected"
+	}
+
+	return permissionEventView{
+		toolName:   action.Payload.ToolName,
+		actionType: string(action.Type),
+		operation:  action.Payload.Operation,
+		targetType: string(action.Payload.TargetType),
+		target:     action.Payload.Target,
+		decision:   decision,
+		reason:     reason,
+		ruleID:     strings.TrimSpace(permissionErr.RuleID()),
+		resolvedAs: resolvedAs,
+	}, true
+}
+
+// toRequestPayload 将权限事件视图转换为 permission_request 载荷。
+func (v permissionEventView) toRequestPayload() PermissionRequestPayload {
+	return PermissionRequestPayload{
+		ToolName:      v.toolName,
+		ActionType:    v.actionType,
+		Operation:     v.operation,
+		TargetType:    v.targetType,
+		Target:        v.target,
+		Decision:      v.decision,
+		Reason:        v.reason,
+		RuleID:        v.ruleID,
+		RememberScope: "",
+	}
+}
+
+// toResolvedPayload 将权限事件视图转换为 permission_resolved 载荷。
+func (v permissionEventView) toResolvedPayload() PermissionResolvedPayload {
+	return PermissionResolvedPayload{
+		ToolName:      v.toolName,
+		ActionType:    v.actionType,
+		Operation:     v.operation,
+		TargetType:    v.targetType,
+		Target:        v.target,
+		Decision:      v.decision,
+		Reason:        v.reason,
+		RuleID:        v.ruleID,
+		RememberScope: "",
+		ResolvedAs:    v.resolvedAs,
+	}
 }
 
 func effectiveSessionWorkdir(sessionWorkdir string, defaultWorkdir string) string {

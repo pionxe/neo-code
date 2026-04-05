@@ -49,6 +49,7 @@ type PermissionDecisionError struct {
 	toolName string
 	action   security.Action
 	reason   string
+	ruleID   string
 }
 
 // Error returns a stable error message for the blocked tool call.
@@ -85,6 +86,30 @@ func (e *PermissionDecisionError) ToolName() string {
 		return ""
 	}
 	return e.toolName
+}
+
+// Action 返回触发权限决策时的结构化动作上下文。
+func (e *PermissionDecisionError) Action() security.Action {
+	if e == nil {
+		return security.Action{}
+	}
+	return e.action
+}
+
+// Reason 返回权限网关给出的拒绝或审批原因。
+func (e *PermissionDecisionError) Reason() string {
+	if e == nil {
+		return ""
+	}
+	return strings.TrimSpace(e.reason)
+}
+
+// RuleID 返回命中规则的标识，未命中时为空字符串。
+func (e *PermissionDecisionError) RuleID() string {
+	if e == nil {
+		return ""
+	}
+	return strings.TrimSpace(e.ruleID)
 }
 
 // DefaultManager routes tool calls through the permission engine, workspace
@@ -184,11 +209,16 @@ func blockedToolResult(input ToolCallInput, decision security.CheckResult) ToolR
 }
 
 func permissionErrorFromDecision(decision security.CheckResult) error {
+	ruleID := ""
+	if decision.Rule != nil {
+		ruleID = decision.Rule.ID
+	}
 	return &PermissionDecisionError{
 		decision: decision.Decision,
 		toolName: decision.Action.Payload.ToolName,
 		action:   decision.Action,
 		reason:   decision.Reason,
+		ruleID:   ruleID,
 	}
 }
 

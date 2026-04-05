@@ -357,6 +357,7 @@ func TestPermissionDecisionError(t *testing.T) {
 			},
 		},
 		reason: "approval required",
+		ruleID: "rule-ask-webfetch",
 	}
 	if !strings.Contains(err.Error(), "approval required") {
 		t.Fatalf("expected reason in error, got %q", err.Error())
@@ -366,6 +367,15 @@ func TestPermissionDecisionError(t *testing.T) {
 	}
 	if err.ToolName() != "webfetch" {
 		t.Fatalf("expected tool name webfetch, got %q", err.ToolName())
+	}
+	if err.Reason() != "approval required" {
+		t.Fatalf("expected approval reason, got %q", err.Reason())
+	}
+	if err.RuleID() != "rule-ask-webfetch" {
+		t.Fatalf("expected rule id rule-ask-webfetch, got %q", err.RuleID())
+	}
+	if err.Action().Type != security.ActionTypeRead {
+		t.Fatalf("expected action type read, got %q", err.Action().Type)
 	}
 	if errors.Is(err, context.Canceled) {
 		t.Fatalf("permission error should not match unrelated errors")

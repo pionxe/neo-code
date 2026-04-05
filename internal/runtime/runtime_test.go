@@ -14,6 +14,7 @@ import (
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
+	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
 
@@ -639,6 +640,182 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	if !foundToolMessage {
 		t.Fatalf("expected tool manager result in session messages, got %+v", session.Messages)
 	}
+}
+
+func TestServiceRunEmitsPermissionRequestAndResolvedForAsk(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "webfetch", content: "should-not-run"}
+	registry.Register(tool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+		{
+			ID:       "ask-webfetch",
+			Type:     security.ActionTypeRead,
+			Resource: "webfetch",
+			Decision: security.DecisionAsk,
+			Reason:   "requires approval",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-ask", Name: "webfetch", Arguments: `{"url":"https://example.com/private"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{RunID: "run-permission-ask", Content: "fetch private"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if tool.callCount != 0 {
+		t.Fatalf("expected blocked tool not to execute, got %d", tool.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventPermissionRequest,
+		EventPermissionResolved,
+		EventToolResult,
+		EventAgentDone,
+	})
+	assertNoEventType(t, events, EventError)
+
+	var (
+		requestPayload  PermissionRequestPayload
+		resolvedPayload PermissionResolvedPayload
+	)
+	for _, event := range events {
+		switch event.Type {
+		case EventPermissionRequest:
+			payload, ok := event.Payload.(PermissionRequestPayload)
+			if !ok {
+				t.Fatalf("expected PermissionRequestPayload, got %#v", event.Payload)
+			}
+			requestPayload = payload
+		case EventPermissionResolved:
+			payload, ok := event.Payload.(PermissionResolvedPayload)
+			if !ok {
+				t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+			}
+			resolvedPayload = payload
+		}
+	}
+
+	if requestPayload.ToolName != "webfetch" || requestPayload.Decision != "ask" {
+		t.Fatalf("unexpected permission request payload: %+v", requestPayload)
+	}
+	if requestPayload.RuleID != "ask-webfetch" {
+		t.Fatalf("expected rule id ask-webfetch, got %+v", requestPayload)
+	}
+	if resolvedPayload.ToolName != "webfetch" || resolvedPayload.Decision != "ask" {
+		t.Fatalf("unexpected permission resolved payload: %+v", resolvedPayload)
+	}
+	if resolvedPayload.ResolvedAs != "rejected" {
+		t.Fatalf("expected resolved_as rejected, got %+v", resolvedPayload)
+	}
+}
+
+func TestServiceRunEmitsPermissionResolvedForDeny(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "bash", content: "should-not-run"}
+	registry.Register(tool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+		{
+			ID:       "deny-bash",
+			Type:     security.ActionTypeBash,
+			Resource: "bash",
+			Decision: security.DecisionDeny,
+			Reason:   "bash denied",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-deny", Name: "bash", Arguments: `{"command":"echo hi"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{RunID: "run-permission-deny", Content: "run bash"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if tool.callCount != 0 {
+		t.Fatalf("expected blocked tool not to execute, got %d", tool.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventPermissionResolved,
+		EventToolResult,
+		EventAgentDone,
+	})
+	assertNoEventType(t, events, EventPermissionRequest)
+	assertNoEventType(t, events, EventError)
+
+	for _, event := range events {
+		if event.Type != EventPermissionResolved {
+			continue
+		}
+		payload, ok := event.Payload.(PermissionResolvedPayload)
+		if !ok {
+			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+		}
+		if payload.ToolName != "bash" || payload.Decision != "deny" || payload.ResolvedAs != "denied" {
+			t.Fatalf("unexpected permission resolved payload: %+v", payload)
+		}
+		if payload.RuleID != "deny-bash" {
+			t.Fatalf("expected deny-bash rule id, got %+v", payload)
+		}
+		return
+	}
+	t.Fatalf("expected permission resolved event payload")
 }
 
 func TestServiceRunHandlesToolManagerSpecError(t *testing.T) {
