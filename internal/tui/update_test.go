@@ -496,6 +496,89 @@ func TestRunAgentWorkdirForwarding(t *testing.T) {
 	})
 }
 
+func TestHandlePermissionDecisionKey(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	app.pendingPermission = &pendingPermissionPrompt{
+		RequestID: "perm-1",
+		ToolName:  "webfetch",
+	}
+
+	tests := []struct {
+		name     string
+		key      tea.KeyMsg
+		wantSent agentruntime.PermissionResolutionDecision
+		handled  bool
+	}{
+		{
+			name:     "y maps to allow once",
+			key:      tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}},
+			wantSent: agentruntime.PermissionResolutionAllowOnce,
+			handled:  true,
+		},
+		{
+			name:     "a maps to allow session",
+			key:      tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}},
+			wantSent: agentruntime.PermissionResolutionAllowSession,
+			handled:  true,
+		},
+		{
+			name:     "n maps to reject",
+			key:      tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}},
+			wantSent: agentruntime.PermissionResolutionReject,
+			handled:  true,
+		},
+		{
+			name:    "other key ignored",
+			key:     tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}},
+			handled: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, handled := app.handlePermissionDecisionKey(tt.key)
+			if handled != tt.handled {
+				t.Fatalf("expected handled=%v, got %v", tt.handled, handled)
+			}
+			if !tt.handled {
+				if cmd != nil {
+					t.Fatalf("expected nil cmd for unhandled key")
+				}
+				return
+			}
+			if cmd == nil {
+				t.Fatalf("expected resolve cmd")
+			}
+			msg := cmd()
+			result, ok := msg.(permissionResolveResultMsg)
+			if !ok {
+				t.Fatalf("expected permissionResolveResultMsg, got %T", msg)
+			}
+			if result.err != nil {
+				t.Fatalf("expected nil resolve error, got %v", result.err)
+			}
+			if len(runtime.resolveInputs) == 0 {
+				t.Fatalf("expected runtime resolve inputs")
+			}
+			last := runtime.resolveInputs[len(runtime.resolveInputs)-1]
+			if last.Decision != tt.wantSent {
+				t.Fatalf("expected decision %q, got %q", tt.wantSent, last.Decision)
+			}
+			if strings.TrimSpace(last.RequestID) != "perm-1" {
+				t.Fatalf("expected request id perm-1, got %q", last.RequestID)
+			}
+		})
+	}
+}
+
 func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 	tests := []struct {
 		name   string
