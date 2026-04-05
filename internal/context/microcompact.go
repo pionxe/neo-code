@@ -48,6 +48,9 @@ func microCompactMessages(messages []provider.Message) []provider.Message {
 		if len(compactableIDs) == 0 {
 			continue
 		}
+		if !hasCompactableToolContent(cloned, span, compactableIDs) {
+			continue
+		}
 		if retainedCompactableSpans < microCompactRetainedToolSpans {
 			retainedCompactableSpans++
 			continue
@@ -109,6 +112,16 @@ func compactableToolCallIDs(calls []provider.ToolCall) map[string]struct{} {
 		return nil
 	}
 	return ids
+}
+
+// hasCompactableToolContent 判断工具块中是否存在会影响保留预算的有效工具结果内容。
+func hasCompactableToolContent(messages []provider.Message, span internalcompact.MessageSpan, compactableIDs map[string]struct{}) bool {
+	for messageIndex := span.Start + 1; messageIndex < span.End; messageIndex++ {
+		if shouldClearToolMessage(messages[messageIndex], compactableIDs) {
+			return true
+		}
+	}
+	return false
 }
 
 // shouldClearToolMessage 判断一条 tool 消息是否满足旧结果清理条件。

@@ -201,3 +201,65 @@ func TestMicroCompactMessagesClearsOnlyCompactableResultsInMixedToolSpan(t *test
 		t.Fatalf("expected assistant tool call metadata to remain intact, got %+v", got[1].ToolCalls)
 	}
 }
+
+func TestMicroCompactMessagesSkipsEmptyRecentSpansWhenCountingRetainedBudget(t *testing.T) {
+	t.Parallel()
+
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "older user"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "older read result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-2", Name: "filesystem_grep", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "middle grep result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-3", Name: "filesystem_edit", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "near edit result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-4", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-4", Content: "", IsError: true},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-5", Name: "webfetch", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-5", Content: ""},
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: provider.RoleAssistant, Content: "current reply"},
+	}
+
+	got := microCompactMessages(messages)
+	if got[2].Content != microCompactClearedMessage {
+		t.Fatalf("expected oldest valid tool result to be cleared, got %q", got[2].Content)
+	}
+	if got[4].Content != "middle grep result" {
+		t.Fatalf("expected middle valid tool result to remain, got %q", got[4].Content)
+	}
+	if got[6].Content != "near edit result" {
+		t.Fatalf("expected nearer valid tool result to remain, got %q", got[6].Content)
+	}
+	if got[8].Content != "" {
+		t.Fatalf("expected error/empty tool result to remain unchanged, got %q", got[8].Content)
+	}
+	if got[10].Content != "" {
+		t.Fatalf("expected empty recent tool result to remain unchanged, got %q", got[10].Content)
+	}
+}
