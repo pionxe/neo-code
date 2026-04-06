@@ -12,8 +12,8 @@ import (
 
 type stubProvider struct{}
 
-func (stubProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
-	return provider.ChatResponse{}, nil
+func (stubProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
+	return nil
 }
 
 func stubDriver(driverType string) provider.DriverDefinition {

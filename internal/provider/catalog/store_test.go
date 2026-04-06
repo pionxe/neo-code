@@ -14,14 +14,14 @@ import (
 func TestJSONStoreRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	store := NewJSONStore(t.TempDir())
+	store := newJSONStore(t.TempDir())
 	identity, err := config.NewProviderIdentity("openai", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
 
 	expected := ModelCatalog{
-		SchemaVersion: SchemaVersion,
+		SchemaVersion: schemaVersion,
 		Identity:      identity,
 		FetchedAt:     time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
 		ExpiresAt:     time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC),
@@ -70,7 +70,7 @@ func TestJSONStoreRoundTrip(t *testing.T) {
 func TestJSONStoreMissingCatalog(t *testing.T) {
 	t.Parallel()
 
-	store := NewJSONStore(t.TempDir())
+	store := newJSONStore(t.TempDir())
 	identity, err := config.NewProviderIdentity("openai", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
@@ -86,14 +86,14 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	store := newJSONStore(baseDir)
 	identity, err := config.NewProviderIdentity("openai", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
 
 	first := ModelCatalog{
-		SchemaVersion: SchemaVersion,
+		SchemaVersion: schemaVersion,
 		Identity:      identity,
 		FetchedAt:     time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
 		ExpiresAt:     time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC),
@@ -102,7 +102,7 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 		},
 	}
 	second := ModelCatalog{
-		SchemaVersion: SchemaVersion,
+		SchemaVersion: schemaVersion,
 		Identity:      identity,
 		FetchedAt:     time.Date(2026, 4, 4, 10, 0, 0, 0, time.UTC),
 		ExpiresAt:     time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),

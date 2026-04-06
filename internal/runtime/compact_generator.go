@@ -56,22 +56,61 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 	if err != nil {
 		return "", err
 	}
-	resp, err := modelProvider.Chat(ctx, provider.ChatRequest{
+
+	// 使用流式事件通道收集 compact 摘要响应。
+	streamEvents := make(chan provider.StreamEvent, 32)
+	streamDone := make(chan error, 1)
+	acc := newStreamAccumulator()
+
+	go func() {
+		var streamErr error
+		defer func() {
+			streamDone <- streamErr
+		}()
+
+		for {
+			select {
+			case event, ok := <-streamEvents:
+				if !ok {
+					return
+				}
+				if err := handleProviderStreamEvent(event, acc, nil, nil); err != nil && streamErr == nil {
+					// 记录首个协议错误后继续排空事件通道，避免 provider 在后续发送时阻塞。
+					streamErr = err
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	err = modelProvider.Chat(ctx, provider.ChatRequest{
 		Model:        g.model,
 		SystemPrompt: prompt.SystemPrompt,
 		Messages: []provider.Message{{
 			Role:    provider.RoleUser,
 			Content: prompt.UserPrompt,
 		}},
-	}, nil)
+	}, streamEvents)
+	close(streamEvents)
+	streamErr := <-streamDone
+
 	if err != nil {
 		return "", err
 	}
-	if len(resp.Message.ToolCalls) > 0 {
+	if streamErr != nil {
+		return "", streamErr
+	}
+
+	message, err := acc.buildMessage()
+	if err != nil {
+		return "", err
+	}
+	if len(message.ToolCalls) > 0 {
 		return "", errors.New("runtime: compact summary response must not contain tool calls")
 	}
 
-	summary := strings.TrimSpace(resp.Message.Content)
+	summary := strings.TrimSpace(message.Content)
 	if summary == "" {
 		return "", errors.New("runtime: compact summary response is empty")
 	}

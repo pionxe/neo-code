@@ -29,7 +29,7 @@ type Service struct {
 
 func NewService(baseDir string, registry *provider.Registry, store Store) *Service {
 	if store == nil && strings.TrimSpace(baseDir) != "" {
-		store = NewJSONStore(baseDir)
+		store = newJSONStore(baseDir)
 	}
 
 	return &Service{
@@ -174,7 +174,7 @@ func (s *Service) discoverAndPersist(ctx context.Context, providerCfg config.Pro
 
 	now := s.now()
 	_ = s.store.Save(ctx, ModelCatalog{
-		SchemaVersion: SchemaVersion,
+		SchemaVersion: schemaVersion,
 		Identity:      identity,
 		FetchedAt:     now,
 		ExpiresAt:     now.Add(s.catalogTTL),

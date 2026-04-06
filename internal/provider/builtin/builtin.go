@@ -9,13 +9,13 @@ import (
 
 func NewRegistry() (*provider.Registry, error) {
 	registry := provider.NewRegistry()
-	if err := Register(registry); err != nil {
+	if err := register(registry); err != nil {
 		return nil, err
 	}
 	return registry, nil
 }
 
-func Register(registry *provider.Registry) error {
+func register(registry *provider.Registry) error {
 	if registry == nil {
 		return errors.New("builtin provider registry is nil")
 	}

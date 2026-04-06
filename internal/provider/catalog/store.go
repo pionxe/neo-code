@@ -16,7 +16,7 @@ import (
 	"neo-code/internal/config"
 )
 
-const SchemaVersion = 1
+const schemaVersion = 1
 
 var ErrCatalogNotFound = errors.New("provider: model catalog not found")
 
@@ -39,18 +39,18 @@ type Store interface {
 	Save(ctx context.Context, catalog ModelCatalog) error
 }
 
-type JSONStore struct {
+type jsonStore struct {
 	dir string
 	mu  sync.RWMutex
 }
 
-func NewJSONStore(baseDir string) *JSONStore {
-	return &JSONStore{
+func newJSONStore(baseDir string) *jsonStore {
+	return &jsonStore{
 		dir: filepath.Join(strings.TrimSpace(baseDir), "cache", "models"),
 	}
 }
 
-func (s *JSONStore) Load(ctx context.Context, identity config.ProviderIdentity) (ModelCatalog, error) {
+func (s *jsonStore) Load(ctx context.Context, identity config.ProviderIdentity) (ModelCatalog, error) {
 	if err := ctx.Err(); err != nil {
 		return ModelCatalog{}, err
 	}
@@ -80,7 +80,7 @@ func (s *JSONStore) Load(ctx context.Context, identity config.ProviderIdentity) 
 	return normalizeCatalog(modelCatalog), nil
 }
 
-func (s *JSONStore) Save(ctx context.Context, catalog ModelCatalog) error {
+func (s *jsonStore) Save(ctx context.Context, catalog ModelCatalog) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -111,18 +111,18 @@ func (s *JSONStore) Save(ctx context.Context, catalog ModelCatalog) error {
 
 func normalizeCatalog(modelCatalog ModelCatalog) ModelCatalog {
 	if modelCatalog.SchemaVersion == 0 {
-		modelCatalog.SchemaVersion = SchemaVersion
+		modelCatalog.SchemaVersion = schemaVersion
 	}
 	modelCatalog.Models = config.MergeModelDescriptors(modelCatalog.Models)
 	return modelCatalog
 }
 
-func (s *JSONStore) catalogPath(identity config.ProviderIdentity) string {
+func (s *jsonStore) catalogPath(identity config.ProviderIdentity) string {
 	sum := sha256.Sum256([]byte(identity.Key()))
 	return filepath.Join(s.dir, hex.EncodeToString(sum[:])+".json")
 }
 
-func (s *JSONStore) writeCatalogFile(path string, data []byte) error {
+func (s *jsonStore) writeCatalogFile(path string, data []byte) error {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return fmt.Errorf("provider: create model catalog dir: %w", err)
 	}

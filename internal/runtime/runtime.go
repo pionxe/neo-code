@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,83 @@ const (
 	// providerRetryMaxWait 是 runtime 层重试的最大等待时间。
 	providerRetryMaxWait = 5 * time.Second
 )
+
+// streamAccumulator 在流式事件处理过程中累积本轮对话需要持久化的助手消息状态，
+// 包括文本内容和工具调用列表。
+type streamAccumulator struct {
+	content   strings.Builder
+	toolCalls map[int]*provider.ToolCall
+}
+
+// newStreamAccumulator 创建并初始化一个空的流式事件累积器。
+func newStreamAccumulator() *streamAccumulator {
+	return &streamAccumulator{
+		toolCalls: make(map[int]*provider.ToolCall),
+	}
+}
+
+// accumulateTextDelta 累积文本增量片段。
+func (a *streamAccumulator) accumulateTextDelta(text string) {
+	a.content.WriteString(text)
+}
+
+// ensureToolCall 返回指定索引的工具调用条目，不存在时会先创建占位对象。
+func (a *streamAccumulator) ensureToolCall(index int) *provider.ToolCall {
+	call, exists := a.toolCalls[index]
+	if !exists {
+		call = &provider.ToolCall{}
+		a.toolCalls[index] = call
+	}
+	return call
+}
+
+// accumulateToolCallStart 记录新发现的工具调用（首次出现时创建条目）。
+func (a *streamAccumulator) accumulateToolCallStart(index int, id, name string) {
+	call := a.ensureToolCall(index)
+	if strings.TrimSpace(id) != "" {
+		call.ID = id
+	}
+	if strings.TrimSpace(name) != "" {
+		call.Name = name
+	}
+}
+
+// accumulateToolCallDelta 累积工具调用参数增量。
+func (a *streamAccumulator) accumulateToolCallDelta(index int, id, argumentsDelta string) {
+	call := a.ensureToolCall(index)
+	if strings.TrimSpace(id) != "" {
+		call.ID = id
+	}
+	call.Arguments += argumentsDelta
+}
+
+// buildMessage 从累积状态构建最终的 assistant Message 对象，并校验工具调用元数据是否完整。
+func (a *streamAccumulator) buildMessage() (provider.Message, error) {
+	ordered := make([]int, 0, len(a.toolCalls))
+	for index := range a.toolCalls {
+		ordered = append(ordered, index)
+	}
+	sort.Ints(ordered)
+
+	message := provider.Message{
+		Role:    provider.RoleAssistant,
+		Content: a.content.String(),
+	}
+	for _, index := range ordered {
+		call := a.toolCalls[index]
+		if call == nil {
+			continue
+		}
+		if strings.TrimSpace(call.ID) == "" {
+			return provider.Message{}, fmt.Errorf("runtime: provider emitted tool call %d without id", index)
+		}
+		if strings.TrimSpace(call.Name) == "" {
+			return provider.Message{}, fmt.Errorf("runtime: provider emitted tool call %d without name", index)
+		}
+		message.ToolCalls = append(message.ToolCalls, *call)
+	}
+	return message, nil
+}
 
 var runtimeSessionWorkdirs = struct {
 	mu   sync.RWMutex
@@ -169,7 +247,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
-		resp, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, provider.ChatRequest{
+		acc, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, provider.ChatRequest{
 			Model:        cfg.CurrentModel,
 			SystemPrompt: builtContext.SystemPrompt,
 			Messages:     builtContext.Messages,
@@ -186,7 +264,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		session.Provider = cfg.SelectedProvider
 		session.Model = cfg.CurrentModel
 
-		assistant := resp.Message
+		assistant, err := acc.buildMessage()
+		if err != nil {
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
+		}
 		if strings.TrimSpace(assistant.Role) == "" {
 			assistant.Role = provider.RoleAssistant
 		}
@@ -417,21 +498,88 @@ func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessio
 	}
 }
 
-// forwardProviderEvents 将 provider 流式事件转发为 runtime 事件。
+// handleProviderStreamEvent 解析并应用单条 provider 流式事件，缺失载荷或未知类型时返回错误。
+func handleProviderStreamEvent(
+	event provider.StreamEvent,
+	acc *streamAccumulator,
+	onTextDelta func(string),
+	onToolCallStart func(provider.ToolCallStartPayload),
+) error {
+	switch event.Type {
+	case provider.StreamEventTextDelta:
+		payload, err := event.TextDeltaValue()
+		if err != nil {
+			return err
+		}
+		if onTextDelta != nil {
+			onTextDelta(payload.Text)
+		}
+		if acc != nil {
+			acc.accumulateTextDelta(payload.Text)
+		}
+	case provider.StreamEventToolCallStart:
+		payload, err := event.ToolCallStartValue()
+		if err != nil {
+			return err
+		}
+		if onToolCallStart != nil {
+			onToolCallStart(payload)
+		}
+		if acc != nil {
+			acc.accumulateToolCallStart(payload.Index, payload.ID, payload.Name)
+		}
+	case provider.StreamEventToolCallDelta:
+		payload, err := event.ToolCallDeltaValue()
+		if err != nil {
+			return err
+		}
+		if acc != nil {
+			acc.accumulateToolCallDelta(payload.Index, payload.ID, payload.ArgumentsDelta)
+		}
+	case provider.StreamEventMessageDone:
+		if _, err := event.MessageDoneValue(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("runtime: unsupported provider stream event type %q", event.Type)
+	}
+	return nil
+}
+
+// forwardProviderEvents 将 provider 流式事件转发为 runtime 事件，同时向 accumulator 累积消息状态。
 // 使用 select 同时监听输入通道和 context 取消信号，确保 goroutine 不会因通道阻塞而泄漏。
-func (s *Service) forwardProviderEvents(ctx context.Context, runID string, sessionID string, input <-chan provider.StreamEvent, done chan<- struct{}) {
-	defer close(done)
+func (s *Service) forwardProviderEvents(
+	ctx context.Context,
+	runID string,
+	sessionID string,
+	input <-chan provider.StreamEvent,
+	done chan<- error,
+	acc *streamAccumulator,
+) {
+	var forwardErr error
+	defer func() {
+		done <- forwardErr
+	}()
+
 	for {
 		select {
 		case event, ok := <-input:
 			if !ok {
 				return
 			}
-			switch event.Type {
-			case provider.StreamEventTextDelta:
-				s.emit(ctx, EventAgentChunk, runID, sessionID, event.Text)
-			case provider.StreamEventToolCallStart:
-				s.emit(ctx, EventToolCallThinking, runID, sessionID, event.ToolName)
+			err := handleProviderStreamEvent(
+				event,
+				acc,
+				func(text string) {
+					s.emit(ctx, EventAgentChunk, runID, sessionID, text)
+				},
+				func(payload provider.ToolCallStartPayload) {
+					s.emit(ctx, EventToolCallThinking, runID, sessionID, payload.Name)
+				},
+			)
+			if err != nil && forwardErr == nil {
+				// 记录首个协议错误后继续排空事件通道，避免 provider 在后续发送时阻塞。
+				forwardErr = err
 			}
 		case <-ctx.Done():
 			return
@@ -489,18 +637,22 @@ func isRetryableProviderError(err error) bool {
 }
 
 // callProviderWithRetry 在可重试的 ProviderError 上自动重试 provider.Chat() 调用。
-// 每次重试都会重新构建 provider 实例和流式事件转发管道。
+// 每次重试都会重新创建 provider 实例、流式事件转发管道和累积器。
 // 非可重试错误、context 取消、重试耗尽时直接返回错误。
+// 返回值 acc 保存了本轮流式事件的完整累积状态，供调用方构建 assistant Message 使用。
 func (s *Service) callProviderWithRetry(
 	ctx context.Context,
 	runID string,
 	sessionID string,
 	req provider.ChatRequest,
-) (provider.ChatResponse, error) {
+) (*streamAccumulator, error) {
+	acc := newStreamAccumulator()
 	var lastErr error
 
 	for retryAttempt := 0; retryAttempt <= defaultProviderRetryMax; retryAttempt++ {
 		if retryAttempt > 0 {
+			// 重试时重置累积器，避免混入上轮数据
+			acc = newStreamAccumulator()
 			wait := providerRetryBackoff(retryAttempt)
 			s.emit(ctx, EventProviderRetry, runID, sessionID,
 				fmt.Sprintf("retrying provider call (attempt %d/%d, wait=%.1fs)...",
@@ -508,45 +660,54 @@ func (s *Service) callProviderWithRetry(
 
 			select {
 			case <-ctx.Done():
-				return provider.ChatResponse{}, ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(wait):
 			}
 		}
 
 		resolvedProvider, err := s.configManager.ResolvedSelectedProvider()
 		if err != nil {
-			return provider.ChatResponse{}, err
+			return nil, err
 		}
 
 		modelProvider, err := s.providerFactory.Build(ctx, resolvedProvider)
 		if err != nil {
-			return provider.ChatResponse{}, err
+			return nil, err
 		}
 
 		streamEvents := make(chan provider.StreamEvent, 32)
-		streamDone := make(chan struct{})
-		go s.forwardProviderEvents(ctx, runID, sessionID, streamEvents, streamDone)
+		streamDone := make(chan error, 1)
+		go s.forwardProviderEvents(ctx, runID, sessionID, streamEvents, streamDone, acc)
 
-		resp, err := modelProvider.Chat(ctx, req, streamEvents)
+		err = modelProvider.Chat(ctx, req, streamEvents)
 		close(streamEvents)
-		<-streamDone
+		forwardErr := <-streamDone
+		if forwardErr != nil {
+			if err != nil {
+				return nil, fmt.Errorf("runtime: provider stream handling failed after provider error: %v: %w", err, forwardErr)
+			}
+			return nil, forwardErr
+		}
 
 		if err == nil {
-			return resp, nil
+			return acc, nil
 		}
 
 		lastErr = err
 
 		// 非可重试错误或 context 已取消，立即返回。
 		if !isRetryableProviderError(err) {
-			return provider.ChatResponse{}, err
+			return nil, lastErr
 		}
 		if ctx.Err() != nil {
-			return provider.ChatResponse{}, ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
 
-	return provider.ChatResponse{}, lastErr
+	if lastErr == nil {
+		lastErr = errors.New("max retries exceeded")
+	}
+	return nil, fmt.Errorf("runtime: max retries exhausted, last error: %w", lastErr)
 }
 
 // providerRetryBackoff 计算指数退避 + 随机抖动的等待时间。

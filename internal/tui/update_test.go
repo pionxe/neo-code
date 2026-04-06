@@ -2603,8 +2603,8 @@ func newTestProviderService(t *testing.T, manager *config.Manager) *config.Selec
 
 type tUItestProvider struct{}
 
-func (tUItestProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
-	return provider.ChatResponse{}, nil
+func (tUItestProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
+	return nil
 }
 
 type tUItestCatalogStore struct {

@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -29,10 +28,10 @@ type buildOptions struct {
 	transport http.RoundTripper
 }
 
-type BuildOption func(*buildOptions)
+type buildOption func(*buildOptions)
 
-// WithTransport 注入自定义 HTTP Transport（如 RetryTransport）。
-func WithTransport(rt http.RoundTripper) BuildOption {
+// withTransport 注入自定义 HTTP Transport（如 RetryTransport）。
+func withTransport(rt http.RoundTripper) buildOption {
 	return func(o *buildOptions) {
 		o.transport = rt
 	}
@@ -50,19 +49,19 @@ func Driver() provider.DriverDefinition {
 	return provider.DriverDefinition{
 		Name: DriverName,
 		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
-			return New(cfg, WithTransport(defaultRetryTransport()))
+			return New(cfg, withTransport(defaultRetryTransport()))
 		},
 		Discover: func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
-			provider, err := New(cfg, WithTransport(defaultRetryTransport()))
+			p, err := New(cfg, withTransport(defaultRetryTransport()))
 			if err != nil {
 				return nil, err
 			}
-			return provider.DiscoverModels(ctx)
+			return p.DiscoverModels(ctx)
 		},
 	}
 }
 
-func New(cfg config.ResolvedProviderConfig, opts ...BuildOption) (*Provider, error) {
+func New(cfg config.ResolvedProviderConfig, opts ...buildOption) (*Provider, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("openai provider: %w", err)
 	}
@@ -103,21 +102,21 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]config.ModelDescriptor
 	return config.MergeModelDescriptors(descriptors), nil
 }
 
-func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
 	payload, err := p.buildRequest(req)
 	if err != nil {
-		return provider.ChatResponse{}, err
+		return err
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return provider.ChatResponse{}, fmt.Errorf("openai provider: marshal request: %w", err)
+		return fmt.Errorf("openai provider: marshal request: %w", err)
 	}
 
 	endpoint := strings.TrimRight(p.cfg.BaseURL, "/") + "/chat/completions"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return provider.ChatResponse{}, fmt.Errorf("openai provider: build request: %w", err)
+		return fmt.Errorf("openai provider: build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -125,7 +124,7 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest, events ch
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return provider.ChatResponse{}, fmt.Errorf("openai provider: send request: %w", err)
+		return fmt.Errorf("openai provider: send request: %w", err)
 	}
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
@@ -135,7 +134,7 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest, events ch
 	}(resp.Body)
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return provider.ChatResponse{}, p.parseError(resp)
+		return p.parseError(resp)
 	}
 
 	return p.consumeStream(ctx, resp.Body, events)
@@ -185,14 +184,13 @@ func (p *Provider) buildRequest(req provider.ChatRequest) (chatCompletionRequest
 	return payload, nil
 }
 
-func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events chan<- provider.StreamEvent) error {
 	reader := bufio.NewReader(body)
 
 	var (
-		contentBuilder strings.Builder
-		finishReason   string
-		usage          provider.Usage
-		done           bool
+		finishReason string
+		usage        provider.Usage
+		done         bool
 	)
 
 	toolCalls := make(map[int]*provider.ToolCall)
@@ -222,7 +220,6 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 				finishReason = choice.FinishReason
 			}
 			if choice.Delta.Content != "" {
-				contentBuilder.WriteString(choice.Delta.Content)
 				if err := emitTextDelta(ctx, events, choice.Delta.Content); err != nil {
 					return err
 				}
@@ -236,12 +233,12 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 		return nil
 	}
 
-	// finishStream 统一的流结束处理：发送 message_done 事件并组装最终响应。
-	finishStream := func() (provider.ChatResponse, error) {
+	// finishStream 统一的流结束处理：发送 message_done 事件。
+	finishStream := func() error {
 		if err := emitMessageDone(ctx, events, finishReason, &usage); err != nil {
-			return provider.ChatResponse{}, err
+			return err
 		}
-		return finalizeResponse(contentBuilder.String(), toolCalls, finishReason, usage), nil
+		return nil
 	}
 
 	flushPendingData := func() error {
@@ -254,7 +251,7 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
-			return provider.ChatResponse{}, fmt.Errorf("openai provider: read stream: %w", err)
+			return fmt.Errorf("openai provider: read stream: %w", err)
 		}
 
 		line = strings.TrimRight(line, "\r\n")
@@ -265,7 +262,7 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
 		case trimmed == "":
 			if flushErr := flushPendingData(); flushErr != nil {
-				return provider.ChatResponse{}, flushErr
+				return flushErr
 			}
 			if done {
 				return finishStream()
@@ -276,7 +273,7 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 
 		if errors.Is(err, io.EOF) {
 			if flushErr := flushPendingData(); flushErr != nil {
-				return provider.ChatResponse{}, flushErr
+				return flushErr
 			}
 			return finishStream()
 		}
@@ -331,34 +328,23 @@ func emitTextDelta(ctx context.Context, events chan<- provider.StreamEvent, text
 	if text == "" {
 		return nil
 	}
-	return emitStreamEvent(ctx, events, provider.StreamEvent{
-		Type: provider.StreamEventTextDelta,
-		Text: text,
-	})
+	return emitStreamEvent(ctx, events, provider.NewTextDeltaStreamEvent(text))
 }
 
 func emitToolCallStart(ctx context.Context, events chan<- provider.StreamEvent, index int, id, name string) error {
 	if name == "" {
 		return nil
 	}
-	return emitStreamEvent(ctx, events, provider.StreamEvent{
-		Type:          provider.StreamEventToolCallStart,
-		ToolCallID:    id,
-		ToolName:      name,
-		ToolCallIndex: index,
-	})
+	return emitStreamEvent(ctx, events, provider.NewToolCallStartStreamEvent(index, id, name))
 }
 
 // emitToolCallDelta 发送工具调用参数增量事件。
-func emitToolCallDelta(ctx context.Context, events chan<- provider.StreamEvent, index int, argumentsDelta string) error {
+// id 为工具调用 ID，由上游 mergeToolCallDelta 从累积状态中传入。
+func emitToolCallDelta(ctx context.Context, events chan<- provider.StreamEvent, index int, id, argumentsDelta string) error {
 	if argumentsDelta == "" {
 		return nil
 	}
-	return emitStreamEvent(ctx, events, provider.StreamEvent{
-		Type:               provider.StreamEventToolCallDelta,
-		ToolCallIndex:      index,
-		ToolArgumentsDelta: argumentsDelta,
-	})
+	return emitStreamEvent(ctx, events, provider.NewToolCallDeltaStreamEvent(index, id, argumentsDelta))
 }
 
 // emitMessageDone 发送消息完成事件。
@@ -366,11 +352,7 @@ func emitMessageDone(ctx context.Context, events chan<- provider.StreamEvent, fi
 	if events == nil {
 		return nil
 	}
-	return emitStreamEvent(ctx, events, provider.StreamEvent{
-		Type:         provider.StreamEventMessageDone,
-		FinishReason: finishReason,
-		Usage:        usage,
-	})
+	return emitStreamEvent(ctx, events, provider.NewMessageDoneStreamEvent(finishReason, usage))
 }
 
 // extractStreamUsage 从 OpenAI usage 响应提取并覆盖累积的 token 统计。
@@ -413,43 +395,11 @@ func mergeToolCallDelta(ctx context.Context, events chan<- provider.StreamEvent,
 	// 发送参数增量事件（同一 chunk 可能同时携带 name 和 arguments）
 	if args := delta.Function.Arguments; args != "" {
 		call.Arguments += args
-		if err := emitToolCallDelta(ctx, events, delta.Index, args); err != nil {
+		if err := emitToolCallDelta(ctx, events, delta.Index, call.ID, args); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// finalizeResponse 将累积的内容、tool calls 和元数据组装为最终 ChatResponse。
-func finalizeResponse(content string, toolCalls map[int]*provider.ToolCall, finishReason string, usage provider.Usage) provider.ChatResponse {
-	ordered := make([]int, 0, len(toolCalls))
-	for index := range toolCalls {
-		ordered = append(ordered, index)
-	}
-	sort.Ints(ordered)
-
-	message := provider.Message{
-		Role:    provider.RoleAssistant,
-		Content: content,
-	}
-
-	for _, index := range ordered {
-		call := toolCalls[index]
-		if call == nil {
-			continue
-		}
-		message.ToolCalls = append(message.ToolCalls, *call)
-	}
-
-	if finishReason == "" && len(message.ToolCalls) > 0 {
-		finishReason = "tool_calls"
-	}
-
-	return provider.ChatResponse{
-		Message:      message,
-		FinishReason: finishReason,
-		Usage:        usage,
-	}
 }
 
 func emitStreamEvent(ctx context.Context, events chan<- provider.StreamEvent, event provider.StreamEvent) error {

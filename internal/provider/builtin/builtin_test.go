@@ -27,7 +27,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("nil registry", func(t *testing.T) {
 		t.Parallel()
-		err := Register(nil)
+		err := register(nil)
 		if err == nil {
 			t.Fatal("expected error for nil registry")
 		}
@@ -39,7 +39,7 @@ func TestRegister(t *testing.T) {
 	t.Run("valid registry", func(t *testing.T) {
 		t.Parallel()
 		registry := provider.NewRegistry()
-		err := Register(registry)
+		err := register(registry)
 		if err != nil {
 			t.Fatalf("Register() error = %v", err)
 		}
