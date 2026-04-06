@@ -1146,6 +1146,14 @@ func TestProviderChatReconnect_MaxRetriesExhausted(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}
+	// 重连耗尽后，错误应被标记为不可重试，防止上层 runtime 再次重试叠加放大。
+	var pErr *domain.ProviderError
+	if !errors.As(err, &pErr) {
+		t.Fatalf("expected *ProviderError after retry exhaustion, got: %T: %v", err, err)
+	}
+	if pErr.Retryable {
+		t.Fatal("error should be non-retryable after reconnect exhaustion")
+	}
 	// 初始1次 + 最大3次重连 = 最多4次尝试
 	if attempt > 4 {
 		t.Fatalf("too many attempts: %d (max should be 4)", attempt)

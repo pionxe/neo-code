@@ -301,3 +301,89 @@ func TestIsRecoverableStreamError_UnknownError_NotRecoverable(t *testing.T) {
 		})
 	}
 }
+
+// --- MarkNonRetryable 测试 ---
+
+func TestMarkNonRetryable_ProviderError(t *testing.T) {
+	t.Parallel()
+
+	// Retryable=true 的 ProviderError → Retryable=false
+	retryable := NewProviderErrorFromStatus(http.StatusInternalServerError, "internal")
+	if !retryable.Retryable {
+		t.Fatal("setup: expected retryable")
+	}
+
+	marked := MarkNonRetryable(retryable)
+	var pErr *ProviderError
+	if !errors.As(marked, &pErr) {
+		t.Fatal("marked error should be *ProviderError")
+	}
+	if pErr.Retryable {
+		t.Fatal("MarkNonRetryable should set Retryable=false")
+	}
+	if pErr.StatusCode != 500 || pErr.Code != ErrorCodeServer {
+		t.Fatalf("MarkNonRetryable should preserve StatusCode and Code, got status=%d code=%s", pErr.StatusCode, pErr.Code)
+	}
+
+	// 原始对象不受影响
+	if !retryable.Retryable {
+		t.Fatal("original ProviderError should not be mutated")
+	}
+}
+
+func TestMarkNonRetryable_WrappedProviderError(t *testing.T) {
+	t.Parallel()
+
+	inner := NewProviderErrorFromStatus(http.StatusTooManyRequests, "rate limited")
+	wrapped := fmt.Errorf("layer: %w", inner)
+
+	marked := MarkNonRetryable(wrapped)
+	var pErr *ProviderError
+	if !errors.As(marked, &pErr) {
+		t.Fatal("marked error should contain *ProviderError")
+	}
+	if pErr.Retryable {
+		t.Fatal("MarkNonRetryable on wrapped should set Retryable=false")
+	}
+}
+
+func TestMarkNonRetryable_NonProviderError(t *testing.T) {
+	t.Parallel()
+
+	// 非 ProviderError → 包装为 ProviderError{Retryable: false}
+	generic := errors.New("some error")
+	marked := MarkNonRetryable(generic)
+
+	var pErr *ProviderError
+	if !errors.As(marked, &pErr) {
+		t.Fatal("marked error should be *ProviderError")
+	}
+	if pErr.Retryable {
+		t.Fatal("should be non-retryable")
+	}
+	if pErr.Code != ErrorCodeUnknown {
+		t.Fatalf("expected code %s, got %s", ErrorCodeUnknown, pErr.Code)
+	}
+	if !strings.Contains(pErr.Message, "some error") {
+		t.Fatalf("message should contain original error text, got: %s", pErr.Message)
+	}
+}
+
+func TestMarkNonRetryable_AlreadyNonRetryable(t *testing.T) {
+	t.Parallel()
+
+	// 已经 Retryable=false 的 ProviderError → 保持 false
+	nonRetryable := NewProviderErrorFromStatus(http.StatusUnauthorized, "bad key")
+	if nonRetryable.Retryable {
+		t.Fatal("setup: 401 should be non-retryable")
+	}
+
+	marked := MarkNonRetryable(nonRetryable)
+	var pErr *ProviderError
+	if !errors.As(marked, &pErr) {
+		t.Fatal("marked error should be *ProviderError")
+	}
+	if pErr.Retryable {
+		t.Fatal("should still be non-retryable")
+	}
+}

@@ -108,6 +108,26 @@ func NewTimeoutProviderError(message string) *ProviderError {
 	}
 }
 
+// MarkNonRetryable 将错误标记为不可重试，用于防止上层重试叠加放大。
+//
+// 若错误链中包含 *ProviderError，返回其 Retryable=false 的副本；
+// 否则将原始错误包装为 *ProviderError{Code: ErrorCodeUnknown, Retryable: false}。
+// 原始错误通过 Unwrap 保留，不影响 errors.Is/As 对原始哨兵的匹配。
+func MarkNonRetryable(err error) error {
+	var pErr *ProviderError
+	if errors.As(err, &pErr) {
+		clone := *pErr
+		clone.Retryable = false
+		return &clone
+	}
+	return &ProviderError{
+		StatusCode: 0,
+		Code:       ErrorCodeUnknown,
+		Message:    err.Error(),
+		Retryable:  false,
+	}
+}
+
 // IsRecoverableStreamError 判断流读取错误是否可通过透明重连恢复。
 //
 // 不可恢复的情况：

@@ -144,8 +144,12 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest, events ch
 		if err == nil {
 			return nil
 		}
-		if !provider.IsRecoverableStreamError(err) || attempt == maxReconnects {
+		if !provider.IsRecoverableStreamError(err) {
 			return err
+		}
+		// 可恢复但重连次数已耗尽 → 标记为不可重试，防止上层 runtime 重试叠加放大。
+		if attempt == maxReconnects {
+			return provider.MarkNonRetryable(err)
 		}
 	}
 	return nil // unreachable，但满足编译器
@@ -318,7 +322,7 @@ func (p *Provider) consumeStream(
 			if flushErr := flushPendingData(); flushErr != nil {
 				return flushErr
 			}
-			return fmt.Errorf("%w: %v", provider.ErrStreamInterrupted, err)
+			return fmt.Errorf("%w: %w", provider.ErrStreamInterrupted, err)
 		}
 
 		trimmed := line
@@ -415,9 +419,6 @@ func emitToolCallDelta(ctx context.Context, events chan<- provider.StreamEvent, 
 
 // emitMessageDone 发送消息完成事件。
 func emitMessageDone(ctx context.Context, events chan<- provider.StreamEvent, finishReason string, usage *provider.Usage) error {
-	if events == nil {
-		return nil
-	}
 	return emitStreamEvent(ctx, events, provider.NewMessageDoneStreamEvent(finishReason, usage))
 }
 
