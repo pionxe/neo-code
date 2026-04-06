@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 func TestToolExecute(t *testing.T) {
@@ -24,30 +24,41 @@ func TestToolExecute(t *testing.T) {
 		name          string
 		command       string
 		workdir       string
+		callWorkdir   string
 		expectErr     string
 		expectContent string
 	}{
 		{
 			name:          "captures stdout",
 			command:       safeEchoCommand(),
+			callWorkdir:   workspace,
 			expectContent: "hello",
 		},
 		{
-			name:      "rejects workdir escape",
-			command:   safeEchoCommand(),
-			workdir:   "..",
-			expectErr: "workdir escapes workspace root",
+			name:        "rejects workdir escape",
+			command:     safeEchoCommand(),
+			workdir:     "..",
+			callWorkdir: workspace,
+			expectErr:   "workdir escapes workspace root",
 		},
 		{
-			name:      "rejects empty command",
-			command:   "",
-			expectErr: "command is empty",
+			name:        "rejects empty command",
+			command:     "",
+			callWorkdir: workspace,
+			expectErr:   "command is empty",
 		},
 		{
 			name:          "runs inside nested workdir",
 			command:       safePwdCommand(),
 			workdir:       "sub",
+			callWorkdir:   workspace,
 			expectContent: normalizeOutputPath(subdir),
+		},
+		{
+			name:          "uses tool root when call workdir is empty",
+			command:       safePwdCommand(),
+			callWorkdir:   "",
+			expectContent: normalizeOutputPath(workspace),
 		},
 	}
 
@@ -66,7 +77,7 @@ func TestToolExecute(t *testing.T) {
 			result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
 				Name:      tool.Name(),
 				Arguments: args,
-				Workdir:   workspace,
+				Workdir:   tt.callWorkdir,
 			})
 
 			if tt.expectErr != "" {
@@ -88,6 +99,88 @@ func TestToolExecute(t *testing.T) {
 	}
 }
 
+func TestToolExecuteErrorFormattingAndTruncation(t *testing.T) {
+	workspace := t.TempDir()
+	tool := New(workspace, defaultShell(), 3*time.Second)
+
+	tests := []struct {
+		name           string
+		arguments      []byte
+		expectErr      string
+		expectContent  []string
+		expectMetadata bool
+		expectTruncate bool
+	}{
+		{
+			name:          "invalid json arguments",
+			arguments:     []byte(`{invalid`),
+			expectErr:     "invalid character",
+			expectContent: []string{"tool error", "tool: bash", "reason: invalid arguments"},
+		},
+		{
+			name:      "command failure returns formatted error",
+			arguments: mustMarshalArgs(t, map[string]string{"command": failingCommand(), "workdir": ""}),
+			expectErr: commandFailureFragment(),
+			expectContent: []string{
+				"tool error",
+				"tool: bash",
+				"reason:",
+				commandFailureOutput(),
+			},
+			expectMetadata: true,
+		},
+		{
+			name:      "large output is truncated",
+			arguments: mustMarshalArgs(t, map[string]string{"command": largeOutputCommand(), "workdir": ""}),
+			expectContent: []string{
+				"...[truncated]",
+			},
+			expectMetadata: true,
+			expectTruncate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+				Name:      tool.Name(),
+				Arguments: tt.arguments,
+				Workdir:   workspace,
+			})
+
+			if tt.expectErr != "" {
+				if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.expectErr)) {
+					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			for _, fragment := range tt.expectContent {
+				if !strings.Contains(result.Content, fragment) {
+					t.Fatalf("expected content to contain %q, got %q", fragment, result.Content)
+				}
+			}
+			if tt.expectMetadata && result.Metadata["workdir"] == "" {
+				t.Fatalf("expected workdir metadata, got %#v", result.Metadata)
+			}
+			if truncated, _ := result.Metadata["truncated"].(bool); truncated != tt.expectTruncate {
+				t.Fatalf("expected truncated=%v, got %#v", tt.expectTruncate, result.Metadata["truncated"])
+			}
+		})
+	}
+}
+
+func mustMarshalArgs(t *testing.T, value any) []byte {
+	t.Helper()
+
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	return data
+}
+
 func safeEchoCommand() string {
 	if goruntime.GOOS == "windows" {
 		return "Write-Output 'hello'"
@@ -100,6 +193,28 @@ func safePwdCommand() string {
 		return "(Get-Location).Path"
 	}
 	return "pwd"
+}
+
+func failingCommand() string {
+	if goruntime.GOOS == "windows" {
+		return "Write-Output 'boom'; exit 1"
+	}
+	return "printf 'boom\\n'; exit 1"
+}
+
+func commandFailureFragment() string {
+	return "exit status 1"
+}
+
+func commandFailureOutput() string {
+	return "boom"
+}
+
+func largeOutputCommand() string {
+	if goruntime.GOOS == "windows" {
+		return "$text = 'x' * 70000; Write-Output $text"
+	}
+	return "i=0; while [ $i -lt 70000 ]; do printf x; i=$((i+1)); done"
 }
 
 func defaultShell() string {

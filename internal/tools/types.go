@@ -3,7 +3,8 @@ package tools
 import (
 	"context"
 
-	"github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/provider"
+	"neo-code/internal/security"
 )
 
 type Tool interface {
@@ -16,12 +17,13 @@ type Tool interface {
 type ChunkEmitter func(chunk []byte)
 
 type ToolCallInput struct {
-	ID        string
-	Name      string
-	Arguments []byte
-	SessionID string
-	Workdir   string
-	EmitChunk ChunkEmitter
+	ID            string
+	Name          string
+	Arguments     []byte
+	SessionID     string
+	Workdir       string
+	WorkspacePlan *security.WorkspaceExecutionPlan
+	EmitChunk     ChunkEmitter
 }
 
 type ToolResult struct {

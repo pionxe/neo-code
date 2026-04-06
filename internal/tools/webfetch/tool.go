@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/config"
+	"neo-code/internal/tools"
 )
 
 const (
@@ -170,7 +170,7 @@ func (t *Tool) handleResponse(targetURL string, resp *http.Response) (tools.Tool
 
 	content, title, err := t.extractContent(data.ContentType, body)
 	if err != nil {
-		return t.newErrorResult(data, reasonUnsupportedType, ""), fmt.Errorf("webfetch: extract content: %w", err)
+		return t.newErrorResult(data, reasonUnsupportedType, err.Error()), fmt.Errorf("webfetch: extract content: %w", err)
 	}
 
 	data.Title = title
@@ -255,9 +255,15 @@ func formatSuccess(data responseData) string {
 }
 
 func formatError(data responseData, reason string, details string) string {
-	lines := append([]string{"webfetch error"}, formatCommonLines(data)...)
-	lines = append(lines, "reason: "+reason)
-	return joinMessage(lines, details)
+	lines := []string{"tool error", "tool: webfetch"}
+	if strings.TrimSpace(reason) != "" {
+		lines = append(lines, "reason: "+strings.TrimSpace(reason))
+	}
+	lines = append(lines, formatCommonLines(data)...)
+	if strings.TrimSpace(details) != "" {
+		lines = append(lines, "details: "+strings.TrimSpace(details))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func formatCommonLines(data responseData) []string {

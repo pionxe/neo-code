@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 func TestWriteFileToolMetadataAndExecute(t *testing.T) {
@@ -108,5 +108,29 @@ func TestWriteFileToolMetadataAndExecute(t *testing.T) {
 				t.Fatalf("expected content %q, got %q", tt.content, string(data))
 			}
 		})
+	}
+}
+
+func TestWriteFileToolInvalidArgumentsFormatting(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	tool := NewWrite(workspace)
+
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: []byte(`{invalid`),
+		Workdir:   workspace,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("expected invalid json error, got %v", err)
+	}
+	for _, fragment := range []string{"tool error", "tool: filesystem_write_file", "reason: invalid arguments"} {
+		if !strings.Contains(result.Content, fragment) {
+			t.Fatalf("expected content containing %q, got %q", fragment, result.Content)
+		}
+	}
+	if !result.IsError {
+		t.Fatalf("expected error result, got %#v", result)
 	}
 }

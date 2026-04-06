@@ -38,10 +38,11 @@ jobs:
         run: go test ./... -covermode=atomic -coverprofile=coverage.out
 
       - name: Upload coverage to Codecov
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.out
           flags: unittests
-          fail_ci_if_error: true
+          fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

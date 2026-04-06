@@ -1,11 +1,8 @@
 package config
 
 import (
-	"bufio"
 	"context"
 	"errors"
-	"os"
-	"strings"
 	"sync"
 )
 
@@ -17,12 +14,15 @@ type Manager struct {
 
 func NewManager(loader *Loader) *Manager {
 	if loader == nil {
-		loader = NewLoader("")
+		panic("config: loader is nil")
 	}
 
 	return &Manager{
 		loader: loader,
-		config: Default(),
+		config: func() *Config {
+			cfg := loader.DefaultConfig()
+			return &cfg
+		}(),
 	}
 }
 
@@ -73,7 +73,7 @@ func (m *Manager) Update(ctx context.Context, mutate func(*Config) error) error 
 		return err
 	}
 
-	next.ApplyDefaults()
+	next.ApplyDefaultsFrom(m.loader.DefaultConfig())
 	if err := next.Validate(); err != nil {
 		return err
 	}
@@ -105,56 +105,4 @@ func (m *Manager) BaseDir() string {
 
 func (m *Manager) ConfigPath() string {
 	return m.loader.ConfigPath()
-}
-
-func (m *Manager) EnvPath() string {
-	return m.loader.EnvPath()
-}
-
-func (m *Manager) ReloadEnvironment() {
-	m.loader.LoadEnvironment()
-}
-
-func (m *Manager) OverloadManagedEnvironment() error {
-	return m.loader.OverloadManagedEnvironment()
-}
-
-func (m *Manager) UpsertEnv(key string, value string) error {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return errors.New("config: env key is empty")
-	}
-
-	lines := []string{}
-	if data, err := os.ReadFile(m.EnvPath()); err == nil {
-		scanner := bufio.NewScanner(strings.NewReader(string(data)))
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-		}
-	}
-
-	replaced := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, key+"=") {
-			lines[i] = key + "=" + value
-			replaced = true
-		}
-	}
-	if !replaced {
-		lines = append(lines, key+"="+value)
-	}
-
-	content := strings.Join(lines, "\n")
-	if !strings.HasSuffix(content, "\n") {
-		content += "\n"
-	}
-
-	if err := os.MkdirAll(m.BaseDir(), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(m.EnvPath(), []byte(content), 0o644)
 }

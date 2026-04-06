@@ -11,28 +11,17 @@ import (
 )
 
 const (
-	ProviderOpenAI    = "openai"
-	ProviderAnthropic = "anthropic"
-	ProviderGemini    = "gemini"
+	DefaultWorkdir                               = "."
+	DefaultMaxLoops                              = 8
+	DefaultToolTimeoutSec                        = 20
+	DefaultWebFetchMaxResponseBytes        int64 = 256 * 1024
+	DefaultCompactManualKeepRecentMessages       = 10
+	DefaultCompactMaxSummaryChars                = 1200
+)
 
-	DefaultOpenAIBaseURL    = "https://api.openai.com/v1"
-	DefaultAnthropicBaseURL = "https://api.anthropic.com"
-	DefaultGeminiBaseURL    = "https://generativelanguage.googleapis.com"
-
-	DefaultOpenAIModel    = "gpt-4.1"
-	DefaultAnthropicModel = "claude-3-7-sonnet-latest"
-	DefaultGeminiModel    = "gemini-2.5-pro"
-
-	DefaultOpenAIAPIKeyEnv    = "OPENAI_API_KEY"
-	DefaultAnthropicAPIKeyEnv = "ANTHROPIC_API_KEY"
-	DefaultGeminiAPIKeyEnv    = "GEMINI_API_KEY"
-
-	DefaultSelectedProvider = ProviderOpenAI
-	DefaultWorkdir          = "."
-	DefaultMaxLoops         = 8
-	DefaultToolTimeoutSec   = 20
-	// DefaultWebFetchMaxResponseBytes bounds the amount of web content returned to the model.
-	DefaultWebFetchMaxResponseBytes int64 = 256 * 1024
+const (
+	CompactManualStrategyKeepRecent  = "keep_recent"
+	CompactManualStrategyFullReplace = "full_replace"
 )
 
 var defaultWebFetchSupportedContentTypes = []string{
@@ -45,19 +34,20 @@ var defaultWebFetchSupportedContentTypes = []string{
 }
 
 type Config struct {
-	Providers        []ProviderConfig `yaml:"providers"`
+	Providers        []ProviderConfig `yaml:"-"`
 	SelectedProvider string           `yaml:"selected_provider"`
 	CurrentModel     string           `yaml:"current_model"`
-	Workdir          string           `yaml:"workdir"`
+	Workdir          string           `yaml:"-"`
 	Shell            string           `yaml:"shell"`
 	MaxLoops         int              `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
+	Context          ContextConfig    `yaml:"context,omitempty"`
 	Tools            ToolsConfig      `yaml:"tools,omitempty"`
 }
 
 type ProviderConfig struct {
 	Name      string `yaml:"name"`
-	Type      string `yaml:"type"`
+	Driver    string `yaml:"driver"`
 	BaseURL   string `yaml:"base_url"`
 	Model     string `yaml:"model"`
 	APIKeyEnv string `yaml:"api_key_env"`
@@ -68,73 +58,40 @@ type ResolvedProviderConfig struct {
 	APIKey string `yaml:"-"`
 }
 
-type ModelOption struct {
-	Name        string
-	Description string
-}
-
-// ToolsConfig stores tool-specific configuration values.
 type ToolsConfig struct {
 	WebFetch WebFetchConfig `yaml:"webfetch,omitempty"`
 }
 
-// WebFetchConfig controls response filtering and limits for the webfetch tool.
+type ContextConfig struct {
+	Compact CompactConfig `yaml:"compact,omitempty"`
+}
+
+type CompactConfig struct {
+	ManualStrategy           string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentMessages int    `yaml:"manual_keep_recent_messages,omitempty"`
+	MaxSummaryChars          int    `yaml:"max_summary_chars,omitempty"`
+}
+
 type WebFetchConfig struct {
 	MaxResponseBytes      int64    `yaml:"max_response_bytes,omitempty"`
 	SupportedContentTypes []string `yaml:"supported_content_types,omitempty"`
 }
 
-// DefaultWebFetchSupportedContentTypes returns the default media types accepted by webfetch.
 func DefaultWebFetchSupportedContentTypes() []string {
 	return append([]string(nil), defaultWebFetchSupportedContentTypes...)
 }
 
 func Default() *Config {
 	return &Config{
-		Providers: []ProviderConfig{
-			{
-				Name:      ProviderOpenAI,
-				Type:      ProviderOpenAI,
-				BaseURL:   DefaultOpenAIBaseURL,
-				Model:     DefaultOpenAIModel,
-				APIKeyEnv: DefaultOpenAIAPIKeyEnv,
-			},
-			{
-				Name:      ProviderAnthropic,
-				Type:      ProviderAnthropic,
-				BaseURL:   DefaultAnthropicBaseURL,
-				Model:     DefaultAnthropicModel,
-				APIKeyEnv: DefaultAnthropicAPIKeyEnv,
-			},
-			{
-				Name:      ProviderGemini,
-				Type:      ProviderGemini,
-				BaseURL:   DefaultGeminiBaseURL,
-				Model:     DefaultGeminiModel,
-				APIKeyEnv: DefaultGeminiAPIKeyEnv,
-			},
-		},
-		SelectedProvider: DefaultSelectedProvider,
-		CurrentModel:     DefaultOpenAIModel,
-		Workdir:          DefaultWorkdir,
-		Shell:            defaultShell(),
-		MaxLoops:         DefaultMaxLoops,
-		ToolTimeoutSec:   DefaultToolTimeoutSec,
+		Workdir:        DefaultWorkdir,
+		Shell:          defaultShell(),
+		MaxLoops:       DefaultMaxLoops,
+		ToolTimeoutSec: DefaultToolTimeoutSec,
+		Context:        defaultContextConfig(),
 		Tools: ToolsConfig{
 			WebFetch: defaultWebFetchConfig(),
 		},
 	}
-}
-
-func BuiltinModelCatalog() []ModelOption {
-	return append([]ModelOption(nil),
-		ModelOption{Name: DefaultOpenAIModel, Description: "Stable OpenAI default model"},
-		ModelOption{Name: "gpt-4o", Description: "Fast general-purpose OpenAI model"},
-		ModelOption{Name: "gpt-5.4", Description: "Frontier reasoning and coding model"},
-		ModelOption{Name: "gpt-5.3-codex", Description: "Code-focused GPT-5.3 variant"},
-		ModelOption{Name: DefaultAnthropicModel, Description: "Balanced Anthropic coding model"},
-		ModelOption{Name: DefaultGeminiModel, Description: "Default Gemini reasoning model"},
-	)
 }
 
 func (c *Config) Clone() Config {
@@ -143,45 +100,54 @@ func (c *Config) Clone() Config {
 	}
 
 	clone := *c
-	clone.Providers = append([]ProviderConfig(nil), c.Providers...)
+	clone.Providers = cloneProviders(c.Providers)
+	clone.Context = c.Context.Clone()
 	clone.Tools = c.Tools.Clone()
 	return clone
 }
 
-func (c *Config) ApplyDefaults() {
+func (c *Config) ApplyDefaultsFrom(defaults Config) {
 	if c == nil {
 		return
 	}
 
-	def := Default()
-
-	if len(c.Providers) == 0 {
-		c.Providers = append([]ProviderConfig(nil), def.Providers...)
-	} else {
-		c.Providers = applyProviderDefaults(c.Providers, def.Providers)
+	if len(defaults.Providers) > 0 {
+		c.Providers = cloneProviders(defaults.Providers)
 	}
 
-	if strings.TrimSpace(c.SelectedProvider) == "" {
-		c.SelectedProvider = def.SelectedProvider
+	fallbackProvider := defaultSelectedProviderName(c.Providers, defaults.SelectedProvider)
+	selectedReset := false
+	switch current := strings.TrimSpace(c.SelectedProvider); {
+	case current == "":
+		c.SelectedProvider = fallbackProvider
+		selectedReset = true
+	case !containsProviderName(c.Providers, current):
+		c.SelectedProvider = fallbackProvider
+		selectedReset = true
+	default:
+		c.SelectedProvider = current
 	}
-	if strings.TrimSpace(c.CurrentModel) == "" {
+	if strings.TrimSpace(c.CurrentModel) == "" || selectedReset {
 		if selected, err := c.SelectedProviderConfig(); err == nil {
 			c.CurrentModel = selected.Model
+		} else if strings.TrimSpace(defaults.CurrentModel) != "" {
+			c.CurrentModel = defaults.CurrentModel
 		}
 	}
 	if strings.TrimSpace(c.Workdir) == "" {
-		c.Workdir = def.Workdir
+		c.Workdir = defaults.Workdir
 	}
 	if strings.TrimSpace(c.Shell) == "" {
-		c.Shell = def.Shell
+		c.Shell = defaults.Shell
 	}
 	if c.MaxLoops <= 0 {
-		c.MaxLoops = def.MaxLoops
+		c.MaxLoops = defaults.MaxLoops
 	}
 	if c.ToolTimeoutSec <= 0 {
-		c.ToolTimeoutSec = def.ToolTimeoutSec
+		c.ToolTimeoutSec = defaults.ToolTimeoutSec
 	}
-	c.Tools.ApplyDefaults(def.Tools)
+	c.Context.ApplyDefaults(defaults.Context)
+	c.Tools.ApplyDefaults(defaults.Tools)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
@@ -195,16 +161,31 @@ func (c *Config) Validate() error {
 	}
 
 	seen := make(map[string]struct{}, len(c.Providers))
+	seenEndpoints := make(map[string]string, len(c.Providers))
 	for i, provider := range c.Providers {
 		if err := provider.Validate(); err != nil {
 			return fmt.Errorf("config: provider[%d]: %w", i, err)
 		}
 
-		key := strings.ToLower(strings.TrimSpace(provider.Name))
+		key := NormalizeProviderName(provider.Name)
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("config: duplicate provider name %q", provider.Name)
 		}
 		seen[key] = struct{}{}
+
+		identity, err := provider.Identity()
+		if err != nil {
+			return fmt.Errorf("config: provider[%d]: %w", i, err)
+		}
+		if existingName, exists := seenEndpoints[identity.Key()]; exists {
+			return fmt.Errorf(
+				"config: duplicate provider endpoint %q for providers %q and %q",
+				identity.BaseURL,
+				existingName,
+				provider.Name,
+			)
+		}
+		seenEndpoints[identity.Key()] = provider.Name
 	}
 
 	if strings.TrimSpace(c.SelectedProvider) == "" {
@@ -229,6 +210,9 @@ func (c *Config) Validate() error {
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
 	}
+	if err := c.Context.Validate(); err != nil {
+		return fmt.Errorf("config: context: %w", err)
+	}
 
 	return nil
 }
@@ -245,9 +229,9 @@ func (c *Config) ProviderByName(name string) (ProviderConfig, error) {
 		return ProviderConfig{}, errors.New("config: config is nil")
 	}
 
-	target := strings.ToLower(strings.TrimSpace(name))
+	target := NormalizeProviderName(name)
 	for _, provider := range c.Providers {
-		if strings.ToLower(strings.TrimSpace(provider.Name)) == target {
+		if NormalizeProviderName(provider.Name) == target {
 			return provider, nil
 		}
 	}
@@ -259,8 +243,8 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		return errors.New("provider name is empty")
 	}
-	if strings.TrimSpace(p.Type) == "" {
-		return fmt.Errorf("provider %q type is empty", p.Name)
+	if strings.TrimSpace(p.Driver) == "" {
+		return fmt.Errorf("provider %q driver is empty", p.Name)
 	}
 	if strings.TrimSpace(p.BaseURL) == "" {
 		return fmt.Errorf("provider %q base_url is empty", p.Name)
@@ -271,7 +255,14 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
+	if _, err := p.Identity(); err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
+	}
 	return nil
+}
+
+func (p ProviderConfig) Identity() (ProviderIdentity, error) {
+	return NewProviderIdentity(p.Driver, p.BaseURL)
 }
 
 func (p ProviderConfig) ResolveAPIKey() (string, error) {
@@ -298,57 +289,6 @@ func (p ProviderConfig) Resolve() (ResolvedProviderConfig, error) {
 		ProviderConfig: p,
 		APIKey:         apiKey,
 	}, nil
-}
-
-func applyProviderDefaults(providers []ProviderConfig, defaults []ProviderConfig) []ProviderConfig {
-	out := make([]ProviderConfig, 0, len(providers))
-	for _, provider := range providers {
-		out = append(out, mergeProviderDefaults(provider, defaults))
-	}
-	return out
-}
-
-func mergeProviderDefaults(provider ProviderConfig, defaults []ProviderConfig) ProviderConfig {
-	base, ok := matchDefaultProvider(provider, defaults)
-	if !ok {
-		return provider
-	}
-
-	if strings.TrimSpace(provider.Name) == "" {
-		provider.Name = base.Name
-	}
-	if strings.TrimSpace(provider.Type) == "" {
-		provider.Type = base.Type
-	}
-	if strings.TrimSpace(provider.BaseURL) == "" {
-		provider.BaseURL = base.BaseURL
-	}
-	if strings.TrimSpace(provider.Model) == "" {
-		provider.Model = base.Model
-	}
-	if strings.TrimSpace(provider.APIKeyEnv) == "" {
-		provider.APIKeyEnv = base.APIKeyEnv
-	}
-
-	return provider
-}
-
-func matchDefaultProvider(provider ProviderConfig, defaults []ProviderConfig) (ProviderConfig, bool) {
-	name := strings.ToLower(strings.TrimSpace(provider.Name))
-	kind := strings.ToLower(strings.TrimSpace(provider.Type))
-
-	for _, candidate := range defaults {
-		if name != "" && strings.ToLower(candidate.Name) == name {
-			return candidate, true
-		}
-	}
-	for _, candidate := range defaults {
-		if kind != "" && strings.ToLower(candidate.Type) == kind {
-			return candidate, true
-		}
-	}
-
-	return ProviderConfig{}, false
 }
 
 func normalizeWorkdir(workdir string) string {
@@ -389,23 +329,63 @@ func defaultWebFetchConfig() WebFetchConfig {
 	}
 }
 
+// defaultContextConfig 返回上下文压缩相关配置的默认值。
+func defaultContextConfig() ContextConfig {
+	return ContextConfig{
+		Compact: defaultCompactConfig(),
+	}
+}
+
+// defaultCompactConfig 返回手动 compact 策略的默认配置。
+func defaultCompactConfig() CompactConfig {
+	return CompactConfig{
+		ManualStrategy:           CompactManualStrategyKeepRecent,
+		ManualKeepRecentMessages: DefaultCompactManualKeepRecentMessages,
+		MaxSummaryChars:          DefaultCompactMaxSummaryChars,
+	}
+}
+
 func (c ToolsConfig) Clone() ToolsConfig {
 	return ToolsConfig{
 		WebFetch: c.WebFetch.Clone(),
 	}
 }
 
-func (c *ToolsConfig) ApplyDefaults(def ToolsConfig) {
+// Clone 返回上下文配置的独立副本，避免后续修改污染原值。
+func (c ContextConfig) Clone() ContextConfig {
+	return ContextConfig{
+		Compact: c.Compact.Clone(),
+	}
+}
+
+func (c *ToolsConfig) ApplyDefaults(defaults ToolsConfig) {
 	if c == nil {
 		return
 	}
 
-	c.WebFetch.ApplyDefaults(def.WebFetch)
+	c.WebFetch.ApplyDefaults(defaults.WebFetch)
+}
+
+// ApplyDefaults 为上下文配置补齐缺省的 compact 参数。
+func (c *ContextConfig) ApplyDefaults(defaults ContextConfig) {
+	if c == nil {
+		return
+	}
+
+	c.Compact.ApplyDefaults(defaults.Compact)
 }
 
 func (c ToolsConfig) Validate() error {
 	if err := c.WebFetch.Validate(); err != nil {
 		return fmt.Errorf("webfetch: %w", err)
+	}
+	return nil
+}
+
+// Validate 校验上下文压缩配置是否合法。
+func (c ContextConfig) Validate() error {
+	if err := c.Compact.Validate(); err != nil {
+		return fmt.Errorf("compact: %w", err)
 	}
 	return nil
 }
@@ -416,15 +396,37 @@ func (c WebFetchConfig) Clone() WebFetchConfig {
 	return clone
 }
 
-func (c *WebFetchConfig) ApplyDefaults(def WebFetchConfig) {
+// Clone 返回 compact 配置的值副本。
+func (c CompactConfig) Clone() CompactConfig {
+	return c
+}
+
+func (c *WebFetchConfig) ApplyDefaults(defaults WebFetchConfig) {
 	if c == nil {
 		return
 	}
 
 	if c.MaxResponseBytes <= 0 {
-		c.MaxResponseBytes = def.MaxResponseBytes
+		c.MaxResponseBytes = defaults.MaxResponseBytes
 	}
-	c.SupportedContentTypes = normalizeContentTypes(c.SupportedContentTypes, def.SupportedContentTypes)
+	c.SupportedContentTypes = normalizeContentTypes(c.SupportedContentTypes, defaults.SupportedContentTypes)
+}
+
+// ApplyDefaults 为 compact 配置填充缺省策略和阈值。
+func (c *CompactConfig) ApplyDefaults(defaults CompactConfig) {
+	if c == nil {
+		return
+	}
+
+	if strings.TrimSpace(c.ManualStrategy) == "" {
+		c.ManualStrategy = defaults.ManualStrategy
+	}
+	if c.ManualKeepRecentMessages <= 0 {
+		c.ManualKeepRecentMessages = defaults.ManualKeepRecentMessages
+	}
+	if c.MaxSummaryChars <= 0 {
+		c.MaxSummaryChars = defaults.MaxSummaryChars
+	}
 }
 
 func (c WebFetchConfig) Validate() error {
@@ -441,6 +443,23 @@ func (c WebFetchConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+// Validate 校验 compact 配置中的策略和阈值是否可用。
+func (c CompactConfig) Validate() error {
+	if c.ManualKeepRecentMessages <= 0 {
+		return errors.New("manual_keep_recent_messages must be greater than 0")
+	}
+	if c.MaxSummaryChars <= 0 {
+		return errors.New("max_summary_chars must be greater than 0")
+	}
+
+	switch strings.ToLower(strings.TrimSpace(c.ManualStrategy)) {
+	case CompactManualStrategyKeepRecent, CompactManualStrategyFullReplace:
+		return nil
+	default:
+		return fmt.Errorf("manual_strategy %q is not supported", c.ManualStrategy)
+	}
 }
 
 func normalizeContentTypes(values []string, defaults []string) []string {
@@ -480,4 +499,39 @@ func normalizeContentType(value string) string {
 		return strings.TrimSpace(trimmed[:index])
 	}
 	return trimmed
+}
+
+func cloneProviders(providers []ProviderConfig) []ProviderConfig {
+	if len(providers) == 0 {
+		return nil
+	}
+
+	cloned := make([]ProviderConfig, 0, len(providers))
+	for _, provider := range providers {
+		cloned = append(cloned, provider)
+	}
+	return cloned
+}
+
+func defaultSelectedProviderName(providers []ProviderConfig, fallback string) string {
+	if containsProviderName(providers, fallback) {
+		return strings.TrimSpace(fallback)
+	}
+	if len(providers) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(providers[0].Name)
+}
+
+func containsProviderName(providers []ProviderConfig, name string) bool {
+	target := NormalizeProviderName(name)
+	if target == "" {
+		return false
+	}
+	for _, provider := range providers {
+		if NormalizeProviderName(provider.Name) == target {
+			return true
+		}
+	}
+	return false
 }

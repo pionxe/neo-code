@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/provider"
 )
 
 type Registry struct {
@@ -34,6 +34,12 @@ func (r *Registry) Get(name string) (Tool, error) {
 	return tool, nil
 }
 
+// Supports reports whether a tool is registered.
+func (r *Registry) Supports(name string) bool {
+	_, err := r.Get(name)
+	return err == nil
+}
+
 func (r *Registry) GetSpecs() []provider.ToolSpec {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
@@ -57,13 +63,22 @@ func (r *Registry) ListSchemas() []provider.ToolSpec {
 	return r.GetSpecs()
 }
 
+// ListAvailableSpecs returns all registered tool specs.
+func (r *Registry) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return r.GetSpecs(), nil
+}
+
 func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult, error) {
 	tool, err := r.Get(input.Name)
 	if err != nil {
+		content := FormatError(input.Name, NormalizeErrorReason(input.Name, err), "")
 		return ToolResult{
 			ToolCallID: input.ID,
 			Name:       input.Name,
-			Content:    err.Error(),
+			Content:    content,
 			IsError:    true,
 		}, err
 	}
@@ -73,7 +88,7 @@ func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult
 	if execErr != nil {
 		result.IsError = true
 		if strings.TrimSpace(result.Content) == "" {
-			result.Content = execErr.Error()
+			result.Content = FormatError(result.Name, NormalizeErrorReason(result.Name, execErr), "")
 		}
 		return result, execErr
 	}

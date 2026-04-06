@@ -1,80 +1,252 @@
 package provider_test
 
 import (
-	"strings"
+	"context"
+	"errors"
 	"testing"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/provider"
-	"github.com/dust/neo-code/internal/provider/anthropic"
-	"github.com/dust/neo-code/internal/provider/openai"
+	"neo-code/internal/config"
+	"neo-code/internal/provider"
+	"neo-code/internal/provider/openai"
 )
 
-func TestRegistryRegisterAndGet(t *testing.T) {
-	t.Parallel()
+type stubProvider struct{}
 
-	openAIProvider, err := openai.New(config.ProviderConfig{
-		Name:      config.ProviderOpenAI,
-		Type:      config.ProviderOpenAI,
-		BaseURL:   config.DefaultOpenAIBaseURL,
-		Model:     config.DefaultOpenAIModel,
-		APIKeyEnv: config.DefaultOpenAIAPIKeyEnv,
-	})
-	if err != nil {
-		t.Fatalf("openai.New() error = %v", err)
+func (stubProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+	return provider.ChatResponse{}, nil
+}
+
+func stubDriver(driverType string) provider.DriverDefinition {
+	return provider.DriverDefinition{
+		Name: driverType,
+		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
+			return stubProvider{}, nil
+		},
 	}
-	anthropicProvider := anthropic.New(config.ProviderConfig{
-		Name:      config.ProviderAnthropic,
-		Type:      config.ProviderAnthropic,
-		BaseURL:   config.DefaultAnthropicBaseURL,
-		Model:     config.DefaultAnthropicModel,
-		APIKeyEnv: config.DefaultAnthropicAPIKeyEnv,
-	})
+}
+
+func newTestRegistry(t *testing.T) *provider.Registry {
+	t.Helper()
 
 	registry := provider.NewRegistry()
-	registry.Register(nil)
-	registry.Register(openAIProvider)
-	registry.Register(anthropicProvider)
+	if err := registry.Register(openai.Driver()); err != nil {
+		t.Fatalf("register openai driver: %v", err)
+	}
+	return registry
+}
+
+func TestRegistryBuildsRegisteredDriverCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	got, err := registry.Build(context.Background(), config.ResolvedProviderConfig{
+		ProviderConfig: config.ProviderConfig{
+			Name:      "openai-main",
+			Driver:    "OPENAI",
+			BaseURL:   config.OpenAIDefaultBaseURL,
+			Model:     config.OpenAIDefaultModel,
+			APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
+		},
+		APIKey: "test-key",
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, ok := got.(*openai.Provider); !ok {
+		t.Fatalf("expected openai.Provider, got %T", got)
+	}
+}
+
+func TestRegistryUnknownDriverReturnsTypedError(t *testing.T) {
+	t.Parallel()
+
+	registry := provider.NewRegistry()
+	_, err := registry.Build(context.Background(), config.ResolvedProviderConfig{
+		ProviderConfig: config.ProviderConfig{Driver: "missing"},
+	})
+	if !errors.Is(err, provider.ErrDriverNotFound) {
+		t.Fatalf("expected ErrDriverNotFound, got %v", err)
+	}
+}
+
+func TestRegistryRejectsDuplicateDriverRegistration(t *testing.T) {
+	t.Parallel()
+
+	registry := provider.NewRegistry()
+	if err := registry.Register(stubDriver("custom")); err != nil {
+		t.Fatalf("initial Register() error = %v", err)
+	}
+	if err := registry.Register(stubDriver("CUSTOM")); err == nil {
+		t.Fatalf("expected duplicate driver registration to fail")
+	}
+}
+
+func TestRegistryDiscoverModels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("driver with discovery function", func(t *testing.T) {
+		t.Parallel()
+
+		expectedModels := []config.ModelDescriptor{
+			{ID: "model-1", Name: "Model 1"},
+			{ID: "model-2", Name: "Model 2"},
+		}
+
+		registry := provider.NewRegistry()
+		driver := provider.DriverDefinition{
+			Name: "test-driver",
+			Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
+				return stubProvider{}, nil
+			},
+			Discover: func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
+				return expectedModels, nil
+			},
+		}
+		if err := registry.Register(driver); err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+
+		got, err := registry.DiscoverModels(context.Background(), config.ResolvedProviderConfig{
+			ProviderConfig: config.ProviderConfig{Driver: "test-driver"},
+		})
+		if err != nil {
+			t.Fatalf("DiscoverModels() error = %v", err)
+		}
+		if len(got) != len(expectedModels) {
+			t.Fatalf("expected %d models, got %d", len(expectedModels), len(got))
+		}
+	})
+
+	t.Run("driver without discovery function", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		driver := provider.DriverDefinition{
+			Name: "test-driver",
+			Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
+				return stubProvider{}, nil
+			},
+			Discover: nil,
+		}
+		if err := registry.Register(driver); err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+
+		got, err := registry.DiscoverModels(context.Background(), config.ResolvedProviderConfig{
+			ProviderConfig: config.ProviderConfig{Driver: "test-driver"},
+		})
+		if err != nil {
+			t.Fatalf("DiscoverModels() error = %v", err)
+		}
+		if got != nil {
+			t.Fatalf("expected nil models, got %v", got)
+		}
+	})
+
+	t.Run("unknown driver", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		_, err := registry.DiscoverModels(context.Background(), config.ResolvedProviderConfig{
+			ProviderConfig: config.ProviderConfig{Driver: "missing"},
+		})
+		if !errors.Is(err, provider.ErrDriverNotFound) {
+			t.Fatalf("expected ErrDriverNotFound, got %v", err)
+		}
+	})
+}
+
+func TestRegistrySupports(t *testing.T) {
+	t.Parallel()
+
+	registry := provider.NewRegistry()
+	if err := registry.Register(stubDriver("openai")); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
 
 	tests := []struct {
-		name       string
-		lookup     string
-		expectName string
+		driverType string
+		want       bool
 	}{
-		{
-			name:       "gets openai provider case insensitively",
-			lookup:     "OPENAI",
-			expectName: config.ProviderOpenAI,
-		},
-		{
-			name:       "gets anthropic provider case insensitively",
-			lookup:     "Anthropic",
-			expectName: config.ProviderAnthropic,
-		},
+		{"openai", true},
+		{"OPENAI", true},
+		{"OpenAI", true},
+		{"missing", false},
+		{"MISSING", false},
+		{"", false},
 	}
 
 	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, err := registry.Get(tt.lookup)
-			if err != nil {
-				t.Fatalf("Get(%q) error = %v", tt.lookup, err)
-			}
-			if got == nil || !strings.EqualFold(got.Name(), tt.expectName) {
-				t.Fatalf("expected provider %q, got %+v", tt.expectName, got)
+		t.Run(tt.driverType, func(t *testing.T) {
+			got := registry.Supports(tt.driverType)
+			if got != tt.want {
+				t.Fatalf("Supports(%q) = %v, want %v", tt.driverType, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestRegistryGetMissingProvider(t *testing.T) {
+func TestRegistryRegisterErrors(t *testing.T) {
 	t.Parallel()
 
-	registry := provider.NewRegistry()
-	_, err := registry.Get("missing")
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("expected not found error, got %v", err)
+	t.Run("nil registry", func(t *testing.T) {
+		t.Parallel()
+
+		var registry *provider.Registry
+		err := registry.Register(stubDriver("test"))
+		if err == nil {
+			t.Fatal("expected error for nil registry")
+		}
+		if err.Error() != "provider: registry is nil" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("empty driver name", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		err := registry.Register(provider.DriverDefinition{
+			Name: "   ",
+			Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
+				return nil, nil
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error for empty driver name")
+		}
+		if err.Error() != "provider: driver name is empty" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("nil build function", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		err := registry.Register(provider.DriverDefinition{
+			Name:  "test",
+			Build: nil,
+		})
+		if err == nil {
+			t.Fatal("expected error for nil build function")
+		}
+		if err.Error() != `provider: driver "test" build func is nil` {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestRegistryDriverWithNilMap(t *testing.T) {
+	t.Parallel()
+
+	registry := &provider.Registry{}
+	err := registry.Register(stubDriver("test"))
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	if !registry.Supports("test") {
+		t.Fatal("expected registry to support test driver")
 	}
 }

@@ -30,10 +30,16 @@ const (
 	EventRunCanceled EventType = "run_canceled"
 	// EventError is emitted for terminal runtime errors other than cancellation.
 	EventError EventType = "error"
-)
-
-const (
-	EventToolStarted   = EventToolStart
-	EventToolFinished  = EventToolResult
-	EventAgentComplete = EventAgentDone
+	// EventToolCallThinking is emitted when the model decides to call a tool,
+	// before the tool execution begins. TUI can show a transitional indicator.
+	EventToolCallThinking EventType = "tool_call_thinking"
+	// EventProviderRetry is emitted when runtime retries a provider call due to
+	// a retryable error (e.g. 429, 5xx). Payload is a human-readable message.
+	EventProviderRetry EventType = "provider_retry"
+	// EventCompactStart is emitted when a compact cycle starts.
+	EventCompactStart EventType = "compact_start"
+	// EventCompactDone is emitted when a compact cycle completes.
+	EventCompactDone EventType = "compact_done"
+	// EventCompactError is emitted when compact fails.
+	EventCompactError EventType = "compact_error"
 )

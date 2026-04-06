@@ -8,7 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/security"
+	"neo-code/internal/tools"
 )
 
 type EditTool struct {
@@ -57,48 +58,59 @@ func (t *EditTool) Schema() map[string]any {
 func (t *EditTool) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	var args editInput
 	if err := json.Unmarshal(input.Arguments, &args); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 	if strings.TrimSpace(args.Path) == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New(editToolName + ": path is required")
+		err := errors.New(editToolName + ": path is required")
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 	if args.SearchString == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New(editToolName + ": search_string is required")
+		err := errors.New(editToolName + ": search_string is required")
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 	if err := ctx.Err(); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	root := effectiveRoot(t.root, input.Workdir)
-	target, err := resolvePath(root, args.Path)
+	root, target, err := tools.ResolveWorkspaceTarget(
+		input,
+		security.TargetTypePath,
+		root,
+		args.Path,
+		resolvePath,
+	)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	data, err := os.ReadFile(target)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	content := string(data)
 	matches := strings.Count(content, args.SearchString)
 	switch {
 	case matches == 0:
-		return tools.ToolResult{Name: t.Name()}, fmt.Errorf("%s: search_string not found in %s", editToolName, toRelativePath(root, target))
+		err := fmt.Errorf("%s: search_string not found in %s", editToolName, toRelativePath(root, target))
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	case matches > 1:
-		return tools.ToolResult{Name: t.Name()}, fmt.Errorf("%s: search_string matched %d locations in %s; refine it to a unique block", editToolName, matches, toRelativePath(root, target))
+		err := fmt.Errorf("%s: search_string matched %d locations in %s; refine it to a unique block", editToolName, matches, toRelativePath(root, target))
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	updated := strings.Replace(content, args.SearchString, args.ReplaceString, 1)
 	if updated == content {
-		return tools.ToolResult{Name: t.Name()}, fmt.Errorf("%s: replacement produced no changes", editToolName)
+		err := fmt.Errorf("%s: replacement produced no changes", editToolName)
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 	if err := ctx.Err(); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	if err := os.WriteFile(target, []byte(updated), 0o644); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	return tools.ToolResult{

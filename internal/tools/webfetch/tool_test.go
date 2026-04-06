@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/tools"
 	"golang.org/x/net/html"
+	"neo-code/internal/config"
+	"neo-code/internal/tools"
 )
 
 func TestToolExecute(t *testing.T) {
@@ -117,7 +117,8 @@ func TestToolExecute(t *testing.T) {
 			toolConfig: defaultConfig,
 			expectErr:  reasonEmptyContent,
 			expectContent: []string{
-				"webfetch error",
+				"tool error",
+				"tool: webfetch",
 				"content_type: text/html",
 				"reason: " + reasonEmptyContent,
 			},
@@ -153,7 +154,8 @@ func TestToolExecute(t *testing.T) {
 			toolConfig: defaultConfig,
 			expectErr:  reasonUnsupportedType,
 			expectContent: []string{
-				"webfetch error",
+				"tool error",
+				"tool: webfetch",
 				"content_type: image/png",
 				"reason: " + reasonUnsupportedType,
 			},
@@ -167,6 +169,8 @@ func TestToolExecute(t *testing.T) {
 			toolConfig: defaultConfig,
 			expectErr:  reasonUnsupportedType,
 			expectContent: []string{
+				"tool error",
+				"tool: webfetch",
 				"reason: " + reasonUnsupportedType,
 			},
 			expectStatus:  "200 OK",
@@ -195,7 +199,8 @@ func TestToolExecute(t *testing.T) {
 			toolConfig: defaultConfig,
 			expectErr:  "unexpected HTTP status 502 Bad Gateway",
 			expectContent: []string{
-				"webfetch error",
+				"tool error",
+				"tool: webfetch",
 				"status: 502 Bad Gateway",
 				"content_type: text/plain",
 				"reason: unexpected HTTP status 502 Bad Gateway",
@@ -211,7 +216,8 @@ func TestToolExecute(t *testing.T) {
 			toolConfig: defaultConfig,
 			expectErr:  "url must start with http:// or https://",
 			expectContent: []string{
-				"webfetch error",
+				"tool error",
+				"tool: webfetch",
 				"reason: " + reasonInvalidURL,
 			},
 			expectIsError: true,
@@ -222,7 +228,8 @@ func TestToolExecute(t *testing.T) {
 			toolConfig: defaultConfig,
 			expectErr:  "JSON input",
 			expectContent: []string{
-				"webfetch error",
+				"tool error",
+				"tool: webfetch",
 				"reason: " + reasonInvalidArguments,
 			},
 			expectIsError: true,
@@ -233,7 +240,8 @@ func TestToolExecute(t *testing.T) {
 			toolConfig: defaultConfig,
 			expectErr:  "webfetch: fetch",
 			expectContent: []string{
-				"webfetch error",
+				"tool error",
+				"tool: webfetch",
 				"reason: " + reasonRequestFailed,
 			},
 			expectIsError: true,

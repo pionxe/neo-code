@@ -12,16 +12,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/provider"
 )
 
 const sessionsDirName = "sessions"
 
 type Session struct {
-	ID        string             `json:"id"`
-	Title     string             `json:"title"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Provider 记录最近一次成功运行会话时使用的 provider，用于 compact 优先复用历史配置。
+	Provider string `json:"provider,omitempty"`
+	// Model 记录最近一次成功运行会话时使用的 model，用于 compact 优先复用历史配置。
+	Model     string             `json:"model,omitempty"`
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
+	Workdir   string             `json:"-"`
 	Messages  []provider.Message `json:"messages"`
 }
 
@@ -165,12 +170,17 @@ func (s *JSONSessionStore) filePath(id string) string {
 }
 
 func newSession(title string) Session {
+	return newSessionWithWorkdir(title, "")
+}
+
+func newSessionWithWorkdir(title string, workdir string) Session {
 	now := time.Now()
 	return Session{
 		ID:        newID("session"),
 		Title:     sanitizeTitle(title),
 		CreatedAt: now,
 		UpdatedAt: now,
+		Workdir:   strings.TrimSpace(workdir),
 		Messages:  []provider.Message{},
 	}
 }

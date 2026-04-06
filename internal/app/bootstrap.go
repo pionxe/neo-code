@@ -6,29 +6,72 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/dust/neo-code/internal/config"
-	agentruntime "github.com/dust/neo-code/internal/runtime"
-	"github.com/dust/neo-code/internal/tools"
-	"github.com/dust/neo-code/internal/tools/bash"
-	"github.com/dust/neo-code/internal/tools/filesystem"
-	"github.com/dust/neo-code/internal/tools/webfetch"
-	"github.com/dust/neo-code/internal/tui"
+	"neo-code/internal/config"
+	agentcontext "neo-code/internal/context"
+	"neo-code/internal/provider/builtin"
+	providercatalog "neo-code/internal/provider/catalog"
+	agentruntime "neo-code/internal/runtime"
+	"neo-code/internal/security"
+	"neo-code/internal/tools"
+	"neo-code/internal/tools/bash"
+	"neo-code/internal/tools/filesystem"
+	"neo-code/internal/tools/webfetch"
+	"neo-code/internal/tui"
 )
 
+const utf8CodePage = 65001
+
+var (
+	setConsoleOutputCodePage = platformSetConsoleOutputCodePage
+	setConsoleInputCodePage  = platformSetConsoleInputCodePage
+)
+
+// ensureConsoleUTF8 is best-effort and should never block app startup.
+func ensureConsoleUTF8() {
+	if err := setConsoleOutputCodePage(utf8CodePage); err != nil {
+		return
+	}
+	_ = setConsoleInputCodePage(utf8CodePage)
+}
+
 func NewProgram(ctx context.Context) (*tea.Program, error) {
-	loader := config.NewLoader("")
+
+	ensureConsoleUTF8()
+
+	loader := config.NewLoader("", config.DefaultConfig())
 	manager := config.NewManager(loader)
-	cfg, err := manager.Load(ctx)
+	if _, err := manager.Load(ctx); err != nil {
+		return nil, err
+	}
+
+	providerRegistry, err := builtin.NewRegistry()
+	if err != nil {
+		return nil, err
+	}
+	modelCatalogs := providercatalog.NewService(manager.BaseDir(), providerRegistry, nil)
+	providerSelection := config.NewSelectionService(manager, providerRegistry, providerRegistry, modelCatalogs)
+	if _, err := providerSelection.EnsureSelection(ctx); err != nil {
+		return nil, err
+	}
+
+	cfg := manager.Get()
+
+	toolRegistry := buildToolRegistry(cfg)
+	toolManager, err := buildToolManager(toolRegistry)
 	if err != nil {
 		return nil, err
 	}
 
-	toolRegistry := buildToolRegistry(cfg)
-
 	sessionStore := agentruntime.NewSessionStore(loader.BaseDir())
-	runtimeSvc := agentruntime.New(manager, toolRegistry, sessionStore)
+	runtimeSvc := agentruntime.NewWithFactory(
+		manager,
+		toolManager,
+		sessionStore,
+		providerRegistry,
+		agentcontext.NewBuilder(),
+	)
 
-	tuiApp, err := tui.New(&cfg, manager, runtimeSvc)
+	tuiApp, err := tui.New(&cfg, manager, runtimeSvc, providerSelection)
 	if err != nil {
 		return nil, err
 	}
@@ -53,4 +96,12 @@ func buildToolRegistry(cfg config.Config) *tools.Registry {
 		SupportedContentTypes: cfg.Tools.WebFetch.SupportedContentTypes,
 	}))
 	return toolRegistry
+}
+
+func buildToolManager(registry *tools.Registry) (tools.Manager, error) {
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		return nil, err
+	}
+	return tools.NewManager(registry, engine, security.NewWorkspaceSandbox())
 }

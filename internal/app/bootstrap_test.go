@@ -3,17 +3,21 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/config"
+	"neo-code/internal/tools"
 )
 
 func TestNewProgram(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -29,6 +33,41 @@ func TestNewProgram(t *testing.T) {
 	configPath := filepath.Join(home, ".neocode", "config.yaml")
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("expected config file to be created at %q: %v", configPath, err)
+	}
+}
+
+func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := []byte("selected_provider: openai\ncurrent_model: unsupported-current\nshell: powershell\n")
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	program, err := NewProgram(context.Background())
+	if err != nil {
+		t.Fatalf("NewProgram() error = %v", err)
+	}
+	if program == nil {
+		t.Fatalf("expected tea program")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(data), "current_model: "+config.OpenAIDefaultModel) {
+		t.Fatalf("expected startup normalization to rewrite current_model, got:\n%s", string(data))
 	}
 }
 
@@ -69,4 +108,124 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	if result.Content == "" {
 		t.Fatalf("expected formatted webfetch content")
 	}
+}
+
+func TestBuildToolManagerWrapsRegistry(t *testing.T) {
+	t.Parallel()
+
+	registry := tools.NewRegistry()
+	registry.Register(stubToolForBootstrap{name: "bash", content: "ok"})
+	workdir := t.TempDir()
+	manager, err := buildToolManager(registry)
+	if err != nil {
+		t.Fatalf("buildToolManager() error = %v", err)
+	}
+	if manager == nil {
+		t.Fatalf("expected tool manager")
+	}
+
+	specs, err := manager.ListAvailableSpecs(context.Background(), tools.SpecListInput{})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %+v", specs)
+	}
+
+	result, execErr := manager.Execute(context.Background(), tools.ToolCallInput{
+		Name:      "bash",
+		Arguments: []byte(`{"command":"echo hi"}`),
+		Workdir:   workdir,
+	})
+	if execErr != nil {
+		t.Fatalf("Execute() error = %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected ok result, got %+v", result)
+	}
+
+	_, execErr = manager.Execute(context.Background(), tools.ToolCallInput{
+		Name:      "bash",
+		Arguments: []byte(`{"command":"echo hi","workdir":"../outside"}`),
+		Workdir:   workdir,
+	})
+	if execErr == nil {
+		t.Fatalf("expected sandbox rejection for outside workdir")
+	}
+}
+
+func TestEnsureConsoleUTF8SetsOutputThenInput(t *testing.T) {
+	originalOutput := setConsoleOutputCodePage
+	originalInput := setConsoleInputCodePage
+	t.Cleanup(func() {
+		setConsoleOutputCodePage = originalOutput
+		setConsoleInputCodePage = originalInput
+	})
+
+	calls := make([]string, 0, 2)
+	setConsoleOutputCodePage = func(codePage uint32) error {
+		if codePage != utf8CodePage {
+			t.Fatalf("expected utf8 code page %d, got %d", utf8CodePage, codePage)
+		}
+		calls = append(calls, "output")
+		return nil
+	}
+	setConsoleInputCodePage = func(codePage uint32) error {
+		if codePage != utf8CodePage {
+			t.Fatalf("expected utf8 code page %d, got %d", utf8CodePage, codePage)
+		}
+		calls = append(calls, "input")
+		return nil
+	}
+
+	ensureConsoleUTF8()
+
+	if len(calls) != 2 || calls[0] != "output" || calls[1] != "input" {
+		t.Fatalf("expected output->input order, got %+v", calls)
+	}
+}
+
+func TestEnsureConsoleUTF8SkipsInputWhenOutputFails(t *testing.T) {
+	originalOutput := setConsoleOutputCodePage
+	originalInput := setConsoleInputCodePage
+	t.Cleanup(func() {
+		setConsoleOutputCodePage = originalOutput
+		setConsoleInputCodePage = originalInput
+	})
+
+	outputErr := errors.New("output failed")
+	setConsoleOutputCodePage = func(codePage uint32) error {
+		return outputErr
+	}
+	inputCalled := false
+	setConsoleInputCodePage = func(codePage uint32) error {
+		inputCalled = true
+		return nil
+	}
+
+	ensureConsoleUTF8()
+
+	if inputCalled {
+		t.Fatalf("expected input code page setup to be skipped when output setup fails")
+	}
+}
+
+type stubToolForBootstrap struct {
+	name    string
+	content string
+}
+
+func (s stubToolForBootstrap) Name() string           { return s.name }
+func (s stubToolForBootstrap) Description() string    { return "stub" }
+func (s stubToolForBootstrap) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (s stubToolForBootstrap) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
+	return tools.ToolResult{Name: s.name, Content: s.content}, nil
+}
+
+func disableBuiltinProviderAPIKeys(t *testing.T) {
+	t.Helper()
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "")
+	t.Setenv(config.GeminiDefaultAPIKeyEnv, "")
+	t.Setenv(config.OpenLLDefaultAPIKeyEnv, "")
+	t.Setenv(config.QiniuDefaultAPIKeyEnv, "")
 }

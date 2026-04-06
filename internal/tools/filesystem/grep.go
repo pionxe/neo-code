@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 const defaultGrepResultLimit = 200
@@ -63,26 +63,27 @@ func (t *GrepTool) Schema() map[string]any {
 func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	var args grepInput
 	if err := json.Unmarshal(input.Arguments, &args); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 
 	pattern := strings.TrimSpace(args.Pattern)
 	if pattern == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New(grepToolName + ": pattern is required")
+		err := errors.New(grepToolName + ": pattern is required")
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 	if err := ctx.Err(); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	root := effectiveRoot(t.root, input.Workdir)
 	searchRoot, err := resolveSearchDir(root, args.Dir)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	matcher, err := buildGrepMatcher(pattern, args.UseRegex)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	var (
@@ -126,7 +127,7 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		return nil
 	})
 	if err != nil && !errors.Is(err, errGrepResultLimitReached) {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	if len(results) == 0 {
@@ -141,7 +142,7 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		}, nil
 	}
 
-	return tools.ToolResult{
+	result := tools.ToolResult{
 		Name:    t.Name(),
 		Content: strings.Join(results, "\n"),
 		Metadata: map[string]any{
@@ -149,7 +150,9 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 			"matched_files": matchedFiles,
 			"matched_lines": len(results),
 		},
-	}, nil
+	}
+	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
+	return result, nil
 }
 
 func buildGrepMatcher(pattern string, useRegex bool) (func(string) bool, error) {

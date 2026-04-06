@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 type GlobTool struct {
@@ -54,27 +54,28 @@ func (t *GlobTool) Schema() map[string]any {
 func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	var args globInput
 	if err := json.Unmarshal(input.Arguments, &args); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 
 	rawPattern := strings.TrimSpace(args.Pattern)
 	if rawPattern == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New(globToolName + ": pattern is required")
+		err := errors.New(globToolName + ": pattern is required")
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 	pattern := normalizeSlashPath(rawPattern)
 	if err := ctx.Err(); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	root := effectiveRoot(t.root, input.Workdir)
 	searchRoot, err := resolveSearchDir(root, args.Dir)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	matcher, err := buildGlobMatcher(pattern)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	matches := make([]string, 0, 32)
@@ -102,7 +103,7 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		return nil
 	})
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	sort.Strings(matches)
@@ -117,14 +118,16 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		}, nil
 	}
 
-	return tools.ToolResult{
+	result := tools.ToolResult{
 		Name:    t.Name(),
 		Content: strings.Join(matches, "\n"),
 		Metadata: map[string]any{
 			"root":  searchRoot,
 			"count": len(matches),
 		},
-	}, nil
+	}
+	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
+	return result, nil
 }
 
 func buildGlobMatcher(pattern string) (*regexp.Regexp, error) {
