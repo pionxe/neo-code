@@ -23,6 +23,9 @@ const (
 	defaultStdioRestartBackoff = 1 * time.Second
 	maxStdioRestartBackoff     = 30 * time.Second
 	maxStdioFrameBytes         = 8 * 1024 * 1024
+	defaultMCPProtocolVersion  = "2024-11-05"
+	defaultMCPClientName       = "neocode"
+	defaultMCPClientVersion    = "0.1.0"
 )
 
 // StdioClientConfig 描述 MCP stdio 客户端的启动与调用参数。
@@ -39,6 +42,12 @@ type StdioClientConfig struct {
 type jsonRPCRequest struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      string `json:"id"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
+type jsonRPCNotification struct {
+	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 }
@@ -62,21 +71,24 @@ type rpcReply struct {
 
 // StdIOClient 通过 stdio 子进程与 MCP server 进行 JSON-RPC 通信。
 type StdIOClient struct {
-	cfg      StdioClientConfig
-	idSeed   uint64
-	mu       sync.Mutex
-	writeMu  sync.Mutex
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	stdout   io.ReadCloser
-	reader   *bufio.Reader
-	pending  map[string]chan rpcReply
-	exited   chan struct{}
-	exitErr  error
-	backoff  time.Duration
-	retryAt  time.Time
-	started  bool
-	shutdown bool
+	cfg          StdioClientConfig
+	idSeed       uint64
+	mu           sync.Mutex
+	writeMu      sync.Mutex
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	stdout       io.ReadCloser
+	reader       *bufio.Reader
+	pending      map[string]chan rpcReply
+	exited       chan struct{}
+	exitErr      error
+	backoff      time.Duration
+	retryAt      time.Time
+	started      bool
+	initialized  bool
+	initializing bool
+	initDone     chan struct{}
+	shutdown     bool
 }
 
 // NewStdIOClient 创建 stdio MCP client。
@@ -201,11 +213,21 @@ func (c *StdIOClient) callContext(ctx context.Context) (context.Context, context
 }
 
 func (c *StdIOClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	return c.callRequest(ctx, method, params, false)
+}
+
+// callRequest 发送带响应的 RPC 请求；skipEnsure=true 用于初始化阶段避免递归。
+func (c *StdIOClient) callRequest(ctx context.Context, method string, params any, skipEnsure bool) (json.RawMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := c.ensureStarted(ctx); err != nil {
-		return nil, err
+	if !skipEnsure {
+		if err := c.ensureStarted(ctx); err != nil {
+			return nil, err
+		}
+		if err := c.ensureInitialized(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	requestID := "req-" + strconv.FormatUint(atomic.AddUint64(&c.idSeed, 1), 10)
@@ -249,6 +271,49 @@ func (c *StdIOClient) call(ctx context.Context, method string, params any) (json
 	case reply := <-replyCh:
 		return reply.result, reply.err
 	}
+}
+
+// sendNotification 发送无需响应的 RPC 通知；skipEnsure=true 用于初始化流程。
+func (c *StdIOClient) sendNotification(ctx context.Context, method string, params any, skipEnsure bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !skipEnsure {
+		if err := c.ensureStarted(ctx); err != nil {
+			return err
+		}
+		if err := c.ensureInitialized(ctx); err != nil {
+			return err
+		}
+	}
+
+	c.mu.Lock()
+	if c.shutdown {
+		c.mu.Unlock()
+		return errors.New("mcp: stdio client closed")
+	}
+	stdin := c.stdin
+	c.mu.Unlock()
+	if stdin == nil {
+		return errors.New("mcp: stdio client is not connected")
+	}
+
+	payload, err := json.Marshal(jsonRPCNotification{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+	})
+	if err != nil {
+		return fmt.Errorf("mcp: marshal notification: %w", err)
+	}
+
+	c.writeMu.Lock()
+	writeErr := writeFramedMessage(stdin, payload)
+	c.writeMu.Unlock()
+	if writeErr != nil {
+		return fmt.Errorf("mcp: send notification: %w", writeErr)
+	}
+	return nil
 }
 
 func (c *StdIOClient) ensureStarted(ctx context.Context) error {
@@ -306,12 +371,78 @@ func (c *StdIOClient) ensureStarted(ctx context.Context) error {
 	c.exited = make(chan struct{})
 	c.exitErr = nil
 	c.started = true
+	c.initialized = false
+	c.initializing = false
+	c.initDone = nil
 	c.backoff = c.cfg.RestartBackoff
 	c.retryAt = time.Time{}
 
 	go c.readLoop()
 	go c.waitLoop(command)
 	go io.Copy(io.Discard, stderr)
+	return nil
+}
+
+// ensureInitialized 确保 MCP 会话完成 initialize/initialized 握手，并发调用共享结果。
+func (c *StdIOClient) ensureInitialized(ctx context.Context) error {
+	for {
+		c.mu.Lock()
+		if c.shutdown {
+			c.mu.Unlock()
+			return errors.New("mcp: stdio client closed")
+		}
+		if !c.started {
+			c.mu.Unlock()
+			return errors.New("mcp: stdio client is not started")
+		}
+		if c.initialized {
+			c.mu.Unlock()
+			return nil
+		}
+		if c.initializing {
+			wait := c.initDone
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-wait:
+				continue
+			}
+		}
+		c.initializing = true
+		c.initDone = make(chan struct{})
+		done := c.initDone
+		c.mu.Unlock()
+
+		initErr := c.performInitialize(ctx)
+
+		c.mu.Lock()
+		if c.started && initErr == nil {
+			c.initialized = true
+		}
+		c.initializing = false
+		close(done)
+		c.mu.Unlock()
+		return initErr
+	}
+}
+
+// performInitialize 执行标准 MCP 初始化握手：initialize -> notifications/initialized。
+func (c *StdIOClient) performInitialize(ctx context.Context) error {
+	params := map[string]any{
+		"protocolVersion": defaultMCPProtocolVersion,
+		"capabilities":    map[string]any{},
+		"clientInfo": map[string]any{
+			"name":    defaultMCPClientName,
+			"version": defaultMCPClientVersion,
+		},
+	}
+	if _, err := c.callRequest(ctx, "initialize", params, true); err != nil {
+		return fmt.Errorf("mcp: initialize session: %w", err)
+	}
+	if err := c.sendNotification(ctx, "notifications/initialized", map[string]any{}, true); err != nil {
+		return fmt.Errorf("mcp: notify initialized: %w", err)
+	}
 	return nil
 }
 
@@ -368,6 +499,12 @@ func (c *StdIOClient) markExited(err error) {
 		return
 	}
 	c.started = false
+	c.initialized = false
+	if c.initializing && c.initDone != nil {
+		close(c.initDone)
+	}
+	c.initializing = false
+	c.initDone = nil
 	c.exitErr = err
 	if c.exited != nil {
 		close(c.exited)

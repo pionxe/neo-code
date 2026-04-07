@@ -276,7 +276,7 @@ func newTestStdIOClient(t *testing.T) *StdIOClient {
 	client, err := NewStdIOClient(StdioClientConfig{
 		Command:      os.Args[0],
 		Args:         []string{"-test.run=TestHelperProcessMCPStdioServer", "--"},
-		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1"},
+		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_REQUIRE_INITIALIZE=1"},
 		StartTimeout: 3 * time.Second,
 		CallTimeout:  3 * time.Second,
 	})
@@ -286,10 +286,35 @@ func newTestStdIOClient(t *testing.T) *StdIOClient {
 	return client
 }
 
+func TestStdIOClientInitializeFailure(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewStdIOClient(StdioClientConfig{
+		Command:      os.Args[0],
+		Args:         []string{"-test.run=TestHelperProcessMCPStdioServer", "--"},
+		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_INIT_FAIL=1"},
+		StartTimeout: 3 * time.Second,
+		CallTimeout:  3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewStdIOClient() error = %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	_, callErr := client.ListTools(context.Background())
+	if callErr == nil || !strings.Contains(callErr.Error(), "initialize session") {
+		t.Fatalf("expected initialize error, got %v", callErr)
+	}
+}
+
 func TestHelperProcessMCPStdioServer(t *testing.T) {
 	if os.Getenv("GO_WANT_MCP_STDIO_HELPER") != "1" {
 		return
 	}
+
+	requireInitialize := os.Getenv("GO_MCP_STDIO_REQUIRE_INITIALIZE") == "1"
+	initFail := os.Getenv("GO_MCP_STDIO_INIT_FAIL") == "1"
+	initialized := !requireInitialize
 
 	reader := bufio.NewReader(os.Stdin)
 	for {
@@ -311,7 +336,45 @@ func TestHelperProcessMCPStdioServer(t *testing.T) {
 
 		var response any
 		switch method {
+		case "initialize":
+			if initFail {
+				response = map[string]any{
+					"jsonrpc": "2.0",
+					"id":      requestID,
+					"error": map[string]any{
+						"code":    -32600,
+						"message": "initialize rejected",
+					},
+				}
+				break
+			}
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      requestID,
+				"result": map[string]any{
+					"protocolVersion": "2024-11-05",
+					"capabilities":    map[string]any{},
+					"serverInfo": map[string]any{
+						"name":    "test-helper",
+						"version": "1.0.0",
+					},
+				},
+			}
+		case "notifications/initialized":
+			initialized = true
+			continue
 		case "tools/list":
+			if !initialized {
+				response = map[string]any{
+					"jsonrpc": "2.0",
+					"id":      requestID,
+					"error": map[string]any{
+						"code":    -32002,
+						"message": "server not initialized",
+					},
+				}
+				break
+			}
 			response = map[string]any{
 				"jsonrpc": "2.0",
 				"id":      requestID,
@@ -329,6 +392,17 @@ func TestHelperProcessMCPStdioServer(t *testing.T) {
 				},
 			}
 		case "tools/call":
+			if !initialized {
+				response = map[string]any{
+					"jsonrpc": "2.0",
+					"id":      requestID,
+					"error": map[string]any{
+						"code":    -32002,
+						"message": "server not initialized",
+					},
+				}
+				break
+			}
 			params, _ := request["params"].(map[string]any)
 			name, _ := params["name"].(string)
 			response = map[string]any{
