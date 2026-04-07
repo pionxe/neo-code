@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,12 @@ import (
 	"testing"
 	"time"
 )
+
+type nopWriteCloser struct {
+	bytes.Buffer
+}
+
+func (n *nopWriteCloser) Close() error { return nil }
 
 type errWriter struct{}
 
@@ -91,6 +98,65 @@ func TestStdIOClientHealthCheck(t *testing.T) {
 	defer cancel()
 	if err := client.HealthCheck(ctx); err != nil {
 		t.Fatalf("HealthCheck() error = %v", err)
+	}
+}
+
+func TestStdIOClientSendNotificationFramedDefault(t *testing.T) {
+	t.Parallel()
+
+	writer := &nopWriteCloser{}
+	client := &StdIOClient{
+		pending: make(map[string]chan rpcReply),
+		stdin:   writer,
+		started: true,
+		cfg: StdioClientConfig{
+			CallTimeout:    time.Second,
+			StartTimeout:   time.Second,
+			RestartBackoff: time.Millisecond,
+		},
+	}
+
+	err := client.sendNotification(context.Background(), "notifications/initialized", map[string]any{}, true)
+	if err != nil {
+		t.Fatalf("sendNotification() error = %v", err)
+	}
+	if !strings.Contains(writer.String(), "Content-Length:") {
+		t.Fatalf("expected framed header, got: %q", writer.String())
+	}
+}
+
+func TestStdIOClientSendNotificationLineProtocol(t *testing.T) {
+	t.Parallel()
+
+	writer := &nopWriteCloser{}
+	client := &StdIOClient{
+		pending:  make(map[string]chan rpcReply),
+		stdin:    writer,
+		started:  true,
+		protocol: stdioProtocolLine,
+		cfg: StdioClientConfig{
+			CallTimeout:    time.Second,
+			StartTimeout:   time.Second,
+			RestartBackoff: time.Millisecond,
+		},
+	}
+
+	err := client.sendNotificationWithProtocol(
+		context.Background(),
+		"notifications/initialized",
+		map[string]any{},
+		true,
+		stdioProtocolLine,
+	)
+	if err != nil {
+		t.Fatalf("sendNotificationWithProtocol() error = %v", err)
+	}
+	raw := writer.String()
+	if strings.Contains(raw, "Content-Length:") {
+		t.Fatalf("expected line protocol write, got: %q", raw)
+	}
+	if !strings.HasSuffix(raw, "\n") {
+		t.Fatalf("expected newline-delimited payload, got: %q", raw)
 	}
 }
 
