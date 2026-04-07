@@ -34,8 +34,9 @@ const (
 // streamAccumulator 在流式事件处理过程中累积本轮对话需要持久化的助手消息状态，
 // 包括文本内容和工具调用列表。
 type streamAccumulator struct {
-	content   strings.Builder
-	toolCalls map[int]*providertypes.ToolCall
+	content     strings.Builder
+	toolCalls   map[int]*providertypes.ToolCall
+	messageDone bool
 }
 
 // newStreamAccumulator 创建并初始化一个空的流式事件累积器。
@@ -294,6 +295,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 		if len(assistant.ToolCalls) == 0 {
+			log.Printf("[DEBUG-RUNTIME] No tool calls in assistant response, content length=%d, emitting EventAgentDone",
+				len(assistant.Content))
 			s.emit(ctx, EventAgentDone, input.RunID, session.ID, assistant)
 			return nil
 		}
@@ -537,6 +540,9 @@ func handleProviderStreamEvent(
 		if _, err := event.MessageDoneValue(); err != nil {
 			return err
 		}
+		if acc != nil {
+			acc.messageDone = true
+		}
 	default:
 		return fmt.Errorf("runtime: unsupported provider stream event type %q", event.Type)
 	}
@@ -679,6 +685,10 @@ func (s *Service) callProviderWithRetry(
 		err = modelProvider.Chat(ctx, req, streamEvents)
 		close(streamEvents)
 		forwardErr := <-streamDone
+
+		// [DEBUG] 打印 provider.Chat() 返回状态和转发错误
+		log.Printf("[DEBUG-RUNTIME] provider.Chat() returned: err=%v, forwardErr=%v", err, forwardErr)
+
 		if forwardErr != nil {
 			if err != nil {
 				return nil, fmt.Errorf("runtime: provider stream handling failed after provider error: %v: %w", err, forwardErr)
@@ -687,6 +697,9 @@ func (s *Service) callProviderWithRetry(
 		}
 
 		if err == nil {
+			if !acc.messageDone {
+				return nil, fmt.Errorf("%w: provider stream ended without message_done event", provider.ErrStreamInterrupted)
+			}
 			return acc, nil
 		}
 
