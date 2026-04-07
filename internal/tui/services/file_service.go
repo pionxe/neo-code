@@ -45,6 +45,9 @@ func ResolveWorkspaceDirectory(workdir string) string {
 	if workdir == "" {
 		return ""
 	}
+	if strings.ContainsRune(workdir, '\x00') {
+		return ""
+	}
 	absolute, err := filepath.Abs(workdir)
 	if err != nil {
 		return ""
