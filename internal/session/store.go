@@ -29,7 +29,9 @@ type Session struct {
 	CreatedAt time.Time               `json:"created_at"`
 	UpdatedAt time.Time               `json:"updated_at"`
 	Workdir   string                  `json:"workdir,omitempty"`
-	Messages  []providertypes.Message `json:"messages"`
+	Messages        []providertypes.Message `json:"messages"`
+	TokenInputTotal int                     `json:"token_input_total,omitempty"`
+	TokenOutputTotal int                    `json:"token_output_total,omitempty"`
 }
 
 // Summary 表示会话列表视图所需的轻量摘要信息。

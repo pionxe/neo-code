@@ -20,6 +20,9 @@ context:
     manual_keep_recent_messages: 10
     max_summary_chars: 1200
     micro_compact_disabled: false
+  auto_compact:
+    enabled: false
+    input_token_threshold: 100000
 ```
 
 - `manual_strategy`
@@ -30,6 +33,19 @@ context:
   控制 compact summary 的最大字符数。
 - `micro_compact_disabled`
   控制是否关闭默认启用的读时 micro compact；设为 `true` 时会回退为仅 trim、不清理旧 tool result。
+- `auto_compact.enabled`
+  控制是否启用基于 token 阈值的自动压缩；默认关闭。
+- `auto_compact.input_token_threshold`
+  当会话累计输入 token 数达到此阈值时触发自动压缩；默认 100000。
+
+## 自动压缩
+
+当 `auto_compact.enabled` 为 `true` 时，runtime 在每次调用 `context.Builder.Build()` 时将当前 token 累计值传入 Metadata，context 模块通过比较累计值与阈值在 `BuildResult.ShouldAutoCompact` 中返回压缩建议。runtime 读取建议后调用现有 compact 管线执行压缩，并在成功后重置 token 计数器。
+
+设计原则：
+- **context 拥有压缩决策权**，runtime 只做编排执行。
+- 每次 `Run()` 调用最多触发一次自动压缩，避免无限循环。
+- 压缩成功后 token 计数器重置为零，下一轮不会立即重复触发。
 
 新增工具时，micro compact 策略不再由 `context` 层静态白名单维护，而是由 `internal/tools` 中的工具实现声明。
 默认情况下，已注册工具都会参与 micro compact；只有显式声明保留历史结果的工具才会跳过旧结果清理。

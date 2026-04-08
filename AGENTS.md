@@ -15,7 +15,7 @@
 - 不要在 `runtime` 或 `tui` 里直接写工具执行逻辑；所有可被模型调用的能力必须进入 `internal/tools`。
 - 不要把会话状态、消息历史、工具调用记录散落到 UI；这些状态优先由 `runtime` 管理。
 - 不要把明文 API Key 写入 YAML、样例配置、测试快照或提交内容。
-- 修改 `config`、`provider`、`runtime`、`tools` 时，默认应同时评估并补充测试。
+- 修改 `config`、`provider`、`runtime`、`tools`、`context` 时，默认应同时评估并补充测试。
 
 ## 3. 代码结构与职责边界
 
@@ -24,16 +24,19 @@
 - `internal/app`：应用装配与 bootstrap，负责连接 config、provider、tools、runtime、tui。
 - `internal/config`：配置模型、YAML 加载、环境变量管理、配置校验和并发安全访问。
 - `internal/provider`：provider 抽象、领域模型和各厂商适配器。
-- `internal/runtime`：ReAct 主循环、事件流、Prompt 编排、Session 持久化。
+- `internal/runtime`：ReAct 主循环、事件流、Prompt 编排、token 累积与自动压缩触发。
+- `internal/session`：会话领域模型、存储抽象与 JSON 持久化实现。
 - `internal/tools`：工具契约、注册表、参数校验和具体工具实现。
 - `internal/tui`：Bubble Tea 状态机、渲染层、Slash Command 和事件桥接。
 - `docs`：架构、配置、事件流、会话持久化等说明文档。
 
 ### 3.2 模块职责
 - `app` 只负责装配和依赖注入，不承载业务规则。
-- `config` 负责 provider 列表、当前 provider、当前 model、workdir、shell 的管理和校验。
+- `config` 负责 provider 列表、当前 provider、当前 model、workdir、shell、context 压缩策略（含自动压缩阈值）的管理和校验。
 - `provider` 只处理模型协议差异、请求组装、响应解析、流式输出、超时与重试。
-- `runtime` 负责会话、消息上下文、tool schema 传递、tool call 识别、tool result 回灌和停止条件。
+- `context` 负责上下文构建（system prompt 组装、micro compact、消息裁剪）和自动压缩决策（基于 token 阈值判断是否需要压缩）。
+- `runtime` 负责会话编排、消息上下文流转、tool schema 传递、tool call 识别、tool result 回灌、token 累积、事件派发和停止条件。runtime 不替 context 做压缩决策。
+- `session` 负责会话领域模型与 JSON 持久化，包括 token 累计值的持久化。
 - `tools` 负责统一的 `schema + execute + result` 协议，以及参数校验、错误包装和输出格式收敛。
 - `tui` 只消费 runtime 事件并负责展示，不直接调用 provider，不直接执行 tools。
 
@@ -58,7 +61,16 @@
   - tool result 回灌
   - 最终响应输出
   - 错误事件派发
-- 修改 `tools` 时，重点覆盖：
+  - token 累积记录与事件发射
+  - 自动压缩触发与重置逻辑
+- 修改 `context` 时，重点覆盖：
+  - Build 输入输出契约（含 Metadata 新字段、ShouldAutoCompact 决策）
+  - micro compact 策略
+  - 消息裁剪边界
+  - AGENTS.md 加载与截断
+- 修改 `config` 时，重点覆盖：
+  - 新增配置项的校验、默认值和序列化/反序列化
+  - 配置加载向后兼容（新字段 omitempty）
   - schema 校验
   - 超时控制
   - 错误包装

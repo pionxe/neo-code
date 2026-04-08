@@ -550,3 +550,83 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildShouldAutoCompactDisabled(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	input := BuildInput{
+		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Metadata: testMetadata(t.TempDir()),
+		Compact:  CompactOptions{AutoCompactThreshold: 0},
+	}
+	input.Metadata.SessionInputTokens = 100
+
+	result, err := builder.Build(stdcontext.Background(), input)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if result.ShouldAutoCompact {
+		t.Fatalf("expected ShouldAutoCompact false when threshold is 0")
+	}
+}
+
+func TestBuildShouldAutoCompactBelowThreshold(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	input := BuildInput{
+		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Metadata: testMetadata(t.TempDir()),
+		Compact:  CompactOptions{AutoCompactThreshold: 100},
+	}
+	input.Metadata.SessionInputTokens = 99
+
+	result, err := builder.Build(stdcontext.Background(), input)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if result.ShouldAutoCompact {
+		t.Fatalf("expected ShouldAutoCompact false when tokens below threshold")
+	}
+}
+
+func TestBuildShouldAutoCompactAtThreshold(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	input := BuildInput{
+		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Metadata: testMetadata(t.TempDir()),
+		Compact:  CompactOptions{AutoCompactThreshold: 100},
+	}
+	input.Metadata.SessionInputTokens = 100
+
+	result, err := builder.Build(stdcontext.Background(), input)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !result.ShouldAutoCompact {
+		t.Fatalf("expected ShouldAutoCompact true when tokens equal threshold")
+	}
+}
+
+func TestBuildShouldAutoCompactAboveThreshold(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	input := BuildInput{
+		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Metadata: testMetadata(t.TempDir()),
+		Compact:  CompactOptions{AutoCompactThreshold: 100},
+	}
+	input.Metadata.SessionInputTokens = 200
+
+	result, err := builder.Build(stdcontext.Background(), input)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !result.ShouldAutoCompact {
+		t.Fatalf("expected ShouldAutoCompact true when tokens above threshold")
+	}
+}

@@ -9,8 +9,15 @@
 NeoCode 在 MVP 阶段使用 JSON 文件持久化 Session，以保持本地优先、易于调试和跨平台可移植。
 
 ## 数据模型
-- `Session`：完整消息历史以及 `id`、`title`、`updated_at` 等元信息
+- `Session`：完整消息历史以及 `id`、`title`、`updated_at`、`token_input_total`、`token_output_total` 等元信息
 - `Summary`：用于侧边栏的轻量摘要结构（原 `SessionSummary` 命名已统一收口为 `Summary`）
+
+### Token 持久化
+- `token_input_total` 和 `token_output_total` 分别记录会话累计输入和输出 token。
+- 使用 `omitempty` 标签，确保旧版 JSON 文件正常加载（零值不序列化）。
+- runtime 在每次 provider 调用后更新 session 的 token 字段，随 session save 一起持久化。
+- 会话加载时，runtime 从 session 恢复 token 计数器；新建会话时计数器清零。
+- 自动压缩成功后 token 计数器重置为零，并持久化到 session。
 
 ## 加载策略
 - `ListSummaries` 只读取渲染侧边栏所需的基础信息

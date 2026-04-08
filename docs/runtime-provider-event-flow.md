@@ -9,6 +9,7 @@
 - `tool_start`
 - `tool_result`
 - `error`
+- `token_usage`
 
 ## ReAct 主循环
 
@@ -30,11 +31,15 @@
   - `shell`
   - 当前 `provider`
   - 当前 `model`
+  - 会话累计输入 token 数（`SessionInputTokens`）
+  - 会话累计输出 token 数（`SessionOutputTokens`）
+  - 自动压缩阈值（`AutoCompactThreshold`）
 - `context.Builder` 负责统一组装：
   - 固定核心 system prompt sections
   - 从 `workdir` 向上发现的 `AGENTS.md`
   - 系统状态摘要（`workdir` / `shell` / `provider` / `model` / git branch / git dirty）
   - 裁剪后的历史消息
+  - 自动压缩决策（`BuildResult.ShouldAutoCompact`）
 - `runtime` 不直接读取规则文件，也不直接查询 git 状态。
 - `provider` 只消费最终生成的 `SystemPrompt`、消息列表和工具 schema，不感知上下文来源。
 
@@ -58,6 +63,17 @@
 - Provider 发出 `StreamEvent`
 - runtime 将其转换成 `RuntimeEvent`
 - TUI 使用 Bubble Tea `Cmd` 监听事件，并在处理完成后继续订阅
+
+## Token 计量
+
+runtime 在转发 provider 流式事件时，从 `MessageDone` 事件中提取 `Usage`（`InputTokens`、`OutputTokens`），累积到会话级计数器，并发出 `token_usage` 事件供 TUI 消费。
+
+`token_usage` payload 包含：
+
+- `input_tokens`：本次调用输入 token
+- `output_tokens`：本次调用输出 token
+- `session_input_tokens`：会话累计输入 token
+- `session_output_tokens`：会话累计输出 token
 
 ## 持久化时机
 

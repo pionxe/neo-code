@@ -21,8 +21,9 @@ type BuildInput struct {
 
 // BuildResult is the provider-facing context produced for a single round.
 type BuildResult struct {
-	SystemPrompt string
-	Messages     []providertypes.Message
+	SystemPrompt      string
+	Messages          []providertypes.Message
+	ShouldAutoCompact bool
 }
 
 // MicroCompactPolicySource 定义 context 读取工具 micro compact 策略的最小依赖。
@@ -32,5 +33,6 @@ type MicroCompactPolicySource interface {
 
 // CompactOptions controls read-time compact behavior inside the context builder.
 type CompactOptions struct {
-	DisableMicroCompact bool
+	DisableMicroCompact  bool
+	AutoCompactThreshold int
 }

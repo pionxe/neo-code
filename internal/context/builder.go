@@ -52,9 +52,13 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 		trimPolicy = spanMessageTrimPolicy{}
 	}
 
+	shouldAutoCompact := input.Compact.AutoCompactThreshold > 0 &&
+		input.Metadata.SessionInputTokens >= input.Compact.AutoCompactThreshold
+
 	return BuildResult{
-		SystemPrompt: composeSystemPrompt(sections...),
-		Messages:     applyReadTimeContextProjection(trimPolicy.Trim(input.Messages), input.Compact, b.microCompactPolicies),
+		SystemPrompt:      composeSystemPrompt(sections...),
+		Messages:          applyReadTimeContextProjection(trimPolicy.Trim(input.Messages), input.Compact, b.microCompactPolicies),
+		ShouldAutoCompact: shouldAutoCompact,
 	}, nil
 }
 
