@@ -82,7 +82,7 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]config.ModelDescriptor
 
 // Chat 发起 SSE 流式对话请求。
 // 流中途断连或协议错误时直接返回错误，由上层调用方决定重试策略。
-func (p *Provider) Chat(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	payload, err := p.buildRequest(req)
 	if err != nil {
 		return err

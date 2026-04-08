@@ -195,10 +195,10 @@ func TestToolSpecStructFields(t *testing.T) {
 	}
 }
 
-func TestChatRequestStructFields(t *testing.T) {
+func TestGenerateRequestStructFields(t *testing.T) {
 	t.Parallel()
 
-	req := ChatRequest{
+	req := GenerateRequest{
 		Model:        "gpt-4",
 		SystemPrompt: "you are helpful",
 		Messages:     []Message{{Role: RoleUser}},

@@ -8,6 +8,7 @@ import (
 
 	"neo-code/internal/config"
 	contextcompact "neo-code/internal/context/compact"
+	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -196,5 +197,43 @@ func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected compact generation to fail instead of deadlocking on malformed stream event")
+	}
+}
+
+func TestCompactSummaryGeneratorRejectsDriverWithoutStreaming(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent("should not run")},
+		},
+	}
+	factory := &scriptedProviderFactory{
+		provider: scripted,
+		capabilities: provider.DriverCapabilities{
+			Streaming:     false,
+			ToolTransport: true,
+		},
+	}
+	generator := newCompactSummaryGenerator(factory, resolvedProvider, "session-model")
+
+	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
+		Mode:   contextcompact.ModeManual,
+		Config: manager.Get().Context.Compact,
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not support streaming") {
+		t.Fatalf("expected streaming capability rejection, got %v", err)
+	}
+	if factory.calls != 0 {
+		t.Fatalf("expected provider build to be skipped, got %d", factory.calls)
+	}
+	if scripted.callCount != 0 {
+		t.Fatalf("expected provider Generate() to be skipped, got %d", scripted.callCount)
 	}
 }

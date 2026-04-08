@@ -235,7 +235,7 @@ func containsModelDescriptorID(models []config.ModelDescriptor, modelID string) 
 
 type catalogTestProvider struct{}
 
-func (catalogTestProvider) Chat(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+func (catalogTestProvider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	return nil
 }
 

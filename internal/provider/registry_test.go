@@ -13,7 +13,7 @@ import (
 
 type stubProvider struct{}
 
-func (stubProvider) Chat(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+func (stubProvider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	return nil
 }
 
@@ -184,6 +184,27 @@ func TestRegistrySupports(t *testing.T) {
 				t.Fatalf("Supports(%q) = %v, want %v", tt.driverType, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRegistryDriverCapabilities(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	got := registry.DriverCapabilities("OPENAI")
+	if !got.Streaming {
+		t.Fatalf("expected openai driver to support streaming, got %+v", got)
+	}
+	if !got.ToolTransport {
+		t.Fatalf("expected openai driver to support tool transport, got %+v", got)
+	}
+	if !got.ModelDiscovery {
+		t.Fatalf("expected openai driver to support model discovery, got %+v", got)
+	}
+
+	missing := registry.DriverCapabilities("missing")
+	if missing != (provider.DriverCapabilities{}) {
+		t.Fatalf("expected zero-value capabilities for missing driver, got %+v", missing)
 	}
 }
 

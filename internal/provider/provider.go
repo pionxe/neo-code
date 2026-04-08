@@ -6,7 +6,7 @@ import (
 	"neo-code/internal/provider/types"
 )
 
-// Provider 定义模型对话能力，通过 channel 推送流式事件给上层消费。
+// Provider 定义模型生成能力，通过 channel 推送流式事件给上层消费。
 type Provider interface {
-	Chat(ctx context.Context, req types.ChatRequest, events chan<- types.StreamEvent) error
+	Generate(ctx context.Context, req types.GenerateRequest, events chan<- types.StreamEvent) error
 }

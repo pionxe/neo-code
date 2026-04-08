@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	// defaultProviderRetryMax 是 runtime 层对单次 provider.Chat() 的最大重试次数（不含首次调用）。
+	// defaultProviderRetryMax 是 runtime 层对单次 provider.Generate() 的最大重试次数（不含首次调用）。
 	// 与 RetryTransport 的 HTTP 层重试互补：Transport 耗尽后 runtime 仍可重试整个 Chat 调用。
 	defaultProviderRetryMax = 2
 	// providerRetryBaseWait 是 runtime 层重试的初始等待时间。
@@ -130,6 +130,7 @@ type UserInput struct {
 
 type ProviderFactory interface {
 	Build(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error)
+	DriverCapabilities(driverType string) provider.DriverCapabilities
 }
 
 type Service struct {
@@ -267,7 +268,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
-		acc, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, providertypes.ChatRequest{
+		acc, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, providertypes.GenerateRequest{
 			Model:        cfg.CurrentModel,
 			SystemPrompt: builtContext.SystemPrompt,
 			Messages:     builtContext.Messages,
@@ -666,7 +667,29 @@ func isRetryableProviderError(err error) bool {
 	return pErr.Retryable
 }
 
-// callProviderWithRetry 在可重试的 ProviderError 上自动重试 provider.Chat() 调用。
+// ensureProviderDriverCapabilities 校验当前 driver 是否满足指定运行场景的基础能力要求。
+func ensureProviderDriverCapabilities(
+	factory ProviderFactory,
+	cfg config.ResolvedProviderConfig,
+	requireStreaming bool,
+	requireToolTransport bool,
+) error {
+	if factory == nil {
+		return errors.New("runtime: provider factory is nil")
+	}
+
+	driverType := strings.TrimSpace(cfg.Driver)
+	caps := factory.DriverCapabilities(driverType)
+	if requireStreaming && !caps.Streaming {
+		return fmt.Errorf("runtime: provider driver %q does not support streaming", driverType)
+	}
+	if requireToolTransport && !caps.ToolTransport {
+		return fmt.Errorf("runtime: provider driver %q does not support tool transport", driverType)
+	}
+	return nil
+}
+
+// callProviderWithRetry 在可重试的 ProviderError 上自动重试 provider.Generate() 调用。
 // 每次重试都会重新创建 provider 实例、流式事件转发管道和累积器。
 // 非可重试错误、context 取消、重试耗尽时直接返回错误。
 // 返回值 acc 保存了本轮流式事件的完整累积状态，供调用方构建 assistant Message 使用。
@@ -674,7 +697,7 @@ func (s *Service) callProviderWithRetry(
 	ctx context.Context,
 	runID string,
 	sessionID string,
-	req providertypes.ChatRequest,
+	req providertypes.GenerateRequest,
 ) (*streamAccumulator, error) {
 	acc := newStreamAccumulator()
 	var lastErr error
@@ -699,6 +722,9 @@ func (s *Service) callProviderWithRetry(
 		if err != nil {
 			return nil, err
 		}
+		if err := ensureProviderDriverCapabilities(s.providerFactory, resolvedProvider, true, true); err != nil {
+			return nil, err
+		}
 
 		modelProvider, err := s.providerFactory.Build(ctx, resolvedProvider)
 		if err != nil {
@@ -709,7 +735,7 @@ func (s *Service) callProviderWithRetry(
 		streamDone := make(chan error, 1)
 		go s.forwardProviderEvents(ctx, runID, sessionID, streamEvents, streamDone, acc)
 
-		err = modelProvider.Chat(ctx, req, streamEvents)
+		err = modelProvider.Generate(ctx, req, streamEvents)
 		close(streamEvents)
 		forwardErr := <-streamDone
 		if forwardErr != nil {

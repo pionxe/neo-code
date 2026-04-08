@@ -1,7 +1,7 @@
 package types
 
-// ChatRequest 是 provider.Chat() 的请求参数。
-type ChatRequest struct {
+// GenerateRequest 是 provider.Generate() 的请求参数。
+type GenerateRequest struct {
 	Model        string     `json:"model"`
 	SystemPrompt string     `json:"system_prompt"`
 	Messages     []Message  `json:"messages"`
