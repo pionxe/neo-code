@@ -44,6 +44,7 @@ type RuntimeClosedMsg = tuistate.RuntimeClosedMsg
 type runFinishedMsg = tuistate.RunFinishedMsg
 type modelCatalogRefreshMsg = tuistate.ModelCatalogRefreshMsg
 type compactFinishedMsg = tuistate.CompactFinishedMsg
+type permissionResolvedMsg = tuistate.PermissionResolvedMsg
 type localCommandResultMsg = tuistate.LocalCommandResultMsg
 type sessionWorkdirResultMsg = tuistate.SessionWorkdirResultMsg
 type workspaceCommandResultMsg = tuistate.WorkspaceCommandResultMsg
@@ -83,22 +84,26 @@ type appComponents struct {
 
 // appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
 type appRuntimeState struct {
-	codeCopyBlocks   map[int]string
-	pendingCopyID    int
-	nowFn            func() time.Time
-	lastInputEditAt  time.Time
-	lastPasteLikeAt  time.Time
-	inputBurstStart  time.Time
-	inputBurstCount  int
-	pasteMode        bool
-	activeMessages   []providertypes.Message
-	activities       []tuistate.ActivityEntry
-	fileCandidates   []string
-	modelRefreshID   string
-	focus            panel
-	runProgressValue float64
-	runProgressKnown bool
-	runProgressLabel string
+	codeCopyBlocks             map[int]string
+	pendingCopyID              int
+	nowFn                      func() time.Time
+	lastInputEditAt            time.Time
+	lastPasteLikeAt            time.Time
+	inputBurstStart            time.Time
+	inputBurstCount            int
+	pasteMode                  bool
+	activeMessages             []providertypes.Message
+	activities                 []tuistate.ActivityEntry
+	fileCandidates             []string
+	modelRefreshID             string
+	focus                      panel
+	runProgressValue           float64
+	runProgressKnown           bool
+	runProgressLabel           string
+	pendingPermissionID        string
+	pendingPermissionTool      string
+	pendingPermissionHint      string
+	pendingPermissionSubmitted bool
 }
 
 type App struct {

@@ -131,6 +131,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.rebuildTranscript()
 		a.transcript.GotoBottom()
 		return a, tea.Batch(cmds...)
+	case permissionResolvedMsg:
+		if typed.RequestID != "" && typed.RequestID != a.pendingPermissionID {
+			return a, tea.Batch(cmds...)
+		}
+		a.pendingPermissionSubmitted = false
+		if typed.Err != nil {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = statusPermissionFailed
+			a.appendActivity("permission", "Permission approval failed", typed.Err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+		a.state.ExecutionError = ""
+		decision := strings.ToLower(strings.TrimSpace(typed.Decision))
+		switch decision {
+		case "allow_once", "allow_session":
+			a.state.StatusText = statusPermissionApproved
+		default:
+			a.state.StatusText = statusPermissionDenied
+		}
+		a.appendActivity("permission", "Permission resolved", decision, false)
+		a.pendingPermissionID = ""
+		a.pendingPermissionTool = ""
+		a.pendingPermissionHint = ""
+		return a, tea.Batch(cmds...)
 	case localCommandResultMsg:
 		if typed.Err != nil {
 			a.state.ExecutionError = typed.Err.Error()
@@ -213,6 +237,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 	case tea.KeyMsg:
+		if decision, ok := resolvePermissionDecisionKey(typed); ok && strings.TrimSpace(a.pendingPermissionID) != "" {
+			if a.pendingPermissionSubmitted {
+				return a, tea.Batch(cmds...)
+			}
+			if a.runtime == nil {
+				a.state.ExecutionError = "runtime is not available"
+				a.state.StatusText = statusPermissionFailed
+				return a, tea.Batch(cmds...)
+			}
+			a.pendingPermissionSubmitted = true
+			a.state.ExecutionError = ""
+			a.state.StatusText = statusAwaitingPermission
+			cmds = append(cmds, runPermissionResolve(a.runtime, a.pendingPermissionID, decision))
+			return a, tea.Batch(cmds...)
+		}
 		if key.Matches(typed, a.keys.Quit) {
 			return a, tea.Quit
 		}
@@ -717,6 +756,8 @@ var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentrun
 	agentruntime.EventType(tuiservices.RuntimeEventRunContext): runtimeEventRunContextHandler,
 	agentruntime.EventType(tuiservices.RuntimeEventToolStatus): runtimeEventToolStatusHandler,
 	agentruntime.EventType(tuiservices.RuntimeEventUsage):      runtimeEventUsageHandler,
+	agentruntime.EventPermissionRequest:                        runtimeEventPermissionRequestHandler,
+	agentruntime.EventPermissionResolved:                       runtimeEventPermissionResolvedHandler,
 	agentruntime.EventToolCallThinking:                         runtimeEventToolCallThinkingHandler,
 	agentruntime.EventToolStart:                                runtimeEventToolStartHandler,
 	agentruntime.EventToolResult:                               runtimeEventToolResultHandler,
@@ -805,6 +846,58 @@ func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	}
 	a.state.TokenUsage = tuiservices.MapUsagePayload(payload)
 	return false
+}
+
+// runtimeEventPermissionRequestHandler 处理权限审批请求并提示用户输入。
+func runtimeEventPermissionRequestHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(agentruntime.PermissionRequestPayload)
+	if !ok {
+		return false
+	}
+	a.pendingPermissionID = strings.TrimSpace(payload.RequestID)
+	a.pendingPermissionTool = strings.TrimSpace(payload.ToolName)
+	a.pendingPermissionHint = formatPermissionPrompt(payload)
+	a.pendingPermissionSubmitted = false
+	a.state.ExecutionError = ""
+	a.state.StatusText = statusAwaitingPermission
+	a.appendActivity("permission", "Permission required", a.pendingPermissionHint, false)
+	return false
+}
+
+// runtimeEventPermissionResolvedHandler 处理权限审批结果并更新状态。
+func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(agentruntime.PermissionResolvedPayload)
+	if !ok {
+		return false
+	}
+	a.pendingPermissionID = ""
+	a.pendingPermissionTool = ""
+	a.pendingPermissionHint = ""
+	a.pendingPermissionSubmitted = false
+	if strings.EqualFold(payload.Decision, "allow") {
+		a.state.StatusText = statusPermissionApproved
+	} else {
+		a.state.StatusText = statusPermissionDenied
+	}
+	a.appendActivity("permission", "Permission resolved", fmt.Sprintf("%s %s", payload.Decision, payload.ToolName), false)
+	return false
+}
+
+// formatPermissionPrompt 组装权限审批提示内容。
+func formatPermissionPrompt(payload agentruntime.PermissionRequestPayload) string {
+	target := strings.TrimSpace(payload.Target)
+	operation := strings.TrimSpace(payload.Operation)
+	toolName := strings.TrimSpace(payload.ToolName)
+	if operation == "" && target == "" {
+		return toolName
+	}
+	if operation == "" {
+		return fmt.Sprintf("%s %s", toolName, target)
+	}
+	if target == "" {
+		return fmt.Sprintf("%s %s", toolName, operation)
+	}
+	return fmt.Sprintf("%s %s %s", toolName, operation, target)
 }
 
 // runtimeEventToolCallThinkingHandler 处理工具规划阶段事件。
@@ -1554,6 +1647,21 @@ func ListenForRuntimeEvent(sub <-chan agentruntime.RuntimeEvent) tea.Cmd {
 	)
 }
 
+// resolvePermissionDecisionKey 将按键映射为权限审批决策。
+func resolvePermissionDecisionKey(msg tea.KeyMsg) (agentruntime.PermissionResolutionDecision, bool) {
+	typed := strings.ToLower(strings.TrimSpace(msg.String()))
+	switch typed {
+	case "y":
+		return agentruntime.PermissionResolutionAllowOnce, true
+	case "a":
+		return agentruntime.PermissionResolutionAllowSession, true
+	case "n":
+		return agentruntime.PermissionResolutionReject, true
+	default:
+		return "", false
+	}
+}
+
 func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, workdir string, content string) tea.Cmd {
 	return tuiservices.RunAgentCmd(
 		runtime,
@@ -1564,6 +1672,24 @@ func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, work
 			Workdir:   workdir,
 		},
 		func(err error) tea.Msg { return runFinishedMsg{Err: err} },
+	)
+}
+
+// runPermissionResolve 触发权限审批回传并封装 TUI 消息。
+func runPermissionResolve(runtime agentruntime.Runtime, requestID string, decision agentruntime.PermissionResolutionDecision) tea.Cmd {
+	return tuiservices.RunPermissionResolveCmd(
+		runtime,
+		agentruntime.PermissionResolutionInput{
+			RequestID: requestID,
+			Decision:  decision,
+		},
+		func(err error) tea.Msg {
+			return permissionResolvedMsg{
+				RequestID: requestID,
+				Decision:  string(decision),
+				Err:       err,
+			}
+		},
 	)
 }
 

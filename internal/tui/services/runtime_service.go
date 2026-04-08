@@ -18,6 +18,11 @@ type Compactor interface {
 	Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error)
 }
 
+// PermissionResolver 定义执行权限审批回传所需最小能力。
+type PermissionResolver interface {
+	ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error
+}
+
 // ListenForRuntimeEventCmd 监听 runtime 事件通道，并将结果映射为 UI 消息。
 func ListenForRuntimeEventCmd(
 	sub <-chan agentruntime.RuntimeEvent,
@@ -53,6 +58,18 @@ func RunCompactCmd(
 ) tea.Cmd {
 	return func() tea.Msg {
 		_, err := runtime.Compact(context.Background(), input)
+		return doneMsg(err)
+	}
+}
+
+// RunPermissionResolveCmd 执行权限审批回传，并将结果映射为 UI 消息。
+func RunPermissionResolveCmd(
+	runtime PermissionResolver,
+	input agentruntime.PermissionResolutionInput,
+	doneMsg func(error) tea.Msg,
+) tea.Cmd {
+	return func() tea.Msg {
+		err := runtime.ResolvePermission(context.Background(), input)
 		return doneMsg(err)
 	}
 }

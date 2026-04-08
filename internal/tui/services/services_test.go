@@ -33,6 +33,16 @@ func (s *stubCompactor) Compact(ctx context.Context, input agentruntime.CompactI
 	return agentruntime.CompactResult{}, s.err
 }
 
+type stubPermissionResolver struct {
+	lastInput agentruntime.PermissionResolutionInput
+	err       error
+}
+
+func (s *stubPermissionResolver) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	s.lastInput = input
+	return s.err
+}
+
 type stubProvider struct {
 	selection config.ProviderSelection
 	models    []config.ModelDescriptor
@@ -98,6 +108,21 @@ func TestRunCompactCmd(t *testing.T) {
 	}
 	if err, ok := msg.(error); !ok || err == nil || err.Error() != "compact failed" {
 		t.Fatalf("expected forwarded compact error, got %T %#v", msg, msg)
+	}
+}
+
+func TestRunPermissionResolveCmd(t *testing.T) {
+	resolver := &stubPermissionResolver{err: errors.New("permission failed")}
+	input := agentruntime.PermissionResolutionInput{
+		RequestID: "perm-1",
+		Decision:  agentruntime.PermissionResolutionAllowOnce,
+	}
+	msg := RunPermissionResolveCmd(resolver, input, func(err error) tea.Msg { return err })()
+	if resolver.lastInput.RequestID != "perm-1" || resolver.lastInput.Decision != agentruntime.PermissionResolutionAllowOnce {
+		t.Fatalf("unexpected permission input: %+v", resolver.lastInput)
+	}
+	if err, ok := msg.(error); !ok || err == nil || err.Error() != "permission failed" {
+		t.Fatalf("expected forwarded permission error, got %T %#v", msg, msg)
 	}
 }
 
