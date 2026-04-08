@@ -74,7 +74,7 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 				if !ok {
 					return
 				}
-				if err := handleProviderStreamEvent(event, acc, nil, nil); err != nil && streamErr == nil {
+				if err := handleProviderStreamEvent(event, acc, nil, nil, nil); err != nil && streamErr == nil {
 					// 记录首个协议错误后继续排空事件通道，避免 provider 在后续发送时阻塞。
 					streamErr = err
 				}

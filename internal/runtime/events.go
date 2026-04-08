@@ -79,4 +79,14 @@ const (
 	EventCompactDone EventType = "compact_done"
 	// EventCompactError is emitted when compact fails.
 	EventCompactError EventType = "compact_error"
+	// EventTokenUsage is emitted after each provider response with token statistics.
+	EventTokenUsage EventType = "token_usage"
 )
+
+// TokenUsagePayload carries token usage statistics for a single provider turn.
+type TokenUsagePayload struct {
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	SessionInputTokens  int `json:"session_input_tokens"`
+	SessionOutputTokens int `json:"session_output_tokens"`
+}

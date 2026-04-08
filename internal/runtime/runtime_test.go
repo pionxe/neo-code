@@ -2954,6 +2954,7 @@ func TestHandleProviderStreamEventErrorBranches(t *testing.T) {
 		acc,
 		nil,
 		nil,
+		nil,
 	)
 	if err == nil || !containsError(err, "tool_call_start event payload is nil") {
 		t.Fatalf("expected tool_call_start payload error, got %v", err)
@@ -2964,6 +2965,7 @@ func TestHandleProviderStreamEventErrorBranches(t *testing.T) {
 		acc,
 		nil,
 		nil,
+		nil,
 	)
 	if err == nil || !containsError(err, "tool_call_delta event payload is nil") {
 		t.Fatalf("expected tool_call_delta payload error, got %v", err)
@@ -2972,6 +2974,7 @@ func TestHandleProviderStreamEventErrorBranches(t *testing.T) {
 	err = handleProviderStreamEvent(
 		providertypes.StreamEvent{Type: providertypes.StreamEventMessageDone},
 		acc,
+		nil,
 		nil,
 		nil,
 	)

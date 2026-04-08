@@ -2,10 +2,12 @@ package context
 
 // Metadata contains the non-message runtime state needed by context sources.
 type Metadata struct {
-	Workdir  string
-	Shell    string
-	Provider string
-	Model    string
+	Workdir             string
+	Shell               string
+	Provider            string
+	Model               string
+	SessionInputTokens  int
+	SessionOutputTokens int
 }
 
 // GitState is the summarized git metadata exposed to the prompt builder.
