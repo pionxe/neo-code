@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	agentruntime "neo-code/internal/runtime"
+	agentsession "neo-code/internal/session"
 )
 
 // SessionWorkdirSetter 定义设置会话工作目录所需的最小 runtime 能力。
 type SessionWorkdirSetter interface {
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentruntime.Session, error)
+	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error)
 }
 
 // SessionWorkdirCommandResult 表示工作目录命令执行结果。
