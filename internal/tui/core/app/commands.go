@@ -39,6 +39,8 @@ const (
 	providerPickerSubtitle = "Up/Down choose, Enter confirm, Esc cancel"
 	modelPickerTitle       = "Select Model"
 	modelPickerSubtitle    = "Up/Down choose, Enter confirm, Esc cancel"
+	helpPickerTitle        = "Slash Commands"
+	helpPickerSubtitle     = "Up/Down choose, Enter run, Esc cancel"
 	filePickerTitle        = "Browse Files"
 	filePickerSubtitle     = "Navigate folders, Enter choose file, Esc cancel"
 
@@ -69,6 +71,7 @@ const (
 	statusCompacting           = "Compacting context"
 	statusChooseProvider       = "Choose a provider"
 	statusChooseModel          = "Choose a model"
+	statusChooseHelp           = "Choose a slash command"
 	statusBrowseFile           = "Browse workspace files"
 	statusPermissionRequired   = "Permission required: choose a decision and press Enter"
 	statusPermissionSubmitting = "Submitting permission decision"
@@ -122,6 +125,13 @@ func newSelectionPicker(items []list.Item) list.Model {
 	return picker
 }
 
+// newHelpPicker 创建 /help 专用选择器，禁用分页以保持单页展示体验。
+func newHelpPicker(items []list.Item) list.Model {
+	picker := newSelectionPicker(items)
+	picker.SetShowPagination(false)
+	return picker
+}
+
 func newCommandMenuModel(uiStyles styles) list.Model {
 	delegate := commandMenuDelegate{styles: uiStyles}
 	menu := list.New([]list.Item{}, delegate, 0, 0)
@@ -142,6 +152,15 @@ func newSelectionPickerItems(items []selectionItem) list.Model {
 		listItems = append(listItems, item)
 	}
 	return newSelectionPicker(listItems)
+}
+
+// newHelpPickerItems 将 slash 命令映射为 /help 弹层列表项。
+func newHelpPickerItems(items []selectionItem) list.Model {
+	listItems := make([]list.Item, 0, len(items))
+	for _, item := range items {
+		listItems = append(listItems, item)
+	}
+	return newHelpPicker(listItems)
 }
 
 func mapProviderItems(items []config.ProviderCatalogItem) []selectionItem {
@@ -174,6 +193,13 @@ func replacePickerItems(current *list.Model, items []selectionItem) {
 	*current = next
 }
 
+// replaceHelpPickerItems 替换 /help 弹层条目并保持尺寸。
+func replaceHelpPickerItems(current *list.Model, items []selectionItem) {
+	next := newHelpPickerItems(items)
+	next.SetSize(current.Width(), current.Height())
+	*current = next
+}
+
 func (a *App) refreshProviderPicker() error {
 	items, err := a.providerSvc.ListProviders(context.Background())
 	if err != nil {
@@ -196,12 +222,32 @@ func (a *App) refreshModelPicker() error {
 	return nil
 }
 
+// refreshHelpPicker 刷新 /help 弹层中的 slash 命令列表。
+func (a *App) refreshHelpPicker() error {
+	items := make([]selectionItem, 0, len(builtinSlashCommands))
+	for _, command := range builtinSlashCommands {
+		items = append(items, selectionItem{
+			id:          command.Usage,
+			name:        command.Usage,
+			description: command.Description,
+		})
+	}
+	replaceHelpPickerItems(&a.helpPicker, items)
+	selectPickerItemByID(&a.helpPicker, "")
+	return nil
+}
+
 func (a *App) openProviderPicker() {
 	a.openPicker(pickerProvider, statusChooseProvider, &a.providerPicker, a.state.CurrentProvider)
 }
 
 func (a *App) openModelPicker() {
 	a.openPicker(pickerModel, statusChooseModel, &a.modelPicker, a.state.CurrentModel)
+}
+
+// openHelpPicker 打开 slash 命令帮助弹层并进入可选择状态。
+func (a *App) openHelpPicker() {
+	a.openPicker(pickerHelp, statusChooseHelp, &a.helpPicker, "")
 }
 
 func (a *App) openPicker(mode pickerMode, statusText string, picker *list.Model, selectedID string) {

@@ -179,6 +179,11 @@ func (a App) renderPicker(width int, height int) string {
 		subtitle = filePickerSubtitle
 		body = a.fileBrowser.View()
 	}
+	if a.state.ActivePicker == pickerHelp {
+		title = helpPickerTitle
+		subtitle = helpPickerSubtitle
+		body = a.helpPicker.View()
+	}
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		a.styles.panelTitle.Render(title),

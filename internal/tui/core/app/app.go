@@ -37,6 +37,7 @@ const (
 	pickerProvider pickerMode = tuistate.PickerProvider
 	pickerModel    pickerMode = tuistate.PickerModel
 	pickerFile     pickerMode = tuistate.PickerFile
+	pickerHelp     pickerMode = tuistate.PickerHelp
 )
 
 type RuntimeMsg = tuistate.RuntimeMsg
@@ -74,6 +75,7 @@ type appComponents struct {
 	commandMenuMeta  tuistate.CommandMenuMeta
 	providerPicker   list.Model
 	modelPicker      list.Model
+	helpPicker       list.Model
 	fileBrowser      filepicker.Model
 	progress         progress.Model
 	transcript       viewport.Model
@@ -224,6 +226,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			commandMenu:      commandMenu,
 			providerPicker:   newSelectionPickerItems(nil),
 			modelPicker:      newSelectionPickerItems(nil),
+			helpPicker:       newHelpPickerItems(nil),
 			fileBrowser:      fileBrowser,
 			progress:         progressBar,
 			transcript:       viewport.New(0, 0),
@@ -256,6 +259,9 @@ func newApp(container tuibootstrap.Container) (App, error) {
 		return App{}, err
 	}
 	if err := app.refreshModelPicker(); err != nil {
+		return App{}, err
+	}
+	if err := app.refreshHelpPicker(); err != nil {
 		return App{}, err
 	}
 	app.selectCurrentProvider(cfg.SelectedProvider)

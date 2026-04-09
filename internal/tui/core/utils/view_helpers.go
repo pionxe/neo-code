@@ -15,6 +15,8 @@ func PickerLabelFromMode(mode tuistate.PickerMode) string {
 		return "model"
 	case tuistate.PickerFile:
 		return "file"
+	case tuistate.PickerHelp:
+		return "help"
 	default:
 		return "none"
 	}

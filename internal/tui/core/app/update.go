@@ -364,6 +364,15 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.resetPasteHeuristics()
 
 			switch strings.ToLower(input) {
+			case slashCommandHelp:
+				if err := a.refreshHelpPicker(); err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("system", "Failed to refresh slash help", err.Error(), true)
+					return a, tea.Batch(cmds...)
+				}
+				a.openHelpPicker()
+				return a, tea.Batch(cmds...)
 			case slashCommandProvider:
 				if err := a.refreshProviderPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
@@ -613,6 +622,13 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, runModelSelection(a.providerSvc, item.id)
+		case pickerHelp:
+			item, ok := a.helpPicker.SelectedItem().(selectionItem)
+			a.closePicker()
+			if !ok {
+				return a, nil
+			}
+			return a, a.runSlashCommandSelection(item.id)
 		}
 	}
 
@@ -622,6 +638,8 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.providerPicker, cmd = a.providerPicker.Update(msg)
 	case pickerModel:
 		a.modelPicker, cmd = a.modelPicker.Update(msg)
+	case pickerHelp:
+		a.helpPicker, cmd = a.helpPicker.Update(msg)
 	case pickerFile:
 		a.fileBrowser, cmd = a.fileBrowser.Update(msg)
 		if didSelect, path := a.fileBrowser.DidSelectFile(msg); didSelect {
@@ -1516,6 +1534,12 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 
 	a.providerPicker.SetSize(max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.rightHeight-10, 6, 10)))
+	helpPickerMaxHeight := max(8, lay.rightHeight-6)
+	helpPickerDesiredHeight := (len(a.helpPicker.Items()) * 3) + 1
+	a.helpPicker.SetSize(
+		max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)),
+		max(6, tuiutils.Clamp(helpPickerDesiredHeight, 6, helpPickerMaxHeight)),
+	)
 	a.fileBrowser.SetHeight(max(6, tuiutils.Clamp(lay.rightHeight-8, 8, 16)))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
@@ -1660,6 +1684,55 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		return true, runCompact(a.runtime, a.state.ActiveSessionID)
 	default:
 		return false, nil
+	}
+}
+
+// runSlashCommandSelection 根据 /help 弹层选中的命令执行对应 slash 行为。
+func (a *App) runSlashCommandSelection(command string) tea.Cmd {
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "" {
+		return nil
+	}
+
+	if handled, cmd := a.handleImmediateSlashCommand(command); handled {
+		return cmd
+	}
+
+	switch command {
+	case slashCommandHelp:
+		if err := a.refreshHelpPicker(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("system", "Failed to refresh slash help", err.Error(), true)
+			return nil
+		}
+		a.openHelpPicker()
+		return nil
+	case slashCommandProvider:
+		if err := a.refreshProviderPicker(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
+			return nil
+		}
+		a.openProviderPicker()
+		return nil
+	case slashCommandModelPick:
+		if err := a.refreshModelPicker(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("system", "Failed to refresh models", err.Error(), true)
+			return nil
+		}
+		a.openModelPicker()
+		return a.requestModelCatalogRefresh(a.state.CurrentProvider)
+	default:
+		a.state.StatusText = statusApplyingCommand
+		a.state.ExecutionError = ""
+		if isWorkspaceSlashCommand(command) {
+			return runSessionWorkdirCommand(a.runtime, a.state.ActiveSessionID, a.state.CurrentWorkdir, command)
+		}
+		return runLocalCommand(a.configManager, a.providerSvc, a.currentStatusSnapshot(), command)
 	}
 }
 
