@@ -1,4 +1,4 @@
-﻿# Provider 模块设计与接口文档
+# Provider 模块设计与接口文档
 
 > 文档版本：v1.2
 > 文档定位：详细设计文档（LLD）+ 接口文档（API/Contract）

@@ -1,4 +1,4 @@
-﻿# context-compact
+# context-compact
 
 > 文档版本：v2.0
 > 文档定位：Context 压缩专题规范（LLD + Contract）

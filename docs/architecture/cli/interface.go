@@ -1,5 +1,6 @@
-﻿//go:build ignore
+//go:build ignore
 // +build ignore
+// 说明：本文件为架构契约定义，仅用于文档与校验，不参与生产编译。
 
 package cli
 
@@ -34,6 +35,7 @@ const (
 // Invocation 描述一次 CLI 调用上下文。
 type Invocation struct {
 	// Argv 是命令行参数序列，不包含可执行文件自身。
+	// 约束：Argv 不能为 nil；空切片表示无参数。
 	Argv []string
 	// Stdin 是标准输入流。
 	Stdin io.Reader
@@ -42,6 +44,7 @@ type Invocation struct {
 	// Stderr 是标准错误输出流。
 	Stderr io.Writer
 	// Workdir 是调用时工作目录。
+	// 约束：Workdir 必须为绝对路径。
 	Workdir string
 }
 
@@ -54,6 +57,7 @@ type ExecRequest struct {
 	// SessionID 是目标会话标识，可为空表示新会话。
 	SessionID string
 	// Workdir 是本次执行工作目录覆盖值。
+	// 约束：若非空，必须为绝对路径。
 	Workdir string
 	// OutputMode 是输出模式，默认为流式输出。
 	OutputMode ExecOutputMode
@@ -96,11 +100,12 @@ type GatewayPort interface {
 type CLI interface {
 	// Parse 解析一次命令调用并产生命令分派结果。
 	// 职责：把 argv 解析为稳定模式语义并完成基础参数校验。
-	// 输入语义：inv.Argv 为原始参数序列。
+	// 输入语义：inv.Argv 为原始参数序列，inv.Workdir 为当前工作目录。
 	// 并发约束：实现必须支持并发解析调用。
 	// 生命周期：每次进程执行调用一次。
 	// 错误语义：返回参数非法、子命令未知或组合冲突错误。
 	// 语义约束：空子命令 MUST 解析为 ModeTUI；`exec` MUST 解析为 ModeExec；`chat` SHOULD 返回未知子命令提示。
+	// 校验约束：inv.Argv 为 nil 时 MUST 返回 `invalid_argv`；inv.Workdir 非绝对路径时 MUST 返回 `invalid_workdir`。
 	Parse(ctx context.Context, inv Invocation) (DispatchResult, error)
 	// Run 执行一次 CLI 调用。
 	// 职责：按分派结果启动 TUI 或执行无头模式并输出结果。

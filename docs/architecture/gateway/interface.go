@@ -1,5 +1,6 @@
-﻿//go:build ignore
+//go:build ignore
 // +build ignore
+// 说明：本文件为架构契约定义，仅用于文档与校验，不参与生产编译。
 
 package gateway
 
@@ -42,6 +43,92 @@ const (
 	FrameActionSetSessionWorkdir FrameAction = "set_session_workdir"
 )
 
+// PayloadKind 表示 payload 的显式类型标签。
+type PayloadKind string
+
+const (
+	// PayloadKindRunRequest 表示运行请求 payload。
+	PayloadKindRunRequest PayloadKind = "run_request"
+	// PayloadKindCompactRequest 表示手动压缩请求 payload。
+	PayloadKindCompactRequest PayloadKind = "compact_request"
+	// PayloadKindCancelRequest 表示取消请求 payload。
+	PayloadKindCancelRequest PayloadKind = "cancel_request"
+	// PayloadKindListSessionsRequest 表示会话列表请求 payload。
+	PayloadKindListSessionsRequest PayloadKind = "list_sessions_request"
+	// PayloadKindLoadSessionRequest 表示会话加载请求 payload。
+	PayloadKindLoadSessionRequest PayloadKind = "load_session_request"
+	// PayloadKindSetSessionWorkdirRequest 表示会话工作目录更新请求 payload。
+	PayloadKindSetSessionWorkdirRequest PayloadKind = "set_session_workdir_request"
+	// PayloadKindRuntimeEvent 表示运行时事件 payload。
+	PayloadKindRuntimeEvent PayloadKind = "runtime_event"
+	// PayloadKindAck 表示确认帧 payload。
+	PayloadKindAck PayloadKind = "ack"
+)
+
+// FramePayload 定义网关 payload 的密封接口。
+// 说明：实现方必须通过 PayloadKind 分派到对应 payload 结构，禁止直接使用 any。
+type FramePayload interface {
+	isFramePayload()
+}
+
+// RunRequestPayload 是 run 动作 payload。
+type RunRequestPayload struct {
+	// InputText 是文本输入内容。
+	InputText string `json:"input_text,omitempty"`
+	// InputParts 是多模态输入分片，语义与 provider.MessagePart 保持一致。
+	InputParts []provider.MessagePart `json:"input_parts,omitempty"`
+	// Workdir 是本次请求工作目录覆盖值。
+	Workdir string `json:"workdir,omitempty"`
+}
+
+func (RunRequestPayload) isFramePayload() {}
+
+// CompactRequestPayload 是 compact 动作 payload。
+type CompactRequestPayload struct{}
+
+func (CompactRequestPayload) isFramePayload() {}
+
+// CancelRequestPayload 是 cancel 动作 payload。
+type CancelRequestPayload struct{}
+
+func (CancelRequestPayload) isFramePayload() {}
+
+// ListSessionsRequestPayload 是 list_sessions 动作 payload。
+type ListSessionsRequestPayload struct{}
+
+func (ListSessionsRequestPayload) isFramePayload() {}
+
+// LoadSessionRequestPayload 是 load_session 动作 payload。
+type LoadSessionRequestPayload struct{}
+
+func (LoadSessionRequestPayload) isFramePayload() {}
+
+// SetSessionWorkdirRequestPayload 是 set_session_workdir 动作 payload。
+type SetSessionWorkdirRequestPayload struct {
+	// Workdir 是目标会话工作目录。
+	Workdir string `json:"workdir"`
+}
+
+func (SetSessionWorkdirRequestPayload) isFramePayload() {}
+
+// RuntimeEventPayload 是 event 帧 payload。
+type RuntimeEventPayload struct {
+	// Event 是运行时事件对象。
+	Event runtime.RuntimeEvent `json:"event"`
+}
+
+func (RuntimeEventPayload) isFramePayload() {}
+
+// AckPayload 是 ack 帧 payload。
+type AckPayload struct {
+	// Accepted 表示请求是否被接收。
+	Accepted bool `json:"accepted"`
+	// Message 是确认消息。
+	Message string `json:"message,omitempty"`
+}
+
+func (AckPayload) isFramePayload() {}
+
 // FrameError 表示协议帧中的错误信息。
 type FrameError struct {
 	// Code 是稳定错误码，供客户端执行分支判断。
@@ -62,14 +149,11 @@ type MessageFrame struct {
 	RunID string `json:"run_id,omitempty"`
 	// SessionID 是会话标识。
 	SessionID string `json:"session_id,omitempty"`
-	// InputText 是文本输入内容。
-	InputText string `json:"input_text,omitempty"`
-	// InputParts 是多模态输入分片，语义与 provider.MessagePart 保持一致。
-	InputParts []provider.MessagePart `json:"input_parts,omitempty"`
-	// Workdir 是本次请求工作目录覆盖值。
-	Workdir string `json:"workdir,omitempty"`
+	// PayloadKind 是 payload 的显式类型标签。
+	PayloadKind PayloadKind `json:"payload_kind,omitempty"`
 	// Payload 是动作扩展负载或事件负载。
-	Payload any `json:"payload,omitempty"`
+	// 约束：必须与 PayloadKind 一一对应。
+	Payload FramePayload `json:"payload,omitempty"`
 	// Error 是错误帧负载。
 	Error *FrameError `json:"error,omitempty"`
 }

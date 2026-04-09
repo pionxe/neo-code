@@ -1,5 +1,6 @@
 //go:build ignore
 // +build ignore
+// 说明：本文件为架构契约定义，仅用于文档与校验，不参与生产编译。
 
 package session
 

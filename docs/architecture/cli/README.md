@@ -1,6 +1,6 @@
-﻿# CLI 模块设计与接口文档
+# CLI 模块设计与接口文档
 
-> 文档版本：v3.0
+> 文档版本：v3.1
 > 文档定位：详细设计文档（LLD）+ 接口文档（API/Contract）
 
 ## 规范词约定
@@ -35,8 +35,6 @@ CLI 模块 MUST NOT 覆盖：
 
 ### 1.3 核心流程
 
-#### 1.3.1 命令解析与模式分派
-
 ```mermaid
 sequenceDiagram
     participant U as User
@@ -47,50 +45,28 @@ sequenceDiagram
     CLI->>CLI: Parse(Invocation)
 
     alt 空子命令
-        CLI->>CLI: Mode = tui
-        CLI->>GW: Send(MessageFrame{type=request,action=run})
+        CLI->>CLI: Mode=tui
+        CLI->>GW: Send(run request frame)
     else exec 子命令
-        CLI->>CLI: Mode = exec
-        CLI->>GW: Send(MessageFrame{type=request,action=run})
+        CLI->>CLI: Mode=exec
+        CLI->>GW: Send(run request frame)
     else 未知子命令(chat 等)
-        CLI-->>U: 错误提示 + 使用建议
+        CLI-->>U: unknown_command
     end
 ```
 
-#### 1.3.2 无头执行输出流程
+### 1.4 Invocation 校验约束
 
-```mermaid
-sequenceDiagram
-    participant CLI as CLI
-    participant GW as GatewayPort
-    participant OUT as Stdout/Stderr
+- `Invocation.Argv` MUST 非 `nil`；空切片表示“无参数”。
+- `Invocation.Workdir` MUST 为绝对路径。
+- `ExecRequest.Workdir` 若非空 MUST 为绝对路径。
+- `Parse` 在上述约束失败时 MUST 返回稳定错误码：`invalid_argv`、`invalid_workdir`。
 
-    CLI->>GW: Send(run request frame)
-    alt output_mode=stream
-        loop event stream
-            GW-->>CLI: MessageFrame(type=event)
-            CLI-->>OUT: 实时打印进度/文本/工具状态
-        end
-    else output_mode=final
-        loop collect
-            GW-->>CLI: MessageFrame(type=event)
-            CLI->>CLI: 缓存中间事件
-        end
-        CLI-->>OUT: 仅输出最终结果/错误
-    end
-```
-
-### 1.4 上下游边界
+### 1.5 上下游边界
 
 - 上游：终端用户与 Shell。
 - 下游：`gateway.Gateway` 提供的客户端通信端口（文档契约为 `cli.GatewayPort`）。
 - 边界约束：CLI 不直连 Runtime、Provider、Tools。
-
-### 1.5 非功能约束
-
-- 并发：CLI 单次执行语义 MUST 清晰，不并发执行多条命令。
-- 可观测性：SHOULD 输出 `request_id/run_id/session_id` 便于追踪。
-- 稳定性：参数错误码与退出码映射 MUST 稳定。
 
 ## 2. 接口文档（API/Contract）
 
@@ -117,9 +93,9 @@ sequenceDiagram
 | `ExecRequest` | 无头执行请求 |
 | `ExecOutputMode` | `stream` / `final` |
 
-### 2.4 输入输出示例
+### 2.4 解析结果与错误示例
 
-#### 2.4.1 `neocode` 解析结果示例
+#### 2.4.1 `neocode` 解析结果
 
 ```json
 {
@@ -128,7 +104,7 @@ sequenceDiagram
 }
 ```
 
-#### 2.4.2 `neocode exec` 解析结果示例
+#### 2.4.2 `neocode exec` 解析结果
 
 ```json
 {
@@ -142,28 +118,21 @@ sequenceDiagram
 }
 ```
 
-#### 2.4.3 未知 `chat` 子命令错误示例
+#### 2.4.3 参数校验失败示例
+
+```json
+{
+  "code": "invalid_workdir",
+  "message": "workdir must be absolute path"
+}
+```
+
+#### 2.4.4 未知子命令示例
 
 ```json
 {
   "code": "unknown_command",
   "message": "unknown subcommand: chat, use `neocode` to start TUI"
-}
-```
-
-#### 2.4.4 无头流式事件输出示例
-
-```json
-{"type":"event","action":"run","run_id":"run_001","payload":{"event_type":"run_progress","message":"searching files"}}
-{"type":"event","action":"run","run_id":"run_001","payload":{"event_type":"run_done","message":"completed"}}
-```
-
-#### 2.4.5 无头仅最终输出示例
-
-```json
-{
-  "run_id": "run_001",
-  "final_text": "构建失败原因：缺少环境变量 OPENAI_API_KEY"
 }
 ```
 
@@ -178,6 +147,6 @@ sequenceDiagram
 - 是否明确 `CLI` 为唯一主契约锚点。
 - 是否固化默认启动语义（`neocode`=TUI，`exec`=无头）。
 - 是否明确不定义独立 `chat` 子命令。
-- 是否包含流式与仅最终两种无头输出语义。
+- 是否包含 `Invocation` 参数硬约束与错误码约束。
 - 是否明确 CLI 下游仅 Gateway。
 - README 类型名是否与 `cli/interface.go` 一致。

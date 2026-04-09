@@ -1,8 +1,8 @@
-﻿# NeoCode 系统架构总览（HLD）
+# NeoCode 系统架构总览（HLD）
 
 > 文档版本：v3.2.0
 > 文档定位：系统级架构设计（HLD）
-> 事实源目录：`。\docs\architecture`
+> 事实源目录：`.\docs\architecture`
 
 ## 1. 引言
 
