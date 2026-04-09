@@ -206,3 +206,5 @@ go run ./cmd/neocode --workdir /path/to/workspace
 - `--workdir` 只影响当前进程，不会写回 `config.yaml`
 - 当前工作区会同时用于工具执行根目录与 session 存储分桶
 - session 历史现在按工作区隔离存储，不同工作区默认互不可见
+
+[![Contributors](https://hub-io-mcells-projects.vercel.app/r/1024XEngineer/neo-code)](https://github.com/1024XEngineer/neo-code/graphs/contributors)
