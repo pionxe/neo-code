@@ -1165,3 +1165,145 @@ func TestRunSlashCommandSelectionModelReturnsRefreshCmd(t *testing.T) {
 		t.Fatalf("expected modelCatalogRefreshMsg, got %T", msg)
 	}
 }
+
+func TestRunSlashCommandSelectionProviderRefreshError(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.providerSvc = errorProviderService{err: errors.New("provider refresh failed")}
+
+	cmd := app.runSlashCommandSelection(slashCommandProvider)
+	if cmd != nil {
+		t.Fatalf("expected nil cmd when provider refresh fails")
+	}
+	if !strings.Contains(app.state.StatusText, "provider refresh failed") {
+		t.Fatalf("expected provider refresh error status, got %q", app.state.StatusText)
+	}
+}
+
+func TestRunSlashCommandSelectionModelRefreshError(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.providerSvc = errorProviderService{err: errors.New("model refresh failed")}
+
+	cmd := app.runSlashCommandSelection(slashCommandModelPick)
+	if cmd != nil {
+		t.Fatalf("expected nil cmd when model refresh fails")
+	}
+	if !strings.Contains(app.state.StatusText, "model refresh failed") {
+		t.Fatalf("expected model refresh error status, got %q", app.state.StatusText)
+	}
+}
+
+func TestRunSlashCommandSelectionWorkspaceAndLocal(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = ""
+	app.state.CurrentWorkdir = t.TempDir()
+
+	workspaceCmd := app.runSlashCommandSelection("/cwd")
+	if workspaceCmd == nil {
+		t.Fatalf("expected workspace slash cmd")
+	}
+	workspaceMsg := workspaceCmd()
+	workspaceResult, ok := workspaceMsg.(sessionWorkdirResultMsg)
+	if !ok {
+		t.Fatalf("expected sessionWorkdirResultMsg, got %T", workspaceMsg)
+	}
+	if workspaceResult.Err != nil {
+		t.Fatalf("expected no workspace error, got %v", workspaceResult.Err)
+	}
+
+	localCmd := app.runSlashCommandSelection(slashCommandStatus)
+	if localCmd == nil {
+		t.Fatalf("expected local slash cmd")
+	}
+	localMsg := localCmd()
+	localResult, ok := localMsg.(localCommandResultMsg)
+	if !ok {
+		t.Fatalf("expected localCommandResultMsg, got %T", localMsg)
+	}
+	if !strings.Contains(localResult.Notice, "Status:") {
+		t.Fatalf("expected status output in local command result")
+	}
+}
+
+func TestHandleImmediateSlashCommandCompactBranches(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+
+	handled, cmd := app.handleImmediateSlashCommand(slashCommandCompact + " now")
+	if !handled || cmd != nil {
+		t.Fatalf("expected compact with args to be handled without cmd")
+	}
+	if !strings.Contains(app.state.StatusText, "usage:") {
+		t.Fatalf("expected usage error for compact with args")
+	}
+
+	app.state.ExecutionError = ""
+	app.state.IsCompacting = true
+	handled, cmd = app.handleImmediateSlashCommand(slashCommandCompact)
+	if !handled || cmd != nil {
+		t.Fatalf("expected compact busy branch to return handled with nil cmd")
+	}
+	if !strings.Contains(app.state.StatusText, "already running") {
+		t.Fatalf("expected busy message")
+	}
+
+	app.state.IsCompacting = false
+	app.state.IsAgentRunning = false
+	app.state.StatusText = ""
+	handled, cmd = app.handleImmediateSlashCommand(slashCommandCompact)
+	if !handled || cmd == nil {
+		t.Fatalf("expected compact success branch to return cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(compactFinishedMsg); !ok {
+		t.Fatalf("expected compactFinishedMsg, got %T", msg)
+	}
+	if len(runtime.resolveCalls) != 0 {
+		t.Fatalf("compact should not resolve permissions")
+	}
+}
+
+func TestHandleImmediateSlashCommandDefault(t *testing.T) {
+	app, _ := newTestApp(t)
+	handled, cmd := app.handleImmediateSlashCommand("/unknown")
+	if handled || cmd != nil {
+		t.Fatalf("expected unknown slash command to be ignored")
+	}
+}
+
+func TestFormatPermissionPromptToolOnly(t *testing.T) {
+	got := formatPermissionPrompt(agentruntime.PermissionRequestPayload{ToolName: "bash"})
+	if got != "bash" {
+		t.Fatalf("expected tool-only prompt, got %q", got)
+	}
+}
+
+func TestStartDraftSessionResetsRunState(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+	app.state.ActiveSessionTitle = "Session 1"
+	app.state.ActiveRunID = "run-1"
+	app.state.CurrentTool = "bash"
+	app.state.ToolStates = []tuistate.ToolState{{ToolCallID: "tool-1", ToolName: "bash"}}
+	app.state.RunContext = tuistate.ContextWindowState{Provider: "openai"}
+	app.state.TokenUsage = tuistate.TokenUsageState{RunTotalTokens: 123}
+	app.activities = []tuistate.ActivityEntry{{Title: "activity"}}
+	app.state.CurrentWorkdir = t.TempDir()
+
+	app.startDraftSession()
+
+	if app.state.ActiveRunID != "" {
+		t.Fatalf("expected run id to be reset")
+	}
+	if app.state.CurrentTool != "" {
+		t.Fatalf("expected current tool to be reset")
+	}
+	if len(app.state.ToolStates) != 0 {
+		t.Fatalf("expected tool states to be reset")
+	}
+	if app.state.ActiveSessionID != "" || app.state.ActiveSessionTitle != draftSessionTitle {
+		t.Fatalf("expected draft session state")
+	}
+	if len(app.activities) != 0 {
+		t.Fatalf("expected activities to be cleared")
+	}
+}
