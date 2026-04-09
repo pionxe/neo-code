@@ -74,6 +74,7 @@ func TestStatusConstants(t *testing.T) {
 		{"statusCompacting", statusCompacting},
 		{"statusChooseProvider", statusChooseProvider},
 		{"statusChooseModel", statusChooseModel},
+		{"statusChooseHelp", statusChooseHelp},
 		{"statusBrowseFile", statusBrowseFile},
 	}
 
@@ -294,5 +295,26 @@ func TestExecuteStatusCommandFormatting(t *testing.T) {
 	output := executeStatusCommand(snapshot)
 	if !strings.Contains(output, "Status:") {
 		t.Fatalf("expected Status header, got %q", output)
+	}
+}
+
+func TestRefreshHelpPicker(t *testing.T) {
+	app, _ := newTestApp(t)
+	if err := app.refreshHelpPicker(); err != nil {
+		t.Fatalf("refreshHelpPicker() error = %v", err)
+	}
+	if len(app.helpPicker.Items()) != len(builtinSlashCommands) {
+		t.Fatalf("expected %d help items, got %d", len(builtinSlashCommands), len(app.helpPicker.Items()))
+	}
+}
+
+func TestOpenHelpPicker(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.openHelpPicker()
+	if app.state.ActivePicker != pickerHelp {
+		t.Fatalf("expected help picker to open")
+	}
+	if app.state.StatusText != statusChooseHelp {
+		t.Fatalf("expected help picker status, got %q", app.state.StatusText)
 	}
 }

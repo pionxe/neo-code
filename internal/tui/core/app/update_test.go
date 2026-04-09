@@ -1064,3 +1064,77 @@ func TestHandleViewportKeys(t *testing.T) {
 	app.handleViewportKeys(&app.transcript, tea.KeyMsg{Type: tea.KeyDown})
 	app.handleViewportKeys(&app.transcript, tea.KeyMsg{Type: tea.KeyUp})
 }
+
+func TestUpdateEnterHelpOpensHelpPicker(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.input.SetValue("/help")
+	app.state.InputText = "/help"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model == nil {
+		t.Fatalf("expected non-nil model")
+	}
+	app = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected no async cmd when opening help picker")
+	}
+	if app.state.ActivePicker != pickerHelp {
+		t.Fatalf("expected help picker to be active")
+	}
+	if app.state.StatusText != statusChooseHelp {
+		t.Fatalf("expected status %q, got %q", statusChooseHelp, app.state.StatusText)
+	}
+	if len(app.helpPicker.Items()) != len(builtinSlashCommands) {
+		t.Fatalf("expected %d help options, got %d", len(builtinSlashCommands), len(app.helpPicker.Items()))
+	}
+}
+
+func TestUpdatePickerHelpSelectionOpensModelPicker(t *testing.T) {
+	app, _ := newTestApp(t)
+	if err := app.refreshHelpPicker(); err != nil {
+		t.Fatalf("refreshHelpPicker() error = %v", err)
+	}
+	app.openHelpPicker()
+	selectPickerItemByID(&app.helpPicker, slashCommandModelPick)
+
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if model == nil {
+		t.Fatalf("expected model")
+	}
+	app = model.(App)
+	if cmd != nil {
+		_ = cmd()
+	}
+	if app.state.ActivePicker != pickerModel {
+		t.Fatalf("expected model picker to open from help selection")
+	}
+}
+
+func TestUpdatePickerHelpSelectionRunsSlashCommand(t *testing.T) {
+	app, _ := newTestApp(t)
+	if err := app.refreshHelpPicker(); err != nil {
+		t.Fatalf("refreshHelpPicker() error = %v", err)
+	}
+	app.openHelpPicker()
+	selectPickerItemByID(&app.helpPicker, slashCommandStatus)
+
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if model == nil {
+		t.Fatalf("expected model")
+	}
+	app = model.(App)
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected help picker to close after selecting /status")
+	}
+	if cmd == nil {
+		t.Fatalf("expected local slash command cmd")
+	}
+	msg := cmd()
+	result, ok := msg.(localCommandResultMsg)
+	if !ok {
+		t.Fatalf("expected localCommandResultMsg, got %T", msg)
+	}
+	if !strings.Contains(result.Notice, "Status:") {
+		t.Fatalf("expected status output in slash result, got %q", result.Notice)
+	}
+}
