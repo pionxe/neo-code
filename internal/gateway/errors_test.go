@@ -9,6 +9,7 @@ func TestStableErrorCodes(t *testing.T) {
 		ErrorCodeInvalidMultimodalPayload,
 		ErrorCodeMissingRequiredField,
 		ErrorCodeUnsupportedAction,
+		ErrorCodeRuntimeUnavailable,
 		ErrorCodeInternalError,
 	}
 

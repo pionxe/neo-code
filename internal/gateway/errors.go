@@ -16,6 +16,8 @@ const (
 	ErrorCodeMissingRequiredField ErrorCode = "missing_required_field"
 	// ErrorCodeUnsupportedAction 表示动作暂不支持。
 	ErrorCodeUnsupportedAction ErrorCode = "unsupported_action"
+	// ErrorCodeRuntimeUnavailable 表示网关当前未绑定可用 runtime 端口。
+	ErrorCodeRuntimeUnavailable ErrorCode = "runtime_unavailable"
 	// ErrorCodeInternalError 表示网关内部错误。
 	ErrorCodeInternalError ErrorCode = "internal_error"
 )
@@ -26,6 +28,7 @@ var stableErrorCodes = map[string]struct{}{
 	string(ErrorCodeInvalidMultimodalPayload): {},
 	string(ErrorCodeMissingRequiredField):     {},
 	string(ErrorCodeUnsupportedAction):        {},
+	string(ErrorCodeRuntimeUnavailable):       {},
 	string(ErrorCodeInternalError):            {},
 }
 
