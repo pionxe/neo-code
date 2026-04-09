@@ -33,7 +33,7 @@ Context 模块 MUST NOT 覆盖：
 - Context 的直接调用方 MUST 是 Runtime。
 - Provider 的直接调用方 MUST 也是 Runtime。
 - Context 不直接调用 Provider。
-- 数据映射链为：`context.BuildResult -> Runtime -> provider.ChatRequest`。
+- 数据映射链为：`context.BuildResult -> Runtime -> provider.GenerateRequest`。
 
 ### 1.3 模块边界
 
@@ -59,7 +59,7 @@ sequenceDiagram
 
     RT->>CTX: Build(ctx, BuildInput)
     CTX-->>RT: BuildResult{SystemPrompt, Messages}
-    RT->>PV: Chat(ChatRequest{SystemPrompt, Messages, ...})
+    RT->>PV: Generate(GenerateRequest{SystemPrompt, Messages, ...})
 ```
 
 #### 1.5.2 高级构建流程
@@ -73,7 +73,7 @@ sequenceDiagram
     RT->>CTX: BuildAdvanced(ctx, AdvancedBuildInput)
     Note over CTX: 预算/作用域/工作区映射策略计算
     CTX-->>RT: BuildResult
-    RT->>PV: Chat(ChatRequest)
+    RT->>PV: Generate(GenerateRequest)
 ```
 
 ### 1.6 非功能约束
@@ -115,7 +115,7 @@ sequenceDiagram
 |---|---|---|---|
 | `Runtime -> Context`（基础） | `context.BuildInput` | `context.BuildResult` | 基础消息构建 |
 | `Runtime -> Context`（高级） | `context.AdvancedBuildInput` | `context.BuildResult` | 预算与作用域控制构建 |
-| `Runtime -> Provider`（映射后发送） | `context.BuildResult` | `provider.ChatRequest` | Runtime 执行桥接映射并发起请求 |
+| `Runtime -> Provider`（映射后发送） | `context.BuildResult` | `provider.GenerateRequest` | Runtime 执行桥接映射并发起请求 |
 
 ### 2.5 示例
 
@@ -178,3 +178,4 @@ sequenceDiagram
 - 基础/高级路径是否共享统一输出。
 - 是否包含可联调的成功与失败示例。
 - 类型命名是否与 `context/interface.go` 一致。
+

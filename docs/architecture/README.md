@@ -101,7 +101,7 @@ graph TD
 | Gateway | 协议适配、连接管理、入口路由 | Client | Runtime / Utils | `gateway.Gateway`、`gateway.MessageFrame` |
 | Runtime | 回合编排、事件发布、状态收敛 | Gateway | Context / Provider / Tools / Session / Config | `runtime.UserInput`、`runtime.CompactInput` |
 | Context | Prompt 组装、上下文压缩、作用域隔离 | Runtime | Config / Utils | `context.BuildInput`、`context.BuildResult` |
-| Provider | 模型协议抹平、流式事件归一、能力判定 | Runtime | 模型供应商 API | `provider.ChatRequest`、`provider.StreamEvent` |
+| Provider | 模型协议抹平、流式事件归一、能力判定 | Runtime | 模型供应商 API | `provider.GenerateRequest`、`provider.StreamEvent` |
 | Tools | 工具执行、审批拦截、输出归一 | Runtime | 本地/远端执行器 | `tools.ToolCallInput`、`tools.ToolResult` |
 | Session | 会话持久化、摘要视图、状态恢复 | Runtime | 存储介质 | `session.Store`、`session.Session`、`session.SessionSummary` |
 | Config | 配置加载、校验、更新、快照提供 | Runtime / Gateway | 配置文件与环境变量 | `config.Registry` |
@@ -124,7 +124,7 @@ graph TD
 | `Client <-> Gateway` | `gateway.MessageFrame` | `gateway.MessageFrame` | 统一协议帧承载 HTTP/WS 消息 |
 | `Gateway -> Runtime` | `runtime.UserInput`、`runtime.CompactInput` | `runtime.RuntimeEvent` | 网关将请求映射为运行命令 |
 | `Runtime -> Context` | `context.BuildInput`、`context.AdvancedBuildInput` | `context.BuildResult` | 编排层请求上下文构建 |
-| `Runtime -> Provider` | `provider.ChatRequest` | `provider.StreamEvent` | 模型调用与流式事件回传 |
+| `Runtime -> Provider` | `provider.GenerateRequest` | `provider.StreamEvent` | 模型生成调用与流式事件回传 |
 | `Runtime -> Tools` | `tools.ToolCallInput` | `tools.ToolResult` | 工具执行与结果回灌 |
 | `Runtime <-> Session` | `session.Store` | `session.Session`、`session.SessionSummary` | 会话读写与摘要查询 |
 | `Runtime <-> Config` | `config.Registry` | `config.Config` | 配置读取与更新事务 |
@@ -132,8 +132,8 @@ graph TD
 
 ## 8. 多模态输入与能力协商
 
-- 多模态输入 MUST 通过 `provider.MessagePart` 统一表达文本与非文本内容。
-- Provider MUST 通过 `provider.ModelCapabilities` 执行模型能力判定。
+- 多模态输入 MUST 通过 `provider.MessagePart + provider.AssetRef` 统一表达文本与非文本内容。
+- Provider MUST 通过 `provider.ModelDescriptor` 与 `provider.ModelCapabilityHints` 提供模型能力协商依据。
 - 请求模态超出模型能力时，Provider MUST 返回 `provider.ErrorCodeUnsupportedModality`。
 - Runtime SHOULD 基于模态能力错误执行恢复路径（模型切换、输入降级、用户提示）。
 
@@ -154,3 +154,5 @@ graph TD
 ---
 
 本文档仅承载系统级架构定义。模块级实现细节请查看对应模块文档。
+
+

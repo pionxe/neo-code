@@ -57,7 +57,7 @@ sequenceDiagram
     RT->>SS: Load/Init Session
     RT->>CTX: Build/BuildAdvanced
     CTX-->>RT: BuildResult
-    RT->>PV: Chat(ChatRequest)
+    RT->>PV: Generate(GenerateRequest)
 
     loop provider stream
         PV-->>RT: StreamEvent
@@ -67,7 +67,7 @@ sequenceDiagram
             RT->>SS: Append tool result
             RT->>CTX: Build/BuildAdvanced
             CTX-->>RT: BuildResult
-            RT->>PV: Chat(ChatRequest)
+            RT->>PV: Generate(GenerateRequest)
         else text delta
             RT-->>GW: RuntimeEvent(run_progress)
         end
@@ -130,7 +130,7 @@ sequenceDiagram
         CTX-->>RT: BuildResult
     end
 
-    RT->>PV: Chat(ChatRequest)
+    RT->>PV: Generate(GenerateRequest)
 
     loop Mid-turn stream
         PV-->>RT: StreamEvent
@@ -145,7 +145,7 @@ sequenceDiagram
                 RT-->>GW: RuntimeEvent(compact_done/compact_error)
                 RT->>CTX: BuildAdvanced(继续回合重组)
                 CTX-->>RT: BuildResult
-                RT->>PV: Chat(ChatRequest)
+                RT->>PV: Generate(GenerateRequest)
             end
         end
     end
@@ -161,7 +161,7 @@ sequenceDiagram
     participant CTX as Context
     participant SS as Session
 
-    RT->>PV: Chat(ChatRequest)
+    RT->>PV: Generate(GenerateRequest)
     PV-->>RT: error(context_overflow)
     RT->>RT: AcquireReactiveRetry(run_id)
 
@@ -175,7 +175,7 @@ sequenceDiagram
             RT-->>GW: RuntimeEvent(compact_done)
             RT->>CTX: BuildAdvanced(重建请求上下文)
             CTX-->>RT: BuildResult
-            RT->>PV: Chat(ChatRequest) 单次重试
+            RT->>PV: Generate(GenerateRequest) 单次重试
             alt 重试成功
                 PV-->>RT: StreamEvent...
                 RT-->>GW: RuntimeEvent(run_progress/run_done)
@@ -230,7 +230,7 @@ sequenceDiagram
     participant CTX as Context
     participant SS as Session
 
-    RT->>PV: Chat(ChatRequest)
+    RT->>PV: Generate(GenerateRequest)
     PV-->>RT: ProviderError(code=context_overflow)
     RT->>RT: AcquireReactiveRetry(run_id)
 
@@ -251,8 +251,8 @@ sequenceDiagram
             RT-->>GW: compact_done(trigger_mode=reactive)
             RT->>CTX: BuildAdvanced(重组)
             CTX-->>RT: BuildResult
-            Note over RT: BuildResult -> Runtime -> provider.ChatRequest
-            RT->>PV: Chat(ChatRequest) retry-once
+            Note over RT: BuildResult -> Runtime -> provider.GenerateRequest
+            RT->>PV: Generate(GenerateRequest) retry-once
 
             alt retry failed again
                 PV-->>RT: ProviderError(code=context_overflow or other)
@@ -271,7 +271,7 @@ sequenceDiagram
 
 - 参与者集合 MUST 统一使用：Gateway、Runtime.Orchestrator、Context、Provider、Tools、Session。
 - 调用链 MUST 表述为 `Runtime -> Context` 与 `Runtime -> Provider`，禁止写成 `Context -> Provider` 直接调用。
-- 数据映射链 MUST 显式体现 `context.BuildResult -> Runtime -> provider.ChatRequest`。
+- 数据映射链 MUST 显式体现 `context.BuildResult -> Runtime -> provider.GenerateRequest`。
 - `TryEmitTerminal` 与 `AcquireReactiveRetry` MUST 体现在 Cancel/Reactive 的关键路径。
 - 事件负载 SHOULD 包含可观测字段（如 `run_id`、`session_id`、`trigger_mode`、`code`）。
 - 诊断增强事件 MAY 增加，但不得改变既有终态语义。
@@ -319,7 +319,7 @@ sequenceDiagram
 |---|---|---|---|
 | `Gateway -> Runtime` | `runtime.UserInput` / `runtime.CompactInput` | `runtime.RuntimeEvent` | 网关将用户操作映射为编排命令 |
 | `Runtime -> Context` | `context.BuildInput` / `context.AdvancedBuildInput` | `context.BuildResult` | 上下文构建与重组 |
-| `Runtime -> Provider` | `provider.ChatRequest` | `provider.StreamEvent` | 模型调用与流式消费 |
+| `Runtime -> Provider` | `provider.GenerateRequest` | `provider.StreamEvent` | 模型调用与流式消费 |
 | `Runtime -> Tools` | `tools.ToolCallInput` | `tools.ToolResult` | 工具执行与回灌 |
 | `Runtime <-> Session` | `session.Store` | `session.Session` / `session.SessionSummary` | 会话持久化与恢复 |
 | `Runtime <-> Config` | `config.Registry` | `config.Config` | 配置快照与更新 |
@@ -428,3 +428,4 @@ sequenceDiagram
 - 是否包含成功与失败 JSON 示例（含 reactive 三类失败路径）。
 - 是否明确终态唯一性与重试门禁语义。
 - 文档类型名是否与 `runtime/interface.go` 一致。
+

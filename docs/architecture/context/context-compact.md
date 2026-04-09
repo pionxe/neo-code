@@ -53,11 +53,11 @@ sequenceDiagram
     participant PV as Provider
     participant CMP as Compact
 
-    RT->>PV: ChatRequest
+    RT->>PV: Generate(GenerateRequest)
     PV-->>RT: context_overflow error
     RT->>CMP: Run(trigger_mode=reactive)
     CMP-->>RT: compact_done
-    RT->>PV: Retry ChatRequest (gated once)
+    RT->>PV: Retry Generate(GenerateRequest) (gated once)
 ```
 
 ### 6.2 Proactive 预算触发
@@ -116,3 +116,4 @@ sequenceDiagram
 - Pre-turn 与 Mid-turn 是否均有可执行判定路径。
 - 事件是否包含 `trigger_mode` 与关键指标。
 - 是否有门禁拒绝与失败路径示例。
+

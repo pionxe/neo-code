@@ -32,16 +32,34 @@ const (
 	ModalityFile Modality = "file"
 )
 
-// MediaRef 描述非文本内容的统一引用信息。
-type MediaRef struct {
-	// URI 是媒体资源定位符，可为本地映射路径或远端地址。
-	URI string `json:"uri"`
-	// MIMEType 是媒体的标准内容类型。
+// AssetSource 表示附件引用来源。
+type AssetSource string
+
+const (
+	// AssetSourceSessionAsset 表示会话附件池中的引用。
+	AssetSourceSessionAsset AssetSource = "session_asset"
+	// AssetSourceLocalURI 表示本地文件 URI 引用。
+	AssetSourceLocalURI AssetSource = "local_uri"
+	// AssetSourceRemoteURI 表示远端资源 URI 引用。
+	AssetSourceRemoteURI AssetSource = "remote_uri"
+)
+
+// AssetRef 描述非文本内容的领域级附件引用。
+type AssetRef struct {
+	// Source 是附件来源类型。
+	Source AssetSource `json:"source"`
+	// AssetID 是会话附件标识，Source=session_asset 时必填。
+	AssetID string `json:"asset_id,omitempty"`
+	// URI 是本地或远端资源定位符，Source=local_uri/remote_uri 时必填。
+	URI string `json:"uri,omitempty"`
+	// MIMEType 是附件内容类型。
 	MIMEType string `json:"mime_type"`
 	// FileName 是原始文件名，便于审计与展示。
 	FileName string `json:"file_name,omitempty"`
-	// SizeBytes 是媒体大小（字节）。
+	// SizeBytes 是附件大小（字节）。
 	SizeBytes int64 `json:"size_bytes,omitempty"`
+	// SHA256 是可选内容摘要，用于去重与校验。
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // MessagePart 表示消息中的一个分片。
@@ -50,8 +68,8 @@ type MessagePart struct {
 	Type Modality `json:"type"`
 	// Text 是文本内容，仅在 text 模态有效。
 	Text string `json:"text,omitempty"`
-	// Media 是非文本内容引用，仅在 image/audio/file 模态有效。
-	Media *MediaRef `json:"media,omitempty"`
+	// Asset 是非文本附件引用，仅在 image/audio/file 模态有效。
+	Asset *AssetRef `json:"asset,omitempty"`
 }
 
 // Message 表示统一消息结构。
@@ -88,8 +106,8 @@ type ToolSpec struct {
 	Schema map[string]any `json:"schema"`
 }
 
-// ChatRequest 是模型调用统一请求。
-type ChatRequest struct {
+// GenerateRequest 是模型生成调用统一请求。
+type GenerateRequest struct {
 	// Model 是模型标识。
 	Model string `json:"model"`
 	// SystemPrompt 是系统提示词。
@@ -172,47 +190,45 @@ type MessageDonePayload struct {
 	Usage *Usage `json:"usage"`
 }
 
-// ModelCapabilities 描述某个模型的能力矩阵。
-type ModelCapabilities struct {
-	// ModelID 是模型标识。
-	ModelID string
-	// InputModalities 是模型支持的输入模态集合。
+// ModelCapabilityHints 描述模型能力提示信息。
+type ModelCapabilityHints struct {
+	// InputModalities 是输入模态支持提示。
 	InputModalities map[Modality]bool
-	// OutputModalities 是模型支持的输出模态集合。
+	// OutputModalities 是输出模态支持提示。
 	OutputModalities map[Modality]bool
-	// SupportsStreaming 表示是否支持流式输出。
+	// SupportsStreaming 表示流式能力提示。
 	SupportsStreaming bool
-	// SupportsToolCall 表示是否支持工具调用。
+	// SupportsToolCall 表示工具调用能力提示。
 	SupportsToolCall bool
-	// MaxContextTokens 是上下文窗口上限。
-	MaxContextTokens int
-	// MaxOutputTokens 是最大输出 token 数。
-	MaxOutputTokens int
+	// MaxContextTokensHint 是上下文窗口提示值。
+	MaxContextTokensHint int
+	// MaxOutputTokensHint 是最大输出 token 提示值。
+	MaxOutputTokensHint int
 }
 
-// Provider 定义模型供应商适配接口。
+// ModelDescriptor 描述模型发现元数据。
+type ModelDescriptor struct {
+	// ID 是模型标识。
+	ID string
+	// Name 是展示名称。
+	Name string
+	// Description 是模型说明。
+	Description string
+	// ProviderName 是所属提供商标识。
+	ProviderName string
+	// Hints 是模型能力提示。
+	Hints ModelCapabilityHints
+}
+
+// Provider 定义模型供应商生成接口。
 type Provider interface {
-	// Chat 执行一次模型调用并写入流式事件。
+	// Generate 执行一次模型生成并写入流式事件。
 	// 职责：屏蔽供应商协议差异并输出统一事件序列。
-	// 输入语义：req 为统一请求，events 为流式回传通道。
+	// 输入语义：req 为统一生成请求，events 为流式回传通道。
 	// 并发约束：实现应支持多请求并发，单请求事件顺序必须稳定。
 	// 生命周期：一次调用对应一次完整模型响应生命周期。
 	// 错误语义：返回统一错误语义，供上游执行重试或终止决策。
-	Chat(ctx context.Context, req ChatRequest, events chan<- StreamEvent) error
-	// GetModelCapabilities 查询指定模型能力。
-	// 职责：为上游提供模态、工具、流式等能力判定依据。
-	// 输入语义：model 为目标模型标识。
-	// 并发约束：实现应支持并发查询且不污染会话状态。
-	// 生命周期：模型切换、请求前校验、能力展示阶段调用。
-	// 错误语义：返回模型不存在、鉴权失败或远端查询失败错误。
-	GetModelCapabilities(ctx context.Context, model string) (ModelCapabilities, error)
-	// ValidateRequest 校验请求是否满足模型能力约束。
-	// 职责：在发送远端请求前阻断不合法模态组合与能力越界。
-	// 输入语义：req 为待发送请求，校验依据来自模型能力矩阵。
-	// 并发约束：实现应支持并发校验且不产生共享可变副作用。
-	// 生命周期：每次调用 Chat 前执行。
-	// 错误语义：命中不支持模态或越界参数时返回统一可判定错误。
-	ValidateRequest(ctx context.Context, req ChatRequest) error
+	Generate(ctx context.Context, req GenerateRequest, events chan<- StreamEvent) error
 }
 
 // ProviderRuntimeConfig 描述驱动构建所需的运行时配置。
@@ -233,23 +249,11 @@ type ProviderRuntimeConfig struct {
 	MaxTokens int
 }
 
-// ModelInfo 描述模型发现结果。
-type ModelInfo struct {
-	// ID 是模型标识。
-	ID string
-	// Name 是展示名称。
-	Name string
-	// Description 是模型说明。
-	Description string
-	// Capabilities 是模型能力矩阵。
-	Capabilities ModelCapabilities
-}
-
 // DriverBuilder 描述驱动构建函数签名。
 type DriverBuilder func(ctx context.Context, cfg ProviderRuntimeConfig) (Provider, error)
 
 // ModelDiscoverer 描述模型发现函数签名。
-type ModelDiscoverer func(ctx context.Context, cfg ProviderRuntimeConfig) ([]ModelInfo, error)
+type ModelDiscoverer func(ctx context.Context, cfg ProviderRuntimeConfig) ([]ModelDescriptor, error)
 
 // DriverDefinition 描述一个可注册驱动。
 type DriverDefinition struct {
@@ -277,13 +281,13 @@ type DriverRegistry interface {
 	// 生命周期：每次需要创建 provider 时调用。
 	// 错误语义：返回驱动不存在、配置非法或构建失败错误。
 	Build(ctx context.Context, cfg ProviderRuntimeConfig) (Provider, error)
-	// DiscoverModels 查询指定驱动可用模型列表。
-	// 职责：提供统一模型发现入口供上层展示和校验。
+	// DiscoverModels 查询指定驱动可用模型描述列表。
+	// 职责：提供统一模型发现入口供上层选择与能力协商。
 	// 输入语义：cfg 提供目标驱动与认证信息。
 	// 并发约束：应支持并发查询，且不污染注册状态。
 	// 生命周期：模型选择、能力探测或缓存刷新时调用。
 	// 错误语义：返回驱动不存在、认证失败或远端查询失败错误。
-	DiscoverModels(ctx context.Context, cfg ProviderRuntimeConfig) ([]ModelInfo, error)
+	DiscoverModels(ctx context.Context, cfg ProviderRuntimeConfig) ([]ModelDescriptor, error)
 	// Supports 判断驱动类型是否已注册。
 	// 职责：快速探测某驱动是否可用。
 	// 输入语义：driverType 为驱动标识。
