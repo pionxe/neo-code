@@ -365,12 +365,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 			switch strings.ToLower(input) {
 			case slashCommandHelp:
-				if err := a.refreshHelpPicker(); err != nil {
-					a.state.ExecutionError = err.Error()
-					a.state.StatusText = err.Error()
-					a.appendActivity("system", "Failed to refresh slash help", err.Error(), true)
-					return a, tea.Batch(cmds...)
-				}
+				a.refreshHelpPicker()
 				a.openHelpPicker()
 				return a, tea.Batch(cmds...)
 			case slashCommandProvider:
@@ -1700,12 +1695,7 @@ func (a *App) runSlashCommandSelection(command string) tea.Cmd {
 
 	switch command {
 	case slashCommandHelp:
-		if err := a.refreshHelpPicker(); err != nil {
-			a.state.ExecutionError = err.Error()
-			a.state.StatusText = err.Error()
-			a.appendActivity("system", "Failed to refresh slash help", err.Error(), true)
-			return nil
-		}
+		a.refreshHelpPicker()
 		a.openHelpPicker()
 		return nil
 	case slashCommandProvider:

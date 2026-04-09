@@ -223,7 +223,7 @@ func (a *App) refreshModelPicker() error {
 }
 
 // refreshHelpPicker 刷新 /help 弹层中的 slash 命令列表。
-func (a *App) refreshHelpPicker() error {
+func (a *App) refreshHelpPicker() {
 	items := make([]selectionItem, 0, len(builtinSlashCommands))
 	for _, command := range builtinSlashCommands {
 		items = append(items, selectionItem{
@@ -234,7 +234,6 @@ func (a *App) refreshHelpPicker() error {
 	}
 	replaceHelpPickerItems(&a.helpPicker, items)
 	selectPickerItemByID(&a.helpPicker, "")
-	return nil
 }
 
 func (a *App) openProviderPicker() {

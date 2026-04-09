@@ -261,9 +261,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 	if err := app.refreshModelPicker(); err != nil {
 		return App{}, err
 	}
-	if err := app.refreshHelpPicker(); err != nil {
-		return App{}, err
-	}
+	app.refreshHelpPicker()
 	app.selectCurrentProvider(cfg.SelectedProvider)
 	app.selectCurrentModel(cfg.CurrentModel)
 	app.modelRefreshID = cfg.SelectedProvider

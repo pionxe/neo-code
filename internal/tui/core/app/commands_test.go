@@ -300,9 +300,7 @@ func TestExecuteStatusCommandFormatting(t *testing.T) {
 
 func TestRefreshHelpPicker(t *testing.T) {
 	app, _ := newTestApp(t)
-	if err := app.refreshHelpPicker(); err != nil {
-		t.Fatalf("refreshHelpPicker() error = %v", err)
-	}
+	app.refreshHelpPicker()
 	if len(app.helpPicker.Items()) != len(builtinSlashCommands) {
 		t.Fatalf("expected %d help items, got %d", len(builtinSlashCommands), len(app.helpPicker.Items()))
 	}

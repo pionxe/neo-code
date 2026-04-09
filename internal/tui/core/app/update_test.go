@@ -516,6 +516,20 @@ func TestSplitMarkdownSegmentsIndented(t *testing.T) {
 	}
 }
 
+func TestSplitIndentedCodeSegmentsDetectsCodeFeaturesInCodeMode(t *testing.T) {
+	content := "func main() {\nreturn 1\n}\nplain text"
+	segments := splitIndentedCodeSegments(content)
+	if len(segments) < 2 {
+		t.Fatalf("expected code and text segments, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentCode {
+		t.Fatalf("expected first segment to be code")
+	}
+	if !strings.Contains(segments[0].Code, "return 1") {
+		t.Fatalf("expected code segment to include return statement, got %q", segments[0].Code)
+	}
+}
+
 func TestExtractFencedCodeBlocks(t *testing.T) {
 	content := "text\n```go\nfmt.Println(\"ok\")\n```\nend"
 	blocks := extractFencedCodeBlocks(content)
@@ -1111,9 +1125,7 @@ func TestUpdateEnterHelpOpensHelpPicker(t *testing.T) {
 
 func TestUpdatePickerHelpSelectionOpensModelPicker(t *testing.T) {
 	app, _ := newTestApp(t)
-	if err := app.refreshHelpPicker(); err != nil {
-		t.Fatalf("refreshHelpPicker() error = %v", err)
-	}
+	app.refreshHelpPicker()
 	app.openHelpPicker()
 	selectPickerItemByID(&app.helpPicker, slashCommandModelPick)
 
@@ -1132,9 +1144,7 @@ func TestUpdatePickerHelpSelectionOpensModelPicker(t *testing.T) {
 
 func TestUpdatePickerHelpSelectionRunsSlashCommand(t *testing.T) {
 	app, _ := newTestApp(t)
-	if err := app.refreshHelpPicker(); err != nil {
-		t.Fatalf("refreshHelpPicker() error = %v", err)
-	}
+	app.refreshHelpPicker()
 	app.openHelpPicker()
 	selectPickerItemByID(&app.helpPicker, slashCommandStatus)
 
@@ -1156,5 +1166,22 @@ func TestUpdatePickerHelpSelectionRunsSlashCommand(t *testing.T) {
 	}
 	if !strings.Contains(result.Notice, "Status:") {
 		t.Fatalf("expected status output in slash result, got %q", result.Notice)
+	}
+}
+
+func TestRunSlashCommandSelectionModelReturnsRefreshCmd(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.modelRefreshID = ""
+
+	cmd := app.runSlashCommandSelection(slashCommandModelPick)
+	if app.state.ActivePicker != pickerModel {
+		t.Fatalf("expected model picker to open")
+	}
+	if cmd == nil {
+		t.Fatalf("expected model refresh cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(modelCatalogRefreshMsg); !ok {
+		t.Fatalf("expected modelCatalogRefreshMsg, got %T", msg)
 	}
 }

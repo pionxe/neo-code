@@ -157,10 +157,6 @@ func (a App) renderWaterfall(width int, height int) string {
 	parts = append(parts, a.renderPrompt(width))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	contentHeight := lipgloss.Height(content)
-	if contentHeight < height {
-		content = content + "\n" + lipgloss.NewStyle().Height(height-contentHeight).Render("")
-	}
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
 }
 
