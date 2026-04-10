@@ -3532,7 +3532,7 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 
 	callCount := 0
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			callCount++
 			if callCount == 1 {
 				return &provider.ProviderError{
@@ -3670,7 +3670,7 @@ func TestServiceRunReactivelyCompactsWithinSingleLoopBudget(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			if len(req.Messages) == 3 {
 				return &provider.ProviderError{
 					StatusCode: 400,
@@ -3740,7 +3740,7 @@ func TestServiceRunReactiveCompactRetriesOnlyOnce(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			return &provider.ProviderError{
 				StatusCode: 400,
 				Code:       provider.ErrorCodeContextTooLong,
@@ -3797,6 +3797,50 @@ func TestServiceRunReactiveCompactRetriesOnlyOnce(t *testing.T) {
 	if !foundReactiveError {
 		t.Fatalf("expected reactive compact_error event in %+v", events)
 	}
+}
+
+func TestServiceRunDoesNotReactiveCompactOnPlainTextTokenThrottle(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	throttleErr := errors.New("requested too many tokens for this minute")
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			return throttleErr
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{}
+
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-plain-text-token-throttle",
+		Content: "continue",
+	})
+	if err == nil || !containsError(err, throttleErr.Error()) {
+		t.Fatalf("expected plain text token throttle error, got %v", err)
+	}
+
+	compactRunner := service.compactRunner.(*stubCompactRunner)
+	if len(compactRunner.calls) != 0 {
+		t.Fatalf("expected no reactive compact attempts, got %d", len(compactRunner.calls))
+	}
+	if scripted.callCount != 1 {
+		t.Fatalf("expected provider to be called once, got %d", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventUserMessage,
+		EventError,
+	})
+	assertNoEventType(t, events, EventCompactStart)
+	assertNoEventType(t, events, EventCompactDone)
+	assertNoEventType(t, events, EventCompactError)
 }
 
 func TestRestoreSessionTokens(t *testing.T) {

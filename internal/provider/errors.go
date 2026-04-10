@@ -40,8 +40,6 @@ var contextTooLongFragments = []string{
 	"maximum context length",
 	"maximum prompt length",
 	"prompt is too long",
-	"requested too many tokens",
-	"too many tokens",
 }
 
 // ProviderError 是 provider 层的领域错误类型。

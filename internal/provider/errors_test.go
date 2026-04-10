@@ -127,6 +127,11 @@ func TestNewProviderErrorFromStatus(t *testing.T) {
 		t.Fatalf("expected code %q, got %q", ErrorCodeContextTooLong, err.Code)
 	}
 
+	err = NewProviderErrorFromStatus(400, "requested too many tokens for this minute")
+	if err.Code != ErrorCodeClient {
+		t.Fatalf("400 with token throttle message: expected code %q, got %q", ErrorCodeClient, err.Code)
+	}
+
 	// 429 with token-count message must stay rate_limited, not context_too_long.
 	err = NewProviderErrorFromStatus(429, "requested too many tokens for this minute")
 	if err.Code != ErrorCodeRateLimit {
@@ -212,6 +217,11 @@ func TestIsContextTooLong(t *testing.T) {
 			name: "plain text fallback",
 			err:  errors.New("context window exceeded for model"),
 			want: true,
+		},
+		{
+			name: "plain text token throttle is not context too long",
+			err:  errors.New("requested too many tokens for this minute"),
+			want: false,
 		},
 		{
 			name: "non context error",
