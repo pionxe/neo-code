@@ -129,6 +129,7 @@ go run ./cmd/neocode
 - **[扩展 Provider](docs/guides/adding-providers.md)** — 如何添加新的模型提供商
 - **[架构设计](docs/neocode-coding-agent-mvp-architecture.md)** — 整体架构与设计理念
 - **[事件流](docs/runtime-provider-event-flow.md)** — Runtime 与 Provider 的事件交互
+- **[Session 持久化](docs/session-persistence-design.md)** — 会话 JSON 存储、token 累计与工作区隔离
 
 ## 开发
 
