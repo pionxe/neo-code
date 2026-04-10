@@ -33,7 +33,20 @@ func emitToolCallDelta(ctx context.Context, events chan<- providertypes.StreamEv
 
 // emitMessageDone 发送消息完成事件。
 func emitMessageDone(ctx context.Context, events chan<- providertypes.StreamEvent, finishReason string, usage *providertypes.Usage) error {
-	return emitStreamEvent(ctx, events, providertypes.NewMessageDoneStreamEvent(finishReason, usage))
+	event := providertypes.NewMessageDoneStreamEvent(finishReason, usage)
+	if ctx == nil || ctx.Err() == nil {
+		return emitStreamEvent(ctx, events, event)
+	}
+	if events == nil {
+		return nil
+	}
+
+	select {
+	case events <- event:
+		return nil
+	default:
+		return nil
+	}
 }
 
 // emitStreamEvent 通过 channel 安全发送流式事件，支持上下文取消和 nil channel 保护。

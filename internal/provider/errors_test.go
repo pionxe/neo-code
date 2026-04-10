@@ -132,6 +132,16 @@ func TestNewProviderErrorFromStatus(t *testing.T) {
 	if err.Code != ErrorCodeRateLimit {
 		t.Fatalf("429 with token-count message: expected code %q, got %q", ErrorCodeRateLimit, err.Code)
 	}
+
+	err = NewProviderErrorFromStatus(400, "requested too many tokens in the prompt context window")
+	if err.Code != ErrorCodeContextTooLong {
+		t.Fatalf("expected contextual token-count message to map to %q, got %q", ErrorCodeContextTooLong, err.Code)
+	}
+
+	err = NewProviderErrorFromStatus(400, "requested too many tokens for max_tokens")
+	if err.Code != ErrorCodeClient {
+		t.Fatalf("expected output-token validation message to stay %q, got %q", ErrorCodeClient, err.Code)
+	}
 }
 
 func TestNewNetworkProviderError(t *testing.T) {
@@ -226,6 +236,24 @@ func TestIsContextTooLong(t *testing.T) {
 				Message:    "requested too many tokens for this minute",
 			},
 			want: false,
+		},
+		{
+			name: "output token validation message is not context_too_long",
+			err: &ProviderError{
+				StatusCode: 400,
+				Code:       ErrorCodeClient,
+				Message:    "requested too many tokens for max_tokens",
+			},
+			want: false,
+		},
+		{
+			name: "contextual token-count message is context_too_long",
+			err: &ProviderError{
+				StatusCode: 400,
+				Code:       ErrorCodeClient,
+				Message:    "requested too many tokens for prompt context window",
+			},
+			want: true,
 		},
 	}
 

@@ -129,6 +129,15 @@ func (a App) renderSidebar(width int, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, panel)
 }
 
+// waterfallMetrics 统一计算瀑布区各组件高度，确保渲染、布局与命中区域使用同一组尺寸。
+func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
+	activityHeight := a.activityPreviewHeight()
+	menuHeight := a.commandMenuHeight(width)
+	promptHeight := lipgloss.Height(a.renderPrompt(width))
+	transcriptHeight := max(6, height-activityHeight-menuHeight-promptHeight)
+	return transcriptHeight, activityHeight, menuHeight, promptHeight
+}
+
 func (a App) renderWaterfall(width int, height int) string {
 	if a.state.ActivePicker != pickerNone {
 		return lipgloss.Place(
@@ -140,7 +149,9 @@ func (a App) renderWaterfall(width int, height int) string {
 		)
 	}
 
-	transcript := a.styles.streamContent.Width(width).Height(a.transcript.Height).Render(a.transcript.View())
+	transcriptHeight, _, _, _ := a.waterfallMetrics(width, height)
+
+	transcript := a.styles.streamContent.Width(width).Height(transcriptHeight).Render(a.transcript.View())
 
 	parts := []string{transcript}
 	if activity := a.renderActivityPreview(width); activity != "" {
@@ -151,7 +162,8 @@ func (a App) renderWaterfall(width int, height int) string {
 	}
 	parts = append(parts, a.renderPrompt(width))
 
-	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, lipgloss.JoinVertical(lipgloss.Left, parts...))
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
 }
 
 func (a App) renderPicker(width int, height int) string {
@@ -168,6 +180,11 @@ func (a App) renderPicker(width int, height int) string {
 		title = filePickerTitle
 		subtitle = filePickerSubtitle
 		body = a.fileBrowser.View()
+	}
+	if a.state.ActivePicker == pickerHelp {
+		title = helpPickerTitle
+		subtitle = helpPickerSubtitle
+		body = a.helpPicker.View()
 	}
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,

@@ -343,20 +343,31 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
-			a.input.Reset()
-			a.state.InputText = ""
-			a.applyComponentLayout(true)
-			a.refreshCommandMenu()
-			a.resetPasteHeuristics()
-
+			// 先检查是否是立即执行的命令，如果处理了，就直接返回
 			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
+				a.input.Reset() // 只有在命令被处理后才清空输入
+				a.state.InputText = ""
+				a.applyComponentLayout(true)
+				a.refreshCommandMenu()
+				a.resetPasteHeuristics()
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				return a, tea.Batch(cmds...)
 			}
 
+			// 如果不是立即执行的命令，再执行常规的输入重置
+			a.input.Reset()
+			a.state.InputText = ""
+			a.applyComponentLayout(true)
+			a.refreshCommandMenu()
+			a.resetPasteHeuristics()
+
 			switch strings.ToLower(input) {
+			case slashCommandHelp:
+				a.refreshHelpPicker()
+				a.openHelpPicker()
+				return a, tea.Batch(cmds...)
 			case slashCommandProvider:
 				if err := a.refreshProviderPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
@@ -606,6 +617,13 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, runModelSelection(a.providerSvc, item.id)
+		case pickerHelp:
+			item, ok := a.helpPicker.SelectedItem().(selectionItem)
+			a.closePicker()
+			if !ok {
+				return a, nil
+			}
+			return a, a.runSlashCommandSelection(item.id)
 		}
 	}
 
@@ -615,6 +633,8 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.providerPicker, cmd = a.providerPicker.Update(msg)
 	case pickerModel:
 		a.modelPicker, cmd = a.modelPicker.Update(msg)
+	case pickerHelp:
+		a.helpPicker, cmd = a.helpPicker.Update(msg)
 	case pickerFile:
 		a.fileBrowser, cmd = a.fileBrowser.Update(msg)
 		if didSelect, path := a.fileBrowser.DidSelectFile(msg); didSelect {
@@ -1483,12 +1503,10 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	a.sessions.SetSize(sidebarBodyWidth, sidebarBodyHeight)
 	a.transcript.Width = max(24, lay.rightWidth)
 	a.resizeCommandMenu()
-	menuHeight := a.commandMenuHeight(max(24, lay.rightWidth))
-	activityHeight := a.activityPreviewHeight()
 	a.input.SetWidth(a.composerInnerWidth(lay.rightWidth))
 	a.input.SetHeight(a.composerHeight())
-	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
-	a.transcript.Height = max(6, lay.rightHeight-activityHeight-menuHeight-promptHeight)
+	transcriptHeight, activityHeight, _, _ := a.waterfallMetrics(a.transcript.Width, lay.rightHeight)
+	a.transcript.Height = transcriptHeight
 
 	if activityHeight > 0 {
 		panelStyle := a.styles.panelFocused
@@ -1507,6 +1525,12 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 
 	a.providerPicker.SetSize(max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.rightHeight-10, 6, 10)))
+	helpPickerMaxHeight := max(8, lay.rightHeight-6)
+	helpPickerDesiredHeight := (len(a.helpPicker.Items()) * 3) + 1
+	a.helpPicker.SetSize(
+		max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)),
+		max(6, tuiutils.Clamp(helpPickerDesiredHeight, 6, helpPickerMaxHeight)),
+	)
 	a.fileBrowser.SetHeight(max(6, tuiutils.Clamp(lay.rightHeight-8, 8, 16)))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
@@ -1651,6 +1675,50 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		return true, runCompact(a.runtime, a.state.ActiveSessionID)
 	default:
 		return false, nil
+	}
+}
+
+// runSlashCommandSelection 根据 /help 弹层选中的命令执行对应 slash 行为。
+func (a *App) runSlashCommandSelection(command string) tea.Cmd {
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "" {
+		return nil
+	}
+
+	if handled, cmd := a.handleImmediateSlashCommand(command); handled {
+		return cmd
+	}
+
+	switch command {
+	case slashCommandHelp:
+		a.refreshHelpPicker()
+		a.openHelpPicker()
+		return nil
+	case slashCommandProvider:
+		if err := a.refreshProviderPicker(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
+			return nil
+		}
+		a.openProviderPicker()
+		return nil
+	case slashCommandModelPick:
+		if err := a.refreshModelPicker(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("system", "Failed to refresh models", err.Error(), true)
+			return nil
+		}
+		a.openModelPicker()
+		return a.requestModelCatalogRefresh(a.state.CurrentProvider)
+	default:
+		a.state.StatusText = statusApplyingCommand
+		a.state.ExecutionError = ""
+		if isWorkspaceSlashCommand(command) {
+			return runSessionWorkdirCommand(a.runtime, a.state.ActiveSessionID, a.state.CurrentWorkdir, command)
+		}
+		return runLocalCommand(a.configManager, a.providerSvc, a.currentStatusSnapshot(), command)
 	}
 }
 

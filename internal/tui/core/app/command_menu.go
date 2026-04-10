@@ -186,11 +186,36 @@ func (a *App) resizeCommandMenu() {
 }
 
 func (a App) buildCommandMenuItems(input string, width int) ([]commandMenuItem, tuistate.CommandMenuMeta) {
+	trimmed := strings.TrimSpace(input)
+
+	// 1. 优先检查 Slash 命令
+	if strings.HasPrefix(trimmed, slashPrefix) {
+		suggestions := a.matchingSlashCommands(trimmed)
+		if len(suggestions) > 0 {
+			start, end, _, _ := tokenRange(input, tokenSelectorFirst)
+			items := make([]commandMenuItem, 0, len(suggestions))
+			for _, suggestion := range suggestions {
+				items = append(items, commandMenuItem{
+					title:           suggestion.Command.Usage,
+					description:     suggestion.Command.Description,
+					filter:          suggestion.Command.Usage + " " + suggestion.Command.Description,
+					highlight:       suggestion.Match,
+					replacement:     suggestion.Command.Usage,
+					useReplaceRange: true,
+					replaceStart:    start,
+					replaceEnd:      end,
+				})
+			}
+			return items, tuistate.CommandMenuMeta{Title: commandMenuTitle}
+		}
+	}
+
+	// 2. 检查文件建议 (如果 Slash 命令不匹配)
 	if suggestions := a.fileMenuSuggestions(input); len(suggestions) > 0 {
 		return suggestions, tuistate.CommandMenuMeta{Title: fileMenuTitle}
 	}
 
-	trimmed := strings.TrimSpace(input)
+	// 3. 检查工作区命令 (如果 Slash 命令和文件建议都不匹配)
 	if isWorkspaceCommandInput(trimmed) {
 		replacement := trimmed
 		item := commandMenuItem{
@@ -209,26 +234,8 @@ func (a App) buildCommandMenuItems(input string, width int) ([]commandMenuItem, 
 		return []commandMenuItem{item}, tuistate.CommandMenuMeta{Title: shellMenuTitle}
 	}
 
-	suggestions := a.matchingSlashCommands(trimmed)
-	if len(suggestions) == 0 {
-		return nil, tuistate.CommandMenuMeta{}
-	}
-
-	start, end, _, _ := tokenRange(input, tokenSelectorFirst)
-	items := make([]commandMenuItem, 0, len(suggestions))
-	for _, suggestion := range suggestions {
-		items = append(items, commandMenuItem{
-			title:           suggestion.Command.Usage,
-			description:     suggestion.Command.Description,
-			filter:          suggestion.Command.Usage + " " + suggestion.Command.Description,
-			highlight:       suggestion.Match,
-			replacement:     suggestion.Command.Usage,
-			useReplaceRange: true,
-			replaceStart:    start,
-			replaceEnd:      end,
-		})
-	}
-	return items, tuistate.CommandMenuMeta{Title: commandMenuTitle}
+	// 如果没有任何匹配的建议
+	return nil, tuistate.CommandMenuMeta{}
 }
 
 func (a App) fileMenuSuggestions(input string) []commandMenuItem {
@@ -309,7 +316,7 @@ func (a *App) applySelectedCommandSuggestion() bool {
 
 func (a *App) updateCommandMenuSelection(msg tea.KeyMsg) (tea.Cmd, bool) {
 	if !a.commandMenuHasSuggestions() {
-		return nil, false
+		return nil, false // 让按键继续传递
 	}
 
 	switch msg.Type {
@@ -318,7 +325,7 @@ func (a *App) updateCommandMenuSelection(msg tea.KeyMsg) (tea.Cmd, bool) {
 		a.commandMenu, cmd = a.commandMenu.Update(msg)
 		return cmd, true
 	default:
-		return nil, false
+		return nil, false // 非导航键，让它们继续传递
 	}
 }
 

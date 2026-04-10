@@ -40,8 +40,20 @@ var contextTooLongFragments = []string{
 	"maximum context length",
 	"maximum prompt length",
 	"prompt is too long",
+}
+
+var contextTokenFragments = []string{
 	"requested too many tokens",
 	"too many tokens",
+}
+
+var contextTokenHints = []string{
+	"context",
+	"prompt",
+	"message",
+	"input",
+	"history",
+	"window",
 }
 
 // ProviderError 是 provider 层的领域错误类型。
@@ -162,6 +174,16 @@ func matchesContextTooLong(message string) bool {
 	for _, fragment := range contextTooLongFragments {
 		if strings.Contains(normalized, fragment) {
 			return true
+		}
+	}
+	for _, fragment := range contextTokenFragments {
+		if !strings.Contains(normalized, fragment) {
+			continue
+		}
+		for _, hint := range contextTokenHints {
+			if strings.Contains(normalized, hint) {
+				return true
+			}
 		}
 	}
 	return false

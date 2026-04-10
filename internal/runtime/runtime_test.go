@@ -3302,7 +3302,7 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 				BeforeChars: 60,
 				AfterChars:  24,
 				SavedRatio:  0.6,
-				TriggerMode: string(contextcompact.ModeManual),
+				TriggerMode: string(contextcompact.ModeAuto),
 			},
 			TranscriptID:   "transcript_auto",
 			TranscriptPath: "/tmp/auto.jsonl",
@@ -3320,6 +3320,9 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 
 	if len(compactRunner.calls) != 1 {
 		t.Fatalf("expected auto compact to run once, got %d", len(compactRunner.calls))
+	}
+	if compactRunner.calls[0].Mode != contextcompact.ModeAuto {
+		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeAuto, compactRunner.calls[0].Mode)
 	}
 	if len(builder.builds) != 3 {
 		t.Fatalf("expected 3 build attempts, got %d", len(builder.builds))
@@ -3383,6 +3386,142 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 		EventAgentDone,
 	})
 	assertNoEventType(t, events, EventCompactError)
+
+	foundAutoDone := false
+	for _, event := range events {
+		if event.Type != EventCompactDone {
+			continue
+		}
+		payload, ok := event.Payload.(CompactDonePayload)
+		if !ok {
+			t.Fatalf("expected CompactDonePayload, got %T", event.Payload)
+		}
+		if payload.TriggerMode != string(contextcompact.ModeAuto) {
+			t.Fatalf("expected trigger mode %q, got %q", contextcompact.ModeAuto, payload.TriggerMode)
+		}
+		foundAutoDone = true
+	}
+	if !foundAutoDone {
+		t.Fatalf("expected auto compact_done event in %+v", events)
+	}
+}
+
+func TestServiceRunAutoCompactNoopDoesNotDisableReactiveRetry(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.AutoCompact.Enabled = true
+		cfg.Context.AutoCompact.InputTokenThreshold = 100
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := agentsession.New("auto-noop-reactive")
+	session.ID = "session-auto-noop-reactive"
+	session.TokenInputTotal = 100
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older request"},
+		{Role: providertypes.RoleAssistant, Content: "older answer"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	builder := &stubContextBuilder{
+		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+			return agentcontext.BuildResult{
+				SystemPrompt:      "auto compact prompt",
+				Messages:          append([]providertypes.Message(nil), input.Messages...),
+				ShouldAutoCompact: input.Metadata.SessionInputTokens >= input.Compact.AutoCompactThreshold,
+			}, nil
+		},
+	}
+
+	callCount := 0
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+			callCount++
+			if callCount == 1 {
+				return &provider.ProviderError{
+					StatusCode: 400,
+					Code:       provider.ErrorCodeContextTooLong,
+					Message:    "maximum context length exceeded",
+				}
+			}
+			select {
+			case events <- providertypes.NewTextDeltaStreamEvent("recovered after reactive compact"):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			select {
+			case events <- providertypes.NewMessageDoneStreamEvent("stop", nil):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	compactRunner := &stubCompactRunner{
+		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
+			switch input.Mode {
+			case contextcompact.ModeAuto:
+				return contextcompact.Result{
+					Messages: append([]providertypes.Message(nil), input.Messages...),
+					Applied:  false,
+					Metrics: contextcompact.Metrics{
+						BeforeChars: 40,
+						AfterChars:  40,
+						TriggerMode: string(contextcompact.ModeAuto),
+					},
+				}, nil
+			case contextcompact.ModeReactive:
+				return contextcompact.Result{
+					Messages: []providertypes.Message{
+						{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
+						{Role: providertypes.RoleUser, Content: "continue"},
+					},
+					Applied: true,
+					Metrics: contextcompact.Metrics{
+						BeforeChars: 80,
+						AfterChars:  30,
+						SavedRatio:  0.625,
+						TriggerMode: string(contextcompact.ModeReactive),
+					},
+				}, nil
+			default:
+				t.Fatalf("unexpected compact mode %q", input.Mode)
+				return contextcompact.Result{}, nil
+			}
+		},
+	}
+	service.compactRunner = compactRunner
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-auto-noop-reactive",
+		Content:   "continue",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(compactRunner.calls) != 2 {
+		t.Fatalf("expected auto noop then reactive compact, got %d calls", len(compactRunner.calls))
+	}
+	if compactRunner.calls[0].Mode != contextcompact.ModeAuto {
+		t.Fatalf("expected first compact mode %q, got %q", contextcompact.ModeAuto, compactRunner.calls[0].Mode)
+	}
+	if compactRunner.calls[1].Mode != contextcompact.ModeReactive {
+		t.Fatalf("expected second compact mode %q, got %q", contextcompact.ModeReactive, compactRunner.calls[1].Mode)
+	}
+	if scripted.callCount != 2 {
+		t.Fatalf("expected provider to be called twice, got %d", scripted.callCount)
+	}
 }
 
 func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {

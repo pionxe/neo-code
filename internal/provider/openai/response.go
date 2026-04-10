@@ -80,14 +80,23 @@ func (p *Provider) consumeStream(
 
 	for {
 		// 每次读取前优先响应上下文取消，避免取消请求被误判为流中断。
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		// 一旦收到 [DONE]，后续取消不应覆盖已完成的流收尾。
+		if !done {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 		}
 
 		line, err := reader.ReadLine()
 		if err != nil && !errors.Is(err, io.EOF) {
+			if done {
+				if flushErr := flushPendingData(); flushErr != nil {
+					return flushErr
+				}
+				return finishStream()
+			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}

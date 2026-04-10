@@ -185,6 +185,54 @@ func TestReactiveCompactUsesKeepRecentAndReportsReactiveMode(t *testing.T) {
 	}
 }
 
+func TestAutoCompactUsesManualStrategyAndReportsAutoMode(t *testing.T) {
+	t.Parallel()
+
+	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	runner := NewRunner(generator)
+	home := t.TempDir()
+	runner.userHomeDir = func() (string, error) { return home, nil }
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "old requirement"},
+		{Role: providertypes.RoleAssistant, Content: "old answer"},
+		{Role: providertypes.RoleUser, Content: "middle request"},
+		{Role: providertypes.RoleAssistant, Content: "middle answer"},
+		{Role: providertypes.RoleUser, Content: "recent request"},
+		{Role: providertypes.RoleAssistant, Content: "recent answer"},
+	}
+
+	result, err := runner.Run(context.Background(), Input{
+		Mode:      ModeAuto,
+		SessionID: "session-auto",
+		Workdir:   t.TempDir(),
+		Messages:  messages,
+		Config: config.CompactConfig{
+			ManualStrategy:           config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 4,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected auto compact applied")
+	}
+	if result.Metrics.TriggerMode != string(ModeAuto) {
+		t.Fatalf("expected trigger mode %q, got %q", ModeAuto, result.Metrics.TriggerMode)
+	}
+	if len(generator.calls) != 1 {
+		t.Fatalf("expected generator to run once, got %d", len(generator.calls))
+	}
+	if generator.calls[0].Mode != ModeAuto {
+		t.Fatalf("expected summary input mode %q, got %q", ModeAuto, generator.calls[0].Mode)
+	}
+	if generator.calls[0].Config.ManualStrategy != config.CompactManualStrategyKeepRecent {
+		t.Fatalf("expected auto compact to retain manual strategy, got %q", generator.calls[0].Config.ManualStrategy)
+	}
+}
+
 func TestManualCompactKeepRecentProtectsLatestExplicitUserInstruction(t *testing.T) {
 	t.Parallel()
 

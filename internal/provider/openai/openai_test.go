@@ -595,6 +595,38 @@ func TestConsumeStream_ContextCancellationAtEOFWithoutDoneReturnsCanceled(t *tes
 	}
 }
 
+func TestConsumeStream_DoneThenCancellationStillFinishes(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	p, err := New(resolvedConfig("", ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	body := &cancelAfterDoneReader{
+		payload: []byte("data: [DONE]\n"),
+		cancel:  cancel,
+		err:     io.ErrClosedPipe,
+	}
+	events := make(chan providertypes.StreamEvent, 4)
+
+	err = p.consumeStream(ctx, body, events)
+	if err != nil {
+		t.Fatalf("expected completed stream after [DONE], got %v", err)
+	}
+
+	var foundDone bool
+	for _, evt := range drainStreamEvents(events) {
+		if evt.Type == providertypes.StreamEventMessageDone {
+			foundDone = true
+		}
+	}
+	if !foundDone {
+		t.Fatal("expected message_done event after cancellation race post-[DONE]")
+	}
+}
+
 func TestConsumeStream_FinishReasonAccumulation(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
@@ -1349,6 +1381,23 @@ func (r *cancelOnEOFReader) Read(p []byte) (int, error) {
 		r.cancel()
 	}
 	return n, err
+}
+
+type cancelAfterDoneReader struct {
+	payload []byte
+	cancel  func()
+	err     error
+	read    bool
+}
+
+func (r *cancelAfterDoneReader) Read(p []byte) (int, error) {
+	if !r.read {
+		r.read = true
+		n := copy(p, r.payload)
+		return n, nil
+	}
+	r.cancel()
+	return 0, r.err
 }
 
 type failingReadCloser struct{ err error }

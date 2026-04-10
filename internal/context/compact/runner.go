@@ -18,6 +18,8 @@ type Mode string
 const (
 	// ModeManual runs the explicit user-triggered compact flow.
 	ModeManual Mode = "manual"
+	// ModeAuto runs the token-threshold-triggered compact flow.
+	ModeAuto Mode = "auto"
 	// ModeReactive runs the provider-error-triggered compact flow.
 	ModeReactive Mode = "reactive"
 )
@@ -111,7 +113,7 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 		return Result{}, err
 	}
 
-	if input.Mode != ModeManual && input.Mode != ModeReactive {
+	if input.Mode != ModeManual && input.Mode != ModeAuto && input.Mode != ModeReactive {
 		return Result{}, fmt.Errorf("compact: unsupported mode %q", input.Mode)
 	}
 
