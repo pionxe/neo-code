@@ -44,7 +44,7 @@ func TestListProviderModelsFallsBackToDefaultModelWithoutDiscovery(t *testing.T)
 }
 
 func TestListProviderModelsCustomProviderDoesNotFallbackWithoutDiscovery(t *testing.T) {
-	t.Parallel()
+	t.Setenv(testAPIKeyEnv, "test-key")
 
 	service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
 	models, err := service.ListProviderModels(context.Background(), customGatewayProviderSource())
