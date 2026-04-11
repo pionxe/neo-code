@@ -20,7 +20,6 @@ import (
 	"neo-code/internal/tools"
 	tuistatus "neo-code/internal/tui/core/status"
 	tuiutils "neo-code/internal/tui/core/utils"
-	tuiworkspace "neo-code/internal/tui/core/workspace"
 	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
 )
@@ -404,7 +403,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.rebuildTranscript()
 			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
 			a.state.ActiveRunID = runID
-			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.ActiveSessionID, a.state.CurrentWorkdir)
+			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.CurrentWorkdir)
 			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, input))
 			return a, tea.Batch(cmds...)
 		}
@@ -673,7 +672,7 @@ func (a *App) refreshMessages() error {
 	a.activeMessages = session.Messages
 	a.clearActivities()
 	a.state.ActiveSessionTitle = session.Title
-	a.setCurrentWorkdir(tuiworkspace.SelectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir))
+	a.setCurrentWorkdir(a.configManager.Get().Workdir)
 	a.refreshRuntimeSourceSnapshot()
 	return nil
 }

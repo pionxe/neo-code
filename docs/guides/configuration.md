@@ -77,7 +77,7 @@ tools:
 |------|------|--------|------|
 | `selected_provider` | string | `openai` | 当前选择的 provider 名称 |
 | `current_model` | string | 取决于 provider | 当前选择的模型名称 |
-| `workdir` | string | `.` (当前目录) | 工作目录的绝对路径 |
+| `workdir` | string | `.` (当前目录) | 工作目录的绝对路径；启动时要求路径已存在且必须是目录 |
 | `shell` | string | `bash` (Linux/Mac)<br>`powershell` (Windows) | Shell 类型 |
 | `max_loops` | int | `8` | Agent 推理循环最大轮数 |
 
@@ -93,6 +93,7 @@ tools:
 **自动管理**：
 - 首次启动时自动创建默认配置
 - `workdir` 自动转换为绝对路径
+- `workdir` 必须指向已存在的目录
 - 无效配置会在启动时报错
 
 **最小持久化**：

@@ -11,6 +11,7 @@ import (
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 )
 
 const (
@@ -256,10 +257,11 @@ func (c *Config) Validate() error {
 	if !filepath.IsAbs(c.Workdir) {
 		return fmt.Errorf("config: workdir must be absolute, got %q", c.Workdir)
 	}
-	if info, err := os.Stat(c.Workdir); err != nil {
+	if _, err := agentsession.ResolveExistingDir(c.Workdir); err != nil {
+		if strings.Contains(err.Error(), "is not a directory") {
+			return fmt.Errorf("config: workdir is not a directory: %q", c.Workdir)
+		}
 		return fmt.Errorf("config: workdir does not exist: %q", c.Workdir)
-	} else if !info.IsDir() {
-		return fmt.Errorf("config: workdir is not a directory: %q", c.Workdir)
 	}
 	if selected.Source != ProviderSourceCustom && strings.TrimSpace(selected.Model) == "" {
 		return fmt.Errorf("config: selected provider %q has empty model", selected.Name)

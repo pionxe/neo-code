@@ -57,6 +57,7 @@ type stubRuntime struct {
 	resolveCalls  []agentruntime.PermissionResolutionInput
 	resolveErr    error
 	cancelInvoked bool
+	loadSessionFn func(context.Context, string) (agentsession.Session, error)
 }
 
 func newStubRuntime() *stubRuntime {
@@ -90,6 +91,9 @@ func (s *stubRuntime) ListSessions(ctx context.Context) ([]agentsession.Summary,
 }
 
 func (s *stubRuntime) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	if s.loadSessionFn != nil {
+		return s.loadSessionFn(ctx, id)
+	}
 	return agentsession.NewWithWorkdir("draft", ""), nil
 }
 
@@ -911,10 +915,11 @@ func TestRuntimeEventUserMessageHandler(t *testing.T) {
 
 func TestRuntimeEventRunContextHandler(t *testing.T) {
 	app, _ := newTestApp(t)
+	workdir := t.TempDir()
 	payload := tuiservices.RuntimeRunContextPayload{
 		Provider: "p1",
 		Model:    "m1",
-		Workdir:  "/tmp",
+		Workdir:  workdir,
 	}
 	event := agentruntime.RuntimeEvent{RunID: "run-2", SessionID: "s1", Payload: payload}
 	handled := runtimeEventRunContextHandler(&app, event)
@@ -923,6 +928,32 @@ func TestRuntimeEventRunContextHandler(t *testing.T) {
 	}
 	if app.state.CurrentProvider != "p1" || app.state.CurrentModel != "m1" {
 		t.Fatalf("expected provider/model to update")
+	}
+	if app.state.CurrentWorkdir != workdir {
+		t.Fatalf("expected workdir %q, got %q", workdir, app.state.CurrentWorkdir)
+	}
+}
+
+func TestRefreshMessagesUsesConfiguredWorkdir(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+	configWorkdir := app.configManager.Get().Workdir
+	sessionWorkdir := t.TempDir()
+	runtime.loadSessionFn = func(ctx context.Context, id string) (agentsession.Session, error) {
+		session := agentsession.NewWithWorkdir("persisted", sessionWorkdir)
+		session.ID = id
+		session.Messages = []providertypes.Message{{Role: roleAssistant, Content: "hello"}}
+		return session, nil
+	}
+
+	if err := app.refreshMessages(); err != nil {
+		t.Fatalf("refreshMessages() error = %v", err)
+	}
+	if app.state.CurrentWorkdir != configWorkdir {
+		t.Fatalf("expected configured workdir %q, got %q", configWorkdir, app.state.CurrentWorkdir)
+	}
+	if app.state.ActiveSessionTitle != "persisted" {
+		t.Fatalf("expected session title to refresh, got %q", app.state.ActiveSessionTitle)
 	}
 }
 

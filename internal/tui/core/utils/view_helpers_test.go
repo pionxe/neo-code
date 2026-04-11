@@ -29,18 +29,18 @@ func TestPickerLabelFromMode(t *testing.T) {
 
 func TestRequestedWorkdirForRun(t *testing.T) {
 	tests := []struct {
-		name            string
-		activeSessionID string
-		currentWorkdir  string
-		want            string
+		name           string
+		currentWorkdir string
+		want           string
 	}{
-		{"empty session returns current", "", "/home/user", "/home/user"},
-		{"active session returns empty", "session-1", "/home/user", ""},
+		{"returns current workdir", "/home/user", "/home/user"},
+		{"trims whitespace", "  /home/user  ", "/home/user"},
+		{"empty stays empty", "   ", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := RequestedWorkdirForRun(tt.activeSessionID, tt.currentWorkdir); got != tt.want {
+			if got := RequestedWorkdirForRun(tt.currentWorkdir); got != tt.want {
 				t.Errorf("RequestedWorkdirForRun() = %v, want %v", got, tt.want)
 			}
 		})
