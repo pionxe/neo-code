@@ -184,3 +184,112 @@ func TestRenderTopicNoKeywords(t *testing.T) {
 		t.Errorf("RenderTopic should not contain keywords when empty: %q", got)
 	}
 }
+
+func TestParseIndexLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		line      string
+		wantOK    bool
+		wantType  Type
+		wantTitle string
+		wantTopic string
+	}{
+		{"valid user entry", "- [user] 偏好 tab (user_profile.md)", true, TypeUser, "偏好 tab", "user_profile.md"},
+		{"entry without topic file", "- [feedback] 不要 mock", true, TypeFeedback, "不要 mock", ""},
+		{"invalid prefix", "random text", false, "", "", ""},
+		{"missing close bracket", "- [user foo", false, "", "", ""},
+		{"invalid type", "- [invalid] foo (bar.md)", false, "", "", ""},
+		{"empty rest after bracket", "- [user]", false, "", "", ""},
+		{"project type", "- [project] 使用 Bubble Tea (proj.md)", true, TypeProject, "使用 Bubble Tea", "proj.md"},
+		{"reference type", "- [reference] Claude Code 设计", true, TypeReference, "Claude Code 设计", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, ok := parseIndexLine(tt.line)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if entry.Type != tt.wantType {
+				t.Errorf("Type = %q, want %q", entry.Type, tt.wantType)
+			}
+			if entry.Title != tt.wantTitle {
+				t.Errorf("Title = %q, want %q", entry.Title, tt.wantTitle)
+			}
+			if entry.TopicFile != tt.wantTopic {
+				t.Errorf("TopicFile = %q, want %q", entry.TopicFile, tt.wantTopic)
+			}
+		})
+	}
+}
+
+func TestTypeDisplayName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		typ  Type
+		want string
+	}{
+		{TypeUser, "User"},
+		{TypeFeedback, "Feedback"},
+		{TypeProject, "Project"},
+		{TypeReference, "Reference"},
+		{Type("unknown"), "unknown"},
+	}
+	for _, tt := range tests {
+		got := typeDisplayName(tt.typ)
+		if got != tt.want {
+			t.Errorf("typeDisplayName(%q) = %q, want %q", tt.typ, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeTitle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"normal text", "hello world", "hello world"},
+		{"extra spaces", "  hello   world  ", "hello world"},
+		{"newlines", "line1\nline2", "line1 line2"},
+		{"parens replaced", "use (default)", "use {default}"},
+		{"tabs and spaces", "\thello\t world", "hello world"},
+		{"empty", "   ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormalizeTitle(tt.input)
+			if got != tt.want {
+				t.Errorf("NormalizeTitle(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTopicNameFromEntry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with TopicFile", func(t *testing.T) {
+		entry := &Entry{TopicFile: "user_profile.md"}
+		got := topicNameFromEntry(entry)
+		if got != "user_profile" {
+			t.Errorf("topicNameFromEntry = %q, want %q", got, "user_profile")
+		}
+	})
+
+	t.Run("without TopicFile", func(t *testing.T) {
+		entry := &Entry{Type: TypeUser, Source: SourceUserManual}
+		got := topicNameFromEntry(entry)
+		if got != "user_user_manual" {
+			t.Errorf("topicNameFromEntry = %q, want %q", got, "user_user_manual")
+		}
+	})
+}

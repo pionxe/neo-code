@@ -630,3 +630,43 @@ func TestBuildShouldAutoCompactAboveThreshold(t *testing.T) {
 		t.Fatalf("expected ShouldAutoCompact true when tokens above threshold")
 	}
 }
+
+func TestNewBuilderWithMemo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with memo source injects memo section", func(t *testing.T) {
+		memoSource := stubPromptSectionSource{
+			sections: []promptSection{{Title: "Memo", Content: "- [user] test entry"}},
+		}
+		builder := NewBuilderWithMemo(stubMicroCompactPolicySource{}, memoSource)
+		input := BuildInput{
+			Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+			Metadata: testMetadata(t.TempDir()),
+		}
+		result, err := builder.Build(stdcontext.Background(), input)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if !strings.Contains(result.SystemPrompt, "## Memo") {
+			t.Errorf("expected Memo section in system prompt")
+		}
+		if !strings.Contains(result.SystemPrompt, "test entry") {
+			t.Errorf("expected memo content in system prompt")
+		}
+	})
+
+	t.Run("nil memo source skips memo section", func(t *testing.T) {
+		builder := NewBuilderWithMemo(stubMicroCompactPolicySource{}, nil)
+		input := BuildInput{
+			Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+			Metadata: testMetadata(t.TempDir()),
+		}
+		result, err := builder.Build(stdcontext.Background(), input)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if strings.Contains(result.SystemPrompt, "## Memo") {
+			t.Error("nil memo source should not inject Memo section")
+		}
+	})
+}
