@@ -96,7 +96,7 @@ func TestNewProviderIdentityValidatesInputs(t *testing.T) {
 	}
 }
 
-func TestNormalizeProviderIdentityAnthropicAndFallback(t *testing.T) {
+func TestNormalizeProviderIdentityAnthropicAndUnknownDriver(t *testing.T) {
 	t.Parallel()
 
 	anthropicIdentity, err := NormalizeProviderIdentity(ProviderIdentity{

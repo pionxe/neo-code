@@ -17,7 +17,7 @@ func TestJSONStoreRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	store := newJSONStore(t.TempDir())
-	identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+	identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
@@ -128,7 +128,7 @@ func TestJSONStoreMissingCatalog(t *testing.T) {
 	t.Parallel()
 
 	store := newJSONStore(t.TempDir())
-	identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+	identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 
 	baseDir := t.TempDir()
 	store := newJSONStore(baseDir)
-	identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+	identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
@@ -219,7 +219,7 @@ func TestJSONStoreLoadHonorsContextError(t *testing.T) {
 	t.Parallel()
 
 	store := newJSONStore(t.TempDir())
-	identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+	identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
@@ -238,7 +238,7 @@ func TestJSONStoreLoadRejectsInvalidIdentity(t *testing.T) {
 
 	store := newJSONStore(t.TempDir())
 	_, err := store.Load(context.Background(), provider.ProviderIdentity{
-		Driver:  "openai",
+		Driver:  "openaicompat",
 		BaseURL: "://bad",
 	})
 	if err == nil || !strings.Contains(err.Error(), "normalize model catalog key") {
@@ -250,7 +250,7 @@ func TestJSONStoreLoadRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
 	store := newJSONStore(t.TempDir())
-	identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+	identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
@@ -272,7 +272,7 @@ func TestJSONStoreSaveHonorsContextError(t *testing.T) {
 	t.Parallel()
 
 	store := newJSONStore(t.TempDir())
-	identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+	identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}

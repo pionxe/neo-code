@@ -110,8 +110,12 @@ func TestNewProviderCatalogInputDefaultsOpenAICompatibleIdentityAPIStyle(t *test
 		t.Fatalf("NewProviderCatalogInput() error = %v", err)
 	}
 
-	if input.Identity.APIStyle != defaultOpenAICompatibleAPIStyle {
-		t.Fatalf("expected default api_style %q, got %+v", defaultOpenAICompatibleAPIStyle, input.Identity)
+	if input.Identity.APIStyle != providerpkg.OpenAICompatibleAPIStyleChatCompletions {
+		t.Fatalf(
+			"expected default api_style %q, got %+v",
+			providerpkg.OpenAICompatibleAPIStyleChatCompletions,
+			input.Identity,
+		)
 	}
 
 	runtimeConfig, err := input.ResolveDiscoveryConfig()

@@ -43,24 +43,3 @@ func TestSplitFirstWord(t *testing.T) {
 		t.Fatalf("expected empty split for blank input, got first=%q rest=%q", first, rest)
 	}
 }
-
-func TestWorkspaceSlashCommandHelpers(t *testing.T) {
-	if !IsWorkspaceSlashCommand("/cwd ./tmp", "/cwd") {
-		t.Fatalf("expected /cwd to be recognized")
-	}
-	if IsWorkspaceSlashCommand("/status", "/cwd") {
-		t.Fatalf("did not expect /status as workspace command")
-	}
-
-	args, err := ParseWorkspaceSlashCommand("/cwd ./tmp", "/cwd")
-	if err != nil {
-		t.Fatalf("ParseWorkspaceSlashCommand() error = %v", err)
-	}
-	if args != "./tmp" {
-		t.Fatalf("expected args ./tmp, got %q", args)
-	}
-
-	if _, err := ParseWorkspaceSlashCommand("/status", "/cwd"); err == nil {
-		t.Fatalf("expected parse error for non-workspace command")
-	}
-}

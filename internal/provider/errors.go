@@ -11,6 +11,7 @@ import (
 var (
 	ErrDriverNotFound          = errors.New("provider driver not found")
 	ErrDriverAlreadyRegistered = errors.New("provider: driver already registered")
+	ErrDiscoveryConfig         = errors.New("provider: discovery config invalid")
 
 	// 流级哨兵错误，用于区分可恢复/不可恢复的流中断原因。
 	ErrStreamInterrupted = errors.New("provider: stream interrupted")
@@ -69,6 +70,21 @@ func (e *ProviderError) Error() string {
 		return fmt.Sprintf("provider error (status=%d, code=%s): %s", e.StatusCode, e.Code, e.Message)
 	}
 	return fmt.Sprintf("provider error (code=%s): %s", e.Code, e.Message)
+}
+
+func NewDiscoveryConfigError(message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ErrDiscoveryConfig
+	}
+	return fmt.Errorf("%w: %s", ErrDiscoveryConfig, message)
+}
+
+func IsDiscoveryConfigError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrDiscoveryConfig)
 }
 
 // IsRetryableStatus 根据通用 HTTP 语义判断状态码是否可重试。

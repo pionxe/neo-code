@@ -36,13 +36,6 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		if strings.TrimSpace(frame.SessionID) == "" {
 			return NewMissingRequiredFieldError("session_id")
 		}
-	case FrameActionSetSessionWorkdir:
-		if strings.TrimSpace(frame.SessionID) == "" {
-			return NewMissingRequiredFieldError("session_id")
-		}
-		if strings.TrimSpace(frame.Workdir) == "" {
-			return NewMissingRequiredFieldError("workdir")
-		}
 	case FrameActionResolvePermission:
 		return validateResolvePermissionFrame(frame)
 	case FrameActionCancel, FrameActionListSessions:
@@ -180,7 +173,6 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionCancel,
 		FrameActionListSessions,
 		FrameActionLoadSession,
-		FrameActionSetSessionWorkdir,
 		FrameActionResolvePermission:
 		return true
 	default:

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"neo-code/internal/provider"
 )
 
 const (
@@ -18,7 +20,6 @@ const (
 type customProviderFile struct {
 	Name             string                      `yaml:"name"`
 	Driver           string                      `yaml:"driver"`
-	DefaultModel     string                      `yaml:"default_model"`
 	APIKeyEnv        string                      `yaml:"api_key_env"`
 	BaseURL          string                      `yaml:"base_url,omitempty"`
 	OpenAICompatible customOpenAICompatibleFile  `yaml:"openai_compatible,omitempty"`
@@ -27,7 +28,6 @@ type customProviderFile struct {
 }
 
 type customOpenAICompatibleFile struct {
-	Profile  string `yaml:"profile,omitempty"`
 	BaseURL  string `yaml:"base_url"`
 	APIStyle string `yaml:"api_style,omitempty"`
 }
@@ -49,7 +49,7 @@ type customProviderSettings struct {
 	APIVersion     string
 }
 
-// loadCustomProviders 扫描 baseDir/providers 下的一级子目录，并将其中的 provider.yaml 解析为运行时配置。
+// loadCustomProviders 扫描 baseDir/providers 下的一层子目录，并将其中的 provider.yaml 解析为运行时配置。
 func loadCustomProviders(baseDir string) ([]ProviderConfig, error) {
 	providersDir := filepath.Join(strings.TrimSpace(baseDir), providersDirName)
 	entries, err := os.ReadDir(providersDir)
@@ -99,14 +99,10 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 	}
 
 	var file customProviderFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil {
 		return ProviderConfig{}, fmt.Errorf("config: parse %s: %w", providerPath, err)
-	}
-	if strings.TrimSpace(file.DefaultModel) != "" {
-		return ProviderConfig{}, fmt.Errorf(
-			"config: custom provider %q does not support default_model; models must come from remote discovery",
-			filepath.Base(providerDir),
-		)
 	}
 
 	settings := resolveCustomProviderSettings(file)
@@ -121,8 +117,8 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		Source:         ProviderSourceCustom,
 	}
 
-	if normalizeProviderDriver(cfg.Driver) == "openaicompat" && strings.TrimSpace(cfg.APIStyle) == "" {
-		cfg.APIStyle = defaultOpenAICompatibleAPIStyle
+	if normalizeProviderDriver(cfg.Driver) == provider.DriverOpenAICompat && strings.TrimSpace(cfg.APIStyle) == "" {
+		cfg.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -133,46 +129,23 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 }
 
 // resolveCustomProviderSettings 根据 driver 只提取当前协议真正生效的配置字段，避免误吃其他协议块的值。
+// 已知 driver 仅从协议块读取 base_url；未知 driver 使用顶层 base_url 作为唯一入口。
 func resolveCustomProviderSettings(file customProviderFile) customProviderSettings {
-	settings := customProviderSettings{
-		BaseURL: strings.TrimSpace(file.BaseURL),
-	}
+	settings := customProviderSettings{}
 
 	switch normalizeProviderDriver(file.Driver) {
-	case "openaicompat":
-		if settings.BaseURL == "" {
-			settings.BaseURL = strings.TrimSpace(file.OpenAICompatible.BaseURL)
-		}
+	case provider.DriverOpenAICompat:
+		settings.BaseURL = strings.TrimSpace(file.OpenAICompatible.BaseURL)
 		settings.APIStyle = strings.TrimSpace(file.OpenAICompatible.APIStyle)
-	case "gemini":
-		if settings.BaseURL == "" {
-			settings.BaseURL = strings.TrimSpace(file.Gemini.BaseURL)
-		}
+	case provider.DriverGemini:
+		settings.BaseURL = strings.TrimSpace(file.Gemini.BaseURL)
 		settings.DeploymentMode = strings.TrimSpace(file.Gemini.DeploymentMode)
-	case "anthropic":
-		if settings.BaseURL == "" {
-			settings.BaseURL = strings.TrimSpace(file.Anthropic.BaseURL)
-		}
+	case provider.DriverAnthropic:
+		settings.BaseURL = strings.TrimSpace(file.Anthropic.BaseURL)
 		settings.APIVersion = strings.TrimSpace(file.Anthropic.APIVersion)
 	default:
-		if settings.BaseURL == "" {
-			settings.BaseURL = resolveFallbackCustomProviderBaseURL(file)
-		}
+		settings.BaseURL = strings.TrimSpace(file.BaseURL)
 	}
 
 	return settings
-}
-
-// resolveFallbackCustomProviderBaseURL 为未知 driver 保留兼容兜底顺序，避免切断既有自定义接入配置。
-func resolveFallbackCustomProviderBaseURL(file customProviderFile) string {
-	for _, value := range []string{
-		file.OpenAICompatible.BaseURL,
-		file.Gemini.BaseURL,
-		file.Anthropic.BaseURL,
-	} {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

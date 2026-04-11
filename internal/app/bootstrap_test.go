@@ -684,7 +684,7 @@ func TestBuildRuntimeRejectsInvalidConfigFile(t *testing.T) {
 	}
 
 	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
-	if err == nil || !strings.Contains(err.Error(), "no longer supported") {
+	if err == nil || !strings.Contains(err.Error(), "workdir not found") {
 		t.Fatalf("expected legacy config error, got %v", err)
 	}
 }

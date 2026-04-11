@@ -12,7 +12,7 @@ NeoCode 当前使用本地 JSON 文件持久化会话，以保持实现简单、
 
 - 默认目录按工作区隔离：`~/.neocode/projects/<workspace-hash>/sessions/`
 - 工作区哈希基于启动阶段确定的工作区根目录生成
-- `session.Workdir` 表示会话当前实际执行命令使用的目录，可被运行期命令修改，但不参与分桶
+- `session.Workdir` 表示会话最近一次运行实际使用的目录，由启动 `workdir` 或请求级覆盖值写回，但不参与分桶
 - 旧的全局 `~/.neocode/sessions/` 开发期数据不迁移、不回读
 
 ## 数据模型

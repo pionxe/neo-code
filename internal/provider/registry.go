@@ -13,10 +13,10 @@ type Builder func(ctx context.Context, cfg RuntimeConfig) (Provider, error)
 type DiscoveryFunc func(ctx context.Context, cfg RuntimeConfig) ([]providertypes.ModelDescriptor, error)
 
 type DriverDefinition struct {
-	Name         string
-	Build        Builder
-	Discover     DiscoveryFunc
-	Capabilities DriverTransportCapabilities
+	Name                    string
+	Build                   Builder
+	Discover                DiscoveryFunc
+	ValidateCatalogIdentity func(identity ProviderIdentity) error
 }
 
 type Registry struct {
@@ -42,6 +42,9 @@ func (r *Registry) Register(driver DriverDefinition) error {
 	if driver.Build == nil {
 		return fmt.Errorf("provider: driver %q build func is nil", driver.Name)
 	}
+	if driver.Discover == nil {
+		return fmt.Errorf("provider: driver %q discover func is nil", driver.Name)
+	}
 	if _, exists := r.drivers[driverType]; exists {
 		return fmt.Errorf("%w: %s", ErrDriverAlreadyRegistered, driver.Name)
 	}
@@ -62,9 +65,6 @@ func (r *Registry) DiscoverModels(ctx context.Context, cfg RuntimeConfig) ([]pro
 	if err != nil {
 		return nil, err
 	}
-	if driver.Discover == nil {
-		return nil, nil
-	}
 	return driver.Discover(ctx, cfg)
 }
 
@@ -73,13 +73,20 @@ func (r *Registry) Supports(driverType string) bool {
 	return err == nil
 }
 
-// DriverTransportCapabilities 返回指定 driver 的传输能力声明；driver 不存在时返回对应错误。
-func (r *Registry) DriverTransportCapabilities(driverType string) (DriverTransportCapabilities, error) {
-	driver, err := r.driver(driverType)
-	if err != nil {
-		return DriverTransportCapabilities{}, err
+// ValidateCatalogIdentity 在读取 catalog 快照或执行默认模型回退前执行无需密钥的静态校验，避免无效配置被误判为可用。
+func (r *Registry) ValidateCatalogIdentity(identity ProviderIdentity) error {
+	if r == nil {
+		return ErrDriverNotFound
 	}
-	return driver.Capabilities, nil
+
+	driver, err := r.driver(identity.Driver)
+	if err != nil {
+		return err
+	}
+	if driver.ValidateCatalogIdentity == nil {
+		return nil
+	}
+	return driver.ValidateCatalogIdentity(identity)
 }
 
 func (r *Registry) driver(driverType string) (DriverDefinition, error) {

@@ -3,6 +3,8 @@ package session
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
+	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -49,4 +51,38 @@ func NormalizeWorkspaceRoot(workspaceRoot string) string {
 		trimmed = absolute
 	}
 	return filepath.Clean(trimmed)
+}
+
+// EffectiveWorkdir 优先返回会话工作目录，缺失时回退到默认工作目录。
+// 供 runtime、TUI 等上层模块统一调用，避免在多处重复实现回退逻辑。
+func EffectiveWorkdir(sessionWorkdir string, defaultWorkdir string) string {
+	workdir := strings.TrimSpace(sessionWorkdir)
+	if workdir != "" {
+		return workdir
+	}
+	return strings.TrimSpace(defaultWorkdir)
+}
+
+// ResolveExistingDir 将路径解析为存在的绝对目录路径，用于启动校验和运行时路径规范化。
+// 要求路径非空、可解析为绝对路径、存在且为目录。
+func ResolveExistingDir(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("workdir is empty")
+	}
+
+	absolute, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("resolve workdir %q: %w", trimmed, err)
+	}
+
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve workdir %q: %w", trimmed, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("workdir %q is not a directory", absolute)
+	}
+
+	return filepath.Clean(absolute), nil
 }

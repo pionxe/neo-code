@@ -103,8 +103,8 @@ func (s *SelectionService) SelectProvider(ctx context.Context, providerName stri
 	if err != nil {
 		return ProviderSelection{}, ErrProviderNotFound
 	}
-	if !s.supporters.Supports(providerCfg.Driver) {
-		return ProviderSelection{}, ErrDriverUnsupported
+	if err := s.ensureSupportedProvider(providerCfg); err != nil {
+		return ProviderSelection{}, err
 	}
 
 	input, err := catalogInputFromProvider(providerCfg)
@@ -133,8 +133,8 @@ func (s *SelectionService) SelectProvider(ctx context.Context, providerName stri
 		if err != nil {
 			return ErrProviderNotFound
 		}
-		if !s.supporters.Supports(selected.Driver) {
-			return ErrDriverUnsupported
+		if err := s.ensureSupportedProvider(selected); err != nil {
+			return err
 		}
 
 		cfg.SelectedProvider = selected.Name
@@ -163,8 +163,8 @@ func (s *SelectionService) ListModels(ctx context.Context) ([]providertypes.Mode
 	if err != nil {
 		return nil, err
 	}
-	if !s.supporters.Supports(selected.Driver) {
-		return nil, ErrDriverUnsupported
+	if err := s.ensureSupportedProvider(selected); err != nil {
+		return nil, err
 	}
 	input, err := catalogInputFromProvider(selected)
 	if err != nil {
@@ -186,8 +186,8 @@ func (s *SelectionService) ListModelsSnapshot(ctx context.Context) ([]providerty
 	if err != nil {
 		return nil, err
 	}
-	if !s.supporters.Supports(selected.Driver) {
-		return nil, ErrDriverUnsupported
+	if err := s.ensureSupportedProvider(selected); err != nil {
+		return nil, err
 	}
 	input, err := catalogInputFromProvider(selected)
 	if err != nil {
@@ -211,8 +211,8 @@ func (s *SelectionService) SetCurrentModel(ctx context.Context, modelID string) 
 	if err != nil {
 		return ProviderSelection{}, err
 	}
-	if !s.supporters.Supports(selected.Driver) {
-		return ProviderSelection{}, ErrDriverUnsupported
+	if err := s.ensureSupportedProvider(selected); err != nil {
+		return ProviderSelection{}, err
 	}
 
 	input, err := catalogInputFromProvider(selected)
@@ -246,33 +246,8 @@ func (s *SelectionService) SetCurrentModel(ctx context.Context, modelID string) 
 	return selection, nil
 }
 
-// fallbackToProviderDefaultModel 在切换模型失败时回退到当前 provider 的默认模型，并持久化修正后的选择状态。
-func (s *SelectionService) fallbackToProviderDefaultModel(ctx context.Context, selected ProviderConfig, modelID string) (ProviderSelection, error) {
-	modelID = strings.TrimSpace(modelID)
-	if modelID == "" {
-		return ProviderSelection{}, ErrModelNotFound
-	}
-
-	var selection ProviderSelection
-	err := s.manager.Update(ctx, func(cfg *Config) error {
-		currentSelected, err := cfg.SelectedProviderConfig()
-		if err != nil {
-			return err
-		}
-		if normalizeProviderName(currentSelected.Name) != normalizeProviderName(selected.Name) {
-			return ErrProviderNotFound
-		}
-		cfg.CurrentModel = modelID
-		selection = selectionFromConfig(*cfg)
-		return nil
-	})
-	if err != nil {
-		return ProviderSelection{}, err
-	}
-	return selection, nil
-}
-
 // EnsureSelection 确保当前 provider 和 model 仍然有效，必要时自动修正。
+// EnsureSelection 统一修正当前选择，使 selected_provider/current_model 始终落在当前可用目录内。
 func (s *SelectionService) EnsureSelection(ctx context.Context) (ProviderSelection, error) {
 	if err := s.validate(); err != nil {
 		return ProviderSelection{}, err
@@ -286,13 +261,8 @@ func (s *SelectionService) EnsureSelection(ctx context.Context) (ProviderSelecti
 	if err != nil {
 		return ProviderSelection{}, err
 	}
-	if !s.supporters.Supports(selected.Driver) {
-		return ProviderSelection{}, fmt.Errorf(
-			"selection: provider %q driver %q: %w",
-			selected.Name,
-			selected.Driver,
-			ErrDriverUnsupported,
-		)
+	if err := s.ensureSupportedProvider(selected); err != nil {
+		return ProviderSelection{}, err
 	}
 
 	input, err := catalogInputFromProvider(selected)
@@ -365,6 +335,19 @@ func (s *SelectionService) validate() error {
 func (s *SelectionService) selectedProviderConfig() (ProviderConfig, error) {
 	cfg := s.manager.Get()
 	return cfg.SelectedProviderConfig()
+}
+
+// ensureSupportedProvider 统一校验当前运行时是否支持指定 provider，确保各选择入口返回一致的类型化错误。
+func (s *SelectionService) ensureSupportedProvider(cfg ProviderConfig) error {
+	if s.supporters.Supports(cfg.Driver) {
+		return nil
+	}
+	return fmt.Errorf(
+		"selection: provider %q driver %q: %w",
+		cfg.Name,
+		cfg.Driver,
+		ErrDriverUnsupported,
+	)
 }
 
 func selectionFromConfig(cfg Config) ProviderSelection {

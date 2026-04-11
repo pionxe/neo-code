@@ -409,11 +409,3 @@ func slashHelpText() string {
 func splitFirstWord(input string) (string, string) {
 	return tuicommands.SplitFirstWord(input)
 }
-
-func isWorkspaceSlashCommand(raw string) bool {
-	return tuicommands.IsWorkspaceSlashCommand(raw, slashCommandCWD)
-}
-
-func parseWorkspaceSlashCommand(raw string) (string, error) {
-	return tuicommands.ParseWorkspaceSlashCommand(raw, slashCommandCWD)
-}

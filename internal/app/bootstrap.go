@@ -2,9 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -88,6 +85,8 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		return RuntimeBundle{}, err
 	}
 
+	// Session Store 绑定到启动时的 workdir 哈希分桶，整个应用生命周期内不可变。
+	// 这意味着所有会话都归属到启动时指定的项目目录下，运行时不会因配置变更而迁移存储位置。
 	sessionStore := agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
 
 	var contextBuilder agentcontext.Builder = agentcontext.NewBuilderWithToolPolicies(toolRegistry)
@@ -152,26 +151,7 @@ func bootstrapDefaultConfig(opts BootstrapOptions) (*config.Config, error) {
 
 // resolveBootstrapWorkdir 将 CLI 传入的工作区解析为存在的绝对目录。
 func resolveBootstrapWorkdir(workdir string) (string, error) {
-	trimmed := strings.TrimSpace(workdir)
-	if trimmed == "" {
-		return "", fmt.Errorf("app: workdir is empty")
-	}
-
-	absolute, err := filepath.Abs(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("app: resolve workdir %q: %w", workdir, err)
-	}
-	absolute = filepath.Clean(absolute)
-
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return "", fmt.Errorf("app: resolve workdir %q: %w", workdir, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("app: workdir %q is not a directory", absolute)
-	}
-
-	return absolute, nil
+	return agentsession.ResolveExistingDir(workdir)
 }
 
 func buildToolRegistry(cfg config.Config) (*tools.Registry, error) {

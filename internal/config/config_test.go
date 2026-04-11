@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	providerpkg "neo-code/internal/provider"
 )
 
 const (
@@ -19,11 +21,11 @@ const (
 func testDefaultProviderConfig() ProviderConfig {
 	return ProviderConfig{
 		Name:      testProviderName,
-		Driver:    "openaicompat",
+		Driver:    providerpkg.DriverOpenAICompat,
 		BaseURL:   testBaseURL,
 		Model:     testModel,
 		APIKeyEnv: testAPIKeyEnv,
-		APIStyle:  defaultOpenAICompatibleAPIStyle,
+		APIStyle:  providerpkg.OpenAICompatibleAPIStyleChatCompletions,
 		Source:    ProviderSourceBuiltin,
 	}
 }
@@ -47,24 +49,17 @@ func TestParseConfigFormats(t *testing.T) {
 		assert func(t *testing.T, cfg *Config)
 	}{
 		{
-			name: "current format ignores persisted provider metadata",
+			name: "current format parses runtime settings only",
 			data: `
 selected_provider: openai
 current_model: gpt-5.4
 shell: powershell
-
-provider_overrides:
 tools:
   webfetch:
     max_response_bytes: 4096
     supported_content_types:
       - text/html
       - text/plain
-providers:
-  - name: openai
-    base_url: https://example.com/v1
-    model: gpt-5.4
-    api_key_env: OPENAI_API_KEY
 `,
 			assert: func(t *testing.T, cfg *Config) {
 				t.Helper()
@@ -97,7 +92,7 @@ current_model: gpt-4.1
 default_workdir: ./from-default
 shell: powershell
 `,
-			err: "legacy config key \"default_workdir\" is no longer supported",
+			err: "field default_workdir not found",
 		},
 		{
 			name: "legacy workdir key is rejected",
@@ -107,10 +102,10 @@ current_model: gpt-4.1
 workdir: ./from-legacy
 shell: powershell
 `,
-			err: "legacy config key \"workdir\" is no longer supported",
+			err: "field workdir not found",
 		},
 		{
-			name: "legacy persisted providers list keeps selection only",
+			name: "legacy persisted providers list is rejected",
 			data: `
 selected_provider: openai
 current_model: gpt-5.4
@@ -122,25 +117,10 @@ providers:
     model: gpt-5.4
     api_key_env: OPENAI_API_KEY
 `,
-			assert: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				provider, err := cfg.SelectedProviderConfig()
-				if err != nil {
-					t.Fatalf("selected provider: %v", err)
-				}
-				if provider.BaseURL != testBaseURL {
-					t.Fatalf("expected builtin base url %q, got %q", testBaseURL, provider.BaseURL)
-				}
-				if provider.Model != testModel {
-					t.Fatalf("expected builtin default model %q, got %q", testModel, provider.Model)
-				}
-				if cfg.CurrentModel != "gpt-5.4" {
-					t.Fatalf("expected selected current model to stay %q, got %q", "gpt-5.4", cfg.CurrentModel)
-				}
-			},
+			err: `field providers not found`,
 		},
 		{
-			name: "legacy fields are ignored",
+			name: "legacy unknown fields are rejected",
 			data: `
 selected_provider: openai
 current_model: gpt-4o
@@ -155,31 +135,7 @@ providers:
     models:
       - gpt-4o
 `,
-			assert: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				if cfg.MaxLoops != DefaultMaxLoops {
-					t.Fatalf("expected legacy max_loop to be ignored, got %d", cfg.MaxLoops)
-				}
-				provider, err := cfg.SelectedProviderConfig()
-				if err != nil {
-					t.Fatalf("selected provider: %v", err)
-				}
-				if provider.Model != testModel {
-					t.Fatalf("expected builtin default model %q, got %q", testModel, provider.Model)
-				}
-				if cfg.CurrentModel != "gpt-4o" {
-					t.Fatalf("expected current model %q, got %q", "gpt-4o", cfg.CurrentModel)
-				}
-				if strings.Contains(filepath.ToSlash(cfg.Workdir), "definitely-legacy-root") {
-					t.Fatalf("expected legacy workspace_root to be ignored, got %q", cfg.Workdir)
-				}
-				if cfg.Tools.WebFetch.MaxResponseBytes != DefaultWebFetchMaxResponseBytes {
-					t.Fatalf("expected default max_response_bytes %d, got %d", DefaultWebFetchMaxResponseBytes, cfg.Tools.WebFetch.MaxResponseBytes)
-				}
-				if len(cfg.Tools.WebFetch.SupportedContentTypes) != len(DefaultWebFetchSupportedContentTypes()) {
-					t.Fatalf("expected default supported content types, got %+v", cfg.Tools.WebFetch.SupportedContentTypes)
-				}
-			},
+			err: `field workspace_root not found`,
 		},
 	}
 
@@ -432,6 +388,30 @@ func TestConfigValidateFailures(t *testing.T) {
 			expectErr: "workdir must be absolute",
 		},
 		{
+			name: "non-existent workdir",
+			config: func() *Config {
+				cfg := testDefaultConfig()
+				cfg.ApplyDefaultsFrom(*testDefaultConfig())
+				cfg.Workdir = filepath.Join(t.TempDir(), "does-not-exist")
+				return cfg
+			}(),
+			expectErr: "workdir does not exist",
+		},
+		{
+			name: "workdir is a file",
+			config: func() *Config {
+				cfg := testDefaultConfig()
+				cfg.ApplyDefaultsFrom(*testDefaultConfig())
+				filePath := filepath.Join(t.TempDir(), "a-file.txt")
+				if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				cfg.Workdir = filePath
+				return cfg
+			}(),
+			expectErr: "workdir is not a directory",
+		},
+		{
 			name: "selected provider model empty",
 			config: func() *Config {
 				cfg := validConfig.Clone()
@@ -604,22 +584,10 @@ func TestProviderConfigValidateFailures(t *testing.T) {
 			expectErr: "driver is empty",
 		},
 		{
-			name: "legacy openai driver rejected",
-			provider: ProviderConfig{
-				Name:      "custom-openai",
-				Driver:    "openai",
-				BaseURL:   "https://example.com/v1",
-				Model:     "gpt-4.1",
-				APIKeyEnv: "CUSTOM_API_KEY",
-				Source:    ProviderSourceCustom,
-			},
-			expectErr: "no longer supported",
-		},
-		{
 			name: "custom provider must not define model",
 			provider: ProviderConfig{
 				Name:      "custom-openai",
-				Driver:    "openaicompat",
+				Driver:    providerpkg.DriverOpenAICompat,
 				BaseURL:   "https://example.com/v1",
 				Model:     "gpt-4.1",
 				APIKeyEnv: "CUSTOM_API_KEY",
@@ -631,7 +599,7 @@ func TestProviderConfigValidateFailures(t *testing.T) {
 			name: "missing base url",
 			provider: ProviderConfig{
 				Name:   testProviderName,
-				Driver: "openaicompat",
+				Driver: providerpkg.DriverOpenAICompat,
 			},
 			expectErr: "base_url is empty",
 		},
@@ -639,7 +607,7 @@ func TestProviderConfigValidateFailures(t *testing.T) {
 			name: "missing model",
 			provider: ProviderConfig{
 				Name:    testProviderName,
-				Driver:  "openaicompat",
+				Driver:  providerpkg.DriverOpenAICompat,
 				BaseURL: testBaseURL,
 			},
 			expectErr: "model is empty",
@@ -648,7 +616,7 @@ func TestProviderConfigValidateFailures(t *testing.T) {
 			name: "missing api key env",
 			provider: ProviderConfig{
 				Name:    testProviderName,
-				Driver:  "openaicompat",
+				Driver:  providerpkg.DriverOpenAICompat,
 				BaseURL: testBaseURL,
 				Model:   testModel,
 			},
@@ -665,6 +633,21 @@ func TestProviderConfigValidateFailures(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
 			}
 		})
+	}
+}
+
+func TestProviderConfigValidateAllowsStructurallyValidCustomDriver(t *testing.T) {
+	t.Parallel()
+
+	err := (ProviderConfig{
+		Name:      "custom-openai",
+		Driver:    "custom-driver",
+		BaseURL:   "https://example.com/v1",
+		APIKeyEnv: "CUSTOM_API_KEY",
+		Source:    ProviderSourceCustom,
+	}).Validate()
+	if err != nil {
+		t.Fatalf("expected custom driver to pass structural validation, got %v", err)
 	}
 }
 

@@ -73,26 +73,6 @@ func TestValidateFrame_BasicRules(t *testing.T) {
 			wantField: "session_id",
 		},
 		{
-			name: "set_session_workdir missing workdir",
-			frame: MessageFrame{
-				Type:      FrameTypeRequest,
-				Action:    FrameActionSetSessionWorkdir,
-				SessionID: "sess_1",
-			},
-			wantCode:  ErrorCodeMissingRequiredField.String(),
-			wantField: "workdir",
-		},
-		{
-			name: "set_session_workdir valid",
-			frame: MessageFrame{
-				Type:      FrameTypeRequest,
-				Action:    FrameActionSetSessionWorkdir,
-				SessionID: "sess_1",
-				Workdir:   "/workspace",
-			},
-			wantNil: true,
-		},
-		{
 			name: "resolve_permission valid struct payload",
 			frame: MessageFrame{
 				Type:   FrameTypeRequest,

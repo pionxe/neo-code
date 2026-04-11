@@ -90,13 +90,16 @@ type queryOptions struct {
 }
 
 type catalogSnapshot struct {
-	models   []providertypes.ModelDescriptor
-	ok       bool
-	expired  bool
-	identity provider.ProviderIdentity
+	models  []providertypes.ModelDescriptor
+	ok      bool
+	expired bool
 }
 
 func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogInput, options queryOptions) ([]providertypes.ModelDescriptor, error) {
+	if err := s.registry.ValidateCatalogIdentity(input.Identity); err != nil {
+		return nil, err
+	}
+
 	configuredModels := providertypes.MergeModelDescriptors(input.ConfiguredModels)
 	defaultModels := providertypes.MergeModelDescriptors(input.DefaultModels)
 	snapshot := s.catalogSnapshot(ctx, input)
@@ -107,7 +110,7 @@ func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogI
 	if !catalogOK && options.allowSyncRefresh {
 		discovered, err := s.discoverAndPersist(ctx, input)
 		if err != nil {
-			if len(defaultModels) == 0 {
+			if len(defaultModels) == 0 || provider.IsDiscoveryConfigError(err) {
 				return nil, err
 			}
 		} else {
@@ -117,33 +120,22 @@ func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogI
 		}
 	}
 
-	if options.queueRefresh && snapshot.expired {
-		s.queueRefresh(input)
-	}
-	if options.queueRefresh && !snapshot.ok && !performedSyncRefresh {
+	if shouldQueueRefresh(options, snapshot, performedSyncRefresh) {
 		s.queueRefresh(input)
 	}
 
-	if !catalogOK {
-		if len(defaultModels) == 0 {
-			return nil, nil
-		}
-		return providertypes.MergeModelDescriptors(configuredModels, defaultModels), nil
-	}
-	return providertypes.MergeModelDescriptors(configuredModels, models, defaultModels), nil
+	return mergeResolvedModels(catalogOK, configuredModels, models, defaultModels), nil
 }
 
 func (s *Service) catalogSnapshot(ctx context.Context, input provider.CatalogInput) catalogSnapshot {
-	identity := input.Identity
-	modelCatalog, err := s.loadCatalog(ctx, identity)
+	modelCatalog, err := s.loadCatalog(ctx, input.Identity)
 	if err != nil {
-		return catalogSnapshot{identity: identity}
+		return catalogSnapshot{}
 	}
 	return catalogSnapshot{
-		models:   modelCatalog.Models,
-		ok:       true,
-		expired:  modelCatalog.Expired(s.now()),
-		identity: identity,
+		models:  modelCatalog.Models,
+		ok:      true,
+		expired: modelCatalog.Expired(s.now()),
 	}
 }
 
@@ -155,15 +147,7 @@ func (s *Service) loadCatalog(ctx context.Context, identity provider.ProviderIde
 }
 
 func (s *Service) discoverAndPersist(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
-	driverType := strings.TrimSpace(input.Identity.Driver)
-	if !s.registry.Supports(driverType) {
-		return nil, nil
-	}
-	caps, err := s.registry.DriverTransportCapabilities(driverType)
-	if err != nil {
-		return nil, err
-	}
-	if !caps.ModelDiscovery {
+	if !s.registry.Supports(input.Identity.Driver) {
 		return nil, nil
 	}
 
@@ -198,12 +182,11 @@ func (s *Service) discoverAndPersist(ctx context.Context, input provider.Catalog
 }
 
 func (s *Service) queueRefresh(input provider.CatalogInput) {
-	driverType := strings.TrimSpace(input.Identity.Driver)
-	if s.store == nil || !s.registry.Supports(driverType) {
+	if s.store == nil {
 		return
 	}
-	caps, err := s.registry.DriverTransportCapabilities(driverType)
-	if err != nil || !caps.ModelDiscovery {
+
+	if !s.registry.Supports(input.Identity.Driver) {
 		return
 	}
 	identity := input.Identity
@@ -231,4 +214,26 @@ func (s *Service) queueRefresh(input provider.CatalogInput) {
 		defer cancel()
 		_, _ = s.discoverAndPersist(ctx, input)
 	}()
+}
+
+func shouldQueueRefresh(options queryOptions, snapshot catalogSnapshot, performedSyncRefresh bool) bool {
+	if !options.queueRefresh {
+		return false
+	}
+	if snapshot.expired {
+		return true
+	}
+	return !snapshot.ok && !performedSyncRefresh
+}
+
+func mergeResolvedModels(
+	catalogOK bool,
+	configuredModels []providertypes.ModelDescriptor,
+	discoveredModels []providertypes.ModelDescriptor,
+	defaultModels []providertypes.ModelDescriptor,
+) []providertypes.ModelDescriptor {
+	if !catalogOK {
+		return providertypes.MergeModelDescriptors(configuredModels, defaultModels)
+	}
+	return providertypes.MergeModelDescriptors(configuredModels, discoveredModels, defaultModels)
 }

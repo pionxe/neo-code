@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -118,7 +117,6 @@ type Runtime interface {
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
 	LoadSession(ctx context.Context, id string) (agentsession.Session, error)
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error)
 }
 
 type UserInput struct {
@@ -130,7 +128,6 @@ type UserInput struct {
 
 type ProviderFactory interface {
 	Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error)
-	DriverTransportCapabilities(driverType string) (provider.DriverTransportCapabilities, error)
 }
 
 type Service struct {
@@ -423,34 +420,6 @@ func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Sess
 	return session, nil
 }
 
-func (s *Service) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return agentsession.Session{}, errors.New("runtime: session id is empty")
-	}
-
-	session, err := s.sessionStore.Load(ctx, sessionID)
-	if err != nil {
-		return agentsession.Session{}, err
-	}
-
-	cfg := s.configManager.Get()
-	resolved, err := resolveWorkdirForSession(cfg.Workdir, session.Workdir, workdir)
-	if err != nil {
-		return agentsession.Session{}, err
-	}
-	if session.Workdir == resolved {
-		return session, nil
-	}
-
-	session.Workdir = resolved
-	session.UpdatedAt = time.Now()
-	if err := s.sessionStore.Save(ctx, &session); err != nil {
-		return agentsession.Session{}, err
-	}
-	return session, nil
-}
-
 func (s *Service) loadOrCreateSession(
 	ctx context.Context,
 	sessionID string,
@@ -689,31 +658,6 @@ func isRetryableProviderError(err error) bool {
 	return pErr.Retryable
 }
 
-// ensureDriverTransportCapabilities 校验当前 driver 是否满足指定运行场景的基础传输能力要求。
-func ensureDriverTransportCapabilities(
-	factory ProviderFactory,
-	cfg provider.RuntimeConfig,
-	requireStreaming bool,
-	requireToolTransport bool,
-) error {
-	if factory == nil {
-		return errors.New("runtime: provider factory is nil")
-	}
-
-	driverType := strings.TrimSpace(cfg.Driver)
-	caps, err := factory.DriverTransportCapabilities(driverType)
-	if err != nil {
-		return err
-	}
-	if requireStreaming && !caps.Streaming {
-		return fmt.Errorf("runtime: provider driver %q does not support streaming", driverType)
-	}
-	if requireToolTransport && !caps.ToolTransport {
-		return fmt.Errorf("runtime: provider driver %q does not support tool transport", driverType)
-	}
-	return nil
-}
-
 // callProviderWithRetry 在可重试的 ProviderError 上自动重试 provider.Generate() 调用。
 // 每次重试都会重新创建 provider 实例、流式事件转发管道和累积器。
 // 非可重试错误、context 取消、重试耗尽时直接返回错误。
@@ -748,10 +692,6 @@ func (s *Service) callProviderWithRetry(
 			return nil, err
 		}
 		runtimeCfg := resolvedProvider.ToRuntimeConfig()
-		requireToolTransport := len(req.Tools) > 0
-		if err := ensureDriverTransportCapabilities(s.providerFactory, runtimeCfg, true, requireToolTransport); err != nil {
-			return nil, err
-		}
 
 		modelProvider, err := s.providerFactory.Build(ctx, runtimeCfg)
 		if err != nil {
@@ -894,44 +834,22 @@ func (v permissionEventView) toResolvedPayload() PermissionResolvedPayload {
 }
 
 func effectiveSessionWorkdir(sessionWorkdir string, defaultWorkdir string) string {
-	workdir := strings.TrimSpace(sessionWorkdir)
-	if workdir != "" {
-		return workdir
-	}
-	return strings.TrimSpace(defaultWorkdir)
+	return agentsession.EffectiveWorkdir(sessionWorkdir, defaultWorkdir)
 }
 
 func resolveWorkdirForSession(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {
 	base := effectiveSessionWorkdir(currentWorkdir, defaultWorkdir)
 	if strings.TrimSpace(requestedWorkdir) == "" {
-		return normalizeExistingWorkdir(base)
+		return agentsession.ResolveExistingDir(base)
 	}
 
 	target := strings.TrimSpace(requestedWorkdir)
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(base, target)
 	}
-	return normalizeExistingWorkdir(target)
+	return agentsession.ResolveExistingDir(target)
 }
 
 func normalizeExistingWorkdir(workdir string) (string, error) {
-	trimmed := strings.TrimSpace(workdir)
-	if trimmed == "" {
-		return "", errors.New("runtime: workdir is empty")
-	}
-
-	absolute, err := filepath.Abs(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
-	}
-
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("runtime: workdir %q is not a directory", absolute)
-	}
-
-	return filepath.Clean(absolute), nil
+	return agentsession.ResolveExistingDir(workdir)
 }

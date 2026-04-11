@@ -112,8 +112,12 @@ func NewProviderIdentity(driver string, baseURL string) (ProviderIdentity, error
 // NormalizeProviderIdentity 根据 driver 规则规范化连接身份，保留参与缓存去重的专用字段。
 func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, error) {
 	normalizedDriver := NormalizeProviderDriver(identity.Driver)
+	if normalizedDriver == "" {
+		return ProviderIdentity{}, fmt.Errorf("provider driver is empty")
+	}
+
 	switch normalizedDriver {
-	case "openaicompat":
+	case DriverOpenAICompat:
 		baseURL, err := NormalizeProviderBaseURL(identity.BaseURL)
 		if err != nil {
 			return ProviderIdentity{}, err
@@ -123,7 +127,7 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 			BaseURL:  baseURL,
 			APIStyle: NormalizeProviderAPIStyle(identity.APIStyle),
 		}, nil
-	case "gemini":
+	case DriverGemini:
 		baseURL, err := NormalizeProviderBaseURL(identity.BaseURL)
 		if err != nil {
 			return ProviderIdentity{}, err
@@ -133,7 +137,7 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 			BaseURL:        baseURL,
 			DeploymentMode: NormalizeProviderDeploymentMode(identity.DeploymentMode),
 		}, nil
-	case "anthropic":
+	case DriverAnthropic:
 		baseURL, err := NormalizeProviderBaseURL(identity.BaseURL)
 		if err != nil {
 			return ProviderIdentity{}, err

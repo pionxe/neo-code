@@ -11,6 +11,7 @@ import (
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 )
 
 const (
@@ -268,6 +269,12 @@ func (c *Config) Validate() error {
 	if !filepath.IsAbs(c.Workdir) {
 		return fmt.Errorf("config: workdir must be absolute, got %q", c.Workdir)
 	}
+	if _, err := agentsession.ResolveExistingDir(c.Workdir); err != nil {
+		if strings.Contains(err.Error(), "is not a directory") {
+			return fmt.Errorf("config: workdir is not a directory: %q", c.Workdir)
+		}
+		return fmt.Errorf("config: workdir does not exist: %q", c.Workdir)
+	}
 	if selected.Source != ProviderSourceCustom && strings.TrimSpace(selected.Model) == "" {
 		return fmt.Errorf("config: selected provider %q has empty model", selected.Name)
 	}
@@ -310,11 +317,8 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		return errors.New("provider name is empty")
 	}
-	if strings.TrimSpace(p.Driver) == "" {
+	if normalizeProviderDriver(p.Driver) == "" {
 		return fmt.Errorf("provider %q driver is empty", p.Name)
-	}
-	if normalizeProviderDriver(p.Driver) == "openai" {
-		return fmt.Errorf("provider %q driver %q is no longer supported", p.Name, p.Driver)
 	}
 	if strings.TrimSpace(p.BaseURL) == "" {
 		return fmt.Errorf("provider %q base_url is empty", p.Name)

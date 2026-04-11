@@ -10,7 +10,7 @@ import (
 )
 
 // DriverName 是当前 OpenAI-compatible 协议驱动的唯一标识。
-const DriverName = "openaicompat"
+const DriverName = provider.DriverOpenAICompat
 
 // defaultRetryTransport 返回内置的带重试 HTTP Transport。
 func defaultRetryTransport() http.RoundTripper {
@@ -20,6 +20,12 @@ func defaultRetryTransport() http.RoundTripper {
 // Driver 返回 OpenAI-compatible 协议驱动定义。
 func Driver() provider.DriverDefinition {
 	return driverDefinition(DriverName)
+}
+
+// validateCatalogIdentity 复用 api_style 分流规则，在 catalog 快照与缓存路径上提前拒绝当前尚不支持的静态配置。
+func validateCatalogIdentity(identity provider.ProviderIdentity) error {
+	_, err := supportedAPIStyle(identity.APIStyle)
+	return err
 }
 
 // driverDefinition 根据驱动名构造共享的 OpenAI-compatible 协议驱动定义。
@@ -36,11 +42,6 @@ func driverDefinition(name string) provider.DriverDefinition {
 			}
 			return p.DiscoverModels(ctx)
 		},
-		Capabilities: provider.DriverTransportCapabilities{
-			Streaming:           true,
-			ToolTransport:       true,
-			ModelDiscovery:      true,
-			ImageInputTransport: false,
-		},
+		ValidateCatalogIdentity: validateCatalogIdentity,
 	}
 }

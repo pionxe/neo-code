@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,6 +57,7 @@ type stubRuntime struct {
 	resolveCalls  []agentruntime.PermissionResolutionInput
 	resolveErr    error
 	cancelInvoked bool
+	loadSessionFn func(context.Context, string) (agentsession.Session, error)
 }
 
 func newStubRuntime() *stubRuntime {
@@ -89,11 +91,10 @@ func (s *stubRuntime) ListSessions(ctx context.Context) ([]agentsession.Summary,
 }
 
 func (s *stubRuntime) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	if s.loadSessionFn != nil {
+		return s.loadSessionFn(ctx, id)
+	}
 	return agentsession.NewWithWorkdir("draft", ""), nil
-}
-
-func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
-	return agentsession.NewWithWorkdir("draft", workdir), nil
 }
 
 func newTestApp(t *testing.T) (App, *stubRuntime) {
@@ -914,10 +915,11 @@ func TestRuntimeEventUserMessageHandler(t *testing.T) {
 
 func TestRuntimeEventRunContextHandler(t *testing.T) {
 	app, _ := newTestApp(t)
+	workdir := t.TempDir()
 	payload := tuiservices.RuntimeRunContextPayload{
 		Provider: "p1",
 		Model:    "m1",
-		Workdir:  "/tmp",
+		Workdir:  workdir,
 	}
 	event := agentruntime.RuntimeEvent{RunID: "run-2", SessionID: "s1", Payload: payload}
 	handled := runtimeEventRunContextHandler(&app, event)
@@ -926,6 +928,49 @@ func TestRuntimeEventRunContextHandler(t *testing.T) {
 	}
 	if app.state.CurrentProvider != "p1" || app.state.CurrentModel != "m1" {
 		t.Fatalf("expected provider/model to update")
+	}
+	if app.state.CurrentWorkdir != workdir {
+		t.Fatalf("expected workdir %q, got %q", workdir, app.state.CurrentWorkdir)
+	}
+}
+
+func TestRefreshMessagesUsesSessionWorkdirWhenPresent(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+	sessionWorkdir := t.TempDir()
+	runtime.loadSessionFn = func(ctx context.Context, id string) (agentsession.Session, error) {
+		session := agentsession.NewWithWorkdir("persisted", sessionWorkdir)
+		session.ID = id
+		session.Messages = []providertypes.Message{{Role: roleAssistant, Content: "hello"}}
+		return session, nil
+	}
+
+	if err := app.refreshMessages(); err != nil {
+		t.Fatalf("refreshMessages() error = %v", err)
+	}
+	if app.state.CurrentWorkdir != sessionWorkdir {
+		t.Fatalf("expected session workdir %q, got %q", sessionWorkdir, app.state.CurrentWorkdir)
+	}
+	if app.state.ActiveSessionTitle != "persisted" {
+		t.Fatalf("expected session title to refresh, got %q", app.state.ActiveSessionTitle)
+	}
+}
+
+func TestRefreshMessagesFallsBackToConfiguredWorkdir(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+	configWorkdir := app.configManager.Get().Workdir
+	runtime.loadSessionFn = func(ctx context.Context, id string) (agentsession.Session, error) {
+		session := agentsession.NewWithWorkdir("persisted", "")
+		session.ID = id
+		return session, nil
+	}
+
+	if err := app.refreshMessages(); err != nil {
+		t.Fatalf("refreshMessages() error = %v", err)
+	}
+	if app.state.CurrentWorkdir != configWorkdir {
+		t.Fatalf("expected configured workdir %q, got %q", configWorkdir, app.state.CurrentWorkdir)
 	}
 }
 
@@ -1209,23 +1254,8 @@ func TestRunSlashCommandSelectionModelRefreshError(t *testing.T) {
 	}
 }
 
-func TestRunSlashCommandSelectionWorkspaceAndLocal(t *testing.T) {
+func TestRunSlashCommandSelectionLocalCommand(t *testing.T) {
 	app, _ := newTestApp(t)
-	app.state.ActiveSessionID = ""
-	app.state.CurrentWorkdir = t.TempDir()
-
-	workspaceCmd := app.runSlashCommandSelection("/cwd")
-	if workspaceCmd == nil {
-		t.Fatalf("expected workspace slash cmd")
-	}
-	workspaceMsg := workspaceCmd()
-	workspaceResult, ok := workspaceMsg.(sessionWorkdirResultMsg)
-	if !ok {
-		t.Fatalf("expected sessionWorkdirResultMsg, got %T", workspaceMsg)
-	}
-	if workspaceResult.Err != nil {
-		t.Fatalf("expected no workspace error, got %v", workspaceResult.Err)
-	}
 
 	localCmd := app.runSlashCommandSelection(slashCommandStatus)
 	if localCmd == nil {
@@ -1325,4 +1355,40 @@ func TestStartDraftSessionResetsRunState(t *testing.T) {
 	if len(app.activities) != 0 {
 		t.Fatalf("expected activities to be cleared")
 	}
+}
+
+func TestSetCurrentWorkdir(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	t.Run("accepts absolute path", func(t *testing.T) {
+		dir := t.TempDir()
+		app.setCurrentWorkdir(dir)
+		if app.state.CurrentWorkdir != filepath.Clean(dir) {
+			t.Fatalf("expected %q, got %q", filepath.Clean(dir), app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores empty", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores whitespace", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("   ")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores relative path", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("relative/path")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
 }

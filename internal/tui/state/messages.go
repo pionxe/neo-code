@@ -45,13 +45,6 @@ type LocalCommandResultMsg struct {
 	ModelChanged    bool
 }
 
-// SessionWorkdirResultMsg 表示会话工作目录命令结果。
-type SessionWorkdirResultMsg struct {
-	Notice  string
-	Workdir string
-	Err     error
-}
-
 // WorkspaceCommandResultMsg 表示工作区命令执行结果。
 type WorkspaceCommandResultMsg struct {
 	Command string

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/catalog"
+	"neo-code/internal/provider/openaicompat"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -42,6 +44,46 @@ func TestSelectionServiceListProvidersUsesCatalogModels(t *testing.T) {
 	}
 	if len(expected) != 0 {
 		t.Fatalf("missing builtin providers from catalog: %+v", expected)
+	}
+}
+
+func TestSelectionServiceBuiltinUnsupportedAPIStyleFailsAcrossSnapshotPaths(t *testing.T) {
+	t.Parallel()
+
+	providerCfg := OpenAIProvider()
+	providerCfg.APIStyle = "responses"
+
+	defaults := DefaultConfig()
+	defaults.Providers = []ProviderConfig{providerCfg}
+	defaults.SelectedProvider = providerCfg.Name
+	defaults.CurrentModel = providerCfg.Model
+
+	manager := newSelectionTestManager(t, defaults)
+	registry := provider.NewRegistry()
+	if err := registry.Register(openaicompat.Driver()); err != nil {
+		t.Fatalf("register openaicompat driver: %v", err)
+	}
+	service := NewSelectionService(manager, newDriverSupporterStub(), catalog.NewService("", registry, nil))
+
+	if _, err := service.ListProviders(context.Background()); !provider.IsDiscoveryConfigError(err) {
+		t.Fatalf("expected ListProviders() to surface discovery config error, got %v", err)
+	}
+	if _, err := service.SelectProvider(context.Background(), OpenAIName); !provider.IsDiscoveryConfigError(err) {
+		t.Fatalf("expected SelectProvider() to surface discovery config error, got %v", err)
+	}
+	if _, err := service.EnsureSelection(context.Background()); !provider.IsDiscoveryConfigError(err) {
+		t.Fatalf("expected EnsureSelection() to surface discovery config error, got %v", err)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.SelectedProvider != providerCfg.Name {
+		t.Fatalf("expected selected provider to stay on %q, got %q", providerCfg.Name, reloaded.SelectedProvider)
+	}
+	if reloaded.CurrentModel != providerCfg.Model {
+		t.Fatalf("expected current model to stay on %q, got %q", providerCfg.Model, reloaded.CurrentModel)
 	}
 }
 
@@ -99,25 +141,16 @@ func TestSelectionServiceListModelsSnapshotUsesSnapshotCatalog(t *testing.T) {
 func TestSelectionServiceListModelsSnapshotRejectsUnsupportedDriver(t *testing.T) {
 	t.Parallel()
 
-	defaults := DefaultConfig()
-	defaults.Providers = []ProviderConfig{{
-		Name:      OpenAIName,
-		Driver:    "missing-driver",
-		BaseURL:   OpenAIDefaultBaseURL,
-		Model:     OpenAIDefaultModel,
-		APIKeyEnv: OpenAIDefaultAPIKeyEnv,
-		Source:    ProviderSourceBuiltin,
-	}}
-	defaults.SelectedProvider = OpenAIName
-	defaults.CurrentModel = OpenAIDefaultModel
-
-	manager := newSelectionTestManager(t, defaults)
-	supporters := &selectiveDriverSupporter{supported: map[string]bool{"openaicompat": true}}
+	manager := newSelectionTestManager(t, DefaultConfig())
+	supporters := &selectiveDriverSupporter{supported: map[string]bool{"anthropic": true}}
 	service := NewSelectionService(manager, supporters, newCatalogStub())
 
 	_, err := service.ListModelsSnapshot(context.Background())
 	if !errors.Is(err, ErrDriverUnsupported) {
 		t.Fatalf("expected ErrDriverUnsupported, got %v", err)
+	}
+	if !strings.Contains(err.Error(), `provider "openai" driver "openaicompat"`) {
+		t.Fatalf("expected contextual unsupported-driver error, got %v", err)
 	}
 }
 
@@ -173,20 +206,8 @@ func TestSelectionServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 func TestSelectionServiceSetCurrentModelRejectsUnsupportedDriver(t *testing.T) {
 	t.Parallel()
 
-	defaults := DefaultConfig()
-	defaults.Providers = []ProviderConfig{{
-		Name:      OpenAIName,
-		Driver:    "missing-driver",
-		BaseURL:   OpenAIDefaultBaseURL,
-		Model:     OpenAIDefaultModel,
-		APIKeyEnv: OpenAIDefaultAPIKeyEnv,
-		Source:    ProviderSourceBuiltin,
-	}}
-	defaults.SelectedProvider = OpenAIName
-	defaults.CurrentModel = OpenAIDefaultModel
-
-	manager := newSelectionTestManager(t, defaults)
-	supporters := &selectiveDriverSupporter{supported: map[string]bool{"openaicompat": true}}
+	manager := newSelectionTestManager(t, DefaultConfig())
+	supporters := &selectiveDriverSupporter{supported: map[string]bool{"anthropic": true}}
 	service := NewSelectionService(manager, supporters, newCatalogStub())
 
 	_, err := service.SetCurrentModel(context.Background(), OpenAIDefaultModel)
@@ -533,24 +554,14 @@ func TestSelectionServiceSelectCustomProviderDoesNotPersistWhenDiscoveryFails(t 
 func TestSelectionServiceSelectProviderRejectsUnsupportedDriver(t *testing.T) {
 	t.Parallel()
 
-	defaults := DefaultConfig()
-	defaults.Providers = []ProviderConfig{{
-		Name:      OpenAIName,
-		Driver:    "missing-driver",
-		BaseURL:   OpenAIDefaultBaseURL,
-		Model:     OpenAIDefaultModel,
-		APIKeyEnv: OpenAIDefaultAPIKeyEnv,
-		Source:    ProviderSourceBuiltin,
-	}}
-	defaults.SelectedProvider = OpenAIName
-	defaults.CurrentModel = OpenAIDefaultModel
-
-	manager := newSelectionTestManager(t, defaults)
-	supporters := &selectiveDriverSupporter{supported: map[string]bool{"openaicompat": true}}
+	manager := newSelectionTestManager(t, DefaultConfig())
+	supporters := &selectiveDriverSupporter{supported: map[string]bool{"anthropic": true}}
 	service := NewSelectionService(manager, supporters, newCatalogStub())
 
 	if _, err := service.SelectProvider(context.Background(), OpenAIName); !errors.Is(err, ErrDriverUnsupported) {
 		t.Fatalf("expected SelectProvider() to preserve driver error, got %v", err)
+	} else if !strings.Contains(err.Error(), `provider "openai" driver "openaicompat"`) {
+		t.Fatalf("expected contextual unsupported-driver error, got %v", err)
 	}
 }
 

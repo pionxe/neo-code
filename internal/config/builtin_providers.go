@@ -1,5 +1,7 @@
 package config
 
+import "neo-code/internal/provider"
+
 const (
 	OpenAIName             = "openai"
 	OpenAIDefaultBaseURL   = "https://api.openai.com/v1"
@@ -20,21 +22,17 @@ const (
 	QiniuDefaultBaseURL   = "https://api.qnaigc.com/v1"
 	QiniuDefaultModel     = "openai/gpt-5"
 	QiniuDefaultAPIKeyEnv = "QINIU_API_KEY"
-
-	defaultOpenAICompatibleAPIStyle = "chat_completions"
 )
-
-const OpenaiCompatDriver = "openaicompat"
 
 // OpenAIProvider returns the builtin OpenAI provider definition.
 func OpenAIProvider() ProviderConfig {
 	return ProviderConfig{
 		Name:      OpenAIName,
-		Driver:    OpenaiCompatDriver,
+		Driver:    provider.DriverOpenAICompat,
 		BaseURL:   OpenAIDefaultBaseURL,
 		Model:     OpenAIDefaultModel,
 		APIKeyEnv: OpenAIDefaultAPIKeyEnv,
-		APIStyle:  defaultOpenAICompatibleAPIStyle,
+		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 		Source:    ProviderSourceBuiltin,
 	}
 }
@@ -43,11 +41,11 @@ func OpenAIProvider() ProviderConfig {
 func GeminiProvider() ProviderConfig {
 	return ProviderConfig{
 		Name:      GeminiName,
-		Driver:    OpenaiCompatDriver,
+		Driver:    provider.DriverOpenAICompat,
 		BaseURL:   GeminiDefaultBaseURL,
 		Model:     GeminiDefaultModel,
 		APIKeyEnv: GeminiDefaultAPIKeyEnv,
-		APIStyle:  defaultOpenAICompatibleAPIStyle,
+		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 		Source:    ProviderSourceBuiltin,
 	}
 }
@@ -56,11 +54,11 @@ func GeminiProvider() ProviderConfig {
 func OpenLLProvider() ProviderConfig {
 	return ProviderConfig{
 		Name:      OpenLLName,
-		Driver:    OpenaiCompatDriver,
+		Driver:    provider.DriverOpenAICompat,
 		BaseURL:   OpenLLDefaultBaseURL,
 		Model:     OpenLLDefaultModel,
 		APIKeyEnv: OpenLLDefaultAPIKeyEnv,
-		APIStyle:  defaultOpenAICompatibleAPIStyle,
+		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 		Source:    ProviderSourceBuiltin,
 	}
 }
@@ -69,11 +67,11 @@ func OpenLLProvider() ProviderConfig {
 func QiniuProvider() ProviderConfig {
 	return ProviderConfig{
 		Name:      QiniuName,
-		Driver:    OpenaiCompatDriver,
+		Driver:    provider.DriverOpenAICompat,
 		BaseURL:   QiniuDefaultBaseURL,
 		Model:     QiniuDefaultModel,
 		APIKeyEnv: QiniuDefaultAPIKeyEnv,
-		APIStyle:  defaultOpenAICompatibleAPIStyle,
+		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 		Source:    ProviderSourceBuiltin,
 	}
 }

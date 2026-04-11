@@ -53,10 +53,6 @@ func (r *permissionTestRuntime) LoadSession(ctx context.Context, id string) (age
 	return agentsession.Session{}, nil
 }
 
-func (r *permissionTestRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
-	return agentsession.Session{}, nil
-}
-
 func newPermissionTestApp(runtime agentruntime.Runtime) *App {
 	input := textarea.New()
 	spin := spinner.New()
