@@ -19,6 +19,7 @@ import (
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
 	"neo-code/internal/tools/filesystem"
+	memotool "neo-code/internal/tools/memo"
 	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
 )
@@ -101,6 +102,8 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		}
 		contextBuilder = agentcontext.NewBuilderWithMemo(toolRegistry, memoSource)
 		memoSvc = memo.NewService(memoStore, nil, cfg.Memo, sourceInvl)
+		toolRegistry.Register(memotool.NewRememberTool(memoSvc))
+		toolRegistry.Register(memotool.NewRecallTool(memoSvc))
 	}
 
 	runtimeSvc := agentruntime.NewWithFactory(
