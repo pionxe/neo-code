@@ -22,12 +22,10 @@ func PickerLabelFromMode(mode tuistate.PickerMode) string {
 	}
 }
 
-// RequestedWorkdirForRun 在发起 run 时计算应转发的工作目录。
-func RequestedWorkdirForRun(activeSessionID string, currentWorkdir string) string {
-	if strings.TrimSpace(activeSessionID) == "" {
-		return currentWorkdir
-	}
-	return ""
+// RequestedWorkdirForRun 在发起 run 时返回应转发给 runtime 的工作目录。
+// `/cwd` 移除后，TUI 内部始终以当前界面工作目录作为本次运行的覆盖值。
+func RequestedWorkdirForRun(currentWorkdir string) string {
+	return strings.TrimSpace(currentWorkdir)
 }
 
 // IsBusy 统一判断当前是否存在进行中的 agent 或 compact 操作。

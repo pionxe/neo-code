@@ -17,11 +17,10 @@ import (
 	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
-	tuicommands "neo-code/internal/tui/core/commands"
 	tuistatus "neo-code/internal/tui/core/status"
 	tuiutils "neo-code/internal/tui/core/utils"
-	tuiworkspace "neo-code/internal/tui/core/workspace"
 	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
 )
@@ -186,25 +185,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.appendActivity("command", typed.Notice, "", false)
 		}
-		return a, tea.Batch(cmds...)
-	case sessionWorkdirResultMsg:
-		if typed.Err != nil {
-			a.state.ExecutionError = typed.Err.Error()
-			a.state.StatusText = typed.Err.Error()
-			a.appendActivity("workspace", "Workspace command failed", typed.Err.Error(), true)
-			return a, tea.Batch(cmds...)
-		}
-
-		a.state.ExecutionError = ""
-		a.state.StatusText = typed.Notice
-		a.state.CurrentWorkdir = strings.TrimSpace(typed.Workdir)
-		if err := a.refreshFileCandidates(); err != nil {
-			a.state.ExecutionError = err.Error()
-			a.state.StatusText = err.Error()
-			a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
-			return a, tea.Batch(cmds...)
-		}
-		a.appendActivity("workspace", typed.Notice, "", false)
 		return a, tea.Batch(cmds...)
 	case workspaceCommandResultMsg:
 		if typed.Command == "" && typed.Err != nil {
@@ -392,12 +372,6 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 
 			if strings.HasPrefix(input, slashPrefix) {
-				if isWorkspaceSlashCommand(input) {
-					a.state.StatusText = statusApplyingCommand
-					a.state.ExecutionError = ""
-					cmds = append(cmds, runSessionWorkdirCommand(a.runtime, a.state.ActiveSessionID, a.state.CurrentWorkdir, input))
-					return a, tea.Batch(cmds...)
-				}
 				a.state.StatusText = statusApplyingCommand
 				cmds = append(cmds, runLocalCommand(a.configManager, a.providerSvc, a.currentStatusSnapshot(), input))
 				return a, tea.Batch(cmds...)
@@ -430,7 +404,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.rebuildTranscript()
 			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
 			a.state.ActiveRunID = runID
-			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.ActiveSessionID, a.state.CurrentWorkdir)
+			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.CurrentWorkdir)
 			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, input))
 			return a, tea.Batch(cmds...)
 		}
@@ -699,7 +673,7 @@ func (a *App) refreshMessages() error {
 	a.activeMessages = session.Messages
 	a.clearActivities()
 	a.state.ActiveSessionTitle = session.Title
-	a.state.CurrentWorkdir = tuiworkspace.SelectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir)
+	a.setCurrentWorkdir(agentsession.EffectiveWorkdir(session.Workdir, a.configManager.Get().Workdir))
 	a.refreshRuntimeSourceSnapshot()
 	return nil
 }
@@ -742,7 +716,7 @@ func (a *App) syncConfigState(cfg config.Config) {
 	a.state.CurrentProvider = cfg.SelectedProvider
 	a.state.CurrentModel = cfg.CurrentModel
 	if strings.TrimSpace(a.state.CurrentWorkdir) == "" {
-		a.state.CurrentWorkdir = cfg.Workdir
+		a.setCurrentWorkdir(cfg.Workdir)
 	}
 }
 
@@ -875,7 +849,7 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 		a.state.CurrentModel = mapped.Model
 	}
 	if strings.TrimSpace(mapped.Workdir) != "" {
-		a.state.CurrentWorkdir = mapped.Workdir
+		a.setCurrentWorkdir(mapped.Workdir)
 	}
 	return false
 }
@@ -1715,9 +1689,6 @@ func (a *App) runSlashCommandSelection(command string) tea.Cmd {
 	default:
 		a.state.StatusText = statusApplyingCommand
 		a.state.ExecutionError = ""
-		if isWorkspaceSlashCommand(command) {
-			return runSessionWorkdirCommand(a.runtime, a.state.ActiveSessionID, a.state.CurrentWorkdir, command)
-		}
 		return runLocalCommand(a.configManager, a.providerSvc, a.currentStatusSnapshot(), command)
 	}
 }
@@ -1748,7 +1719,7 @@ func (a *App) startDraftSession() {
 	a.clearRunProgress()
 	a.input.Reset()
 	a.state.InputText = ""
-	a.state.CurrentWorkdir = a.configManager.Get().Workdir
+	a.setCurrentWorkdir(a.configManager.Get().Workdir)
 	if err := a.refreshFileCandidates(); err != nil {
 		a.state.ExecutionError = err.Error()
 		a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
@@ -1812,30 +1783,6 @@ func runResolvePermission(
 	)
 }
 
-func runSessionWorkdirCommand(
-	runtime agentruntime.Runtime,
-	sessionID string,
-	currentWorkdir string,
-	raw string,
-) tea.Cmd {
-	return func() tea.Msg {
-		result := tuicommands.ExecuteSessionWorkdirCommand(
-			runtime,
-			sessionID,
-			currentWorkdir,
-			raw,
-			parseWorkspaceSlashCommand,
-			tuiworkspace.ResolveWorkspacePath,
-			tuiworkspace.SelectSessionWorkdir,
-		)
-		return sessionWorkdirResultMsg{
-			Notice:  result.Notice,
-			Workdir: result.Workdir,
-			Err:     result.Err,
-		}
-	}
-}
-
 // runCompact 鍦ㄧ嫭绔嬪懡浠や腑瑙﹀彂 runtime compact锛屽苟鎶婄粨鏋滃洖浼犵粰 TUI銆
 func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
 	return tuiservices.RunCompactCmd(
@@ -1848,4 +1795,14 @@ func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
 // isBusy 缁熶竴鍒ゆ柇褰撳墠鐣岄潰鏄惁瀛樺湪杩涜涓殑 agent 鎴?compact 鎿嶄綔銆
 func (a App) isBusy() bool {
 	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
+}
+
+// setCurrentWorkdir 统一设置当前工作目录，仅接受非空白且为绝对路径的值。
+// 非法值会被静默忽略，防止 runtime 事件或异常输入污染 UI 状态。
+func (a *App) setCurrentWorkdir(workdir string) {
+	trimmed := strings.TrimSpace(workdir)
+	if trimmed == "" || !filepath.IsAbs(trimmed) {
+		return
+	}
+	a.state.CurrentWorkdir = trimmed
 }

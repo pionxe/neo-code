@@ -402,6 +402,30 @@ func TestConfigValidateFailures(t *testing.T) {
 			expectErr: "workdir must be absolute",
 		},
 		{
+			name: "non-existent workdir",
+			config: func() *Config {
+				cfg := testDefaultConfig()
+				cfg.ApplyDefaultsFrom(*testDefaultConfig())
+				cfg.Workdir = filepath.Join(t.TempDir(), "does-not-exist")
+				return cfg
+			}(),
+			expectErr: "workdir does not exist",
+		},
+		{
+			name: "workdir is a file",
+			config: func() *Config {
+				cfg := testDefaultConfig()
+				cfg.ApplyDefaultsFrom(*testDefaultConfig())
+				filePath := filepath.Join(t.TempDir(), "a-file.txt")
+				if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				cfg.Workdir = filePath
+				return cfg
+			}(),
+			expectErr: "workdir is not a directory",
+		},
+		{
 			name: "selected provider model empty",
 			config: func() *Config {
 				cfg := validConfig.Clone()

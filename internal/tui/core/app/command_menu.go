@@ -177,6 +177,7 @@ func (a *App) refreshCommandMenu() {
 	a.commandMenu.Select(selectedIndex)
 	a.commandMenuMeta = meta
 	a.resizeCommandMenu()
+	a.applyComponentLayout(true)
 }
 
 func (a *App) resizeCommandMenu() {

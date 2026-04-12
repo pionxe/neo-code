@@ -28,8 +28,6 @@ const (
 	FrameActionListSessions FrameAction = "list_sessions"
 	// FrameActionLoadSession 表示加载指定会话详情。
 	FrameActionLoadSession FrameAction = "load_session"
-	// FrameActionSetSessionWorkdir 表示设置会话工作目录。
-	FrameActionSetSessionWorkdir FrameAction = "set_session_workdir"
 	// FrameActionResolvePermission 表示提交一次权限审批决策。
 	FrameActionResolvePermission FrameAction = "resolve_permission"
 )

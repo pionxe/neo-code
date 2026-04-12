@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -118,7 +117,6 @@ type Runtime interface {
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
 	LoadSession(ctx context.Context, id string) (agentsession.Session, error)
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error)
 }
 
 type UserInput struct {
@@ -418,34 +416,6 @@ func (s *Service) ListSessions(ctx context.Context) ([]agentsession.Summary, err
 func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
 	session, err := s.sessionStore.Load(ctx, id)
 	if err != nil {
-		return agentsession.Session{}, err
-	}
-	return session, nil
-}
-
-func (s *Service) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return agentsession.Session{}, errors.New("runtime: session id is empty")
-	}
-
-	session, err := s.sessionStore.Load(ctx, sessionID)
-	if err != nil {
-		return agentsession.Session{}, err
-	}
-
-	cfg := s.configManager.Get()
-	resolved, err := resolveWorkdirForSession(cfg.Workdir, session.Workdir, workdir)
-	if err != nil {
-		return agentsession.Session{}, err
-	}
-	if session.Workdir == resolved {
-		return session, nil
-	}
-
-	session.Workdir = resolved
-	session.UpdatedAt = time.Now()
-	if err := s.sessionStore.Save(ctx, &session); err != nil {
 		return agentsession.Session{}, err
 	}
 	return session, nil
@@ -866,44 +836,22 @@ func (v permissionEventView) toResolvedPayload() PermissionResolvedPayload {
 }
 
 func effectiveSessionWorkdir(sessionWorkdir string, defaultWorkdir string) string {
-	workdir := strings.TrimSpace(sessionWorkdir)
-	if workdir != "" {
-		return workdir
-	}
-	return strings.TrimSpace(defaultWorkdir)
+	return agentsession.EffectiveWorkdir(sessionWorkdir, defaultWorkdir)
 }
 
 func resolveWorkdirForSession(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {
 	base := effectiveSessionWorkdir(currentWorkdir, defaultWorkdir)
 	if strings.TrimSpace(requestedWorkdir) == "" {
-		return normalizeExistingWorkdir(base)
+		return agentsession.ResolveExistingDir(base)
 	}
 
 	target := strings.TrimSpace(requestedWorkdir)
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(base, target)
 	}
-	return normalizeExistingWorkdir(target)
+	return agentsession.ResolveExistingDir(target)
 }
 
 func normalizeExistingWorkdir(workdir string) (string, error) {
-	trimmed := strings.TrimSpace(workdir)
-	if trimmed == "" {
-		return "", errors.New("runtime: workdir is empty")
-	}
-
-	absolute, err := filepath.Abs(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
-	}
-
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("runtime: workdir %q is not a directory", absolute)
-	}
-
-	return filepath.Clean(absolute), nil
+	return agentsession.ResolveExistingDir(workdir)
 }
