@@ -52,6 +52,49 @@ func TestAdapterFactoryBuildAdaptersEmptySnapshot(t *testing.T) {
 	}
 }
 
+func TestAdapterFactoryBuildAdaptersFromSnapshots(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	if err := registry.RegisterServer("docs", "stdio", "v1", &stubServerClient{}); err != nil {
+		t.Fatalf("register server: %v", err)
+	}
+
+	factory := NewAdapterFactory(registry)
+	snapshots := []ServerSnapshot{
+		{
+			ServerID: "docs",
+			Status:   ServerStatusReady,
+			Tools: []ToolDescriptor{
+				{Name: "search", InputSchema: map[string]any{"type": "object"}},
+				{Name: "lookup", InputSchema: map[string]any{"type": "object"}},
+			},
+		},
+	}
+	adapters, err := factory.BuildAdaptersFromSnapshots(context.Background(), snapshots)
+	if err != nil {
+		t.Fatalf("BuildAdaptersFromSnapshots() error = %v", err)
+	}
+	if len(adapters) != 2 {
+		t.Fatalf("expected 2 adapters, got %d", len(adapters))
+	}
+	if adapters[0].FullName() != "mcp.docs.search" || adapters[1].FullName() != "mcp.docs.lookup" {
+		t.Fatalf("unexpected adapter names: %q, %q", adapters[0].FullName(), adapters[1].FullName())
+	}
+}
+
+func TestAdapterFactoryBuildAdaptersFromSnapshotsCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	factory := NewAdapterFactory(NewRegistry())
+	if _, err := factory.BuildAdaptersFromSnapshots(ctx, []ServerSnapshot{{ServerID: "docs"}}); err == nil {
+		t.Fatalf("expected canceled context error")
+	}
+}
+
 func TestAdapterCall(t *testing.T) {
 	t.Parallel()
 

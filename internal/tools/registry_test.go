@@ -250,6 +250,28 @@ type stubMCPClient struct {
 	callErr    error
 }
 
+type stubExposureFilter struct {
+	filtered  []mcp.ServerSnapshot
+	decisions []mcp.ExposureDecision
+	err       error
+	inputs    []mcp.ExposureFilterInput
+}
+
+func (s *stubExposureFilter) Filter(
+	ctx context.Context,
+	snapshots []mcp.ServerSnapshot,
+	input mcp.ExposureFilterInput,
+) ([]mcp.ServerSnapshot, []mcp.ExposureDecision, error) {
+	s.inputs = append(s.inputs, input)
+	if s.err != nil {
+		return nil, nil, s.err
+	}
+	if s.filtered != nil || s.decisions != nil {
+		return s.filtered, s.decisions, nil
+	}
+	return snapshots, nil, nil
+}
+
 func (s *stubMCPClient) ListTools(ctx context.Context) ([]mcp.ToolDescriptor, error) {
 	return s.tools, nil
 }
@@ -518,5 +540,148 @@ func TestRegistrySupportsMCPToolAndHelpers(t *testing.T) {
 	}
 	if got := mcpToolFullName(" Docs ", " Search "); got != "mcp.docs.search" {
 		t.Fatalf("unexpected mcp full name: %q", got)
+	}
+}
+
+func TestRegistryListAvailableSpecsAppliesMCPExposureFilter(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(stubTool{name: "a_tool", description: "built-in", schema: map[string]any{"type": "object"}})
+
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RegisterServer("admin", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "secret", Description: "secret tool", InputSchema: map[string]any{"type": "object"}},
+		},
+	}); err != nil {
+		t.Fatalf("register admin server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh docs tools: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "admin"); err != nil {
+		t.Fatalf("refresh admin tools: %v", err)
+	}
+
+	registry.SetMCPRegistry(mcpRegistry)
+	registry.SetMCPExposureFilter(mcp.NewExposureFilter(mcp.ExposureFilterConfig{
+		Allowlist: []string{"docs"},
+		Denylist:  []string{"admin.secret"},
+	}))
+
+	specs, err := registry.ListAvailableSpecs(context.Background(), SpecListInput{Agent: "coder", SessionID: "s-1"})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+
+	names := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		names = append(names, spec.Name)
+	}
+	if strings.Join(names, ",") != "a_tool,mcp.docs.search" {
+		t.Fatalf("unexpected specs: %+v", names)
+	}
+
+	audit := registry.MCPExposureAuditSnapshot()
+	if len(audit) != 2 {
+		t.Fatalf("expected 2 audit decisions, got %+v", audit)
+	}
+	if audit[0].ToolFullName != "mcp.admin.secret" || audit[0].Reason != mcp.ExposureFilterReasonPolicyDeny {
+		t.Fatalf("unexpected audit[0]: %+v", audit[0])
+	}
+}
+
+func TestRegistryListAvailableSpecsFailClosedOnExposureFilterError(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(stubTool{name: "builtin", description: "built-in", schema: map[string]any{"type": "object"}})
+
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+
+	registry.SetMCPRegistry(mcpRegistry)
+	registry.SetMCPExposureFilter(&stubExposureFilter{err: errors.New("boom")})
+
+	specs, err := registry.ListAvailableSpecs(context.Background(), SpecListInput{})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+	if len(specs) != 1 || specs[0].Name != "builtin" {
+		t.Fatalf("expected built-in specs only, got %+v", specs)
+	}
+
+	audit := registry.MCPExposureAuditSnapshot()
+	if len(audit) != 1 || audit[0].Reason != mcp.ExposureFilterReasonFilterError {
+		t.Fatalf("expected filter_error audit, got %+v", audit)
+	}
+}
+
+func TestRegistryListAvailableSpecsPassesAgentAndQueryToExposureFilter(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+
+	filter := &stubExposureFilter{}
+	registry.SetMCPRegistry(mcpRegistry)
+	registry.SetMCPExposureFilter(filter)
+
+	_, err := registry.ListAvailableSpecs(context.Background(), SpecListInput{
+		SessionID: "session-1",
+		Agent:     "planner",
+		Query:     "find docs",
+	})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+	if len(filter.inputs) != 1 {
+		t.Fatalf("expected one filter input, got %+v", filter.inputs)
+	}
+	if filter.inputs[0].SessionID != "session-1" || filter.inputs[0].Agent != "planner" || filter.inputs[0].Query != "find docs" {
+		t.Fatalf("unexpected filter input: %+v", filter.inputs[0])
+	}
+}
+
+func TestParseMCPToolFullName(t *testing.T) {
+	t.Parallel()
+
+	serverID, toolName, ok := parseMCPToolFullName("  MCP.Docs.Search  ")
+	if !ok {
+		t.Fatalf("expected parse success")
+	}
+	if serverID != "docs" || toolName != "search" {
+		t.Fatalf("unexpected parse result: server=%q tool=%q", serverID, toolName)
+	}
+
+	if _, _, ok := parseMCPToolFullName("mcp.docs"); ok {
+		t.Fatalf("expected parse failure for incomplete name")
 	}
 }

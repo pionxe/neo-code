@@ -14,6 +14,7 @@ import (
 type SpecListInput struct {
 	SessionID string
 	Agent     string
+	Query     string
 }
 
 // Manager is the runtime-facing tool execution and schema exposure boundary.

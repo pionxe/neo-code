@@ -29,6 +29,17 @@ func (f *AdapterFactory) BuildAdapters(ctx context.Context) ([]*Adapter, error) 
 	}
 
 	snapshots := f.registry.Snapshot()
+	return f.BuildAdaptersFromSnapshots(ctx, snapshots)
+}
+
+// BuildAdaptersFromSnapshots 将传入的不可变快照转换为 Adapter 列表。
+func (f *AdapterFactory) BuildAdaptersFromSnapshots(ctx context.Context, snapshots []ServerSnapshot) ([]*Adapter, error) {
+	if f == nil || f.registry == nil {
+		return nil, errors.New("mcp: adapter factory registry is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(snapshots) == 0 {
 		return nil, nil
 	}

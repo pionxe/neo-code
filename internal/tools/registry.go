@@ -16,6 +16,8 @@ type Registry struct {
 	microCompactPolicies map[string]MicroCompactPolicy
 	mcpRegistry          *mcp.Registry
 	mcpFactory           *mcp.AdapterFactory
+	mcpExposureFilter    mcp.ExposureFilter
+	mcpExposureAudit     []mcp.ExposureDecision
 }
 
 func NewRegistry() *Registry {
@@ -32,6 +34,27 @@ func (r *Registry) SetMCPRegistry(registry *mcp.Registry) {
 	}
 	r.mcpRegistry = registry
 	r.mcpFactory = mcp.NewAdapterFactory(registry)
+	if r.mcpExposureFilter == nil {
+		r.mcpExposureFilter = mcp.NewExposureFilter(mcp.ExposureFilterConfig{})
+	}
+}
+
+// SetMCPExposureFilter 绑定 MCP 暴露过滤器，仅影响模型可见 specs，不影响工具执行。
+func (r *Registry) SetMCPExposureFilter(filter mcp.ExposureFilter) {
+	if r == nil {
+		return
+	}
+	r.mcpExposureFilter = filter
+}
+
+// MCPExposureAuditSnapshot 返回最近一次 specs 过滤得到的 MCP 审计决策副本。
+func (r *Registry) MCPExposureAuditSnapshot() []mcp.ExposureDecision {
+	if r == nil || len(r.mcpExposureAudit) == 0 {
+		return nil
+	}
+	cloned := make([]mcp.ExposureDecision, len(r.mcpExposureAudit))
+	copy(cloned, r.mcpExposureAudit)
+	return cloned
 }
 
 func (r *Registry) Register(tool Tool) {
@@ -64,7 +87,7 @@ func (r *Registry) Supports(name string) bool {
 	return r.supportsMCPTool(name)
 }
 
-// MicroCompactPolicy 返回指定工具名的 micro compact 策略；未知工具按默认可压缩处理。
+// MicroCompactPolicy 返回指定工具的 micro compact 策略；未知工具按默认可压缩处理。
 func (r *Registry) MicroCompactPolicy(name string) MicroCompactPolicy {
 	if r == nil {
 		return MicroCompactPolicyCompact
@@ -102,14 +125,14 @@ func (r *Registry) ListSchemas() []providertypes.ToolSpec {
 	return r.GetSpecs()
 }
 
-// ListAvailableSpecs returns all registered tool specs.
+// ListAvailableSpecs 返回当前上下文下模型可见的工具 specs。
 func (r *Registry) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
 	specs := r.GetSpecs()
-	mcpAdapters, err := r.listMCPAdapters(ctx)
+	mcpAdapters, err := r.listMCPAdapters(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -212,29 +235,93 @@ func (r *Registry) supportsMCPTool(name string) bool {
 }
 
 // listMCPAdapters 返回 MCP 快照对应的 adapter 列表。
-func (r *Registry) listMCPAdapters(ctx context.Context) ([]*mcp.Adapter, error) {
-	if r == nil || r.mcpFactory == nil {
+func (r *Registry) listMCPAdapters(ctx context.Context, input SpecListInput) ([]*mcp.Adapter, error) {
+	if r == nil || r.mcpFactory == nil || r.mcpRegistry == nil {
 		return nil, nil
 	}
-	return r.mcpFactory.BuildAdapters(ctx)
+	snapshots := r.mcpRegistry.Snapshot()
+	filteredSnapshots, decisions, err := r.filterMCPSnapshots(ctx, snapshots, mcp.ExposureFilterInput{
+		SessionID: input.SessionID,
+		Agent:     input.Agent,
+		Query:     input.Query,
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.mcpExposureAudit = decisions
+	return r.mcpFactory.BuildAdaptersFromSnapshots(ctx, filteredSnapshots)
 }
 
 // resolveMCPAdapter 按完整工具名解析并返回对应 adapter。
 func (r *Registry) resolveMCPAdapter(ctx context.Context, fullName string) (*mcp.Adapter, error) {
-	adapters, err := r.listMCPAdapters(ctx)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	lowerName := strings.ToLower(strings.TrimSpace(fullName))
-	if !strings.HasPrefix(lowerName, "mcp.") {
+	if r == nil || r.mcpRegistry == nil {
 		return nil, errors.New("tool: not found")
 	}
-	for _, adapter := range adapters {
-		if strings.EqualFold(adapter.FullName(), lowerName) {
-			return adapter, nil
+
+	serverID, toolName, ok := parseMCPToolFullName(fullName)
+	if !ok {
+		return nil, errors.New("tool: not found")
+	}
+
+	for _, snapshot := range r.mcpRegistry.Snapshot() {
+		if !strings.EqualFold(snapshot.ServerID, serverID) {
+			continue
+		}
+		for _, descriptor := range snapshot.Tools {
+			if strings.EqualFold(strings.TrimSpace(descriptor.Name), toolName) {
+				return mcp.NewAdapter(r.mcpRegistry, snapshot.ServerID, descriptor)
+			}
 		}
 	}
 	return nil, errors.New("tool: not found")
+}
+
+// filterMCPSnapshots 在暴露阶段过滤 MCP snapshots，并在过滤失败时按 fail-closed 退化。
+func (r *Registry) filterMCPSnapshots(
+	ctx context.Context,
+	snapshots []mcp.ServerSnapshot,
+	input mcp.ExposureFilterInput,
+) ([]mcp.ServerSnapshot, []mcp.ExposureDecision, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if r == nil {
+		return nil, nil, nil
+	}
+	filter := r.mcpExposureFilter
+	if filter == nil {
+		filter = mcp.NewExposureFilter(mcp.ExposureFilterConfig{})
+	}
+	filteredSnapshots, decisions, err := filter.Filter(ctx, snapshots, input)
+	if err != nil {
+		failClosed := buildMCPFilterErrorAudit(snapshots)
+		r.mcpExposureAudit = failClosed
+		return nil, failClosed, nil
+	}
+	return filteredSnapshots, decisions, nil
+}
+
+// buildMCPFilterErrorAudit 为过滤器异常生成 fail-closed 审计记录。
+func buildMCPFilterErrorAudit(snapshots []mcp.ServerSnapshot) []mcp.ExposureDecision {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	decisions := make([]mcp.ExposureDecision, 0)
+	for _, snapshot := range snapshots {
+		for _, tool := range snapshot.Tools {
+			decisions = append(decisions, mcp.ExposureDecision{
+				ServerID:     snapshot.ServerID,
+				ToolName:     tool.Name,
+				ToolFullName: mcpToolFullName(snapshot.ServerID, tool.Name),
+				Allowed:      false,
+				Reason:       mcp.ExposureFilterReasonFilterError,
+			})
+		}
+	}
+	return decisions
 }
 
 // mcpFactoryBuildSnapshot 读取 MCP registry 快照，用于无上下文快速检查。
@@ -247,4 +334,17 @@ func (r *Registry) mcpFactoryBuildSnapshot() []mcp.ServerSnapshot {
 
 func mcpToolFullName(serverID string, toolName string) string {
 	return "mcp." + strings.ToLower(strings.TrimSpace(serverID)) + "." + strings.ToLower(strings.TrimSpace(toolName))
+}
+
+// parseMCPToolFullName 解析 mcp.<server>.<tool> 形式的完整工具名。
+func parseMCPToolFullName(fullName string) (string, string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(fullName))
+	if !strings.HasPrefix(normalized, "mcp.") {
+		return "", "", false
+	}
+	parts := strings.SplitN(normalized, ".", 3)
+	if len(parts) != 3 || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
 }

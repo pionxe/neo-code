@@ -19,6 +19,7 @@ import (
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
 	"neo-code/internal/tools/filesystem"
+	"neo-code/internal/tools/mcp"
 	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
 )
@@ -178,8 +179,28 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, error) {
 	}
 	if mcpRegistry != nil {
 		toolRegistry.SetMCPRegistry(mcpRegistry)
+		toolRegistry.SetMCPExposureFilter(mcp.NewExposureFilter(mcp.ExposureFilterConfig{
+			Allowlist: cfg.Tools.MCP.Exposure.Allowlist,
+			Denylist:  cfg.Tools.MCP.Exposure.Denylist,
+			Agents:    buildMCPAgentExposureRules(cfg.Tools.MCP.Exposure.Agents),
+		}))
 	}
 	return toolRegistry, nil
+}
+
+// buildMCPAgentExposureRules 将配置层的 agent 过滤规则转换为 tools/mcp 层输入。
+func buildMCPAgentExposureRules(configs []config.MCPAgentExposureConfig) []mcp.AgentExposureRule {
+	if len(configs) == 0 {
+		return nil
+	}
+	rules := make([]mcp.AgentExposureRule, 0, len(configs))
+	for _, item := range configs {
+		rules = append(rules, mcp.AgentExposureRule{
+			Agent:     item.Agent,
+			Allowlist: append([]string(nil), item.Allowlist...),
+		})
+	}
+	return rules
 }
 
 func buildToolManager(registry *tools.Registry) (tools.Manager, error) {

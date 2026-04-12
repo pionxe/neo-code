@@ -372,6 +372,75 @@ func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryAppliesMCPExposureConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.Workdir = t.TempDir()
+	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
+		{
+			ID:      "docs",
+			Enabled: true,
+			Source:  "stdio",
+			Stdio: config.MCPStdioConfig{
+				Command: "mock",
+			},
+		},
+		{
+			ID:      "admin",
+			Enabled: true,
+			Source:  "stdio",
+			Stdio: config.MCPStdioConfig{
+				Command: "mock",
+			},
+		},
+	}
+	cfg.Tools.MCP.Exposure = config.MCPExposureConfig{
+		Allowlist: []string{"docs"},
+		Agents: []config.MCPAgentExposureConfig{
+			{Agent: "planner", Allowlist: []string{"docs.search"}},
+		},
+	}
+
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		client := &stubMCPServerClient{
+			tools: []mcp.ToolDescriptor{
+				{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+			},
+		}
+		if err := registry.RegisterServer(server.ID, "stdio", server.Version, client); err != nil {
+			return err
+		}
+		return registry.RefreshServerTools(context.Background(), server.ID)
+	}
+
+	registry, err := buildToolRegistry(cfg)
+	if err != nil {
+		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
+
+	specs, err := registry.ListAvailableSpecs(context.Background(), tools.SpecListInput{Agent: "planner"})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+
+	foundDocs := false
+	foundAdmin := false
+	for _, spec := range specs {
+		if spec.Name == "mcp.docs.search" {
+			foundDocs = true
+		}
+		if spec.Name == "mcp.admin.search" {
+			foundAdmin = true
+		}
+	}
+	if !foundDocs || foundAdmin {
+		t.Fatalf("expected only docs MCP tool to be exposed, got %+v", specs)
+	}
+}
+
 func TestBuildToolRegistryReturnsMCPSourceError(t *testing.T) {
 	t.Parallel()
 
