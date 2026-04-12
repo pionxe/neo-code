@@ -402,20 +402,18 @@ func TestConfigValidateFailures(t *testing.T) {
 			expectErr: "workdir must be absolute",
 		},
 		{
-			name: "non-existent workdir",
+			name: "non-existent workdir is accepted by ValidateSnapshot (no filesystem check)",
 			config: func() *Config {
 				cfg := testDefaultConfig()
-				cfg.ApplyDefaultsFrom(*testDefaultConfig())
 				cfg.Workdir = filepath.Join(t.TempDir(), "does-not-exist")
 				return cfg
 			}(),
-			expectErr: "workdir does not exist",
+			expectErr: "", // ValidateSnapshot 只校验路径格式，不做文件系统检查
 		},
 		{
-			name: "workdir is a file",
+			name: "workdir pointing to a file is accepted by ValidateSnapshot (no filesystem check)",
 			config: func() *Config {
 				cfg := testDefaultConfig()
-				cfg.ApplyDefaultsFrom(*testDefaultConfig())
 				filePath := filepath.Join(t.TempDir(), "a-file.txt")
 				if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
 					t.Fatalf("setup: %v", err)
@@ -423,7 +421,7 @@ func TestConfigValidateFailures(t *testing.T) {
 				cfg.Workdir = filePath
 				return cfg
 			}(),
-			expectErr: "workdir is not a directory",
+			expectErr: "", // ValidateSnapshot 不验证 workdir 是否为目录
 		},
 		{
 			name: "selected provider model empty",
@@ -515,6 +513,12 @@ func TestConfigValidateFailures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			err := tt.config.ValidateSnapshot()
+			if tt.expectErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
 			}

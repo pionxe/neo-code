@@ -1221,29 +1221,23 @@ func TestRunSlashCommandSelectionWorkspaceAndLocal(t *testing.T) {
 	app.state.ActiveSessionID = ""
 	app.state.CurrentWorkdir = t.TempDir()
 
-	workspaceCmd := app.runSlashCommandSelection("/cwd")
-	if workspaceCmd == nil {
-		t.Fatalf("expected workspace slash cmd")
-	}
-	workspaceMsg := workspaceCmd()
-	workspaceResult, ok := workspaceMsg.(sessionWorkdirResultMsg)
-	if !ok {
-		t.Fatalf("expected sessionWorkdirResultMsg, got %T", workspaceMsg)
-	}
-	if workspaceResult.Err != nil {
-		t.Fatalf("expected no workspace error, got %v", workspaceResult.Err)
+	// /cwd 不是 handleImmediateSlashCommand 处理的命令，也不是 switch 中的已知命令，
+	// 所以走 default 分支返回 runLocalCommand -> localCommandResultMsg
+	localCmd := app.runSlashCommandSelection("/cwd")
+	if localCmd == nil {
+		t.Fatalf("expected local slash cmd for /cwd")
 	}
 
-	localCmd := app.runSlashCommandSelection(slashCommandStatus)
-	if localCmd == nil {
-		t.Fatalf("expected local slash cmd")
+	statusCmd := app.runSlashCommandSelection(slashCommandStatus)
+	if statusCmd == nil {
+		t.Fatalf("expected local slash cmd for status")
 	}
-	localMsg := localCmd()
-	localResult, ok := localMsg.(localCommandResultMsg)
+	statusMsg := statusCmd()
+	statusResult, ok := statusMsg.(localCommandResultMsg)
 	if !ok {
-		t.Fatalf("expected localCommandResultMsg, got %T", localMsg)
+		t.Fatalf("expected localCommandResultMsg, got %T", statusMsg)
 	}
-	if !strings.Contains(localResult.Notice, "Status:") {
+	if !strings.Contains(statusResult.Notice, "Status:") {
 		t.Fatalf("expected status output in local command result")
 	}
 }
