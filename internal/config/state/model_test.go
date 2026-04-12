@@ -127,3 +127,110 @@ func TestCatalogInputFromProviderPropagatesIdentityErrors(t *testing.T) {
 		t.Fatalf("expected base_url validation error, got %v", err)
 	}
 }
+
+func TestCatalogInputFromProviderResolveDiscoveryConfigPropagatesResolveError(t *testing.T) {
+	t.Parallel()
+
+	input, err := catalogInputFromProvider(configpkg.ProviderConfig{
+		Name:      "company-gateway",
+		Driver:    "openaicompat",
+		BaseURL:   "https://api.example.com/v1",
+		Model:     "server-default",
+		APIKeyEnv: "MISSING_PROVIDER_API_KEY",
+		Source:    configpkg.ProviderSourceBuiltin,
+	})
+	if err != nil {
+		t.Fatalf("catalogInputFromProvider() error = %v", err)
+	}
+
+	_, err = input.ResolveDiscoveryConfig()
+	if err == nil || !strings.Contains(err.Error(), "environment variable MISSING_PROVIDER_API_KEY is empty") {
+		t.Fatalf("expected resolve api key error, got %v", err)
+	}
+}
+
+func TestSameProviderIdentityPropagatesIdentityErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := sameProviderIdentity(configpkg.ProviderConfig{
+		Name:      "broken-left",
+		Driver:    "openaicompat",
+		BaseURL:   " ",
+		APIKeyEnv: "LEFT_KEY",
+	}, configpkg.ProviderConfig{
+		Name:      "right",
+		Driver:    "openaicompat",
+		BaseURL:   "https://api.example.com/v1",
+		APIKeyEnv: "RIGHT_KEY",
+	})
+	if err == nil || !strings.Contains(err.Error(), "base_url is empty") {
+		t.Fatalf("expected left identity error, got %v", err)
+	}
+
+	_, err = sameProviderIdentity(configpkg.ProviderConfig{
+		Name:      "left",
+		Driver:    "openaicompat",
+		BaseURL:   "https://api.example.com/v1",
+		APIKeyEnv: "LEFT_KEY",
+	}, configpkg.ProviderConfig{
+		Name:      "broken-right",
+		Driver:    "openaicompat",
+		BaseURL:   " ",
+		APIKeyEnv: "RIGHT_KEY",
+	})
+	if err == nil || !strings.Contains(err.Error(), "base_url is empty") {
+		t.Fatalf("expected right identity error, got %v", err)
+	}
+}
+
+func TestSameSelectionSnapshotReturnsFalseWhenLatestSelectionMissing(t *testing.T) {
+	t.Parallel()
+
+	same, err := sameSelectionSnapshot(
+		configpkg.Config{
+			SelectedProvider: "",
+			Providers: []configpkg.ProviderConfig{
+				configpkg.OpenAIProvider(),
+			},
+		},
+		configpkg.Config{CurrentModel: configpkg.OpenAIDefaultModel},
+		configpkg.OpenAIProvider(),
+	)
+	if err != nil {
+		t.Fatalf("sameSelectionSnapshot() unexpected error = %v", err)
+	}
+	if same {
+		t.Fatalf("expected latest snapshot without selection to be treated as different")
+	}
+}
+
+func TestSameSelectionSnapshotPropagatesIdentityErrors(t *testing.T) {
+	t.Parallel()
+
+	latest := configpkg.Config{
+		SelectedProvider: "openai",
+		Providers: []configpkg.ProviderConfig{
+			{
+				Name:      "openai",
+				Driver:    "openaicompat",
+				BaseURL:   " ",
+				Model:     configpkg.OpenAIDefaultModel,
+				APIKeyEnv: "OPENAI_API_KEY",
+				Source:    configpkg.ProviderSourceBuiltin,
+			},
+		},
+	}
+
+	_, err := sameSelectionSnapshot(
+		latest,
+		configpkg.Config{
+			SelectedProvider: "openai",
+			CurrentModel:     configpkg.OpenAIDefaultModel,
+			Providers:        []configpkg.ProviderConfig{configpkg.OpenAIProvider()},
+		},
+		configpkg.OpenAIProvider(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "base_url is empty") {
+		t.Fatalf("expected identity error from latest selected provider, got %v", err)
+	}
+}
