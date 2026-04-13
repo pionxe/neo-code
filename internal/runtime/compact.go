@@ -120,6 +120,7 @@ func (s *Service) runCompactForSession(
 		SessionID: session.ID,
 		Workdir:   agentsession.EffectiveWorkdir(session.Workdir, cfg.Workdir),
 		Messages:  session.Messages,
+		TaskState: session.TaskState,
 		Config:    cfg.Context.Compact,
 	})
 	if err != nil {
@@ -135,6 +136,7 @@ func (s *Service) runCompactForSession(
 
 	if result.Applied {
 		session.Messages = append([]providertypes.Message(nil), result.Messages...)
+		session.TaskState = result.TaskState.Clone()
 		session.TokenInputTotal = 0
 		session.TokenOutputTotal = 0
 		session.UpdatedAt = time.Now()

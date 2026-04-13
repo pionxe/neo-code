@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -27,6 +28,7 @@ func NewBuilderWithToolPolicies(policies MicroCompactPolicySource) Builder {
 		promptSources: []promptSectionSource{
 			corePromptSource{},
 			&projectRulesSource{},
+			taskStateSource{},
 			systemSource,
 		},
 		trimPolicy:           spanMessageTrimPolicy{},
@@ -41,11 +43,12 @@ func NewBuilderWithMemo(policies MicroCompactPolicySource, memoSource SectionSou
 	sources := []promptSectionSource{
 		corePromptSource{},
 		&projectRulesSource{},
-		systemSource,
+		taskStateSource{},
 	}
 	if memoSource != nil {
 		sources = append(sources, memoSource)
 	}
+	sources = append(sources, systemSource)
 	return &DefaultBuilder{
 		promptSources:        sources,
 		trimPolicy:           spanMessageTrimPolicy{},
@@ -78,15 +81,20 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 
 	return BuildResult{
 		SystemPrompt:         composeSystemPrompt(sections...),
-		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages), input.Compact, b.microCompactPolicies),
+		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages), input.TaskState, input.Compact, b.microCompactPolicies),
 		AutoCompactSuggested: shouldAutoCompact,
 	}, nil
 }
 
 // applyReadTimeContextProjection 负责在 provider 请求前按开关应用只读上下文投影，避免改写原始会话消息。
-func applyReadTimeContextProjection(messages []providertypes.Message, options CompactOptions, policies MicroCompactPolicySource) []providertypes.Message {
+func applyReadTimeContextProjection(
+	messages []providertypes.Message,
+	taskState agentsession.TaskState,
+	options CompactOptions,
+	policies MicroCompactPolicySource,
+) []providertypes.Message {
 	var projected []providertypes.Message
-	if options.DisableMicroCompact {
+	if options.DisableMicroCompact || !taskState.Established() {
 		projected = cloneContextMessages(messages)
 	} else {
 		projected = microCompactMessagesWithPolicies(messages, policies)

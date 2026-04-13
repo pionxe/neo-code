@@ -127,7 +127,8 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	activeWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, cfg.Workdir)
 
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
-		Messages: state.session.Messages,
+		Messages:  state.session.Messages,
+		TaskState: state.session.TaskState,
 		Metadata: agentcontext.Metadata{
 			Workdir:             activeWorkdir,
 			Shell:               cfg.Shell,

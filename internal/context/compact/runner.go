@@ -10,6 +10,7 @@ import (
 
 	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 )
 
 // Mode identifies the compact execution mode.
@@ -37,16 +38,24 @@ type Input struct {
 	SessionID string
 	Workdir   string
 	Messages  []providertypes.Message
+	TaskState agentsession.TaskState
 	Config    config.CompactConfig
 }
 
 // SummaryInput describes the historical context that must be summarized.
 type SummaryInput struct {
 	Mode                 Mode
+	CurrentTaskState     agentsession.TaskState
 	ArchivedMessages     []providertypes.Message
 	RetainedMessages     []providertypes.Message
 	ArchivedMessageCount int
 	Config               config.CompactConfig
+}
+
+// SummaryOutput 描述 compact 生成器返回的任务状态和展示摘要。
+type SummaryOutput struct {
+	TaskState      agentsession.TaskState
+	DisplaySummary string
 }
 
 // Metrics reports compact input/output size changes.
@@ -60,6 +69,7 @@ type Metrics struct {
 // Result is the compact execution result.
 type Result struct {
 	Messages       []providertypes.Message `json:"messages"`
+	TaskState      agentsession.TaskState  `json:"task_state"`
 	Metrics        Metrics                 `json:"metrics"`
 	TranscriptID   string                  `json:"transcript_id"`
 	TranscriptPath string                  `json:"transcript_path"`
@@ -69,7 +79,7 @@ type Result struct {
 
 // SummaryGenerator produces the semantic compact summary.
 type SummaryGenerator interface {
-	Generate(ctx context.Context, input SummaryInput) (string, error)
+	Generate(ctx context.Context, input SummaryInput) (SummaryOutput, error)
 }
 
 // Runner defines the compact execution contract.
@@ -126,6 +136,7 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 	beforeChars := countMessageChars(messages)
 	base := Result{
 		Messages:  messages,
+		TaskState: agentsession.NormalizeTaskState(input.TaskState),
 		Applied:   false,
 		ErrorMode: ErrorModeNone,
 		Metrics: Metrics{
@@ -148,22 +159,26 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	plan = sanitizeCompactionPlan(plan)
 	if !plan.Applied {
 		return base, nil
 	}
 
-	summary, err := s.buildSummary(ctx, input.Mode, plan, cfg)
+	output, err := s.buildSummary(ctx, input.Mode, input.TaskState, plan, cfg)
 	if err != nil {
 		return Result{}, err
 	}
+	output.TaskState = agentsession.NormalizeTaskState(output.TaskState)
+	output.TaskState.LastUpdatedAt = s.now()
 
 	next := make([]providertypes.Message, 0, len(plan.Retained)+1)
-	next = append(next, providertypes.Message{Role: providertypes.RoleAssistant, Content: summary})
+	next = append(next, providertypes.Message{Role: providertypes.RoleAssistant, Content: output.DisplaySummary})
 	next = append(next, plan.Retained...)
 
 	afterChars := countMessageChars(next)
 	result := base
 	result.Messages = next
+	result.TaskState = output.TaskState
 	result.Applied = true
 	result.Metrics.AfterChars = afterChars
 	if beforeChars > 0 {
@@ -173,23 +188,39 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 }
 
 // buildSummary 调用摘要生成器并委托校验器收敛最终摘要内容。
-func (s *Service) buildSummary(ctx context.Context, mode Mode, plan compactionPlan, cfg config.CompactConfig) (string, error) {
+func (s *Service) buildSummary(
+	ctx context.Context,
+	mode Mode,
+	currentTaskState agentsession.TaskState,
+	plan compactionPlan,
+	cfg config.CompactConfig,
+) (SummaryOutput, error) {
 	if s.generator == nil {
-		return "", errors.New("compact: summary generator is nil")
+		return SummaryOutput{}, errors.New("compact: summary generator is nil")
 	}
 
-	summary, err := s.generator.Generate(ctx, SummaryInput{
+	output, err := s.generator.Generate(ctx, SummaryInput{
 		Mode:                 mode,
+		CurrentTaskState:     currentTaskState.Clone(),
 		ArchivedMessages:     cloneMessages(plan.Archived),
 		RetainedMessages:     cloneMessages(plan.Retained),
 		ArchivedMessageCount: plan.ArchivedMessageCount,
 		Config:               cfg,
 	})
 	if err != nil {
-		return "", err
+		return SummaryOutput{}, err
 	}
 
-	return s.summaryVerifier.Validate(summary, cfg.MaxSummaryChars)
+	output.TaskState = agentsession.NormalizeTaskState(output.TaskState)
+	if err := validateGeneratedTaskState(output.TaskState); err != nil {
+		return SummaryOutput{}, err
+	}
+
+	output.DisplaySummary, err = s.summaryVerifier.Validate(output.DisplaySummary, cfg.MaxSummaryChars)
+	if err != nil {
+		return SummaryOutput{}, err
+	}
+	return output, nil
 }
 
 // transcriptStore 基于 Service 当前依赖构造 transcript 持久化服务。
@@ -213,4 +244,45 @@ func normalizeCompactConfig(cfg config.CompactConfig) config.CompactConfig {
 		cfg.ManualStrategy = config.CompactManualStrategyKeepRecent
 	}
 	return cfg
+}
+
+// sanitizeCompactionPlan 在真正生成 compact 前移除旧的展示摘要，避免摘要的摘要。
+func sanitizeCompactionPlan(plan compactionPlan) compactionPlan {
+	plan.Archived = filterCompactSummaryMessages(plan.Archived)
+	plan.Retained = filterCompactSummaryMessages(plan.Retained)
+	plan.ArchivedMessageCount = len(plan.Archived)
+	plan.Applied = len(plan.Archived) > 0
+	return plan
+}
+
+// filterCompactSummaryMessages 过滤历史中的 compact 展示摘要，防止它们再次参与状态生成。
+func filterCompactSummaryMessages(messages []providertypes.Message) []providertypes.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	filtered := make([]providertypes.Message, 0, len(messages))
+	for _, message := range messages {
+		if isCompactSummaryMessage(message) {
+			continue
+		}
+		filtered = append(filtered, message)
+	}
+	return filtered
+}
+
+// isCompactSummaryMessage 判断一条消息是否为 compact 展示摘要。
+func isCompactSummaryMessage(message providertypes.Message) bool {
+	if message.Role != providertypes.RoleAssistant {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(message.Content), "[compact_summary]")
+}
+
+// validateGeneratedTaskState 确保 compact 生成结果真正建立了 durable task state，避免“摘要成功但状态为空”。
+func validateGeneratedTaskState(state agentsession.TaskState) error {
+	if !state.Established() {
+		return errors.New("compact: generated task_state is empty")
+	}
+	return nil
 }

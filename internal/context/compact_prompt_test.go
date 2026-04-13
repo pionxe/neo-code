@@ -6,6 +6,7 @@ import (
 
 	"neo-code/internal/context/internalcompact"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 )
 
 func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) {
@@ -17,6 +18,13 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 		ManualKeepRecentMessages: 10,
 		ArchivedMessageCount:     3,
 		MaxSummaryChars:          1200,
+		CurrentTaskState: agentsession.TaskState{
+			Goal:         "Finish the refactor",
+			Progress:     []string{"Moved durable state into session"},
+			OpenItems:    []string{"Update runtime tests"},
+			NextStep:     "Patch compact prompt assertions",
+			KeyArtifacts: []string{"internal/context/compact_prompt.go"},
+		},
 		ArchivedMessages: []providertypes.Message{
 			{
 				Role:    providertypes.RoleUser,
@@ -37,6 +45,9 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 	if !strings.Contains(prompt.SystemPrompt, internalcompact.SummaryMarker) {
 		t.Fatalf("expected summary format in system prompt, got %q", prompt.SystemPrompt)
 	}
+	if !strings.Contains(prompt.SystemPrompt, `{"task_state":{"goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"..."}`) {
+		t.Fatalf("expected task state JSON contract in system prompt, got %q", prompt.SystemPrompt)
+	}
 	if !strings.Contains(prompt.SystemPrompt, internalcompact.FormatTemplate()) {
 		t.Fatalf("expected system prompt to reuse shared compact summary template, got %q", prompt.SystemPrompt)
 	}
@@ -54,6 +65,9 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 	if !strings.Contains(prompt.UserPrompt, "<archived_source_material>") {
 		t.Fatalf("expected archived material boundary, got %q", prompt.UserPrompt)
 	}
+	if !strings.Contains(prompt.UserPrompt, "<current_task_state>") {
+		t.Fatalf("expected current task state boundary, got %q", prompt.UserPrompt)
+	}
 	if !strings.Contains(prompt.UserPrompt, "<retained_source_material>") {
 		t.Fatalf("expected retained material boundary, got %q", prompt.UserPrompt)
 	}
@@ -68,6 +82,12 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 	}
 	if !strings.Contains(prompt.UserPrompt, "content:\n  legacy request") {
 		t.Fatalf("expected multiline content block in compact transcript, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, `"goal": "Finish the refactor"`) {
+		t.Fatalf("expected durable task state JSON in user prompt, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, `"next_step": "Patch compact prompt assertions"`) {
+		t.Fatalf("expected next_step in user prompt, got %q", prompt.UserPrompt)
 	}
 	if !strings.Contains(prompt.UserPrompt, "target_max_summary_chars: 1200") {
 		t.Fatalf("expected target max chars in user prompt, got %q", prompt.UserPrompt)
@@ -87,8 +107,14 @@ func TestBuildCompactPromptUsesEmptyJSONArraysWhenNoMessages(t *testing.T) {
 	t.Parallel()
 
 	prompt := BuildCompactPrompt(CompactPromptInput{})
-	if strings.Count(prompt.UserPrompt, "[]") < 2 {
-		t.Fatalf("expected empty archived and retained arrays, got %q", prompt.UserPrompt)
+	if !strings.Contains(prompt.UserPrompt, "<current_task_state>\n{\n  \"goal\": \"\",") {
+		t.Fatalf("expected empty task state JSON block, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "<archived_source_material>\n[]\n</archived_source_material>") {
+		t.Fatalf("expected empty archived message block, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "<retained_source_material>\n[]\n</retained_source_material>") {
+		t.Fatalf("expected empty retained message block, got %q", prompt.UserPrompt)
 	}
 }
 

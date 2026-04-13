@@ -4,6 +4,7 @@ import (
 	"context"
 
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -14,9 +15,10 @@ type Builder interface {
 
 // BuildInput contains the runtime state needed to assemble model context.
 type BuildInput struct {
-	Messages []providertypes.Message
-	Metadata Metadata
-	Compact  CompactOptions
+	Messages  []providertypes.Message
+	TaskState agentsession.TaskState
+	Metadata  Metadata
+	Compact   CompactOptions
 }
 
 // BuildResult is the provider-facing context produced for a single round.

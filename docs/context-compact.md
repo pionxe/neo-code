@@ -7,7 +7,7 @@
 - runtime 已接入手动 compact、基于 token 阈值的自动 compact，以及 provider 上下文过长后的 `reactive` compact 自动恢复。
 - `internal/context/compact` 支持 `manual`、`auto` 与 `reactive` 三种 mode。
 - 用户通过 `/compact` 对当前会话执行一次上下文压缩。
-- compact 前会先写入完整 transcript，随后生成并校验 compact summary，再回写会话消息。
+- compact 前会先写入完整 transcript，随后生成并校验新的 durable `TaskState` 与 display summary，再回写会话消息。
 
 ## 配置
 
@@ -49,25 +49,26 @@ context:
 
 新增工具时，micro compact 策略不再由 `context` 层静态白名单维护，而是由 `internal/tools` 中的工具实现声明。
 默认情况下，已注册工具都会参与 micro compact；只有显式声明保留历史结果的工具才会跳过旧结果清理。
+但 micro compact 只有在当前会话已经建立非空 `TaskState` 时才会生效；没有 durable task state 时，context 仅做 trim，不清理旧 tool result。
 
 ## 执行链路
 
 1. TUI 识别 `/compact` 并调用 `runtime.Compact(...)`。
 2. runtime 发出 `compact_start` 事件。
 3. compact runner 将原始消息写入 transcript（JSONL）。
-4. compact runner 根据策略构造归档消息与保留消息。
+4. compact runner 根据策略构造归档消息与保留消息，并过滤旧的 `[compact_summary]` 展示摘要，避免“摘要的摘要”。
 5. runtime 选择用于生成 summary 的 provider 和 model：
    优先复用会话记录的 `provider` / `model`，缺失时回退到当前配置。
-6. summary generator 调用模型生成语义摘要。
-7. runner 校验摘要结构与长度，必要时截断。
-8. compact 成功时回写会话消息并发出 `compact_done`；失败时发出 `compact_error`。
+6. summary generator 调用模型生成完整 `task_state` 与 display summary。
+7. runner 校验 display summary 结构与长度，必要时截断，并写入 `task_state.last_updated_at`。
+8. compact 成功时回写 `session.TaskState` 与会话消息并发出 `compact_done`；失败时发出 `compact_error`。
 
 其中 `reactive` mode 在 context 包内与 `manual` 复用同一条压缩管线：
 
 1. 先写 transcript。
 2. 默认按 `keep_recent` 裁剪可归档历史。
-3. 生成并校验 `[compact_summary]`。
-4. 返回压缩后的消息与 transcript 元信息。
+3. 生成并校验 display summary，同时更新 durable `TaskState`。
+4. 返回压缩后的消息、`TaskState` 与 transcript 元信息。
 
 当 provider 返回“上下文过长”错误时，runtime 会：
 
@@ -76,9 +77,31 @@ context:
 3. 继续复用 `compact_start`、`compact_done`、`compact_error` 事件，并通过 `trigger_mode=reactive` 区分来源。
 4. 每次 `Run()` 最多只执行一次 reactive 重试，避免无限循环。
 
-## 摘要协议
+## 生成协议
 
-compact summary 必须以如下结构返回：
+compact generator 必须只返回一个 JSON 对象，顶层固定包含：
+
+```json
+{
+  "task_state": {
+    "goal": "",
+    "progress": [],
+    "open_items": [],
+    "next_step": "",
+    "blockers": [],
+    "key_artifacts": [],
+    "decisions": [],
+    "user_constraints": []
+  },
+  "display_summary": "[compact_summary]\n..."
+}
+```
+
+- `task_state` 表示 compact 之后的完整 durable task state，而不是增量 patch。
+- `task_state` 只允许包含固定字段，不允许混入模型自定义键。
+- `display_summary` 仍然必须使用 `[compact_summary]` 协议，供人类阅读和后续轮次参考。
+
+`display_summary` 必须以如下结构返回：
 
 ```text
 [compact_summary]
@@ -105,8 +128,9 @@ constraints:
 
 ## 保留原则
 
-- 优先保留已完成事项及结果。
-- 保留仍在进行中的状态、关键决策及原因、关键代码改动、用户约束。
+- durable truth 优先进入 `TaskState`，而不是散落在聊天消息里。
+- `TaskState` 重点保留目标、已完成进展、未完成事项、下一步、阻塞点、关键工件、决策、用户约束。
+- `display_summary` 只保留继续工作最少需要的人类可读信息。
 - 默认忽略工具详细输出、重复背景、已解决错误的排查细节。
 
 ## 事件

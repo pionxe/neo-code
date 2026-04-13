@@ -12,24 +12,29 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/context/internalcompact"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 )
 
 type stubSummaryGenerator struct {
-	generateFn func(ctx context.Context, input SummaryInput) (string, error)
+	generateFn func(ctx context.Context, input SummaryInput) (SummaryOutput, error)
 	calls      []SummaryInput
-	summary    string
+	output     SummaryOutput
 	err        error
 }
 
-func (g *stubSummaryGenerator) Generate(ctx context.Context, input SummaryInput) (string, error) {
+func (g *stubSummaryGenerator) Generate(ctx context.Context, input SummaryInput) (SummaryOutput, error) {
 	cloned := input
 	cloned.ArchivedMessages = cloneMessages(input.ArchivedMessages)
 	cloned.RetainedMessages = cloneMessages(input.RetainedMessages)
+	cloned.CurrentTaskState = input.CurrentTaskState.Clone()
 	g.calls = append(g.calls, cloned)
 	if g.generateFn != nil {
 		return g.generateFn(ctx, input)
 	}
-	return g.summary, g.err
+	return SummaryOutput{
+		TaskState:      g.output.TaskState.Clone(),
+		DisplaySummary: g.output.DisplaySummary,
+	}, g.err
 }
 
 func validSemanticSummary() string {
@@ -48,10 +53,22 @@ func validSemanticSummary() string {
 	return strings.Join(lines[:len(lines)-1], "\n")
 }
 
+func validSummaryOutput() SummaryOutput {
+	return SummaryOutput{
+		TaskState: agentsession.TaskState{
+			Goal:      "Continue the current coding task",
+			Progress:  []string{"Captured the archived context into durable task state."},
+			OpenItems: []string{"Finish the retained follow-up work."},
+			NextStep:  "Continue from the retained recent context window.",
+		},
+		DisplaySummary: validSemanticSummary(),
+	}
+}
+
 func TestManualCompactKeepRecentRetainsRecentMessagesAndWholeToolBlock(t *testing.T) {
 	t.Parallel()
 
-	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
 	runner := NewRunner(generator)
 	home := t.TempDir()
 	runner.userHomeDir = func() (string, error) { return home, nil }
@@ -105,6 +122,9 @@ func TestManualCompactKeepRecentRetainsRecentMessagesAndWholeToolBlock(t *testin
 	if result.Messages[2].Role != providertypes.RoleTool || result.Messages[2].ToolCallID != "call-old" {
 		t.Fatalf("expected retained tool result, got %+v", result.Messages[2])
 	}
+	if result.TaskState.Goal != "Continue the current coding task" {
+		t.Fatalf("expected durable task state to be returned, got %+v", result.TaskState)
+	}
 	if len(generator.calls) != 1 {
 		t.Fatalf("expected generator to run once, got %d", len(generator.calls))
 	}
@@ -116,10 +136,62 @@ func TestManualCompactKeepRecentRetainsRecentMessagesAndWholeToolBlock(t *testin
 	}
 }
 
+func TestManualCompactPassesCurrentTaskStateAndFiltersOldDisplaySummary(t *testing.T) {
+	t.Parallel()
+
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
+	runner := NewRunner(generator)
+	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	currentState := agentsession.TaskState{
+		Goal:      "Finish task state refactor",
+		OpenItems: []string{"Update tests"},
+		NextStep:  "Patch compact runner tests",
+	}
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleAssistant, Content: validSemanticSummary()},
+		{Role: providertypes.RoleUser, Content: "older request"},
+		{Role: providertypes.RoleAssistant, Content: "older answer"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+	}
+
+	result, err := runner.Run(context.Background(), Input{
+		Mode:      ModeManual,
+		SessionID: "session-task-state",
+		Workdir:   t.TempDir(),
+		Messages:  messages,
+		TaskState: currentState,
+		Config: config.CompactConfig{
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected compact applied")
+	}
+	if len(generator.calls) != 1 {
+		t.Fatalf("expected generator called once, got %d", len(generator.calls))
+	}
+	if generator.calls[0].CurrentTaskState.Goal != currentState.Goal {
+		t.Fatalf("expected current task state forwarded, got %+v", generator.calls[0].CurrentTaskState)
+	}
+	if len(generator.calls[0].ArchivedMessages) != 2 {
+		t.Fatalf("expected old display summary filtered from archived messages, got %+v", generator.calls[0].ArchivedMessages)
+	}
+	if strings.HasPrefix(strings.TrimSpace(generator.calls[0].ArchivedMessages[0].Content), "[compact_summary]") {
+		t.Fatalf("expected compact summary message to be filtered, got %+v", generator.calls[0].ArchivedMessages)
+	}
+}
+
 func TestReactiveCompactUsesKeepRecentAndReportsReactiveMode(t *testing.T) {
 	t.Parallel()
 
-	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
 	runner := NewRunner(generator)
 	home := t.TempDir()
 	runner.userHomeDir = func() (string, error) { return home, nil }
@@ -188,7 +260,7 @@ func TestReactiveCompactUsesKeepRecentAndReportsReactiveMode(t *testing.T) {
 func TestAutoCompactUsesManualStrategyAndReportsAutoMode(t *testing.T) {
 	t.Parallel()
 
-	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
 	runner := NewRunner(generator)
 	home := t.TempDir()
 	runner.userHomeDir = func() (string, error) { return home, nil }
@@ -236,7 +308,7 @@ func TestAutoCompactUsesManualStrategyAndReportsAutoMode(t *testing.T) {
 func TestManualCompactKeepRecentProtectsLatestExplicitUserInstruction(t *testing.T) {
 	t.Parallel()
 
-	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
 	runner := NewRunner(generator)
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
@@ -283,7 +355,7 @@ func TestManualCompactKeepRecentProtectsLatestExplicitUserInstruction(t *testing
 func TestManualCompactWritesTranscriptJSONL(t *testing.T) {
 	t.Parallel()
 
-	runner := NewRunner(&stubSummaryGenerator{summary: validSemanticSummary()})
+	runner := NewRunner(&stubSummaryGenerator{output: validSummaryOutput()})
 	home := t.TempDir()
 	runner.userHomeDir = func() (string, error) { return home, nil }
 
@@ -322,7 +394,7 @@ func TestManualCompactWritesTranscriptJSONL(t *testing.T) {
 func TestManualCompactFailsWhenTranscriptWriteFails(t *testing.T) {
 	t.Parallel()
 
-	runner := NewRunner(&stubSummaryGenerator{summary: validSemanticSummary()})
+	runner := NewRunner(&stubSummaryGenerator{output: validSummaryOutput()})
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 	runner.mkdirAll = func(path string, perm os.FileMode) error {
 		return errors.New("disk full")
@@ -347,7 +419,7 @@ func TestManualCompactFailsWhenTranscriptWriteFails(t *testing.T) {
 func TestManualCompactFullReplaceKeepsProtectedTail(t *testing.T) {
 	t.Parallel()
 
-	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
 	runner := NewRunner(generator)
 	home := t.TempDir()
 	runner.userHomeDir = func() (string, error) { return home, nil }
@@ -395,7 +467,7 @@ func TestManualCompactFullReplaceKeepsProtectedTail(t *testing.T) {
 func TestManualCompactFullReplaceWithoutArchivableMessagesSkipsGenerator(t *testing.T) {
 	t.Parallel()
 
-	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
 	runner := NewRunner(generator)
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
@@ -432,7 +504,7 @@ func TestManualCompactFullReplaceWithoutArchivableMessagesSkipsGenerator(t *test
 func TestRunManualRejectsUnsupportedStrategy(t *testing.T) {
 	t.Parallel()
 
-	runner := NewRunner(&stubSummaryGenerator{summary: validSemanticSummary()})
+	runner := NewRunner(&stubSummaryGenerator{output: validSummaryOutput()})
 	home := t.TempDir()
 	runner.userHomeDir = func() (string, error) { return home, nil }
 	runner.randomToken = func() (string, error) { return "token0001", nil }
@@ -456,7 +528,7 @@ func TestRunManualRejectsUnsupportedStrategy(t *testing.T) {
 func TestRunRejectsUnsupportedMode(t *testing.T) {
 	t.Parallel()
 
-	runner := NewRunner(&stubSummaryGenerator{summary: validSemanticSummary()})
+	runner := NewRunner(&stubSummaryGenerator{output: validSummaryOutput()})
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
 	_, err := runner.Run(context.Background(), Input{
@@ -492,7 +564,7 @@ func TestCountMessageCharsUsesRunes(t *testing.T) {
 func TestSaveTranscriptUsesUniqueIDWithinSameTimestamp(t *testing.T) {
 	t.Parallel()
 
-	runner := NewRunner(&stubSummaryGenerator{summary: validSemanticSummary()})
+	runner := NewRunner(&stubSummaryGenerator{output: validSummaryOutput()})
 	home := t.TempDir()
 	runner.userHomeDir = func() (string, error) { return home, nil }
 	fixedNow := time.Unix(1712052000, 123456789)
@@ -539,14 +611,17 @@ func TestManualCompactGeneratorInvalidSummaryFails(t *testing.T) {
 	t.Parallel()
 
 	runner := NewRunner(&stubSummaryGenerator{
-		summary: strings.Join([]string{
-			"[compact_summary]",
-			"done:",
-			"- ok",
-			"",
-			"in_progress:",
-			"- continue",
-		}, "\n"),
+		output: SummaryOutput{
+			TaskState: validSummaryOutput().TaskState,
+			DisplaySummary: strings.Join([]string{
+				"[compact_summary]",
+				"done:",
+				"- ok",
+				"",
+				"in_progress:",
+				"- continue",
+			}, "\n"),
+		},
 	})
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
@@ -575,23 +650,26 @@ func TestManualCompactGeneratorEmptyBulletFails(t *testing.T) {
 	t.Parallel()
 
 	runner := NewRunner(&stubSummaryGenerator{
-		summary: strings.Join([]string{
-			"[compact_summary]",
-			"done:",
-			"- ok",
-			"",
-			"in_progress:",
-			"- continue",
-			"",
-			"decisions:",
-			"- ",
-			"",
-			"code_changes:",
-			"- file updated",
-			"",
-			"constraints:",
-			"- none",
-		}, "\n"),
+		output: SummaryOutput{
+			TaskState: validSummaryOutput().TaskState,
+			DisplaySummary: strings.Join([]string{
+				"[compact_summary]",
+				"done:",
+				"- ok",
+				"",
+				"in_progress:",
+				"- continue",
+				"",
+				"decisions:",
+				"- ",
+				"",
+				"code_changes:",
+				"- file updated",
+				"",
+				"constraints:",
+				"- none",
+			}, "\n"),
+		},
 	})
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
@@ -616,11 +694,46 @@ func TestManualCompactGeneratorEmptyBulletFails(t *testing.T) {
 	}
 }
 
+func TestManualCompactRejectsEmptyTaskState(t *testing.T) {
+	t.Parallel()
+
+	runner := NewRunner(&stubSummaryGenerator{
+		output: SummaryOutput{
+			TaskState:      agentsession.TaskState{},
+			DisplaySummary: validSemanticSummary(),
+		},
+	})
+	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	_, err := runner.Run(context.Background(), Input{
+		Mode:      ModeManual,
+		SessionID: "session-empty-task-state",
+		Workdir:   t.TempDir(),
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Content: "older"},
+			{Role: providertypes.RoleAssistant, Content: "older answer"},
+			{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+			{Role: providertypes.RoleAssistant, Content: "newer"},
+		},
+		Config: config.CompactConfig{
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "generated task_state is empty") {
+		t.Fatalf("expected empty task_state rejection, got %v", err)
+	}
+}
+
 func TestManualCompactTruncationFailsWhenStructureBreaks(t *testing.T) {
 	t.Parallel()
 
 	summary := validSemanticSummary()
-	runner := NewRunner(&stubSummaryGenerator{summary: summary})
+	runner := NewRunner(&stubSummaryGenerator{output: SummaryOutput{
+		TaskState:      validSummaryOutput().TaskState,
+		DisplaySummary: summary,
+	}})
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
 	_, err := runner.Run(context.Background(), Input{
@@ -647,7 +760,7 @@ func TestManualCompactTruncationFailsWhenStructureBreaks(t *testing.T) {
 func TestManualCompactKeepRecentWithoutEnoughMessagesSkipsGenerator(t *testing.T) {
 	t.Parallel()
 
-	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
 	runner := NewRunner(generator)
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
@@ -705,7 +818,7 @@ func TestManualCompactReturnsErrorWhenSummaryGeneratorIsMissing(t *testing.T) {
 func TestManualCompactDefaultsToKeepRecentStrategyWhenManualStrategyIsEmpty(t *testing.T) {
 	t.Parallel()
 
-	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	generator := &stubSummaryGenerator{output: validSummaryOutput()}
 	runner := NewRunner(generator)
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 

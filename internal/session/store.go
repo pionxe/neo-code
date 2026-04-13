@@ -20,8 +20,9 @@ const sessionsDirName = "sessions"
 // Session 表示单个会话的持久化模型，包含基础元数据与消息历史。
 // Provider / Model 用于在 compact 等流程中优先复用会话最近一次成功运行的模型配置。
 type Session struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	SchemaVersion int    `json:"schema_version"`
+	ID            string `json:"id"`
+	Title         string `json:"title"`
 	// Provider 记录最近一次成功运行会话时使用的 provider，用于 compact 优先复用历史配置。
 	Provider string `json:"provider,omitempty"`
 	// Model 记录最近一次成功运行会话时使用的 model，用于 compact 优先复用历史配置。
@@ -29,6 +30,7 @@ type Session struct {
 	CreatedAt        time.Time               `json:"created_at"`
 	UpdatedAt        time.Time               `json:"updated_at"`
 	Workdir          string                  `json:"workdir,omitempty"`
+	TaskState        TaskState               `json:"task_state"`
 	Messages         []providertypes.Message `json:"messages"`
 	TokenInputTotal  int                     `json:"token_input_total,omitempty"`
 	TokenOutputTotal int                     `json:"token_output_total,omitempty"`
@@ -75,6 +77,11 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 	if session == nil {
 		return errors.New("session: session is nil")
 	}
+	if err := validateSessionSchema(*session); err != nil {
+		return err
+	}
+
+	session.TaskState = NormalizeTaskState(session.TaskState)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -118,8 +125,8 @@ func (s *JSONStore) Load(ctx context.Context, id string) (Session, error) {
 		return Session{}, err
 	}
 
-	var session Session
-	if err := json.Unmarshal(data, &session); err != nil {
+	session, err := decodeStoredSession(data)
+	if err != nil {
 		return Session{}, fmt.Errorf("session: decode session %s: %w", id, err)
 	}
 	return session, nil
@@ -160,14 +167,19 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 			continue
 		}
 
-		var summary Summary
-		if err := json.Unmarshal(data, &summary); err != nil {
+		session, err := decodeStoredSession(data)
+		if err != nil {
 			continue
 		}
-		if strings.TrimSpace(summary.ID) == "" {
+		if strings.TrimSpace(session.ID) == "" {
 			continue
 		}
-		summaries = append(summaries, summary)
+		summaries = append(summaries, Summary{
+			ID:        session.ID,
+			Title:     session.Title,
+			CreatedAt: session.CreatedAt,
+			UpdatedAt: session.UpdatedAt,
+		})
 	}
 
 	sort.Slice(summaries, func(i, j int) bool {
@@ -191,12 +203,14 @@ func New(title string) Session {
 func NewWithWorkdir(title string, workdir string) Session {
 	now := time.Now()
 	return Session{
-		ID:        NewID("session"),
-		Title:     sanitizeTitle(title),
-		CreatedAt: now,
-		UpdatedAt: now,
-		Workdir:   strings.TrimSpace(workdir),
-		Messages:  []providertypes.Message{},
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            NewID("session"),
+		Title:         sanitizeTitle(title),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		Workdir:       strings.TrimSpace(workdir),
+		TaskState:     TaskState{},
+		Messages:      []providertypes.Message{},
 	}
 }
 
@@ -211,4 +225,41 @@ func sanitizeTitle(title string) string {
 		return string(runes[:40])
 	}
 	return title
+}
+
+// validateSessionSchema 校验会话持久化版本，开发阶段只接受当前结构版本。
+func validateSessionSchema(session Session) error {
+	if session.SchemaVersion != CurrentSchemaVersion {
+		return fmt.Errorf(
+			"session: unsupported schema_version %d, expected %d",
+			session.SchemaVersion,
+			CurrentSchemaVersion,
+		)
+	}
+	return nil
+}
+
+// decodeStoredSession 严格校验持久化会话所需字段，并拒绝缺少 schema_version 或 task_state 的旧数据。
+func decodeStoredSession(data []byte) (Session, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return Session{}, err
+	}
+
+	if _, ok := envelope["schema_version"]; !ok {
+		return Session{}, errors.New("missing required field schema_version")
+	}
+	if _, ok := envelope["task_state"]; !ok {
+		return Session{}, errors.New("missing required field task_state")
+	}
+
+	var session Session
+	if err := json.Unmarshal(data, &session); err != nil {
+		return Session{}, err
+	}
+	if err := validateSessionSchema(session); err != nil {
+		return Session{}, err
+	}
+	session.TaskState = NormalizeTaskState(session.TaskState)
+	return session, nil
 }

@@ -910,6 +910,7 @@ type stubCompactRunner struct {
 func (r *stubCompactRunner) Run(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
 	cloned := input
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
+	cloned.TaskState = input.TaskState.Clone()
 	r.calls = append(r.calls, cloned)
 	if r.runFn != nil {
 		return r.runFn(ctx, input)
@@ -924,6 +925,11 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	store := newMemoryStore()
 	session := agentsession.New("memory reject")
 	session.ID = "session-memory-reject"
+	session.TaskState = agentsession.TaskState{
+		Goal:      "Finish task state rollout",
+		OpenItems: []string{"Verify builder wiring"},
+		NextStep:  "Inspect build input",
+	}
 	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
@@ -946,7 +952,7 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
-	input := UserInput{RunID: "run-context-builder", Content: "hello"}
+	input := UserInput{SessionID: session.ID, RunID: "run-context-builder", Content: "hello"}
 	if err := service.Run(context.Background(), input); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -968,6 +974,9 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	}
 	if builder.lastInput.Compact.DisableMicroCompact {
 		t.Fatalf("expected micro compact to stay enabled by default")
+	}
+	if builder.lastInput.TaskState.Goal != "Finish task state rollout" {
+		t.Fatalf("expected session task state to be forwarded to builder, got %+v", builder.lastInput.TaskState)
 	}
 	if len(builder.lastInput.Messages) != 1 || builder.lastInput.Messages[0].Content != "hello" {
 		t.Fatalf("expected persisted session messages to be forwarded, got %+v", builder.lastInput.Messages)
@@ -2398,23 +2407,7 @@ func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
-			{providertypes.NewTextDeltaStreamEvent(strings.Join([]string{
-				"[compact_summary]",
-				"done:",
-				"- ok",
-				"",
-				"in_progress:",
-				"- continue",
-				"",
-				"decisions:",
-				"- kept existing provider and model",
-				"",
-				"code_changes:",
-				"- none",
-				"",
-				"constraints:",
-				"- none",
-			}, "\n"))},
+			{providertypes.NewTextDeltaStreamEvent(`{"task_state":{"goal":"Use session provider metadata for compact","progress":["Reused session provider and model"],"open_items":[],"next_step":"Continue compact flow","blockers":[],"key_artifacts":["session-model"],"decisions":["Prefer session provider and model when present"],"user_constraints":[]},"display_summary":"[compact_summary]\ndone:\n- ok\n\nin_progress:\n- continue\n\ndecisions:\n- kept existing provider and model\n\ncode_changes:\n- none\n\nconstraints:\n- none"}`)},
 		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
@@ -2435,6 +2428,14 @@ func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 	}
 	if len(scripted.requests) != 1 || scripted.requests[0].Model != "session-model" {
 		t.Fatalf("expected session model to be used, got %+v", scripted.requests)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load compacted session: %v", err)
+	}
+	if saved.TaskState.Goal != "Use session provider metadata for compact" {
+		t.Fatalf("expected persisted task state, got %+v", saved.TaskState)
 	}
 }
 
@@ -2471,23 +2472,7 @@ func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *t
 
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
-			{providertypes.NewTextDeltaStreamEvent(strings.Join([]string{
-				"[compact_summary]",
-				"done:",
-				"- ok",
-				"",
-				"in_progress:",
-				"- continue",
-				"",
-				"decisions:",
-				"- fallback to current selection",
-				"",
-				"code_changes:",
-				"- none",
-				"",
-				"constraints:",
-				"- none",
-			}, "\n"))},
+			{providertypes.NewTextDeltaStreamEvent(`{"task_state":{"goal":"Fallback to current provider metadata","progress":["Used current selected provider and model"],"open_items":[],"next_step":"Continue compact flow","blockers":[],"key_artifacts":["gemini-current-model"],"decisions":["Fallback to current provider selection when session metadata is missing"],"user_constraints":[]},"display_summary":"[compact_summary]\ndone:\n- ok\n\nin_progress:\n- continue\n\ndecisions:\n- fallback to current selection\n\ncode_changes:\n- none\n\nconstraints:\n- none"}`)},
 		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
@@ -2982,6 +2967,7 @@ func assertEventsRunID(t *testing.T, events []RuntimeEvent, runID string) {
 func cloneSession(session agentsession.Session) agentsession.Session {
 	cloned := session
 	cloned.Messages = append([]providertypes.Message(nil), session.Messages...)
+	cloned.TaskState = session.TaskState.Clone()
 	return cloned
 }
 
@@ -2995,6 +2981,7 @@ func cloneGenerateRequest(req providertypes.GenerateRequest) providertypes.Gener
 func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 	cloned := input
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
+	cloned.TaskState = input.TaskState.Clone()
 	return cloned
 }
 

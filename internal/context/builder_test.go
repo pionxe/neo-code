@@ -11,6 +11,7 @@ import (
 
 	"neo-code/internal/context/internalcompact"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -108,6 +109,36 @@ func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderBuildIncludesTaskStateBeforeSystemState(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		TaskState: agentsession.TaskState{
+			Goal:      "Finish task state refactor",
+			OpenItems: []string{"Update tests"},
+			NextStep:  "Run go test ./...",
+		},
+		Metadata: testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	taskStateIndex := strings.Index(got.SystemPrompt, "## Task State")
+	systemStateIndex := strings.Index(got.SystemPrompt, "## System State")
+	if taskStateIndex < 0 || systemStateIndex < 0 {
+		t.Fatalf("expected task state and system state sections, got %q", got.SystemPrompt)
+	}
+	if taskStateIndex > systemStateIndex {
+		t.Fatalf("expected task state before system state, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "- goal: Finish task state refactor") {
+		t.Fatalf("expected task state content in system prompt, got %q", got.SystemPrompt)
+	}
+}
+
 func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T) {
 	t.Parallel()
 
@@ -125,7 +156,10 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 		},
 	}
 
-	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages:  messages,
+		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -188,7 +222,10 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 		{Role: providertypes.RoleAssistant, Content: "current reply"},
 	}
 
-	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages:  messages,
+		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -203,6 +240,42 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 	}
 	if got.Messages[6].Content != "latest webfetch result" {
 		t.Fatalf("expected latest tool result to stay visible, got %q", got.Messages[6].Content)
+	}
+}
+
+func TestDefaultBuilderBuildSkipsMicroCompactWithoutEstablishedTaskState(t *testing.T) {
+	t.Parallel()
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
+		},
+	}
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-2", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+	}
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got.Messages[2].Content != "old read result" {
+		t.Fatalf("expected old tool result to remain visible without task state, got %q", got.Messages[2].Content)
 	}
 }
 

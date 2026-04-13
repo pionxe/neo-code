@@ -11,7 +11,14 @@ import (
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 )
+
+func validCompactSummaryJSON() string {
+	return strings.Join([]string{
+		`{"task_state":{"goal":"Finish task state refactor","progress":["Persisted task_state in session"],"open_items":["Update runtime tests"],"next_step":"Continue from retained context","blockers":[],"key_artifacts":["internal/runtime/compact_generator.go"],"decisions":["Do not keep old summary-only protocol"],"user_constraints":["No backward compatibility"]},"display_summary":"[compact_summary]\ndone:\n- Persisted durable task state.\n\nin_progress:\n- Continue from the retained recent window.\n\ndecisions:\n- Do not keep the old summary-only protocol.\n\ncode_changes:\n- Updated compact summary generation behavior.\n\nconstraints:\n- Preserve only the minimum information needed to continue the work."}`,
+	}, "")
+}
 
 func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) {
 	t.Parallel()
@@ -24,23 +31,7 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
-			{providertypes.NewTextDeltaStreamEvent(strings.Join([]string{
-				"[compact_summary]",
-				"done:",
-				"- Completed the historical task and kept the final result.",
-				"",
-				"in_progress:",
-				"- Continue from the retained recent window.",
-				"",
-				"decisions:",
-				"- Keep the existing section layout for compatibility.",
-				"",
-				"code_changes:",
-				"- Updated compact summary generation behavior.",
-				"",
-				"constraints:",
-				"- Preserve only the minimum information needed to continue the work.",
-			}, "\n"))},
+			{providertypes.NewTextDeltaStreamEvent(validCompactSummaryJSON())},
 		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
@@ -48,6 +39,10 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 
 	summary, err := generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode: contextcompact.ModeManual,
+		CurrentTaskState: agentsession.TaskState{
+			Goal:      "Finish task state refactor",
+			OpenItems: []string{"Update runtime tests"},
+		},
 		ArchivedMessages: []providertypes.Message{
 			{Role: providertypes.RoleUser, Content: "legacy request"},
 			{
@@ -66,8 +61,11 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	if !strings.Contains(summary, "[compact_summary]") {
-		t.Fatalf("expected compact summary marker, got %q", summary)
+	if !strings.Contains(summary.DisplaySummary, "[compact_summary]") {
+		t.Fatalf("expected compact summary marker, got %+v", summary)
+	}
+	if summary.TaskState.Goal != "Finish task state refactor" {
+		t.Fatalf("expected parsed task state, got %+v", summary.TaskState)
 	}
 	if factory.calls != 1 || scripted.callCount != 1 {
 		t.Fatalf("expected one provider call, got factory=%d provider=%d", factory.calls, scripted.callCount)
@@ -89,11 +87,17 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	if !strings.Contains(req.SystemPrompt, "[compact_summary]") {
 		t.Fatalf("expected compact system prompt, got %q", req.SystemPrompt)
 	}
+	if !strings.Contains(req.SystemPrompt, "\"task_state\"") {
+		t.Fatalf("expected task state contract in system prompt, got %q", req.SystemPrompt)
+	}
 	if len(req.Messages) != 1 || req.Messages[0].Role != providertypes.RoleUser {
 		t.Fatalf("expected a single user prompt, got %+v", req.Messages)
 	}
 	if !strings.Contains(req.Messages[0].Content, "<archived_source_material>") {
 		t.Fatalf("expected archived material boundary, got %q", req.Messages[0].Content)
+	}
+	if !strings.Contains(req.Messages[0].Content, "<current_task_state>") {
+		t.Fatalf("expected task state boundary, got %q", req.Messages[0].Content)
 	}
 	if strings.Contains(req.Messages[0].Content, "\"role\": \"user\"") {
 		t.Fatalf("expected transcript-style compact prompt instead of pretty JSON, got %q", req.Messages[0].Content)
@@ -103,6 +107,9 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	}
 	if !strings.Contains(req.Messages[0].Content, "tool_call id=call-1 name=filesystem_read_file") {
 		t.Fatalf("expected tool call metadata in compact prompt, got %q", req.Messages[0].Content)
+	}
+	if !strings.Contains(req.Messages[0].Content, `"goal": "Finish task state refactor"`) {
+		t.Fatalf("expected current task state JSON in compact prompt, got %q", req.Messages[0].Content)
 	}
 }
 

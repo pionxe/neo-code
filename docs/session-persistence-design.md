@@ -19,27 +19,43 @@ NeoCode 当前使用本地 JSON 文件持久化会话，以保持实现简单、
 
 `internal/session.Session` 持久化以下核心字段：
 
+- `schema_version`
 - `id`、`title`
 - `provider`、`model`
 - `created_at`、`updated_at`
 - `workdir`
+- `task_state`
 - `messages`
 - `token_input_total`
 - `token_output_total`
 
 其中：
 
+- `schema_version` 为开发期强校验字段；当前实现只接受当前版本，不兼容旧 session 文件
 - `provider` / `model` 记录最近一次成功运行会话时使用的配置，供 compact 等流程优先复用
+- `task_state` 是会话级 durable task state，由 runtime 维护、session 持久化、context 只读投影
 - `token_input_total` / `token_output_total` 分别表示会话累计输入与输出 token
-- token 字段使用 `omitempty`，以兼容旧版 session JSON 文件
+- token 字段仍使用 `omitempty`，但不再承担旧版 session JSON 兼容职责
 
 `internal/session.Summary` 只保留会话列表渲染所需的轻量字段，不加载完整消息历史。
+
+`task_state` 固定包含以下字段：
+
+- `goal`
+- `progress`
+- `open_items`
+- `next_step`
+- `blockers`
+- `key_artifacts`
+- `decisions`
+- `user_constraints`
+- `last_updated_at`
 
 ## 读写行为
 
 - `Save` 使用“临时文件 + 原子替换”写入完整会话 JSON
-- `Load` 在用户真正进入某个会话时读取完整历史
-- `ListSummaries` 只解析摘要字段，并按 `updated_at` 倒序返回
+- `Load` 在用户真正进入某个会话时读取完整历史，并严格要求 `schema_version` 与 `task_state` 字段存在
+- `ListSummaries` 只解析摘要字段，并按 `updated_at` 倒序返回；不合法的旧 session 文件会被直接跳过
 
 ## Token 计数持久化
 
@@ -47,6 +63,14 @@ NeoCode 当前使用本地 JSON 文件持久化会话，以保持实现简单、
 - 会话保存时，token 计数随 session 一起持久化
 - 会话重新加载时，runtime 从 session 恢复累计 token
 - 自动 compact 成功后，runtime 会重置累计 token，并将重置后的值持久化
+
+## TaskState 与 compact
+
+- `TaskState` 是继续执行多轮任务时的唯一 durable truth，不依赖聊天消息本身长期保存
+- compact 成功后，runtime 会同时回写 `session.TaskState` 和压缩后的 `session.Messages`
+- `messages` 中的 `[compact_summary]` 只是展示层，不再是唯一续航载体
+- context 构建时会优先注入 `TaskState`，再注入 memo、最近消息和必要工具结果
+- 只有当 `TaskState` 已建立后，读时 micro compact 才允许清理旧的可重建 tool payload
 
 ## 保存时机
 
