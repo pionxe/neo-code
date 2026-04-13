@@ -1,0 +1,105 @@
+package memo
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	"neo-code/internal/memo"
+	"neo-code/internal/tools"
+)
+
+const (
+	recallToolName = tools.ToolNameMemoRecall
+)
+
+// recallInput 定义 memo_recall 工具的 JSON 入参。
+type recallInput struct {
+	Keyword string `json:"keyword"`
+}
+
+// RecallTool 让 Agent 按关键词搜索并加载记忆详情。
+type RecallTool struct {
+	svc *memo.Service
+}
+
+// NewRecallTool 创建 memo_recall 工具，svc 不可为 nil。
+func NewRecallTool(svc *memo.Service) *RecallTool {
+	return &RecallTool{svc: svc}
+}
+
+// Name 返回工具注册名。
+func (t *RecallTool) Name() string { return recallToolName }
+
+// Description 返回工具描述，供模型理解工具用途。
+func (t *RecallTool) Description() string {
+	return "Search and load persistent memory entries by keyword. " +
+		"Returns detailed content of matching memory topics. " +
+		"Use this to recall user preferences, project decisions, or past feedback."
+}
+
+// Schema 返回 JSON Schema 描述的工具参数格式。
+func (t *RecallTool) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"keyword": map[string]any{
+				"type":        "string",
+				"description": "Search keyword to find matching memory entries (searches title, type, and keywords).",
+			},
+		},
+		"required": []string{"keyword"},
+	}
+}
+
+// MicroCompactPolicy 记忆读取结果应保留在上下文中，不参与 micro compact 清理。
+func (t *RecallTool) MicroCompactPolicy() tools.MicroCompactPolicy {
+	return tools.MicroCompactPolicyPreserveHistory
+}
+
+// Execute 执行 memo_recall 工具调用。调用前须确保 svc 已通过构造函数注入。
+func (t *RecallTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
+	var args recallInput
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		err = fmt.Errorf("%s: %w", recallToolName, err)
+		return tools.NewErrorResult(recallToolName, "invalid arguments", err.Error(), nil), err
+	}
+
+	args.Keyword = strings.TrimSpace(args.Keyword)
+	if args.Keyword == "" {
+		err := fmt.Errorf("%s: keyword is required", recallToolName)
+		return tools.NewErrorResult(recallToolName, tools.NormalizeErrorReason(recallToolName, err), "", nil), err
+	}
+
+	results, err := t.svc.Recall(ctx, args.Keyword)
+	if err != nil {
+		return tools.NewErrorResult(recallToolName, tools.NormalizeErrorReason(recallToolName, err), "", nil), err
+	}
+
+	if len(results) == 0 {
+		return tools.ToolResult{
+			Name:    recallToolName,
+			Content: fmt.Sprintf("No memories found matching %q.", args.Keyword),
+		}, nil
+	}
+
+	// 按 key 排序保证输出稳定性
+	keys := make([]string, 0, len(results))
+	for k := range results {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Found %d memory topic(s) matching %q:\n\n", len(results), args.Keyword)
+	for _, k := range keys {
+		fmt.Fprintf(&builder, "--- %s ---\n%s\n\n", k, results[k])
+	}
+
+	return tools.ToolResult{
+		Name:    recallToolName,
+		Content: builder.String(),
+	}, nil
+}

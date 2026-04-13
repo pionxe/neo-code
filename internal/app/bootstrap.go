@@ -13,6 +13,7 @@ import (
 	"neo-code/internal/memo"
 	"neo-code/internal/provider/builtin"
 	providercatalog "neo-code/internal/provider/catalog"
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
@@ -20,6 +21,7 @@ import (
 	"neo-code/internal/tools/bash"
 	"neo-code/internal/tools/filesystem"
 	"neo-code/internal/tools/mcp"
+	memotool "neo-code/internal/tools/memo"
 	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
 )
@@ -102,6 +104,8 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		}
 		contextBuilder = agentcontext.NewBuilderWithMemo(toolRegistry, memoSource)
 		memoSvc = memo.NewService(memoStore, nil, cfg.Memo, sourceInvl)
+		toolRegistry.Register(memotool.NewRememberTool(memoSvc))
+		toolRegistry.Register(memotool.NewRecallTool(memoSvc))
 	}
 
 	runtimeSvc := agentruntime.NewWithFactory(
@@ -111,6 +115,14 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		providerRegistry,
 		contextBuilder,
 	)
+
+	// 注入记忆提取钩子：当 AutoExtract 启用且 memoSvc 可用时，ReAct 循环完成后异步提取记忆。
+	if memoSvc != nil && cfg.Memo.AutoExtract {
+		runtimeSvc.SetMemoExtractor(&memoExtractorAdapter{
+			extractor: memo.NewRuleExtractor(),
+			svc:       memoSvc,
+		})
+	}
 
 	return RuntimeBundle{
 		Config:            cfg,
@@ -209,4 +221,15 @@ func buildToolManager(registry *tools.Registry) (tools.Manager, error) {
 		return nil, err
 	}
 	return tools.NewManager(registry, engine, security.NewWorkspaceSandbox())
+}
+
+// memoExtractorAdapter 适配 memo.RuleExtractor + memo.Service 到 runtime.MemoExtractor 接口。
+type memoExtractorAdapter struct {
+	extractor *memo.RuleExtractor
+	svc       *memo.Service
+}
+
+// ExtractAndStore 实现 runtime.MemoExtractor 接口，从消息中提取记忆并保存。
+func (a *memoExtractorAdapter) ExtractAndStore(ctx context.Context, messages []providertypes.Message) {
+	memo.ExtractAndStore(ctx, a.extractor, a.svc, messages)
 }
