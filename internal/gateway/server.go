@@ -19,12 +19,14 @@ import (
 type ServerOptions struct {
 	ListenAddress string
 	Logger        *log.Logger
+	listenFn      func(address string) (net.Listener, error)
 }
 
 // Server 提供基于本地 IPC 的网关服务骨架实现。
 type Server struct {
 	listenAddress string
 	logger        *log.Logger
+	listenFn      func(address string) (net.Listener, error)
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -47,10 +49,15 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if logger == nil {
 		logger = log.New(os.Stderr, "gateway: ", log.LstdFlags)
 	}
+	listenFn := options.listenFn
+	if listenFn == nil {
+		listenFn = transport.Listen
+	}
 
 	return &Server{
 		listenAddress: listenAddress,
 		logger:        logger,
+		listenFn:      listenFn,
 		conns:         make(map[net.Conn]struct{}),
 	}, nil
 }
@@ -62,7 +69,7 @@ func (s *Server) ListenAddress() string {
 
 // Serve 启动 IPC 监听并处理客户端请求。
 func (s *Server) Serve(ctx context.Context, runtimePort RuntimePort) error {
-	listener, err := transport.Listen(s.listenAddress)
+	listener, err := s.listenFn(s.listenAddress)
 	if err != nil {
 		return err
 	}
@@ -92,10 +99,14 @@ func (s *Server) Serve(ctx context.Context, runtimePort RuntimePort) error {
 			return fmt.Errorf("gateway: accept connection: %w", acceptErr)
 		}
 
+		if !s.registerConnection(conn) {
+			_ = conn.Close()
+			continue
+		}
+
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.trackConnection(conn)
 			defer s.untrackConnection(conn)
 			s.handleConnection(ctx, conn, runtimePort)
 		}()
@@ -157,6 +168,17 @@ func (s *Server) trackConnection(conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.conns[conn] = struct{}{}
+}
+
+// registerConnection 在服务可用时登记连接，若网关已关闭则拒绝登记。
+func (s *Server) registerConnection(conn net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener == nil {
+		return false
+	}
+	s.conns[conn] = struct{}{}
+	return true
 }
 
 // untrackConnection 移除已结束连接，避免连接集合持续增长。
