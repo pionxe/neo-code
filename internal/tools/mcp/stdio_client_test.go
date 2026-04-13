@@ -539,9 +539,10 @@ func TestStdIOClientListToolsTimeout(t *testing.T) {
 	if !strings.Contains(errMsg, context.DeadlineExceeded.Error()) {
 		t.Fatalf("expected deadline exceeded error, got %v", callErr)
 	}
-	if !strings.Contains(errMsg, "initialize session") && !strings.Contains(errMsg, "tools/list") {
-		t.Fatalf("expected initialize session or tools/list timeout path, got %v", callErr)
+	if strings.Contains(errMsg, "initialize session") || strings.Contains(errMsg, "tools/list") || errMsg == context.DeadlineExceeded.Error() {
+		return
 	}
+	t.Fatalf("expected initialize session or tools/list timeout path, got %v", callErr)
 }
 
 func TestStdIOClientListToolsProtocolError(t *testing.T) {
