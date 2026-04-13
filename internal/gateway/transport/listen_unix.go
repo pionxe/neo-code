@@ -19,11 +19,14 @@ const (
 // Listen 在 Unix 系统上启动 UDS 监听并在关闭时清理 socket 文件。
 func Listen(address string) (net.Listener, error) {
 	socketDir := filepath.Dir(address)
-	if err := os.MkdirAll(socketDir, unixSocketDirPerm); err != nil {
-		return nil, fmt.Errorf("gateway: create socket dir: %w", err)
+	created, err := ensureSocketDir(socketDir)
+	if err != nil {
+		return nil, err
 	}
-	if err := os.Chmod(socketDir, unixSocketDirPerm); err != nil {
-		return nil, fmt.Errorf("gateway: set socket dir permission: %w", err)
+	if created {
+		if err := os.Chmod(socketDir, unixSocketDirPerm); err != nil {
+			return nil, fmt.Errorf("gateway: set socket dir permission: %w", err)
+		}
 	}
 
 	if err := removeStaleUnixSocket(address); err != nil {
@@ -45,6 +48,25 @@ func Listen(address string) (net.Listener, error) {
 		}
 		return nil
 	}), nil
+}
+
+// ensureSocketDir 确保 socket 父目录可用，并返回该目录是否由当前流程创建。
+func ensureSocketDir(socketDir string) (bool, error) {
+	info, err := os.Stat(socketDir)
+	if err == nil {
+		if !info.IsDir() {
+			return false, fmt.Errorf("gateway: socket dir path exists and is not directory: %s", socketDir)
+		}
+		return false, nil
+	}
+	if !os.IsNotExist(err) {
+		return false, fmt.Errorf("gateway: stat socket dir: %w", err)
+	}
+
+	if err := os.MkdirAll(socketDir, unixSocketDirPerm); err != nil {
+		return false, fmt.Errorf("gateway: create socket dir: %w", err)
+	}
+	return true, nil
 }
 
 // removeStaleUnixSocket 清理历史残留的 socket 文件，避免监听失败。
