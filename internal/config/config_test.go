@@ -1429,3 +1429,356 @@ func TestMemoConfigValidate(t *testing.T) {
 		}
 	})
 }
+
+func TestNormalizeWorkdirEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		check func(t *testing.T, value string)
+	}{
+		{
+			name:  "empty string returns empty",
+			input: "",
+			check: func(t *testing.T, value string) {
+				if value != "" {
+					t.Fatalf("expected empty, got %q", value)
+				}
+			},
+		},
+		{
+			name:  "whitespace only returns empty",
+			input: "   ",
+			check: func(t *testing.T, value string) {
+				if value != "" {
+					t.Fatalf("expected empty for whitespace-only input, got %q", value)
+				}
+			},
+		},
+		{
+			name:  "dot resolves to cwd",
+			input: ".",
+			check: func(t *testing.T, value string) {
+				if !filepath.IsAbs(value) {
+					t.Fatalf("expected absolute path for dot, got %q", value)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeWorkdir(tt.input)
+			tt.check(t, got)
+		})
+	}
+}
+
+func TestStaticReturnsCompleteSkeleton(t *testing.T) {
+	t.Parallel()
+
+	cfg := StaticDefaults()
+	if cfg == nil {
+		t.Fatal("expected non-nil static defaults")
+	}
+	if cfg.Workdir == "" {
+		t.Fatal("expected workdir to be set")
+	}
+	if cfg.Shell == "" {
+		t.Fatal("expected shell to be set")
+	}
+	if cfg.MaxLoops == 0 {
+		t.Fatal("expected max_loops to be set")
+	}
+	if cfg.ToolTimeoutSec == 0 {
+		t.Fatal("expected tool_timeout_sec to be set")
+	}
+	if cfg.Tools.WebFetch.MaxResponseBytes == 0 {
+		t.Fatal("expected webfetch max_response_bytes to be set")
+	}
+}
+
+func TestApplyDefaultsNilReceivers(t *testing.T) {
+	t.Parallel()
+
+	var toolsCfg *ToolsConfig
+	toolsCfg.ApplyDefaults(ToolsConfig{})
+
+	var ctxCfg *ContextConfig
+	ctxCfg.ApplyDefaults(ContextConfig{})
+
+	var wfCfg *WebFetchConfig
+	wfCfg.ApplyDefaults(WebFetchConfig{})
+}
+
+func TestApplyStaticDefaultsNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var cfg *Config
+	cfg.applyStaticDefaults(*StaticDefaults())
+	if cfg != nil {
+		t.Fatal("expected nil config to remain nil")
+	}
+}
+
+func TestValidateSnapshotRejectsEmptyWorkdir(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Providers:        []ProviderConfig{testDefaultProviderConfig()},
+		SelectedProvider: testProviderName,
+		CurrentModel:     testModel,
+		Workdir:          "",
+		Shell:            "powershell",
+	}
+	err := cfg.ValidateSnapshot()
+	if err == nil || !strings.Contains(err.Error(), "workdir is empty") {
+		t.Fatalf("expected empty workdir error, got %v", err)
+	}
+}
+
+func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
+	t.Parallel()
+
+	workdir := filepath.Clean(t.TempDir())
+	cfg := Config{
+		Providers:        []ProviderConfig{testDefaultProviderConfig()},
+		SelectedProvider: testProviderName,
+		CurrentModel:     testModel,
+		Workdir:          workdir,
+		Shell:            "powershell",
+		Tools: ToolsConfig{
+			WebFetch: WebFetchConfig{
+				MaxResponseBytes:      DefaultWebFetchMaxResponseBytes,
+				SupportedContentTypes: []string{"text/html"},
+			},
+		},
+		Context: ContextConfig{
+			Compact: CompactConfig{
+				ManualStrategy:           "invalid_strategy",
+				ManualKeepRecentMessages: 10,
+				MaxSummaryChars:          1200,
+			},
+		},
+	}
+	err := cfg.ValidateSnapshot()
+	if err == nil || !strings.Contains(err.Error(), "compact") {
+		t.Fatalf("expected compact error, got %v", err)
+	}
+}
+
+func TestManagerUpdateNilMutateFunc(t *testing.T) {
+	tempDir := t.TempDir()
+	manager := NewManager(NewLoader(tempDir, testDefaultConfig()))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	err := manager.Update(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "mutate func is nil") {
+		t.Fatalf("expected nil mutate error, got %v", err)
+	}
+}
+
+func TestManagerUpdateValidationFailurePreservesCurrentState(t *testing.T) {
+	tempDir := t.TempDir()
+	manager := NewManager(NewLoader(tempDir, testDefaultConfig()))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	before := manager.Get()
+	err := manager.Update(context.Background(), func(cfg *Config) error {
+		cfg.Context.Compact.ManualStrategy = "totally_invalid_strategy"
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+
+	after := manager.Get()
+	if before.SelectedProvider != after.SelectedProvider {
+		t.Fatalf("expected selected provider to be preserved after failed update")
+	}
+}
+
+func TestParseConfigWithEmptyData(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseConfigWithContextDefaults([]byte{}, StaticDefaults().Context)
+	if err != nil {
+		t.Fatalf("parseConfigWithContextDefaults(empty) error = %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected non-nil config for empty data")
+	}
+}
+
+func TestParseConfigWithWhitespaceOnlyData(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseConfigWithContextDefaults([]byte("  \n\t  "), StaticDefaults().Context)
+	if err != nil {
+		t.Fatalf("parseConfigWithContextDefaults(whitespace) error = %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected non-nil config for whitespace-only data")
+	}
+}
+
+func TestMarshalPersistedConfigEndsWithNewline(t *testing.T) {
+	t.Parallel()
+
+	snapshot := testDefaultConfig().Clone()
+	data, err := marshalPersistedConfig(snapshot)
+	if err != nil {
+		t.Fatalf("marshalPersistedConfig() error = %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("expected non-empty marshaled data")
+	}
+	if data[len(data)-1] != '\n' {
+		t.Fatal("expected marshaled data to end with newline")
+	}
+}
+
+func TestAssembleProvidersAcceptsEmptyNameProvider(t *testing.T) {
+	t.Parallel()
+
+	custom := []ProviderConfig{{
+		Name:      "",
+		Driver:    "custom-driver",
+		BaseURL:   "https://example.com/v1",
+		APIKeyEnv: "CUSTOM_KEY",
+		Source:    ProviderSourceCustom,
+	}}
+
+	assembled, err := assembleProviders(testDefaultConfig().Providers, custom)
+	if err != nil {
+		t.Fatalf("assembleProviders() with empty name error = %v", err)
+	}
+	if len(assembled) < 2 {
+		t.Fatalf("expected at least 2 providers, got %d", len(assembled))
+	}
+}
+
+func TestAssembleProvidersDuplicateBetweenBuiltinAndCustom(t *testing.T) {
+	t.Parallel()
+
+	custom := []ProviderConfig{{
+		Name:      testProviderName,
+		Driver:    "custom-driver",
+		BaseURL:   "https://example.com/v1",
+		APIKeyEnv: "CUSTOM_KEY",
+		Source:    ProviderSourceCustom,
+	}}
+
+	_, err := assembleProviders(testDefaultConfig().Providers, custom)
+	if err == nil || !strings.Contains(err.Error(), "duplicate provider name") {
+		t.Fatalf("expected duplicate error between builtin/custom, got %v", err)
+	}
+}
+
+func TestToRuntimeConfigMapsAllFields(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolvedProviderConfig{
+		ProviderConfig: ProviderConfig{
+			Name:           "test-provider",
+			Driver:         "gemini",
+			BaseURL:        "https://generativelanguage.googleapis.com/v1beta/openai",
+			Model:          "gemini-2.5-flash",
+			APIKeyEnv:      "TEST_ENV_KEY",
+			APIStyle:       "responses",
+			DeploymentMode: "vertex",
+			APIVersion:     "v1beta",
+		},
+		APIKey: "resolved-secret-key",
+	}
+
+	got := resolved.ToRuntimeConfig()
+	if got.Name != "test-provider" {
+		t.Fatalf("expected Name=test-provider, got %q", got.Name)
+	}
+	if got.Driver != "gemini" {
+		t.Fatalf("expected Driver=gemini, got %q", got.Driver)
+	}
+	if got.DefaultModel != "gemini-2.5-flash" {
+		t.Fatalf("expected DefaultModel=gemini-2.5-flash, got %q", got.DefaultModel)
+	}
+	if got.APIKey != "resolved-secret-key" {
+		t.Fatalf("expected APIKey=resolved-secret-key, got %q", got.APIKey)
+	}
+	if got.DeploymentMode != "vertex" {
+		t.Fatalf("expected DeploymentMode=vertex, got %q", got.DeploymentMode)
+	}
+	if got.APIVersion != "v1beta" {
+		t.Fatalf("expected APIVersion=v1beta, got %q", got.APIVersion)
+	}
+}
+
+func TestLoaderLoadWithCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := loader.Load(ctx)
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled error for Load, got %v", err)
+	}
+}
+
+func TestLoaderSaveWithCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	cfg := testDefaultConfig()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := loader.Save(ctx, cfg)
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled error for Save, got %v", err)
+	}
+}
+
+func TestManagerUpdateRestoresProvidersWhenCleared(t *testing.T) {
+	tempDir := t.TempDir()
+	manager := NewManager(NewLoader(tempDir, testDefaultConfig()))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	err := manager.Update(context.Background(), func(cfg *Config) error {
+		cfg.Providers = nil
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	reloaded := manager.Get()
+	if len(reloaded.Providers) == 0 {
+		t.Fatal("expected providers to be restored from defaults after clearing")
+	}
+}
+
+func TestConfigCloneNilReceiverReturnsDefaults(t *testing.T) {
+	t.Parallel()
+
+	var cfg *Config
+	cloned := cfg.Clone()
+	if cloned.Workdir == "" {
+		t.Fatal("expected cloned nil config to have default workdir")
+	}
+	if cloned.Shell == "" {
+		t.Fatal("expected cloned nil config to have default shell")
+	}
+	if cloned.MaxLoops == 0 {
+		t.Fatal("expected cloned nil config to have default max_loops")
+	}
+}
