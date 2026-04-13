@@ -8,30 +8,28 @@ import (
 func TestMCPServerConfigApplyDefaultsNormalizesSource(t *testing.T) {
 	t.Parallel()
 
-	cfg := MCPServerConfig{
-		ID:      "test-server",
-		Enabled: true,
-		Source:  " STDIO ",
-		Stdio:   MCPStdioConfig{Command: "cmd"},
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{name: "trimmed", source: " STDIO "},
+		{name: "empty", source: ""},
 	}
-	cfg.ApplyDefaults()
-	if cfg.Source != "stdio" {
-		t.Fatalf("expected normalized source 'stdio', got %q", cfg.Source)
-	}
-}
 
-func TestMCPServerConfigApplyDefaultsSetsStdioWhenEmpty(t *testing.T) {
-	t.Parallel()
-
-	cfg := MCPServerConfig{
-		ID:      "test-server",
-		Enabled: true,
-		Source:  "",
-		Stdio:   MCPStdioConfig{Command: "cmd"},
-	}
-	cfg.ApplyDefaults()
-	if cfg.Source != "stdio" {
-		t.Fatalf("expected default source 'stdio', got %q", cfg.Source)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := MCPServerConfig{
+				ID:      "test-server",
+				Enabled: true,
+				Source:  tt.source,
+				Stdio:   MCPStdioConfig{Command: "cmd"},
+			}
+			cfg.ApplyDefaults()
+			if cfg.Source != "stdio" {
+				t.Fatalf("expected normalized source 'stdio', got %q", cfg.Source)
+			}
+		})
 	}
 }
 
@@ -119,8 +117,11 @@ func TestMCPServerConfigCloneWithEmptyEnvSlice(t *testing.T) {
 		Env:   []MCPEnvVarConfig{},
 	}
 	cloned := original.Clone()
+	if cloned.Env == nil {
+		t.Fatal("expected cloned env to preserve empty slice")
+	}
 	if len(cloned.Env) != 0 {
-		t.Fatal("expected cloned env to be empty slice, not nil")
+		t.Fatalf("expected cloned env length to be 0, got %d", len(cloned.Env))
 	}
 }
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -78,23 +79,38 @@ func TestNormalizeContentType(t *testing.T) {
 	}
 }
 
-func TestNormalizeContentTypesDeduplicatesAndCleans(t *testing.T) {
+func TestNormalizeContentTypesBehaviors(t *testing.T) {
 	t.Parallel()
 
-	defaults := []string{"text/html", "text/plain"}
-	result := normalizeContentTypes([]string{"TEXT/HTML", " text/plain ", "text/html", "", "  "}, defaults)
-	if len(result) != 2 {
-		t.Fatalf("expected 2 unique content types, got %d: %+v", len(result), result)
+	tests := []struct {
+		name     string
+		values   []string
+		defaults []string
+		want     []string
+	}{
+		{
+			name:     "deduplicates and cleans",
+			values:   []string{"TEXT/HTML", " text/plain ", "text/html", "", "  "},
+			defaults: []string{"text/html", "text/plain"},
+			want:     []string{"text/html", "text/plain"},
+		},
+		{
+			name:     "drops empty without fallback",
+			values:   []string{"", "   "},
+			defaults: []string{"text/html", "text/plain"},
+			want:     []string{},
+		},
 	}
-}
 
-func TestNormalizeContentTypesFallsBackToDefaultsWhenEmpty(t *testing.T) {
-	t.Parallel()
-
-	defaults := []string{"text/html", "text/plain"}
-	result := normalizeContentTypes([]string{"", "   "}, defaults)
-	if len(result) != 0 {
-		t.Fatalf("expected 0 types when all inputs are empty, got %d: %+v", len(result), result)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := normalizeContentTypes(tt.values, tt.defaults)
+			if !reflect.DeepEqual(result, tt.want) {
+				t.Fatalf("normalizeContentTypes(%+v) = %+v, want %+v", tt.values, result, tt.want)
+			}
+		})
 	}
 }
 

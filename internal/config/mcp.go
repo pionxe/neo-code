@@ -71,9 +71,9 @@ func (c MCPConfig) Clone() MCPConfig {
 func (c MCPServerConfig) Clone() MCPServerConfig {
 	cloned := c
 	cloned.Stdio.Args = append([]string(nil), c.Stdio.Args...)
-	if len(c.Env) > 0 {
-		cloned.Env = make([]MCPEnvVarConfig, 0, len(c.Env))
-		cloned.Env = append(cloned.Env, c.Env...)
+	if c.Env != nil {
+		cloned.Env = make([]MCPEnvVarConfig, len(c.Env))
+		copy(cloned.Env, c.Env)
 	} else {
 		cloned.Env = nil
 	}
