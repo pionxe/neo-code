@@ -231,3 +231,63 @@ func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
 		t.Fatalf("unexpected recent window: first=%q last=%q", generator.messages[0].Content, generator.messages[9].Content)
 	}
 }
+
+func TestLLMExtractorExtractNilGenerator(t *testing.T) {
+	var extractor *LLMExtractor
+	_, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "记住这个。"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "text generator is nil") {
+		t.Fatalf("Extract() error = %v", err)
+	}
+
+	extractor = NewLLMExtractor(nil)
+	_, err = extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "记住这个。"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "text generator is nil") {
+		t.Fatalf("Extract() error = %v", err)
+	}
+}
+
+func TestLLMExtractorExtractGeneratorFailure(t *testing.T) {
+	extractor := NewLLMExtractor(&stubTextGenerator{err: errors.New("upstream failed")})
+	_, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "记住这个。"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "upstream failed") {
+		t.Fatalf("Extract() error = %v", err)
+	}
+}
+
+func TestExtractJSONArrayErrors(t *testing.T) {
+	if _, err := extractJSONArray("no json here"); err == nil || !strings.Contains(err.Error(), "does not contain") {
+		t.Fatalf("expected missing array error, got %v", err)
+	}
+	if _, err := extractJSONArray(`[{"a":"x"}`); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("expected incomplete array error, got %v", err)
+	}
+}
+
+func TestCloneProviderMessageDeepCopy(t *testing.T) {
+	original := providertypes.Message{
+		Role:    providertypes.RoleAssistant,
+		Content: "hello",
+		ToolCalls: []providertypes.ToolCall{
+			{ID: "1", Name: "a", Arguments: "{}"},
+		},
+		ToolMetadata: map[string]string{"k": "v"},
+	}
+
+	cloned := cloneProviderMessage(original)
+	original.ToolCalls[0].Name = "changed"
+	original.ToolMetadata["k"] = "changed"
+	if cloned.ToolCalls[0].Name != "a" || cloned.ToolMetadata["k"] != "v" {
+		t.Fatalf("cloneProviderMessage should deep copy nested values, got %#v", cloned)
+	}
+
+	plain := cloneProviderMessage(providertypes.Message{Role: providertypes.RoleUser, Content: "x"})
+	if len(plain.ToolCalls) != 0 || plain.ToolMetadata != nil {
+		t.Fatalf("plain clone should not create nested values, got %#v", plain)
+	}
+}

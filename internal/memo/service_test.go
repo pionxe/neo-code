@@ -308,6 +308,139 @@ func TestServiceRemoveSaveIndexFailureDoesNotDeleteTopics(t *testing.T) {
 	}
 }
 
+func TestServiceAddAutoExtractIfAbsent(t *testing.T) {
+	baseDir := t.TempDir()
+	workspace := t.TempDir()
+	store := NewFileStore(baseDir, workspace)
+	svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
+	ctx := context.Background()
+
+	first := Entry{
+		Type:    TypeUser,
+		Title:   "reply in chinese",
+		Content: "reply in chinese",
+		Source:  SourceAutoExtract,
+	}
+	added, err := svc.addAutoExtractIfAbsent(ctx, first)
+	if err != nil || !added {
+		t.Fatalf("first addAutoExtractIfAbsent() = (%v,%v), want (true,nil)", added, err)
+	}
+
+	added, err = svc.addAutoExtractIfAbsent(ctx, first)
+	if err != nil {
+		t.Fatalf("second addAutoExtractIfAbsent() error = %v", err)
+	}
+	if added {
+		t.Fatalf("duplicate addAutoExtractIfAbsent() = true, want false")
+	}
+
+	entries, err := svc.List(ctx)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries after dedupe = %d, want 1", len(entries))
+	}
+}
+
+func TestServiceEnsureAutoExtractIndexAndLoadFailureTolerance(t *testing.T) {
+	store := &stubStoreWithTopics{
+		stubStore: &stubStore{
+			index: &Index{
+				Entries: []Entry{
+					{ID: "1", Type: TypeUser, Title: "A", TopicFile: "a.md"},
+					{ID: "2", Type: TypeFeedback, Title: "B", TopicFile: "b.md"},
+					{ID: "3", Type: TypeProject, Title: "C", TopicFile: "missing.md"},
+				},
+			},
+		},
+		topics: map[string]string{
+			"a.md": "---\nsource: extractor_auto\n---\n\na content",
+			"b.md": "---\nsource: user_manual\n---\n\nb content",
+		},
+	}
+	svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
+	if err := svc.ensureAutoExtractIndex(context.Background()); err != nil {
+		t.Fatalf("ensureAutoExtractIndex() error = %v", err)
+	}
+	if !svc.autoExtractIndexReady {
+		t.Fatalf("autoExtractIndexReady = false, want true")
+	}
+	if len(svc.autoExtractKeysByTopic) != 1 {
+		t.Fatalf("autoExtractKeysByTopic = %+v", svc.autoExtractKeysByTopic)
+	}
+	if svc.autoExtractKeyRefs[autoExtractDedupKey(Entry{
+		Type:    TypeUser,
+		Title:   "A",
+		Content: "a content",
+		Source:  SourceAutoExtract,
+	})] != 1 {
+		t.Fatalf("autoExtractKeyRefs = %+v", svc.autoExtractKeyRefs)
+	}
+}
+
+func TestServiceEnsureAutoExtractIndexLoadIndexFailure(t *testing.T) {
+	store := &stubStore{err: errors.New("load index failed")}
+	svc := NewService(store, nil, config.MemoConfig{}, nil)
+	err := svc.ensureAutoExtractIndex(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "load index") {
+		t.Fatalf("ensureAutoExtractIndex() error = %v", err)
+	}
+}
+
+func TestServiceAutoExtractIndexHelpers(t *testing.T) {
+	svc := NewService(&stubStore{}, nil, config.MemoConfig{}, nil)
+	svc.autoExtractIndexReady = true
+	svc.autoExtractKeysByTopic = map[string]string{}
+	svc.autoExtractKeyRefs = map[string]int{}
+
+	entry := Entry{
+		Type:      TypeProject,
+		Title:     "  release plan ",
+		Content:   " ship in april ",
+		Source:    SourceAutoExtract,
+		TopicFile: "plan.md",
+	}
+	svc.trackAutoExtractEntryLocked(entry)
+	key := autoExtractDedupKey(entry)
+	if svc.autoExtractKeysByTopic["plan.md"] != key || svc.autoExtractKeyRefs[key] != 1 {
+		t.Fatalf("trackAutoExtractEntryLocked() state = %+v %+v", svc.autoExtractKeysByTopic, svc.autoExtractKeyRefs)
+	}
+	if !svc.hasExactAutoExtractLocked(entry) {
+		t.Fatalf("hasExactAutoExtractLocked() = false, want true")
+	}
+
+	svc.trackAutoExtractEntryLocked(entry)
+	if svc.autoExtractKeyRefs[key] != 1 {
+		t.Fatalf("expected stable ref count on same topic replacement, refs=%d", svc.autoExtractKeyRefs[key])
+	}
+
+	svc.autoExtractKeysByTopic["plan-copy.md"] = key
+	svc.autoExtractKeyRefs[key] = 2
+	svc.removeAutoExtractTopicLocked("plan.md")
+	if svc.autoExtractKeyRefs[key] != 1 {
+		t.Fatalf("removeAutoExtractTopicLocked() should decrement refs, got %d", svc.autoExtractKeyRefs[key])
+	}
+	svc.removeAutoExtractTopicLocked("plan-copy.md")
+	if svc.autoExtractKeyRefs[key] != 0 {
+		t.Fatalf("removeAutoExtractTopicLocked() should clear refs, got %+v", svc.autoExtractKeyRefs)
+	}
+}
+
+func TestCloneIndexNilAndCopyIsolation(t *testing.T) {
+	clonedNil := cloneIndex(nil)
+	if clonedNil == nil || len(clonedNil.Entries) != 0 {
+		t.Fatalf("cloneIndex(nil) = %+v", clonedNil)
+	}
+
+	origin := &Index{Entries: []Entry{{ID: "1", Type: TypeUser, Title: "old"}}}
+	cloned := cloneIndex(origin)
+	origin.Entries[0].Title = "changed"
+	if cloned.Entries[0].Title != "old" {
+		t.Fatalf("cloneIndex should isolate entries, got %+v", cloned.Entries)
+	}
+}
+
 func TestNewEntryID(t *testing.T) {
 	id := newEntryID(TypeUser)
 	if !strings.HasPrefix(id, "user_") {

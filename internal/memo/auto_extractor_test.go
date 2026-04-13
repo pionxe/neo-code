@@ -295,6 +295,94 @@ func TestAutoExtractorLoadsDedupIndexOutsideCurrentProcessState(t *testing.T) {
 	}
 }
 
+func TestAutoExtractorScheduleWithExtractorUsesBoundExtractor(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	defaultExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{{Type: TypeProject, Title: "default", Content: "default", Source: SourceAutoExtract}}, nil
+		},
+	}
+	boundExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{{Type: TypeProject, Title: "bound", Content: "bound", Source: SourceAutoExtract}}, nil
+		},
+	}
+
+	auto := NewAutoExtractor(defaultExtractor, svc)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+
+	auto.ScheduleWithExtractor("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "use bound"}}, boundExtractor)
+
+	waitFor(t, time.Second, func() bool { return boundExtractor.Calls() == 1 })
+	if defaultExtractor.Calls() != 0 {
+		t.Fatalf("default extractor calls = %d, want 0", defaultExtractor.Calls())
+	}
+}
+
+func TestAutoExtractorScheduleGuardClauses(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	extractor := &stubMemoExtractor{}
+	auto := NewAutoExtractor(extractor, svc)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+
+	auto.Schedule("", []providertypes.Message{{Role: providertypes.RoleUser, Content: "skip"}})
+	auto.ScheduleWithExtractor("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "skip"}}, nil)
+
+	waitFor(t, 150*time.Millisecond, func() bool { return true })
+	if extractor.Calls() != 0 {
+		t.Fatalf("extractor calls = %d, want 0", extractor.Calls())
+	}
+}
+
+func TestAutoExtractDedupKeyAndTopicParsing(t *testing.T) {
+	if key := autoExtractDedupKey(Entry{Type: TypeProject, Title: "  demo  ", Content: "  value  "}); key != "project\x1fdemo\x1fvalue" {
+		t.Fatalf("autoExtractDedupKey() = %q", key)
+	}
+	if key := autoExtractDedupKey(Entry{Type: "invalid", Title: "demo", Content: "value"}); key != "" {
+		t.Fatalf("autoExtractDedupKey() invalid type = %q, want empty", key)
+	}
+
+	source, body := parseTopicSourceAndContent("plain body")
+	if source != "" || body != "plain body" {
+		t.Fatalf("parse plain topic = (%q,%q)", source, body)
+	}
+
+	source, body = parseTopicSourceAndContent("---\nsource: extractor_auto\n---\n\n正文")
+	if source != SourceAutoExtract || body != "正文" {
+		t.Fatalf("parse frontmatter topic = (%q,%q)", source, body)
+	}
+}
+
+func TestCloneProviderMessagesDeepCopyAndStopTimer(t *testing.T) {
+	original := []providertypes.Message{
+		{
+			Role:    providertypes.RoleAssistant,
+			Content: "msg",
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "c1", Name: "tool", Arguments: "{}"},
+			},
+			ToolMetadata: map[string]string{"k": "v"},
+		},
+	}
+	cloned := cloneProviderMessages(original)
+	if len(cloned) != 1 || len(cloned[0].ToolCalls) != 1 || cloned[0].ToolMetadata["k"] != "v" {
+		t.Fatalf("cloneProviderMessages() = %#v", cloned)
+	}
+
+	original[0].ToolCalls[0].Name = "changed"
+	original[0].ToolMetadata["k"] = "changed"
+	if cloned[0].ToolCalls[0].Name != "tool" || cloned[0].ToolMetadata["k"] != "v" {
+		t.Fatalf("clone should be isolated, got %#v", cloned[0])
+	}
+
+	stopTimer(nil)
+	timer := time.NewTimer(5 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	stopTimer(timer)
+}
+
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

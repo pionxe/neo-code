@@ -184,6 +184,18 @@ func TestContainsSignal(t *testing.T) {
 	}
 }
 
+func TestTruncateWithEllipsisBoundaries(t *testing.T) {
+	if got := truncateWithEllipsis("abcdef", 0); got != "" {
+		t.Fatalf("truncateWithEllipsis(0) = %q, want empty", got)
+	}
+	if got := truncateWithEllipsis("abcdef", 3); got != "abc" {
+		t.Fatalf("truncateWithEllipsis(3) = %q, want %q", got, "abc")
+	}
+	if got := truncateWithEllipsis("abc", 10); got != "abc" {
+		t.Fatalf("truncateWithEllipsis(no truncate) = %q", got)
+	}
+}
+
 func TestExtractAndStore(t *testing.T) {
 	t.Run("nil extractor returns silently", func(t *testing.T) {
 		ExtractAndStore(context.Background(), nil, nil, nil)
