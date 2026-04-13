@@ -167,19 +167,14 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 			continue
 		}
 
-		session, err := decodeStoredSession(data)
+		summary, err := decodeStoredSummary(data)
 		if err != nil {
 			continue
 		}
-		if strings.TrimSpace(session.ID) == "" {
+		if strings.TrimSpace(summary.ID) == "" {
 			continue
 		}
-		summaries = append(summaries, Summary{
-			ID:        session.ID,
-			Title:     session.Title,
-			CreatedAt: session.CreatedAt,
-			UpdatedAt: session.UpdatedAt,
-		})
+		summaries = append(summaries, summary)
 	}
 
 	sort.Slice(summaries, func(i, j int) bool {
@@ -262,4 +257,34 @@ func decodeStoredSession(data []byte) (Session, error) {
 	}
 	session.TaskState = NormalizeTaskState(session.TaskState)
 	return session, nil
+}
+
+// decodeStoredSummary 只解析会话列表所需的摘要元数据，避免为列表视图反序列化完整消息历史。
+func decodeStoredSummary(data []byte) (Summary, error) {
+	var stored struct {
+		SchemaVersion *int            `json:"schema_version"`
+		ID            string          `json:"id"`
+		Title         string          `json:"title"`
+		CreatedAt     time.Time       `json:"created_at"`
+		UpdatedAt     time.Time       `json:"updated_at"`
+		TaskState     json.RawMessage `json:"task_state"`
+	}
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return Summary{}, err
+	}
+	if stored.SchemaVersion == nil {
+		return Summary{}, errors.New("missing required field schema_version")
+	}
+	if len(stored.TaskState) == 0 {
+		return Summary{}, errors.New("missing required field task_state")
+	}
+	if err := validateSessionSchema(Session{SchemaVersion: *stored.SchemaVersion}); err != nil {
+		return Summary{}, err
+	}
+	return Summary{
+		ID:        stored.ID,
+		Title:     stored.Title,
+		CreatedAt: stored.CreatedAt,
+		UpdatedAt: stored.UpdatedAt,
+	}, nil
 }

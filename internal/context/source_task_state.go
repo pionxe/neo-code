@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 
 	agentsession "neo-code/internal/session"
 )
 
-// taskStateSource 负责把 durable TaskState 投影为稳定的 prompt section。
+// taskStateSource 负责将 durable TaskState 投影为稳定的 prompt section。
 type taskStateSource struct{}
 
 // Sections 将任务状态渲染为 provider 可读的结构化上下文。
@@ -45,7 +46,7 @@ func renderTaskStateSection(state agentsession.TaskState) promptSection {
 
 // promptTaskStateValue 统一渲染任务状态中的单值字段。
 func promptTaskStateValue(value string) string {
-	value = strings.TrimSpace(value)
+	value = sanitizePromptTaskStateText(value)
 	if value == "" {
 		return "none"
 	}
@@ -57,5 +58,30 @@ func promptTaskStateListValue(values []string) string {
 	if len(values) == 0 {
 		return "none"
 	}
-	return strings.Join(values, " | ")
+
+	sanitized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = sanitizePromptTaskStateText(value)
+		if value == "" {
+			continue
+		}
+		sanitized = append(sanitized, value)
+	}
+	if len(sanitized) == 0 {
+		return "none"
+	}
+	return strings.Join(sanitized, " | ")
+}
+
+// sanitizePromptTaskStateText 将 TaskState 文本收敛为单行安全片段，避免注入额外 prompt 结构。
+func sanitizePromptTaskStateText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsControl(r), unicode.IsSpace(r):
+			return ' '
+		default:
+			return r
+		}
+	}, value)
+	return strings.Join(strings.Fields(value), " ")
 }

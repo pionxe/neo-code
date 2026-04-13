@@ -554,6 +554,11 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 
 	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "malformed.json"), "{malformed")
 	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "empty-id.json"), `{"id":"   ","title":"x"}`)
+	mustWriteSessionFile(
+		t,
+		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-task-state-summary.json"),
+		`{"schema_version":1,"id":"missing-task-state-summary","title":"x","created_at":"2026-04-13T00:00:00Z","updated_at":"2026-04-13T00:00:00Z"}`,
+	)
 
 	summaries, err := store.ListSummaries(context.Background())
 	if err != nil {
@@ -635,6 +640,42 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 	}
 	if loaded.Messages[2].ToolMetadata["tool_name"] != "webfetch" || loaded.Messages[2].ToolMetadata["http_status"] != "200" {
 		t.Fatalf("expected tool metadata round-trip, got %+v", loaded.Messages[2].ToolMetadata)
+	}
+}
+
+func TestDecodeStoredSummaryUsesLightweightMetadataPath(t *testing.T) {
+	t.Parallel()
+
+	summary, err := decodeStoredSummary([]byte(`{
+  "schema_version": 1,
+  "id": "summary-only",
+  "title": "Summary Only",
+  "created_at": "2026-04-13T08:00:00Z",
+  "updated_at": "2026-04-13T09:00:00Z",
+  "task_state": {
+    "goal": "persist task state",
+    "progress": [],
+    "open_items": [],
+    "next_step": "",
+    "blockers": [],
+    "key_artifacts": [],
+    "decisions": [],
+    "user_constraints": [],
+    "last_updated_at": "2026-04-13T09:00:00Z"
+  }
+}`))
+	if err != nil {
+		t.Fatalf("decodeStoredSummary() error: %v", err)
+	}
+
+	if summary.ID != "summary-only" {
+		t.Fatalf("expected summary id %q, got %q", "summary-only", summary.ID)
+	}
+	if summary.Title != "Summary Only" {
+		t.Fatalf("expected summary title %q, got %q", "Summary Only", summary.Title)
+	}
+	if summary.CreatedAt.IsZero() || summary.UpdatedAt.IsZero() {
+		t.Fatalf("expected non-zero timestamps, got created=%v updated=%v", summary.CreatedAt, summary.UpdatedAt)
 	}
 }
 
