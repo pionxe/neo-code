@@ -9,10 +9,21 @@ import (
 	"path/filepath"
 )
 
+const (
+	// unixSocketDirPerm 定义 Unix socket 父目录权限（仅当前用户可访问）。
+	unixSocketDirPerm os.FileMode = 0o700
+	// unixSocketFilePerm 定义 Unix socket 文件权限（仅当前用户可读写）。
+	unixSocketFilePerm os.FileMode = 0o600
+)
+
 // Listen 在 Unix 系统上启动 UDS 监听并在关闭时清理 socket 文件。
 func Listen(address string) (net.Listener, error) {
-	if err := os.MkdirAll(filepath.Dir(address), 0o755); err != nil {
+	socketDir := filepath.Dir(address)
+	if err := os.MkdirAll(socketDir, unixSocketDirPerm); err != nil {
 		return nil, fmt.Errorf("gateway: create socket dir: %w", err)
+	}
+	if err := os.Chmod(socketDir, unixSocketDirPerm); err != nil {
+		return nil, fmt.Errorf("gateway: set socket dir permission: %w", err)
 	}
 
 	if err := removeStaleUnixSocket(address); err != nil {
@@ -22,6 +33,10 @@ func Listen(address string) (net.Listener, error) {
 	listener, err := net.Listen("unix", address)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: listen unix socket: %w", err)
+	}
+	if err := os.Chmod(address, unixSocketFilePerm); err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("gateway: set socket file permission: %w", err)
 	}
 
 	return newCleanupListener(listener, func() error {

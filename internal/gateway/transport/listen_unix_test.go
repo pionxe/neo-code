@@ -14,6 +14,7 @@ func TestListenUnixAcceptsConnectionAndCleansSocket(t *testing.T) {
 	t.Parallel()
 
 	socketPath := filepath.Join(t.TempDir(), "gateway.sock")
+	socketDir := filepath.Dir(socketPath)
 	listener, err := Listen(socketPath)
 	if err != nil {
 		t.Fatalf("listen unix socket: %v", err)
@@ -38,6 +39,22 @@ func TestListenUnixAcceptsConnectionAndCleansSocket(t *testing.T) {
 		t.Fatalf("dial unix socket: %v", err)
 	}
 	_ = conn.Close()
+
+	socketInfo, err := os.Stat(socketPath)
+	if err != nil {
+		t.Fatalf("stat socket file: %v", err)
+	}
+	if got := socketInfo.Mode() & os.ModePerm; got != unixSocketFilePerm {
+		t.Fatalf("socket file perm = %#o, want %#o", got, unixSocketFilePerm)
+	}
+
+	dirInfo, err := os.Stat(socketDir)
+	if err != nil {
+		t.Fatalf("stat socket dir: %v", err)
+	}
+	if got := dirInfo.Mode() & os.ModePerm; got != unixSocketDirPerm {
+		t.Fatalf("socket dir perm = %#o, want %#o", got, unixSocketDirPerm)
+	}
 
 	select {
 	case acceptErr := <-acceptDone:
