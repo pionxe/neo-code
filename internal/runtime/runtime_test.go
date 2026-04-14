@@ -1993,13 +1993,13 @@ func TestServiceRunMaxLoopsSavesLoopLimitCheckpoint(t *testing.T) {
 		EventToolChunk,
 		EventToolResult,
 		EventCompactStart,
-		EventCompactDone,
+		EventCompactApplied,
 		EventError,
 	})
 	assertNoEventType(t, events, EventCompactError)
 
 	compactStartIndex := eventIndex(events, EventCompactStart)
-	compactDoneIndex := eventIndex(events, EventCompactDone)
+	compactDoneIndex := eventIndex(events, EventCompactApplied)
 	errorIndex := eventIndex(events, EventError)
 	if compactStartIndex == -1 || compactDoneIndex == -1 || errorIndex == -1 {
 		t.Fatalf("expected loop-limit events in %+v", events)
@@ -2012,7 +2012,7 @@ func TestServiceRunMaxLoopsSavesLoopLimitCheckpoint(t *testing.T) {
 	foundLoopLimitError := false
 	for _, event := range events {
 		switch event.Type {
-		case EventCompactDone:
+		case EventCompactApplied:
 			payload, ok := event.Payload.(CompactResult)
 			if !ok {
 				t.Fatalf("expected CompactResult payload, got %T", event.Payload)
@@ -2115,7 +2115,7 @@ func TestServiceRunMaxLoopsLoopLimitCompactFailureFallsBackToOriginalExit(t *tes
 		EventCompactError,
 		EventError,
 	})
-	assertNoEventType(t, events, EventCompactDone)
+	assertNoEventType(t, events, EventCompactApplied)
 
 	compactStartIndex := eventIndex(events, EventCompactStart)
 	compactErrorIndex := eventIndex(events, EventCompactError)
@@ -3214,6 +3214,8 @@ func collectRuntimeEvents(events <-chan RuntimeEvent) []RuntimeEvent {
 // isPermissionRequestEvent 判断是否为权限请求类事件（含 1A 主事件与兼容旧名）。
 func isPermissionRequestEvent(typ EventType) bool {
 	return typ == EventPermissionRequested
+}
+
 func eventIndex(events []RuntimeEvent, want EventType) int {
 	for index, event := range events {
 		if event.Type == want {
