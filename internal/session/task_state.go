@@ -8,6 +8,13 @@ import (
 const (
 	// CurrentSchemaVersion 表示当前会话持久化结构的唯一合法版本。
 	CurrentSchemaVersion = 1
+
+	// taskStateMaxFieldChars 限制 TaskState 单值字段的最大字符数，避免异常大文本污染持久化与后续 prompt。
+	taskStateMaxFieldChars = 2000
+	// taskStateMaxListItems 限制 TaskState 列表字段的最大条目数，避免模型输出超大数组导致上下文膨胀。
+	taskStateMaxListItems = 32
+	// taskStateMaxListItemChars 限制 TaskState 列表单条目的最大字符数，避免单项异常放大。
+	taskStateMaxListItemChars = 400
 )
 
 // TaskState 表示会话级、可持久化的任务续航状态。
@@ -59,6 +66,19 @@ func NormalizeTaskState(state TaskState) TaskState {
 	return state
 }
 
+// ClampTaskStateBoundaries 对 TaskState 做尺寸与数量限幅，避免持久化状态无限增长。
+func ClampTaskStateBoundaries(state TaskState) TaskState {
+	state.Goal = truncateRunes(state.Goal, taskStateMaxFieldChars)
+	state.NextStep = truncateRunes(state.NextStep, taskStateMaxFieldChars)
+	state.Progress = truncateTaskStateList(state.Progress)
+	state.OpenItems = truncateTaskStateList(state.OpenItems)
+	state.Blockers = truncateTaskStateList(state.Blockers)
+	state.KeyArtifacts = truncateTaskStateList(state.KeyArtifacts)
+	state.Decisions = truncateTaskStateList(state.Decisions)
+	state.UserConstraints = truncateTaskStateList(state.UserConstraints)
+	return state
+}
+
 // normalizeTaskStateList 对任务状态中的字符串列表做去空、去重并保留顺序。
 func normalizeTaskStateList(items []string) []string {
 	if len(items) == 0 {
@@ -83,4 +103,31 @@ func normalizeTaskStateList(items []string) []string {
 		return nil
 	}
 	return result
+}
+
+// truncateTaskStateList 在保持顺序前提下裁剪列表长度与每项字符数。
+func truncateTaskStateList(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	if len(items) > taskStateMaxListItems {
+		items = items[:taskStateMaxListItems]
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		result = append(result, truncateRunes(item, taskStateMaxListItemChars))
+	}
+	return result
+}
+
+// truncateRunes 按 rune 长度截断字符串，避免截断多字节字符。
+func truncateRunes(value string, limit int) string {
+	if limit <= 0 || value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }

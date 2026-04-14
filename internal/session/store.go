@@ -81,7 +81,7 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 		return err
 	}
 
-	session.TaskState = NormalizeTaskState(session.TaskState)
+	session.TaskState = normalizeAndClampTaskState(session.TaskState)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,27 +236,57 @@ func validateSessionSchema(session Session) error {
 
 // decodeStoredSession 严格校验持久化会话所需字段，并拒绝缺少 schema_version 或 task_state 的旧数据。
 func decodeStoredSession(data []byte) (Session, error) {
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(data, &envelope); err != nil {
+	type storedSession struct {
+		SchemaVersion *int                    `json:"schema_version"`
+		ID            string                  `json:"id"`
+		Title         string                  `json:"title"`
+		Provider      string                  `json:"provider,omitempty"`
+		Model         string                  `json:"model,omitempty"`
+		CreatedAt     time.Time               `json:"created_at"`
+		UpdatedAt     time.Time               `json:"updated_at"`
+		Workdir       string                  `json:"workdir,omitempty"`
+		TaskState     *TaskState              `json:"task_state"`
+		Messages      []providertypes.Message `json:"messages"`
+		TokenInput    int                     `json:"token_input_total,omitempty"`
+		TokenOutput   int                     `json:"token_output_total,omitempty"`
+	}
+
+	var stored storedSession
+	if err := json.Unmarshal(data, &stored); err != nil {
 		return Session{}, err
 	}
 
-	if _, ok := envelope["schema_version"]; !ok {
+	if stored.SchemaVersion == nil {
 		return Session{}, errors.New("missing required field schema_version")
 	}
-	if _, ok := envelope["task_state"]; !ok {
+	if stored.TaskState == nil {
 		return Session{}, errors.New("missing required field task_state")
 	}
 
-	var session Session
-	if err := json.Unmarshal(data, &session); err != nil {
-		return Session{}, err
+	session := Session{
+		SchemaVersion:    *stored.SchemaVersion,
+		ID:               stored.ID,
+		Title:            stored.Title,
+		Provider:         stored.Provider,
+		Model:            stored.Model,
+		CreatedAt:        stored.CreatedAt,
+		UpdatedAt:        stored.UpdatedAt,
+		Workdir:          stored.Workdir,
+		TaskState:        *stored.TaskState,
+		Messages:         stored.Messages,
+		TokenInputTotal:  stored.TokenInput,
+		TokenOutputTotal: stored.TokenOutput,
 	}
 	if err := validateSessionSchema(session); err != nil {
 		return Session{}, err
 	}
-	session.TaskState = NormalizeTaskState(session.TaskState)
+	session.TaskState = normalizeAndClampTaskState(session.TaskState)
 	return session, nil
+}
+
+// normalizeAndClampTaskState 先规范化再限幅，保证持久化前后的 task_state 行为一致。
+func normalizeAndClampTaskState(state TaskState) TaskState {
+	return ClampTaskStateBoundaries(NormalizeTaskState(state))
 }
 
 // decodeStoredSummary 只解析会话列表所需的摘要元数据，避免为列表视图反序列化完整消息历史。

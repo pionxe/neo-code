@@ -141,7 +141,7 @@ func coerceStringArray(raw json.RawMessage) []string {
 	case '[':
 		var arr []string
 		if err := json.Unmarshal(raw, &arr); err == nil {
-			return arr
+			return cloneStringSlice(arr)
 		}
 		return nil
 	case '"':
@@ -159,13 +159,42 @@ func coerceStringArray(raw json.RawMessage) []string {
 	}
 }
 
-// extractJSONObject 从模型响应中提取最外层 JSON 对象，容忍前后噪音。
+// cloneStringSlice 复制字符串切片，避免结果复用解析对象的底层数组。
+func cloneStringSlice(items []string) []string {
+	return append([]string(nil), items...)
+}
+
+// extractJSONObject 从模型响应中提取首个满足 compact 协议的 JSON 对象，容忍前后噪音。
 func extractJSONObject(text string) (string, error) {
-	start := strings.Index(text, "{")
+	start := strings.IndexByte(text, '{')
 	if start < 0 {
 		return "", errors.New("runtime: compact summary response does not contain a JSON object")
 	}
 
+	for {
+		candidate, err := extractJSONObjectCandidate(text, start)
+		if err == nil {
+			// 验证候选对象可被容忍解析器接受
+			var probe tolerantSummaryResponse
+			if unmarshalErr := json.Unmarshal([]byte(candidate), &probe); unmarshalErr == nil {
+				if strings.TrimSpace(probe.DisplaySummary) != "" {
+					return candidate, nil
+				}
+			}
+		}
+
+		next := strings.IndexByte(text[start+1:], '{')
+		if next < 0 {
+			break
+		}
+		start += next + 1
+	}
+
+	return "", errors.New("runtime: compact summary response does not contain a valid compact JSON object")
+}
+
+// extractJSONObjectCandidate 从给定起点抽取平衡的 JSON 对象片段。
+func extractJSONObjectCandidate(text string, start int) (string, error) {
 	depth := 0
 	inString := false
 	escaped := false

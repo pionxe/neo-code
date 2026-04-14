@@ -679,6 +679,111 @@ func TestDecodeStoredSummaryUsesLightweightMetadataPath(t *testing.T) {
 	}
 }
 
+func TestJSONStoreSaveClampsOversizedTaskState(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+
+	progress := make([]string, 0, taskStateMaxListItems+8)
+	for i := 0; i < taskStateMaxListItems+8; i++ {
+		progress = append(progress, strings.Repeat("p", taskStateMaxListItemChars-4)+buildIndexedSuffix(i))
+	}
+	session := &Session{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            "task-state-clamp-save",
+		Title:         "Clamp Save",
+		CreatedAt:     time.Now().Add(-time.Minute),
+		UpdatedAt:     time.Now(),
+		TaskState: TaskState{
+			Goal:      strings.Repeat("g", taskStateMaxFieldChars+50),
+			NextStep:  strings.Repeat("n", taskStateMaxFieldChars+50),
+			Progress:  progress,
+			OpenItems: progress,
+		},
+	}
+
+	if err := store.Save(context.Background(), session); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	if len([]rune(session.TaskState.Goal)) != taskStateMaxFieldChars {
+		t.Fatalf("expected goal to be clamped to %d runes, got %d", taskStateMaxFieldChars, len([]rune(session.TaskState.Goal)))
+	}
+	if len(session.TaskState.Progress) != taskStateMaxListItems {
+		t.Fatalf("expected progress list clamped to %d, got %d", taskStateMaxListItems, len(session.TaskState.Progress))
+	}
+	if len([]rune(session.TaskState.Progress[0])) != taskStateMaxListItemChars {
+		t.Fatalf(
+			"expected progress item clamped to %d runes, got %d",
+			taskStateMaxListItemChars,
+			len([]rune(session.TaskState.Progress[0])),
+		)
+	}
+}
+
+func TestJSONStoreLoadClampsOversizedTaskState(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+
+	payload := strings.Join([]string{
+		`{`,
+		`  "schema_version": 1,`,
+		`  "id": "task-state-clamp-load",`,
+		`  "title": "Clamp Load",`,
+		`  "created_at": "2026-04-13T08:00:00Z",`,
+		`  "updated_at": "2026-04-13T09:00:00Z",`,
+		`  "task_state": {`,
+		`    "goal": "` + strings.Repeat("g", taskStateMaxFieldChars+30) + `",`,
+		`    "progress": [` + buildQuotedRepeatedWithIndex("p", taskStateMaxListItemChars+30, taskStateMaxListItems+3) + `],`,
+		`    "open_items": [],`,
+		`    "next_step": "",`,
+		`    "blockers": [],`,
+		`    "key_artifacts": [],`,
+		`    "decisions": [],`,
+		`    "user_constraints": [],`,
+		`    "last_updated_at": "2026-04-13T09:00:00Z"`,
+		`  },`,
+		`  "messages": []`,
+		`}`,
+	}, "\n")
+	mustWriteSessionFile(
+		t,
+		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "task-state-clamp-load.json"),
+		payload,
+	)
+
+	loaded, err := store.Load(context.Background(), "task-state-clamp-load")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if len([]rune(loaded.TaskState.Goal)) != taskStateMaxFieldChars {
+		t.Fatalf("expected loaded goal to be clamped to %d runes, got %d", taskStateMaxFieldChars, len([]rune(loaded.TaskState.Goal)))
+	}
+	if len(loaded.TaskState.Progress) != taskStateMaxListItems {
+		t.Fatalf("expected loaded progress list clamped to %d, got %d", taskStateMaxListItems, len(loaded.TaskState.Progress))
+	}
+}
+
+func buildQuotedRepeatedWithIndex(ch string, itemLen int, count int) string {
+	items := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		items = append(items, `"`+strings.Repeat(ch, itemLen-4)+buildIndexedSuffix(i)+`"`)
+	}
+	return strings.Join(items, ",")
+}
+
+func buildIndexedSuffix(index int) string {
+	chars := []rune("abcdefghijklmnopqrstuvwxyz0123456789")
+	hi := chars[(index/len(chars))%len(chars)]
+	lo := chars[index%len(chars)]
+	return string([]rune{hi, lo, 'x', 'x'})
+}
+
 func mustWriteSessionFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
