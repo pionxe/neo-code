@@ -53,7 +53,7 @@ func TestApplyComponentLayoutKeepsTranscriptHeightInSyncWithWaterfall(t *testing
 	app.applyComponentLayout(false)
 
 	lay := app.computeLayout()
-	wantTranscriptHeight, activityHeight, menuHeight, _ := app.waterfallMetrics(app.transcript.Width, lay.rightHeight)
+	wantTranscriptHeight, activityHeight, menuHeight, _ := app.waterfallMetrics(app.transcript.Width, lay.contentHeight)
 	if app.transcript.Height != wantTranscriptHeight {
 		t.Fatalf("expected transcript height %d, got %d", wantTranscriptHeight, app.transcript.Height)
 	}

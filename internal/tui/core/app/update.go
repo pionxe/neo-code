@@ -1276,13 +1276,8 @@ func (a App) transcriptBounds() (int, int, int, int) {
 
 	streamX := contentX
 	streamY := bodyY
-	if lay.stacked {
-		streamY += lay.sidebarHeight
-	} else {
-		streamX += lay.sidebarWidth + lay.bodyGap
-	}
 
-	return streamX, streamY, lay.rightWidth, a.transcript.Height
+	return streamX, streamY, lay.contentWidth, a.transcript.Height
 }
 
 func (a App) isMouseWithinInput(msg tea.MouseMsg) bool {
@@ -1302,15 +1297,10 @@ func (a App) inputBounds() (int, int, int, int) {
 
 	streamX := contentX
 	streamY := bodyY
-	if lay.stacked {
-		streamY += lay.sidebarHeight
-	} else {
-		streamX += lay.sidebarWidth + lay.bodyGap
-	}
 
-	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.commandMenuHeight(max(24, lay.rightWidth))
-	inputHeight := lipgloss.Height(a.renderPrompt(max(24, lay.rightWidth)))
-	return streamX, inputY, lay.rightWidth, inputHeight
+	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.commandMenuHeight(lay.contentWidth)
+	inputHeight := lipgloss.Height(a.renderPrompt(lay.contentWidth))
+	return streamX, inputY, lay.contentWidth, inputHeight
 }
 
 func (a App) activityBounds() (int, int, int, int) {
@@ -1322,17 +1312,12 @@ func (a App) activityBounds() (int, int, int, int) {
 
 	streamX := contentX
 	streamY := bodyY
-	if lay.stacked {
-		streamY += lay.sidebarHeight
-	} else {
-		streamX += lay.sidebarWidth + lay.bodyGap
-	}
 
 	activityHeight := a.activityPreviewHeight()
 	if activityHeight <= 0 {
-		return streamX, streamY + a.transcript.Height, lay.rightWidth, 0
+		return streamX, streamY + a.transcript.Height, lay.contentWidth, 0
 	}
-	return streamX, streamY + a.transcript.Height, lay.rightWidth, activityHeight
+	return streamX, streamY + a.transcript.Height, lay.contentWidth, activityHeight
 }
 
 func (a App) isMouseWithinActivity(msg tea.MouseMsg) bool {
@@ -1472,16 +1457,11 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	prevActivityWidth := a.activity.Width
 	prevActivityHeight := a.activity.Height
 	a.help.ShowAll = a.state.ShowHelp
-	sidebarFrameWidth := a.styles.panelFocused.GetHorizontalFrameSize()
-	sidebarFrameHeight := a.styles.panelFocused.GetVerticalFrameSize()
-	sidebarBodyWidth := max(14, lay.sidebarWidth-sidebarFrameWidth)
-	sidebarBodyHeight := max(4, lay.sidebarHeight-sidebarFrameHeight-lipgloss.Height(a.renderSidebarHeader(sidebarBodyWidth)))
-	a.sessions.SetSize(sidebarBodyWidth, sidebarBodyHeight)
-	a.transcript.Width = max(24, lay.rightWidth)
+	a.transcript.Width = lay.contentWidth
 	a.resizeCommandMenu()
-	a.input.SetWidth(a.composerInnerWidth(lay.rightWidth))
+	a.input.SetWidth(a.composerInnerWidth(lay.contentWidth))
 	a.input.SetHeight(a.composerHeight())
-	transcriptHeight, activityHeight, _, _ := a.waterfallMetrics(a.transcript.Width, lay.rightHeight)
+	transcriptHeight, activityHeight, _, _ := a.waterfallMetrics(a.transcript.Width, lay.contentHeight)
 	a.transcript.Height = transcriptHeight
 
 	if activityHeight > 0 {
@@ -1489,25 +1469,25 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 		frameHeight := panelStyle.GetVerticalFrameSize()
 		borderWidth := 2
 		paddingWidth := panelStyle.GetHorizontalFrameSize() - borderWidth
-		panelWidth := max(1, lay.rightWidth-borderWidth)
+		panelWidth := max(1, lay.contentWidth-borderWidth)
 		bodyWidth := max(10, panelWidth-paddingWidth)
 		bodyHeight := max(1, activityHeight-frameHeight-1)
 		a.activity.Width = bodyWidth
 		a.activity.Height = bodyHeight
 	} else {
-		a.activity.Width = max(10, lay.rightWidth-4)
+		a.activity.Width = max(10, lay.contentWidth-4)
 		a.activity.Height = 0
 	}
 
-	a.providerPicker.SetSize(max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.rightHeight-10, 6, 10)))
-	a.modelPicker.SetSize(max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.rightHeight-10, 6, 10)))
-	helpPickerMaxHeight := max(8, lay.rightHeight-6)
+	a.providerPicker.SetSize(max(24, tuiutils.Clamp(lay.contentWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.contentHeight-10, 6, 10)))
+	a.modelPicker.SetSize(max(24, tuiutils.Clamp(lay.contentWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.contentHeight-10, 6, 10)))
+	helpPickerMaxHeight := max(8, lay.contentHeight-6)
 	helpPickerDesiredHeight := (len(a.helpPicker.Items()) * 3) + 1
 	a.helpPicker.SetSize(
-		max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)),
+		max(24, tuiutils.Clamp(lay.contentWidth-14, 28, 52)),
 		max(6, tuiutils.Clamp(helpPickerDesiredHeight, 6, helpPickerMaxHeight)),
 	)
-	a.fileBrowser.SetHeight(max(6, tuiutils.Clamp(lay.rightHeight-8, 8, 16)))
+	a.fileBrowser.SetHeight(max(6, tuiutils.Clamp(lay.contentHeight-8, 8, 16)))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
 	} else if a.transcript.AtBottom() || a.isBusy() {
@@ -1558,7 +1538,13 @@ func (a *App) rebuildTranscript() {
 	copyButtons := make([]copyCodeButtonBinding, 0, 4)
 	nextCopyID := 1
 	for _, message := range a.activeMessages {
+		if message.Role == roleTool {
+			continue
+		}
 		rendered, bindings := a.renderMessageBlockWithCopy(message, width, nextCopyID)
+		if rendered == "" {
+			continue
+		}
 		blocks = append(blocks, rendered)
 		copyButtons = append(copyButtons, bindings...)
 		nextCopyID += len(bindings)

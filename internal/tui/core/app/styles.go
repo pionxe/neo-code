@@ -7,19 +7,32 @@ import (
 )
 
 const (
-	colorPrimary  = "#7AA2F7"
-	colorUser     = "#4FD6BE"
-	colorBorder   = "#2B3342"
-	colorError    = "#F7768E"
-	colorSuccess  = "#73DACA"
-	colorText     = "#DCE3F0"
-	colorSubtle   = "#7E8AA3"
-	colorBg       = "#090C12"
-	colorPanel    = "#11161F"
-	colorPanelAlt = "#151C27"
-	colorCode     = "#0E131B"
-	colorInk      = "#081018"
-	colorWarning  = "#E0AF68"
+	parchment   = "#f5f4ed"
+	ivory       = "#faf9f5"
+	pureWhite   = "#ffffff"
+	warmSand    = "#e8e6dc"
+	darkSurface = "#30302e"
+	deepDark    = "#141413"
+
+	anthropicNearBlack = "#141413"
+	terracotta         = "#c96442"
+	coralAccent        = "#d97757"
+
+	errorCrimson = "#b53333"
+	focusBlue    = "#3898ec"
+
+	charcoalWarm = "#4d4c48"
+	oliveGray    = "#5e5d59"
+	stoneGray    = "#87867f"
+	darkWarm     = "#3d3d3a"
+	warmSilver   = "#b0aea5"
+
+	borderCream = "#f0eee6"
+	borderWarm  = "#e8e6dc"
+	borderDark  = "#30302e"
+	ringWarm    = "#d1cfc5"
+	ringSubtle  = "#dedc01"
+	ringDeep    = "#c2c0b6"
 )
 
 type styles struct {
@@ -48,10 +61,8 @@ type styles struct {
 	streamContent     lipgloss.Style
 	messageUserTag    lipgloss.Style
 	messageAgentTag   lipgloss.Style
-	messageToolTag    lipgloss.Style
 	messageBody       lipgloss.Style
 	messageUserBody   lipgloss.Style
-	messageToolBody   lipgloss.Style
 	inlineNotice      lipgloss.Style
 	inlineError       lipgloss.Style
 	inlineSystem      lipgloss.Style
@@ -79,7 +90,7 @@ type styles struct {
 func newStyles() styles {
 	panel := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color(colorBorder)).
+		BorderForeground(lipgloss.Color(borderWarm)).
 		UnsetBackground().
 		Padding(0, 1)
 
@@ -87,107 +98,100 @@ func newStyles() styles {
 		doc: lipgloss.NewStyle().
 			Padding(1, 2, 0, 2).
 			UnsetBackground().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		headerBar: lipgloss.NewStyle().
 			UnsetBackground().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		headerBrand: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorPrimary)).
+			Foreground(lipgloss.Color(terracotta)).
 			UnsetBackground().
 			Padding(0, 1),
 		headerLabel: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)),
+			Foreground(lipgloss.Color(oliveGray)),
 		headerPath: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		headerSub: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)),
+			Foreground(lipgloss.Color(oliveGray)),
 		headerMeta: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		headerSpacer: lipgloss.NewStyle().
 			Width(1).
 			UnsetBackground(),
 		panel: panel,
 		panelFocused: panel.Copy().
-			BorderForeground(lipgloss.Color(colorPrimary)),
+			BorderForeground(lipgloss.Color(terracotta)),
 		panelTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		panelSubtitle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)),
+			Foreground(lipgloss.Color(oliveGray)),
 		panelBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(lipgloss.Color(anthropicNearBlack)).
 			UnsetBackground(),
 		empty: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)).
+			Foreground(lipgloss.Color(stoneGray)).
 			Padding(1, 0),
 		sessionRow: lipgloss.NewStyle().
 			Padding(0, 1).
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(lipgloss.Color(anthropicNearBlack)).
 			UnsetBackground(),
 		sessionRowActive: lipgloss.NewStyle().
 			Padding(0, 1).
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(lipgloss.Color(anthropicNearBlack)).
 			UnsetBackground(),
 		sessionRowFocused: lipgloss.NewStyle().
 			Padding(0, 1).
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(lipgloss.Color(anthropicNearBlack)).
 			UnsetBackground().
 			Bold(true),
 		sessionMeta: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)),
+			Foreground(lipgloss.Color(oliveGray)),
 		sessionMetaActive: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#94A0B8")),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		sessionMetaFocus: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#AFC3FF")),
+			Foreground(lipgloss.Color(terracotta)),
 		streamTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		streamMeta: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)),
+			Foreground(lipgloss.Color(oliveGray)),
 		streamContent: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(lipgloss.Color(anthropicNearBlack)).
 			UnsetBackground(),
-		messageUserTag:  tagStyle(colorUser),
-		messageAgentTag: tagStyle(colorPrimary),
-		messageToolTag:  tagStyle(colorSuccess),
+		messageUserTag:  tagStyle(charcoalWarm),
+		messageAgentTag: tagStyle(terracotta),
 		messageBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(lipgloss.Color(anthropicNearBlack)).
 			UnsetBackground().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorBorder)).
+			BorderForeground(lipgloss.Color(borderWarm)).
 			Padding(0, 0),
 		messageUserBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(lipgloss.Color(anthropicNearBlack)).
 			UnsetBackground().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorUser)).
-			Padding(0, 0),
-		messageToolBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSuccess)).
-			UnsetBackground().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorSuccess)).
+			BorderForeground(lipgloss.Color(terracotta)).
 			Padding(0, 0),
 		inlineNotice: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)).
+			Foreground(lipgloss.Color(oliveGray)).
 			UnsetBackground().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorBorder)).
+			BorderForeground(lipgloss.Color(borderWarm)).
 			Padding(0, 0).
 			Italic(true),
 		inlineError: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorError)).
+			Foreground(lipgloss.Color(errorCrimson)).
 			UnsetBackground().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorError)).
+			BorderForeground(lipgloss.Color(errorCrimson)).
 			Padding(0, 0).
 			Bold(true),
 		inlineSystem: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)).
+			Foreground(lipgloss.Color(oliveGray)).
 			UnsetBackground().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorBorder)).
+			BorderForeground(lipgloss.Color(borderWarm)).
 			Padding(0, 0),
 		codeBlock: lipgloss.NewStyle().
 			MarginLeft(1).
@@ -195,50 +199,50 @@ func newStyles() styles {
 			UnsetBackground().
 			Border(lipgloss.NormalBorder()).
 			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorPrimary)),
+			BorderForeground(lipgloss.Color(borderDark)),
 		codeText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(warmSilver)),
 		codeCopyButton: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorPrimary)).
+			Foreground(lipgloss.Color(coralAccent)).
 			Underline(true),
 		commandMenu: lipgloss.NewStyle().
 			UnsetBackground().
 			Padding(1, 1),
 		commandMenuTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorPrimary)),
+			Foreground(lipgloss.Color(terracotta)),
 		commandUsage: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		commandUsageMatch: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorPrimary)),
+			Foreground(lipgloss.Color(terracotta)),
 		commandDesc: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)),
+			Foreground(lipgloss.Color(oliveGray)),
 		inputPrefix: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorUser)).
+			Foreground(lipgloss.Color(terracotta)).
 			Bold(true),
 		inputLine: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(anthropicNearBlack)),
 		inputBox: lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorBorder)).
+			BorderForeground(lipgloss.Color(borderWarm)).
 			UnsetBackground().
 			Padding(0, 1),
 		inputBoxFocused: lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(colorPrimary)).
+			BorderForeground(lipgloss.Color(focusBlue)).
 			UnsetBackground().
 			Padding(0, 1),
 		footer: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)).
+			Foreground(lipgloss.Color(oliveGray)).
 			UnsetBackground(),
-		badgeUser:    badge("#12202D", colorUser),
-		badgeAgent:   badge("#16233A", colorPrimary),
-		badgeSuccess: badge("#102018", colorSuccess),
-		badgeWarning: badge("#241B10", colorWarning),
-		badgeError:   badge("#26131A", colorError),
-		badgeMuted:   badge(colorPanelAlt, colorSubtle),
+		badgeUser:    badge("", charcoalWarm),
+		badgeAgent:   badge("", coralAccent),
+		badgeSuccess: badge("", oliveGray),
+		badgeWarning: badge("", charcoalWarm),
+		badgeError:   badge("", errorCrimson),
+		badgeMuted:   badge("", stoneGray),
 	}
 }
 
@@ -246,7 +250,7 @@ func tagStyle(fg string) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(fg)).
-		Background(lipgloss.Color(colorBg)).
+		UnsetBackground().
 		Padding(0, 1)
 }
 

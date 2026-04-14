@@ -731,21 +731,15 @@ func TestComputeLayoutStackedAndWide(t *testing.T) {
 	app.width = 90
 	app.height = 40
 	layout := app.computeLayout()
-	if !layout.stacked {
-		t.Fatalf("expected stacked layout for narrow width")
-	}
-	if layout.rightWidth <= 0 || layout.sidebarWidth <= 0 {
-		t.Fatalf("expected positive layout widths, got %+v", layout)
+	if layout.contentWidth <= 0 {
+		t.Fatalf("expected positive content width, got %+v", layout)
 	}
 
 	app.width = 140
 	app.height = 40
 	layout = app.computeLayout()
-	if layout.stacked {
-		t.Fatalf("expected non-stacked layout for wide width")
-	}
-	if layout.rightWidth <= 0 || layout.sidebarWidth <= 0 {
-		t.Fatalf("expected positive layout widths, got %+v", layout)
+	if layout.contentWidth <= 0 {
+		t.Fatalf("expected positive content width, got %+v", layout)
 	}
 }
 

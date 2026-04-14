@@ -52,11 +52,8 @@ const (
 	filePickerTitle        = "Browse Files"
 	filePickerSubtitle     = "Navigate folders, Enter choose file, Esc cancel"
 
-	sidebarTitle      = "Sessions"
-	sidebarFilterHint = "Type / to search"
-	sidebarOpenHint   = "Enter to open"
-	activityTitle     = "Activity"
-	activitySubtitle  = "Latest execution events"
+	activityTitle    = "Activity"
+	activitySubtitle = "Latest execution events"
 
 	draftSessionTitle     = "Draft"
 	emptyConversationText = "No conversation yet.\nAsk NeoCode to inspect or change code, or type /help to browse local commands."

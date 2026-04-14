@@ -14,14 +14,8 @@ import (
 )
 
 type layout struct {
-	stacked       bool
 	contentWidth  int
 	contentHeight int
-	sidebarWidth  int
-	sidebarHeight int
-	rightWidth    int
-	rightHeight   int
-	bodyGap       int
 }
 
 const headerBarHeight = 1
@@ -29,8 +23,8 @@ const headerBarHeight = 1
 func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
-	if docWidth < 84 || docHeight < 24 {
-		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, "Window too small.\nPlease resize to at least 84x24.")), "\n")
+	if docWidth < 60 || docHeight < 20 {
+		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, "Window too small.\nPlease resize to at least 60x20.")), "\n")
 	}
 
 	lay := a.computeLayout()
@@ -96,37 +90,7 @@ func (a App) renderHeader(width int) string {
 }
 
 func (a App) renderBody(lay layout) string {
-	sidebar := a.renderSidebar(lay.sidebarWidth, lay.sidebarHeight)
-	stream := a.renderWaterfall(lay.rightWidth, lay.rightHeight)
-	if lay.stacked {
-		return lipgloss.JoinVertical(lipgloss.Left, sidebar, stream)
-	}
-	return lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		sidebar,
-		lipgloss.NewStyle().Width(lay.bodyGap).Render(""),
-		stream,
-	)
-}
-
-func (a App) renderSidebar(width int, height int) string {
-	style := a.styles.panel
-	if a.focus == panelSessions {
-		style = a.styles.panelFocused
-	}
-
-	frameHeight := style.GetVerticalFrameSize()
-	borderWidth := 2
-	paddingWidth := style.GetHorizontalFrameSize() - borderWidth
-	panelWidth := max(1, width-borderWidth)
-	bodyWidth := max(10, panelWidth-paddingWidth)
-	header := a.renderSidebarHeader(bodyWidth)
-	bodyHeight := max(3, height-frameHeight-lipgloss.Height(header))
-	a.sessions.SetSize(bodyWidth, bodyHeight)
-	body := a.styles.panelBody.Width(bodyWidth).Height(bodyHeight).Render(a.sessions.View())
-
-	panel := style.Width(panelWidth).Height(max(1, height-frameHeight)).Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
-	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, panel)
+	return a.renderWaterfall(lay.contentWidth, lay.contentHeight)
 }
 
 // waterfallMetrics 统一计算瀑布区各组件高度，确保渲染、布局与命中区域使用同一组尺寸。
@@ -210,23 +174,6 @@ func (a App) renderPrompt(width int) string {
 	return box.Width(boxWidth).Render(a.renderPermissionPrompt())
 }
 
-func (a App) renderSidebarHeader(width int) string {
-	title := a.styles.panelTitle.Render(sidebarTitle)
-	filterWidth := max(6, width-lipgloss.Width(title)-1)
-	titleRow := lipgloss.JoinHorizontal(
-		lipgloss.Center,
-		title,
-		lipgloss.NewStyle().Width(1).Render(""),
-		a.styles.panelSubtitle.Render(tuiutils.TrimRunes(sidebarFilterHint, filterWidth)),
-	)
-	openRow := a.styles.panelSubtitle.Render(tuiutils.TrimRunes(sidebarOpenHint, width))
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		lipgloss.Place(width, 1, lipgloss.Left, lipgloss.Top, titleRow),
-		lipgloss.Place(width, 1, lipgloss.Left, lipgloss.Top, openRow),
-	)
-}
-
 func (a App) renderPanel(title string, subtitle string, body string, width int, height int, focused bool) string {
 	style := a.styles.panel
 	if focused {
@@ -274,9 +221,7 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 		bodyStyle = a.styles.messageUserBody
 		blockAlign = lipgloss.Right
 	case roleTool:
-		tag = messageTagTool
-		tagStyle = a.styles.messageToolTag
-		bodyStyle = a.styles.messageToolBody
+		return "", nil
 	}
 
 	content := strings.TrimSpace(message.Content)
@@ -470,22 +415,7 @@ func (a App) computeLayout() layout {
 	helpHeight := a.helpHeight(contentWidth)
 	headerHeight := headerBarHeight
 	contentHeight := max(1, a.height-a.styles.doc.GetVerticalFrameSize()-headerHeight-helpHeight)
-	lay := layout{contentWidth: contentWidth, contentHeight: contentHeight}
-	if contentWidth < 110 {
-		lay.stacked = true
-		lay.sidebarWidth = contentWidth
-		lay.sidebarHeight = tuiutils.Clamp(contentHeight/3, 9, 13)
-		lay.rightWidth = contentWidth
-		lay.rightHeight = max(10, contentHeight-lay.sidebarHeight)
-		return lay
-	}
-
-	lay.bodyGap = 1
-	lay.sidebarWidth = 22
-	lay.sidebarHeight = contentHeight
-	lay.rightWidth = max(24, contentWidth-lay.sidebarWidth-lay.bodyGap)
-	lay.rightHeight = contentHeight
-	return lay
+	return layout{contentWidth: contentWidth, contentHeight: contentHeight}
 }
 
 // helpHeight 仅计算帮助区高度，避免在 layout 计算阶段触发完整渲染。

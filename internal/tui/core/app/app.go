@@ -181,24 +181,24 @@ func newApp(container tuibootstrap.Container) (App, error) {
 		return "> "
 	})
 	input.FocusedStyle.Base = lipgloss.NewStyle()
-	input.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser)).Bold(true)
-	input.FocusedStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
-	input.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
+	input.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(anthropicNearBlack)).Bold(true)
+	input.FocusedStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(anthropicNearBlack))
+	input.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(oliveGray))
 	input.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	input.FocusedStyle.CursorLineNumber = lipgloss.NewStyle()
 	input.BlurredStyle.Base = lipgloss.NewStyle()
-	input.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser)).Bold(true)
-	input.BlurredStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
-	input.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
+	input.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(anthropicNearBlack)).Bold(true)
+	input.BlurredStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(anthropicNearBlack))
+	input.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(oliveGray))
 	input.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	input.BlurredStyle.CursorLineNumber = lipgloss.NewStyle()
-	input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser))
+	input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(terracotta))
 	input.SetHeight(composerMinHeight)
 	input.Focus()
 
 	spin := spinner.New()
 	spin.Spinner = spinner.Line
-	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colorPrimary))
+	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(terracotta))
 
 	h := help.New()
 	h.ShowAll = false
