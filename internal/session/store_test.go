@@ -769,6 +769,129 @@ func TestJSONStoreLoadClampsOversizedTaskState(t *testing.T) {
 	}
 }
 
+func TestJSONStoreSaveLoadRoundTripTodos(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+
+	createdAt := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(5 * time.Minute)
+	session := &Session{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            "todos-round-trip",
+		Title:         "Todos Round Trip",
+		CreatedAt:     createdAt,
+		UpdatedAt:     updatedAt,
+		TaskState:     TaskState{},
+		Todos: []TodoItem{
+			{
+				ID:           "todo-1",
+				Content:      "  design session todo model  ",
+				Status:       TodoStatusPending,
+				Dependencies: []string{"todo-2", "todo-2", " "},
+				CreatedAt:    createdAt,
+				UpdatedAt:    updatedAt,
+			},
+			{
+				ID:        "todo-2",
+				Content:   "persist todos in session",
+				Status:    TodoStatusInProgress,
+				Priority:  2,
+				CreatedAt: createdAt,
+				UpdatedAt: updatedAt,
+			},
+		},
+		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+	}
+
+	if err := store.Save(context.Background(), session); err != nil {
+		t.Fatalf("save session with todos: %v", err)
+	}
+	if got := session.Todos[0].Dependencies; len(got) != 1 || got[0] != "todo-2" {
+		t.Fatalf("expected dependencies normalized in-memory, got %+v", got)
+	}
+	if got := session.Todos[0].Content; got != "design session todo model" {
+		t.Fatalf("expected content normalized, got %q", got)
+	}
+
+	loaded, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load session with todos: %v", err)
+	}
+	if len(loaded.Todos) != 2 {
+		t.Fatalf("expected 2 todos, got %d", len(loaded.Todos))
+	}
+	if loaded.Todos[0].ID != "todo-1" || loaded.Todos[1].ID != "todo-2" {
+		t.Fatalf("unexpected todo ids: %+v", loaded.Todos)
+	}
+	if loaded.Todos[1].Priority != 2 {
+		t.Fatalf("expected priority 2, got %d", loaded.Todos[1].Priority)
+	}
+}
+
+func TestJSONStoreLoadAllowsMissingTodosField(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+
+	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "no-todos.json"), strings.Join([]string{
+		`{`,
+		`  "schema_version": 1,`,
+		`  "id": "no-todos",`,
+		`  "title": "No Todos",`,
+		`  "created_at": "2026-04-14T10:00:00Z",`,
+		`  "updated_at": "2026-04-14T10:05:00Z",`,
+		`  "task_state": {`,
+		`    "goal": "",`,
+		`    "progress": [],`,
+		`    "open_items": [],`,
+		`    "next_step": "",`,
+		`    "blockers": [],`,
+		`    "key_artifacts": [],`,
+		`    "decisions": [],`,
+		`    "user_constraints": [],`,
+		`    "last_updated_at": "2026-04-14T10:05:00Z"`,
+		`  },`,
+		`  "messages": []`,
+		`}`,
+	}, "\n"))
+
+	loaded, err := store.Load(context.Background(), "no-todos")
+	if err != nil {
+		t.Fatalf("load session without todos field: %v", err)
+	}
+	if len(loaded.Todos) != 0 {
+		t.Fatalf("expected no todos, got %+v", loaded.Todos)
+	}
+}
+
+func TestJSONStoreSaveRejectsInvalidTodos(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+
+	err := store.Save(context.Background(), &Session{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            "invalid-todos",
+		Title:         "Invalid Todos",
+		CreatedAt:     time.Now().Add(-time.Minute),
+		UpdatedAt:     time.Now(),
+		TaskState:     TaskState{},
+		Todos: []TodoItem{
+			{ID: "todo-1", Content: "first", Dependencies: []string{"missing"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), `unknown dependency "missing"`) {
+		t.Fatalf("expected invalid dependency error, got %v", err)
+	}
+}
+
 func buildQuotedRepeatedWithIndex(ch string, itemLen int, count int) string {
 	items := make([]string, 0, count)
 	for i := 0; i < count; i++ {

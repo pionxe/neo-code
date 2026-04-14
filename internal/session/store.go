@@ -31,6 +31,7 @@ type Session struct {
 	UpdatedAt        time.Time               `json:"updated_at"`
 	Workdir          string                  `json:"workdir,omitempty"`
 	TaskState        TaskState               `json:"task_state"`
+	Todos            []TodoItem              `json:"todos,omitempty"`
 	Messages         []providertypes.Message `json:"messages"`
 	TokenInputTotal  int                     `json:"token_input_total,omitempty"`
 	TokenOutputTotal int                     `json:"token_output_total,omitempty"`
@@ -82,6 +83,11 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 	}
 
 	session.TaskState = normalizeAndClampTaskState(session.TaskState)
+	normalizedTodos, err := normalizeAndValidateTodos(session.Todos)
+	if err != nil {
+		return err
+	}
+	session.Todos = normalizedTodos
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,6 +211,7 @@ func NewWithWorkdir(title string, workdir string) Session {
 		UpdatedAt:     now,
 		Workdir:       strings.TrimSpace(workdir),
 		TaskState:     TaskState{},
+		Todos:         []TodoItem{},
 		Messages:      []providertypes.Message{},
 	}
 }
@@ -246,6 +253,7 @@ func decodeStoredSession(data []byte) (Session, error) {
 		UpdatedAt     time.Time               `json:"updated_at"`
 		Workdir       string                  `json:"workdir,omitempty"`
 		TaskState     *TaskState              `json:"task_state"`
+		Todos         []TodoItem              `json:"todos,omitempty"`
 		Messages      []providertypes.Message `json:"messages"`
 		TokenInput    int                     `json:"token_input_total,omitempty"`
 		TokenOutput   int                     `json:"token_output_total,omitempty"`
@@ -273,6 +281,7 @@ func decodeStoredSession(data []byte) (Session, error) {
 		UpdatedAt:        stored.UpdatedAt,
 		Workdir:          stored.Workdir,
 		TaskState:        *stored.TaskState,
+		Todos:            stored.Todos,
 		Messages:         stored.Messages,
 		TokenInputTotal:  stored.TokenInput,
 		TokenOutputTotal: stored.TokenOutput,
@@ -281,6 +290,11 @@ func decodeStoredSession(data []byte) (Session, error) {
 		return Session{}, err
 	}
 	session.TaskState = normalizeAndClampTaskState(session.TaskState)
+	normalizedTodos, err := normalizeAndValidateTodos(session.Todos)
+	if err != nil {
+		return Session{}, err
+	}
+	session.Todos = normalizedTodos
 	return session, nil
 }
 

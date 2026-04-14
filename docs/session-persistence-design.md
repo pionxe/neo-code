@@ -25,6 +25,7 @@ NeoCode 当前使用本地 JSON 文件持久化会话，以保持实现简单、
 - `created_at`、`updated_at`
 - `workdir`
 - `task_state`
+- `todos`
 - `messages`
 - `token_input_total`
 - `token_output_total`
@@ -50,6 +51,22 @@ NeoCode 当前使用本地 JSON 文件持久化会话，以保持实现简单、
 - `decisions`
 - `user_constraints`
 - `last_updated_at`
+
+`todos` 鍥哄畾鍖呭惈浠ヤ笅瑕佺偣锛?
+- `id`
+- `content`
+- `status`
+- `dependencies`
+- `created_at`
+- `updated_at`
+- 鍙€?`priority`
+
+鍏朵腑 `status` 褰撳墠鍥哄畾涓猴細
+- `pending`
+- `in_progress`
+- `completed`
+
+鍚屾椂锛屽綋 session JSON 缂哄け `todos` 瀛楁鏃讹紝`Load` 浼氭寜绌?Todo 鍒楄〃鍏煎鍔犺浇銆?
 
 ## 读写行为
 
