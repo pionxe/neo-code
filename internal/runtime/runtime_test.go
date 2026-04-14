@@ -4483,6 +4483,74 @@ func TestParallelToolCallsSerializeSameToolName(t *testing.T) {
 	}
 }
 
+func TestParallelToolCallsStopDispatchAfterFirstError(t *testing.T) {
+	t.Parallel()
+
+	const (
+		totalCalls    = 12
+		slowToolDelay = 200 * time.Millisecond
+	)
+
+	toolSpecs := make([]providertypes.ToolSpec, 0, totalCalls)
+	toolCalls := make([]providertypes.ToolCall, 0, totalCalls)
+	for i := 0; i < totalCalls; i++ {
+		name := fmt.Sprintf("tool_%d", i)
+		toolSpecs = append(toolSpecs, providertypes.ToolSpec{Name: name})
+		toolCalls = append(toolCalls, providertypes.ToolCall{ID: fmt.Sprintf("call_%d", i), Name: name, Arguments: `{}`})
+	}
+
+	var executeStarted int32
+	toolManager := &stubToolManager{
+		specs: toolSpecs,
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			atomic.AddInt32(&executeStarted, 1)
+			if input.Name == "tool_0" {
+				return tools.ToolResult{Name: input.Name, Content: "ok"}, nil
+			}
+			time.Sleep(slowToolDelay)
+			return tools.ToolResult{Name: input.Name, Content: "ok"}, nil
+		},
+	}
+
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			responses: []scriptedResponse{
+				{
+					Message: providertypes.Message{
+						Role:      providertypes.RoleAssistant,
+						ToolCalls: toolCalls,
+					},
+					FinishReason: "tool_calls",
+				},
+			},
+		},
+	}
+
+	baseStore := newMemoryStore()
+	store := &failingStore{
+		Store:      baseStore,
+		saveErr:    errors.New("save failed"),
+		failOnSave: 3,
+	}
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		toolManager,
+		store,
+		providerFactory,
+		nil,
+	)
+
+	err := service.Run(context.Background(), UserInput{RunID: "run-first-error-stop-dispatch", Content: "parallel"})
+	if err == nil {
+		t.Fatalf("expected run error when first tool result save fails")
+	}
+
+	if got := atomic.LoadInt32(&executeStarted); got >= int32(totalCalls) {
+		t.Fatalf("expected dispatch to stop before all tool calls start, started=%d total=%d", got, totalCalls)
+	}
+}
+
 func TestAgentDoneEventCarriesRunScopedEnvelope(t *testing.T) {
 	t.Parallel()
 
