@@ -28,15 +28,16 @@ func (taskStateSource) Sections(ctx context.Context, input BuildInput) ([]prompt
 
 // renderTaskStateSection 把任务状态转成稳定顺序的文本段，供模型恢复长期任务上下文。
 func renderTaskStateSection(state agentsession.TaskState) promptSection {
-	lines := make([]string, 0, 8)
-	lines = append(lines, fmt.Sprintf("- goal: %s", promptTaskStateValue(state.Goal)))
-	lines = append(lines, fmt.Sprintf("- progress: %s", promptTaskStateListValue(state.Progress)))
-	lines = append(lines, fmt.Sprintf("- open_items: %s", promptTaskStateListValue(state.OpenItems)))
-	lines = append(lines, fmt.Sprintf("- next_step: %s", promptTaskStateValue(state.NextStep)))
-	lines = append(lines, fmt.Sprintf("- blockers: %s", promptTaskStateListValue(state.Blockers)))
-	lines = append(lines, fmt.Sprintf("- key_artifacts: %s", promptTaskStateListValue(state.KeyArtifacts)))
-	lines = append(lines, fmt.Sprintf("- decisions: %s", promptTaskStateListValue(state.Decisions)))
-	lines = append(lines, fmt.Sprintf("- user_constraints: %s", promptTaskStateListValue(state.UserConstraints)))
+	lines := []string{
+		fmt.Sprintf("- goal: %s", promptTaskStateValue(state.Goal)),
+		fmt.Sprintf("- progress: %s", promptTaskStateListValue(state.Progress)),
+		fmt.Sprintf("- open_items: %s", promptTaskStateListValue(state.OpenItems)),
+		fmt.Sprintf("- next_step: %s", promptTaskStateValue(state.NextStep)),
+		fmt.Sprintf("- blockers: %s", promptTaskStateListValue(state.Blockers)),
+		fmt.Sprintf("- key_artifacts: %s", promptTaskStateListValue(state.KeyArtifacts)),
+		fmt.Sprintf("- decisions: %s", promptTaskStateListValue(state.Decisions)),
+		fmt.Sprintf("- user_constraints: %s", promptTaskStateListValue(state.UserConstraints)),
+	}
 
 	return promptSection{
 		Title:   "Task State",
@@ -50,7 +51,7 @@ func promptTaskStateValue(value string) string {
 	if value == "" {
 		return "none"
 	}
-	return value
+	return escapePromptTaskStateLineBreaks(value)
 }
 
 // promptTaskStateListValue 统一渲染任务状态中的列表字段。
@@ -65,7 +66,7 @@ func promptTaskStateListValue(values []string) string {
 		if value == "" {
 			continue
 		}
-		sanitized = append(sanitized, value)
+		sanitized = append(sanitized, escapePromptTaskStateLineBreaks(value))
 	}
 	if len(sanitized) == 0 {
 		return "none"
@@ -93,4 +94,9 @@ func sanitizePromptTaskStateText(value string) string {
 		cleaned = append(cleaned, strings.Join(fields, " "))
 	}
 	return strings.Join(cleaned, "\n")
+}
+
+// escapePromptTaskStateLineBreaks 在渲染到单行键值结构前转义换行，避免多行内容破坏 prompt 结构。
+func escapePromptTaskStateLineBreaks(value string) string {
+	return strings.ReplaceAll(value, "\n", `\n`)
 }

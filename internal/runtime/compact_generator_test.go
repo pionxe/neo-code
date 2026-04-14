@@ -16,9 +16,7 @@ import (
 )
 
 func validCompactSummaryJSON() string {
-	return strings.Join([]string{
-		`{"task_state":{"goal":"Finish task state refactor","progress":["Persisted task_state in session"],"open_items":["Update runtime tests"],"next_step":"Continue from retained context","blockers":[],"key_artifacts":["internal/runtime/compact_generator.go"],"decisions":["Do not keep old summary-only protocol"],"user_constraints":["No backward compatibility"]},"display_summary":"[compact_summary]\ndone:\n- Persisted durable task state.\n\nin_progress:\n- Continue from the retained recent window.\n\ndecisions:\n- Do not keep the old summary-only protocol.\n\ncode_changes:\n- Updated compact summary generation behavior.\n\nconstraints:\n- Preserve only the minimum information needed to continue the work."}`,
-	}, "")
+	return `{"task_state":{"goal":"Finish task state refactor","progress":["Persisted task_state in session"],"open_items":["Update runtime tests"],"next_step":"Continue from retained context","blockers":[],"key_artifacts":["internal/runtime/compact_generator.go"],"decisions":["Do not keep old summary-only protocol"],"user_constraints":["No backward compatibility"]},"display_summary":"[compact_summary]\ndone:\n- Persisted durable task state.\n\nin_progress:\n- Continue from the retained recent window.\n\ndecisions:\n- Do not keep the old summary-only protocol.\n\ncode_changes:\n- Updated compact summary generation behavior.\n\nconstraints:\n- Preserve only the minimum information needed to continue the work."}`
 }
 
 func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) {
@@ -385,6 +383,23 @@ func TestParseCompactSummaryOutputSkipsNonCompactJSONPreface(t *testing.T) {
 	}
 	if output.TaskState.Goal != "g" {
 		t.Fatalf("expected parsed goal, got %+v", output.TaskState)
+	}
+}
+
+func TestParseCompactSummaryOutputSkipsStrictlyInvalidCandidateAndUsesNext(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Join([]string{
+		`noise {"task_state":{"goal":"bad","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"unexpected":"x"},"display_summary":"[compact_summary]\ninvalid"}`,
+		`{"task_state":{"goal":"good","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"[compact_summary]\nok"}`,
+	}, "\n")
+
+	output, err := parseCompactSummaryOutput(content)
+	if err != nil {
+		t.Fatalf("expected parser to skip invalid strict candidate, got %v", err)
+	}
+	if output.TaskState.Goal != "good" {
+		t.Fatalf("expected second valid candidate, got %+v", output.TaskState)
 	}
 }
 
