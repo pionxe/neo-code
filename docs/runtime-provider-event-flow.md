@@ -22,6 +22,8 @@
 - `compact_applied`
 - `compact_error`
 
+这三类 compact 事件同时用于 `manual`、`auto`、`reactive` 与 `loop_limit` 四种来源，调用方可通过 payload 中的 `trigger_mode` 区分。
+
 ## ReAct 主循环
 
 1. 加载目标会话或创建新会话。
@@ -37,6 +39,10 @@
 11. 如果最终 assistant 回复后没有后续工具调用，则在 runtime 收口处安排一次后台 memo 自动提取。
 12. 如果仍需继续推理，则进入下一轮；否则结束。
 
+补充说明：
+- 当下一轮开始前已命中 `max_loops` 上限时，runtime 会先尝试一次 `loop_limit` compact checkpoint，再发出最终 `error` 事件结束本次 run。
+- 该 checkpoint 成功时会先发出 `compact_start -> compact_done`，并把 session 消息、`TaskState` 与累计 token 重置后的状态持久化；失败时会发出 `compact_error`，随后仍以最大轮数错误结束。
+
 ### Memo 自动提取调度
 
 - 自动提取只在最终 assistant 回复完成且当前轮没有后续工具调用时调度。
@@ -44,6 +50,10 @@
 - runtime 只负责在结束点调度，不直接执行提取逻辑；实际 debounce、尾随执行与持久化去重由 `internal/memo` 内部处理。
 - 调度时会绑定当次 provider/model 快照，后台任务不会重新读取全局当前配置，避免把历史会话消息发送到后续切换后的 provider。
 - 自动提取失败只记日志，不额外发出 TUI 事件，也不影响主链路完成。
+- `memo` 的最近消息窗口会复用 `internal/context` 的只读投影规则，只保留 provider-safe 的消息序列。
+- assistant 含 `tool_calls` 时，只有在窗口内能同时保留对应 `tool` 响应时才会注入；缺响应、空内容或已被 micro compact 清空的 assistant/tool 片段会整组丢弃，保留项会先投影为模型可消费的结构化文本。
+- recent window 的总消息数有硬预算：`min(limit*2, 24)`；超过预算的整段 tool span 会被跳过，避免窗口体积失控。
+- 进入 `memo` 提取前，tool 文本会二次收敛为 `content_excerpt`，并按 `600` rune 上限截断。
 
 补充约束：
 - 同一 turn 内的 provider retry 只重放冻结后的 turn 快照，不会重新读取配置。
@@ -91,6 +101,8 @@
 - `internal/provider/streaming` 统一累积文本、tool call 增量和 `message_done`
 - runtime 将累积过程映射成 `RuntimeEvent`
 - TUI 使用 Bubble Tea `Cmd` 监听事件，并在处理完成后继续订阅
+- `provider.GenerateText` 只在上游 `Generate` 成功返回时，才把缺失 `message_done` 视为流式中断。
+- 如果 provider 在真正开始流式输出前直接返回 HTTP/ProviderError，则优先保留原始错误，不再额外包装成 `message_done` 缺失。
 
 同一套流式累积逻辑同时复用于：
 - 普通 `Run()` 的 assistant 回复收敛

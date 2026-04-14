@@ -1133,6 +1133,58 @@ func TestNewMemoExtractorAdapterSchedulesExtractorAndGenerates(t *testing.T) {
 	}
 }
 
+func TestNewMemoExtractorAdapterBuildsProviderSafeMemoWindow(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "token")
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	manager := config.NewManager(config.NewLoader("", &cfg))
+
+	providerStub := &stubMemoProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			if len(req.Messages) != 2 {
+				t.Fatalf("unexpected memo window: %+v", req.Messages)
+			}
+			for _, message := range req.Messages {
+				if len(message.ToolCalls) > 0 {
+					t.Fatalf("unexpected incomplete tool call span in memo window: %+v", req.Messages)
+				}
+			}
+			events <- providertypes.NewTextDeltaStreamEvent(`[]`)
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+	factory := &stubMemoProviderFactory{provider: providerStub}
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
+
+	inputMessages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "first"},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call_1", Name: "filesystem_read_file", Arguments: `{}`},
+			},
+		},
+		{Role: providertypes.RoleUser, Content: "second"},
+	}
+	extractor.Schedule("session-1", inputMessages)
+	if !scheduler.called || scheduler.extractor == nil {
+		t.Fatalf("expected scheduler to receive extractor")
+	}
+
+	entries, err := scheduler.extractor.Extract(context.Background(), inputMessages)
+	if err != nil {
+		t.Fatalf("extractor.Extract() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected empty extracted entries, got %+v", entries)
+	}
+	if !factory.called {
+		t.Fatalf("expected provider factory Build to be called")
+	}
+}
+
 func TestNewMemoExtractorAdapterKeepsScheduledConfigSnapshot(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "openai-token")
 	t.Setenv(config.QiniuDefaultAPIKeyEnv, "qiniu-token")

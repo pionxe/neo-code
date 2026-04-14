@@ -2,11 +2,14 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	providertypes "neo-code/internal/provider/types"
 )
+
+var errGenerateTextMissingMessageDone = errors.New("provider stream ended without message_done event")
 
 // GenerateText 聚合并消费流式事件，直接返回完整字符串。消灭上层流处理样板代码。
 func GenerateText(ctx context.Context, p Provider, req providertypes.GenerateRequest) (string, error) {
@@ -43,7 +46,7 @@ func GenerateText(ctx context.Context, p Provider, req providertypes.GenerateReq
 			}
 		}
 		if streamErr == nil && !messageDone {
-			streamErr = fmt.Errorf("provider stream ended without message_done event")
+			streamErr = errGenerateTextMissingMessageDone
 		}
 		done <- streamErr
 	}()
@@ -51,14 +54,15 @@ func GenerateText(ctx context.Context, p Provider, req providertypes.GenerateReq
 	err := p.Generate(ctx, req, events)
 	close(events)
 
-	if streamErr := <-done; streamErr != nil {
-		if err != nil {
-			return "", fmt.Errorf("generate failed: %v: %w", streamErr, err)
-		}
-		return "", streamErr
-	}
+	streamErr := <-done
 	if err != nil {
-		return "", err
+		if streamErr == nil || errors.Is(streamErr, errGenerateTextMissingMessageDone) {
+			return "", err
+		}
+		return "", fmt.Errorf("generate failed: %v: %w", streamErr, err)
+	}
+	if streamErr != nil {
+		return "", streamErr
 	}
 	return builder.String(), nil
 }

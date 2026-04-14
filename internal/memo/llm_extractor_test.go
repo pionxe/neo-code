@@ -232,6 +232,102 @@ func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
 	}
 }
 
+func TestLLMExtractorExtractDropsIncompleteToolCallSpan(t *testing.T) {
+	generator := &stubTextGenerator{response: `[]`}
+	extractor := NewLLMExtractor(generator)
+
+	_, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "first"},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call_1", Name: "filesystem_read_file", Arguments: `{}`},
+			},
+		},
+		{Role: providertypes.RoleUser, Content: "second"},
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(generator.messages) != 2 {
+		t.Fatalf("len(generator.messages) = %d, want 2", len(generator.messages))
+	}
+	for _, message := range generator.messages {
+		if len(message.ToolCalls) > 0 {
+			t.Fatalf("unexpected tool call message in extraction window: %#v", message)
+		}
+	}
+}
+
+func TestLLMExtractorExtractKeepsProjectedToolCallSpan(t *testing.T) {
+	generator := &stubTextGenerator{response: `[]`}
+	extractor := NewLLMExtractor(generator)
+
+	_, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember this"},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call_1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+		{
+			Role:         providertypes.RoleTool,
+			ToolCallID:   "call_1",
+			Content:      "README body",
+			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(generator.messages) != 3 {
+		t.Fatalf("len(generator.messages) = %d, want 3", len(generator.messages))
+	}
+	if generator.messages[1].Role != providertypes.RoleAssistant || len(generator.messages[1].ToolCalls) != 1 {
+		t.Fatalf("expected assistant tool call span to be preserved, got %#v", generator.messages[1])
+	}
+	toolMessage := generator.messages[2]
+	if toolMessage.Role != providertypes.RoleTool {
+		t.Fatalf("expected projected tool message, got %#v", toolMessage)
+	}
+	if !strings.Contains(toolMessage.Content, "tool result") || !strings.Contains(toolMessage.Content, "tool: filesystem_read_file") {
+		t.Fatalf("expected projected tool text, got %q", toolMessage.Content)
+	}
+	if toolMessage.ToolMetadata != nil {
+		t.Fatalf("expected projected tool metadata to be cleared, got %#v", toolMessage.ToolMetadata)
+	}
+}
+
+func TestLLMExtractorExtractSkipsOrphanAndClearedToolMessages(t *testing.T) {
+	generator := &stubTextGenerator{response: `[]`}
+	extractor := NewLLMExtractor(generator)
+
+	_, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "alpha"},
+		{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call_1", Name: "bash", Arguments: `{}`},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call_1", Content: "[Old tool result content cleared]"},
+		{Role: providertypes.RoleUser, Content: "beta"},
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(generator.messages) != 2 {
+		t.Fatalf("len(generator.messages) = %d, want 2", len(generator.messages))
+	}
+	for _, message := range generator.messages {
+		if message.Role == providertypes.RoleTool || len(message.ToolCalls) > 0 {
+			t.Fatalf("unexpected tool-related message in extraction window: %#v", message)
+		}
+	}
+}
+
 func TestLLMExtractorExtractNilGenerator(t *testing.T) {
 	var extractor *LLMExtractor
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
@@ -266,28 +362,5 @@ func TestExtractJSONArrayErrors(t *testing.T) {
 	}
 	if _, err := extractJSONArray(`[{"a":"x"}`); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("expected incomplete array error, got %v", err)
-	}
-}
-
-func TestCloneProviderMessageDeepCopy(t *testing.T) {
-	original := providertypes.Message{
-		Role:    providertypes.RoleAssistant,
-		Content: "hello",
-		ToolCalls: []providertypes.ToolCall{
-			{ID: "1", Name: "a", Arguments: "{}"},
-		},
-		ToolMetadata: map[string]string{"k": "v"},
-	}
-
-	cloned := cloneProviderMessage(original)
-	original.ToolCalls[0].Name = "changed"
-	original.ToolMetadata["k"] = "changed"
-	if cloned.ToolCalls[0].Name != "a" || cloned.ToolMetadata["k"] != "v" {
-		t.Fatalf("cloneProviderMessage should deep copy nested values, got %#v", cloned)
-	}
-
-	plain := cloneProviderMessage(providertypes.Message{Role: providertypes.RoleUser, Content: "x"})
-	if len(plain.ToolCalls) != 0 || plain.ToolMetadata != nil {
-		t.Fatalf("plain clone should not create nested values, got %#v", plain)
 	}
 }
