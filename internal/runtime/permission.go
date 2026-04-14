@@ -170,7 +170,7 @@ func (s *Service) awaitPermissionDecision(
 	}
 	defer s.approvalBroker.Close(requestID)
 
-	s.emit(ctx, EventPermissionRequest, input.RunID, input.SessionID, PermissionRequestPayload{
+	s.emit(ctx, EventPermissionRequested, input.RunID, input.SessionID, PermissionRequestPayload{
 		RequestID:    requestID,
 		ToolCallID:   input.Call.ID,
 		ToolName:     input.Call.Name,

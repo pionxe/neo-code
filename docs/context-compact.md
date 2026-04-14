@@ -61,7 +61,7 @@ context:
    优先复用会话记录的 `provider` / `model`，缺失时回退到当前配置。
 6. summary generator 调用模型生成完整 `task_state` 与 display summary。
 7. runner 校验 display summary 结构与长度，必要时截断，并写入 `task_state.last_updated_at`。
-8. compact 成功时回写 `session.TaskState` 与会话消息并发出 `compact_done`；失败时发出 `compact_error`。
+8. compact 成功时回写 `session.TaskState` 与会话消息并发出 `compact_applied`；失败时发出 `compact_error`。
 
 其中 `reactive` mode 在 context 包内与 `manual` 复用同一条压缩管线：
 
@@ -74,7 +74,7 @@ context:
 
 1. 识别 provider 归一化后的 typed error，必要时回退到错误文本匹配。
 2. 触发一次 `compact.Run(mode=reactive)`。
-3. 继续复用 `compact_start`、`compact_done`、`compact_error` 事件，并通过 `trigger_mode=reactive` 区分来源。
+3. 继续复用 `compact_start`、`compact_applied`、`compact_error` 事件，并通过 `trigger_mode=reactive` 区分来源。
 4. 每次 `Run()` 最多只执行一次 reactive 重试，避免无限循环。
 
 ## 生成协议
@@ -138,10 +138,10 @@ constraints:
 compact 相关 runtime 事件包括：
 
 - `compact_start`
-- `compact_done`
+- `compact_applied`
 - `compact_error`
 
-`compact_done` payload 包含：
+`compact_applied` payload 包含：
 
 - `applied`
 - `before_chars`

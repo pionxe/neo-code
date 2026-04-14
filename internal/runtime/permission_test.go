@@ -209,7 +209,7 @@ waitRequest:
 		case <-time.After(3 * time.Second):
 			t.Fatalf("timed out waiting permission request")
 		case event := <-service.Events():
-			if event.Type != EventPermissionRequest {
+			if !isPermissionRequestEvent(event.Type) {
 				continue
 			}
 			payload, ok := event.Payload.(PermissionRequestPayload)
@@ -327,7 +327,7 @@ waitRequest:
 		case <-time.After(3 * time.Second):
 			t.Fatalf("timed out waiting permission request")
 		case event := <-service.Events():
-			if event.Type != EventPermissionRequest {
+			if !isPermissionRequestEvent(event.Type) {
 				continue
 			}
 			payload, ok := event.Payload.(PermissionRequestPayload)
@@ -462,7 +462,7 @@ waitRequest:
 		case <-time.After(3 * time.Second):
 			t.Fatalf("timed out waiting permission request")
 		case event := <-service.Events():
-			if event.Type != EventPermissionRequest {
+			if !isPermissionRequestEvent(event.Type) {
 				continue
 			}
 			payload, ok := event.Payload.(PermissionRequestPayload)
@@ -590,7 +590,7 @@ func TestServiceRunMCPPermissionHardDenyFlow(t *testing.T) {
 
 	events := collectRuntimeEvents(service.Events())
 	assertEventSequence(t, events, []EventType{EventPermissionResolved, EventToolResult, EventAgentDone})
-	assertNoEventType(t, events, EventPermissionRequest)
+	assertNoPermissionRequestFlow(t, events)
 
 	foundResolved := false
 	for _, event := range events {

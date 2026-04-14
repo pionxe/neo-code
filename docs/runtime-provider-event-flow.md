@@ -2,7 +2,7 @@
 
 ## Runtime 事件类型
 
-当前 runtime 对外暴露一组小而稳定的事件：
+当前 runtime 对外暴露一组小而稳定的事件（1A 硬切后不再保留旧事件镜像）：
 
 - `user_message`
 - `agent_chunk`
@@ -11,14 +11,13 @@
 - `tool_start`
 - `tool_chunk`
 - `tool_result`
-- `run_canceled`
-- `error`
+- `stop_reason_decided`
 - `provider_retry`
-- `permission_request`
+- `permission_requested`
 - `permission_resolved`
 - `token_usage`
 - `compact_start`
-- `compact_done`
+- `compact_applied`
 - `compact_error`
 
 ## ReAct 主循环

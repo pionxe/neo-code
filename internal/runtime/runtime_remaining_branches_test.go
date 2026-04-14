@@ -250,7 +250,7 @@ func TestExecuteToolCallWithPermissionRemainingBranches(t *testing.T) {
 		service := &Service{toolManager: manager, approvalBroker: approvalflow.NewBroker(), events: make(chan RuntimeEvent, 16)}
 		go func() {
 			for evt := range service.events {
-				if evt.Type != EventPermissionRequest {
+				if !isPermissionRequestEvent(evt.Type) {
 					continue
 				}
 				payload := evt.Payload.(PermissionRequestPayload)
@@ -326,7 +326,7 @@ func TestExecuteToolCallWithPermissionRemainingBranches(t *testing.T) {
 
 func resolveDecisionFromEvent(service *Service, decision approvalflow.Decision) {
 	for evt := range service.events {
-		if evt.Type != EventPermissionRequest {
+		if !isPermissionRequestEvent(evt.Type) {
 			continue
 		}
 		payload := evt.Payload.(PermissionRequestPayload)

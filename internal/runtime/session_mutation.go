@@ -19,7 +19,7 @@ func (s *Service) appendUserMessageAndSave(ctx context.Context, state *runState,
 	if err := s.sessionStore.Save(ctx, &state.session); err != nil {
 		return err
 	}
-	s.emit(ctx, EventUserMessage, state.runID, state.session.ID, message)
+	s.emitRunScoped(ctx, EventUserMessage, state, message)
 	return nil
 }
 
@@ -33,7 +33,6 @@ func (s *Service) appendAssistantMessageAndSave(
 	metadataChanged := state.session.Provider != snapshot.providerConfig.Name || state.session.Model != snapshot.model
 	state.session.Provider = snapshot.providerConfig.Name
 	state.session.Model = snapshot.model
-	state.syncSessionTokenTotals()
 
 	if strings.TrimSpace(assistant.Content) != "" || len(assistant.ToolCalls) > 0 {
 		state.session.Messages = append(state.session.Messages, assistant)
@@ -54,6 +53,8 @@ func (s *Service) appendToolMessageAndSave(
 	call providertypes.ToolCall,
 	result tools.ToolResult,
 ) error {
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	toolMessage := providertypes.Message{
 		Role:         providertypes.RoleTool,
 		Content:      result.Content,

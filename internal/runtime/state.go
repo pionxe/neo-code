@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"sync"
 	"time"
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
 )
 
@@ -14,32 +16,24 @@ const maxReactiveCompactAttempts = 3
 
 // runState 汇总单次 Run 生命周期内会变化的会话与计量状态。
 type runState struct {
+	mu                      sync.Mutex
 	runID                   string
 	session                 agentsession.Session
-	tokenInputTotal         int
-	tokenOutputTotal        int
 	compactApplied          bool
 	reactiveCompactAttempts int
 	rememberedThisRun       bool
+	turn                    int
+	phase                   controlplane.Phase
+	stopEmitted             bool
+	progress                controlplane.ProgressState
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。
 func newRunState(runID string, session agentsession.Session) runState {
 	return runState{
-		runID:            runID,
-		session:          session,
-		tokenInputTotal:  session.TokenInputTotal,
-		tokenOutputTotal: session.TokenOutputTotal,
+		runID:   runID,
+		session: session,
 	}
-}
-
-// syncSessionTokenTotals 将运行期 token 计数同步回会话对象。
-func (s *runState) syncSessionTokenTotals() {
-	if s == nil {
-		return
-	}
-	s.session.TokenInputTotal = s.tokenInputTotal
-	s.session.TokenOutputTotal = s.tokenOutputTotal
 }
 
 // recordUsage 累加本轮 provider 返回的 token 使用量。
@@ -47,8 +41,8 @@ func (s *runState) recordUsage(inputTokens int, outputTokens int) {
 	if s == nil {
 		return
 	}
-	s.tokenInputTotal += inputTokens
-	s.tokenOutputTotal += outputTokens
+	s.session.TokenInputTotal += inputTokens
+	s.session.TokenOutputTotal += outputTokens
 }
 
 // resetTokenTotals 在 compact 应用成功后清零当前运行的 token 账本。
@@ -56,17 +50,15 @@ func (s *runState) resetTokenTotals() {
 	if s == nil {
 		return
 	}
-	s.tokenInputTotal = 0
-	s.tokenOutputTotal = 0
-	s.syncSessionTokenTotals()
+	s.session.TokenInputTotal = 0
+	s.session.TokenOutputTotal = 0
 }
 
-// touchSession 更新会话修改时间并同步最新 token 累计值。
+// touchSession 更新会话修改时间。
 func (s *runState) touchSession() {
 	if s == nil {
 		return
 	}
-	s.syncSessionTokenTotals()
 	s.session.UpdatedAt = time.Now()
 }
 

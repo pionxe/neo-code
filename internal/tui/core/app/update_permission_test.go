@@ -193,7 +193,7 @@ func TestSubmitPermissionDecisionValidation(t *testing.T) {
 func TestRuntimePermissionEventHandlers(t *testing.T) {
 	app := newPermissionTestApp(&permissionTestRuntime{})
 	requestEvent := agentruntime.RuntimeEvent{
-		Type: agentruntime.EventPermissionRequest,
+		Type: agentruntime.EventPermissionRequested,
 		Payload: agentruntime.PermissionRequestPayload{
 			RequestID: "perm-4",
 			ToolName:  "bash",
@@ -292,7 +292,7 @@ func TestRuntimePermissionRequestHandlerAutoRejectsSupersededRequest(t *testing.
 	}
 
 	event := agentruntime.RuntimeEvent{
-		Type: agentruntime.EventPermissionRequest,
+		Type: agentruntime.EventPermissionRequested,
 		Payload: agentruntime.PermissionRequestPayload{
 			RequestID: "perm-new",
 			ToolName:  "bash",
@@ -330,7 +330,7 @@ func TestRuntimePermissionRequestHandlerDoesNotAutoRejectSubmittingRequest(t *te
 	}
 
 	runtimeEventPermissionRequestHandler(app, agentruntime.RuntimeEvent{
-		Type: agentruntime.EventPermissionRequest,
+		Type: agentruntime.EventPermissionRequested,
 		Payload: agentruntime.PermissionRequestPayload{
 			RequestID: "perm-new",
 		},
@@ -348,7 +348,7 @@ func TestHandleRuntimeEventQueuesDeferredCommand(t *testing.T) {
 	}
 
 	model, cmd := app.Update(RuntimeMsg{Event: agentruntime.RuntimeEvent{
-		Type: agentruntime.EventPermissionRequest,
+		Type: agentruntime.EventPermissionRequested,
 		Payload: agentruntime.PermissionRequestPayload{
 			RequestID: "perm-new",
 		},
