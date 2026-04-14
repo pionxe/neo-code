@@ -12,6 +12,7 @@ import (
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 )
 
 type compactSummaryGenerator struct {
@@ -113,17 +114,20 @@ func parseCompactSummaryOutput(content string) (contextcompact.SummaryOutput, er
 		return contextcompact.SummaryOutput{}, err
 	}
 
+	task := raw.TaskState
 	output := contextcompact.SummaryOutput{
 		DisplaySummary: strings.TrimSpace(raw.DisplaySummary),
+		TaskState: agentsession.TaskState{
+			Goal:            task.Goal,
+			Progress:        coerceStringArray(task.Progress),
+			OpenItems:       coerceStringArray(task.OpenItems),
+			NextStep:        task.NextStep,
+			Blockers:        coerceStringArray(task.Blockers),
+			KeyArtifacts:    coerceStringArray(task.KeyArtifacts),
+			Decisions:       coerceStringArray(task.Decisions),
+			UserConstraints: coerceStringArray(task.UserConstraints),
+		},
 	}
-	output.TaskState.Goal = raw.TaskState.Goal
-	output.TaskState.Progress = coerceStringArray(raw.TaskState.Progress)
-	output.TaskState.OpenItems = coerceStringArray(raw.TaskState.OpenItems)
-	output.TaskState.NextStep = raw.TaskState.NextStep
-	output.TaskState.Blockers = coerceStringArray(raw.TaskState.Blockers)
-	output.TaskState.KeyArtifacts = coerceStringArray(raw.TaskState.KeyArtifacts)
-	output.TaskState.Decisions = coerceStringArray(raw.TaskState.Decisions)
-	output.TaskState.UserConstraints = coerceStringArray(raw.TaskState.UserConstraints)
 
 	if output.DisplaySummary == "" {
 		return contextcompact.SummaryOutput{}, errors.New("runtime: compact summary response is empty")
@@ -159,20 +163,17 @@ func coerceStringArray(raw json.RawMessage) []string {
 		if err := json.Unmarshal(raw, &arr); err == nil {
 			return arr
 		}
-		return nil
 	case '"':
 		var s string
 		if err := json.Unmarshal(raw, &s); err == nil {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				return []string{s}
+			trimmed := strings.TrimSpace(s)
+			if trimmed != "" {
+				return []string{trimmed}
 			}
 		}
-		return nil
-	default:
-		// null、数字、布尔、对象等均返回 nil
-		return nil
 	}
+	// null、数字、布尔、对象等均返回 nil
+	return nil
 }
 
 // extractJSONObject 从模型响应中提取首个满足 compact 协议的 JSON 对象，容忍前后噪音。
@@ -185,12 +186,10 @@ func extractJSONObject(text string) (string, error) {
 	for {
 		candidate, err := extractJSONObjectCandidate(text, start)
 		if err == nil {
-			// 验证候选对象可被容忍解析器接受
-			var probe tolerantSummaryResponse
-			if unmarshalErr := json.Unmarshal([]byte(candidate), &probe); unmarshalErr == nil {
-				if strings.TrimSpace(probe.DisplaySummary) != "" {
-					return candidate, nil
-				}
+			// 与最终解析保持一致：候选对象必须通过严格解码且包含非空 display_summary。
+			if probe, decodeErr := decodeCompactSummaryResponse(candidate); decodeErr == nil &&
+				strings.TrimSpace(probe.DisplaySummary) != "" {
+				return candidate, nil
 			}
 		}
 
