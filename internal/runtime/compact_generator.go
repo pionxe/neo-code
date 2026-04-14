@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 )
 
 type compactSummaryGenerator struct {
@@ -32,16 +34,17 @@ func newCompactSummaryGenerator(
 	}
 }
 
-type compactSummaryResponse struct {
+// tolerantSummaryResponse 使用 json.RawMessage 接收数组字段，容忍 LLM 返回 string 代替 []string。
+type tolerantSummaryResponse struct {
 	TaskState struct {
-		Goal            string   `json:"goal"`
-		Progress        []string `json:"progress"`
-		OpenItems       []string `json:"open_items"`
-		NextStep        string   `json:"next_step"`
-		Blockers        []string `json:"blockers"`
-		KeyArtifacts    []string `json:"key_artifacts"`
-		Decisions       []string `json:"decisions"`
-		UserConstraints []string `json:"user_constraints"`
+		Goal            string          `json:"goal"`
+		Progress        json.RawMessage `json:"progress"`
+		OpenItems       json.RawMessage `json:"open_items"`
+		NextStep        string          `json:"next_step"`
+		Blockers        json.RawMessage `json:"blockers"`
+		KeyArtifacts    json.RawMessage `json:"key_artifacts"`
+		Decisions       json.RawMessage `json:"decisions"`
+		UserConstraints json.RawMessage `json:"user_constraints"`
 	} `json:"task_state"`
 	DisplaySummary string `json:"display_summary"`
 }
@@ -69,6 +72,7 @@ func (g *compactSummaryGenerator) Generate(
 		ManualKeepRecentMessages: input.Config.ManualKeepRecentMessages,
 		ArchivedMessageCount:     input.ArchivedMessageCount,
 		MaxSummaryChars:          input.Config.MaxSummaryChars,
+		MaxArchivedPromptChars:   input.Config.MaxArchivedPromptChars,
 		CurrentTaskState:         input.CurrentTaskState,
 		ArchivedMessages:         input.ArchivedMessages,
 		RetainedMessages:         input.RetainedMessages,
@@ -99,29 +103,57 @@ func (g *compactSummaryGenerator) Generate(
 	return parseCompactSummaryOutput(message.Content)
 }
 
-// parseCompactSummaryOutput 解析 compact 生成器返回的 JSON 响应。
+// parseCompactSummaryOutput 解析 compact 生成器返回的 JSON 响应，容忍数组字段被返回为字符串。
 func parseCompactSummaryOutput(content string) (contextcompact.SummaryOutput, error) {
 	jsonText, err := extractJSONObject(content)
 	if err != nil {
 		return contextcompact.SummaryOutput{}, err
 	}
 
-	response, err := decodeCompactSummaryResponse(jsonText)
+	raw, err := decodeCompactSummaryResponse(jsonText)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+
+	task := raw.TaskState
+	progress, err := coerceStringArray("progress", task.Progress)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	openItems, err := coerceStringArray("open_items", task.OpenItems)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	blockers, err := coerceStringArray("blockers", task.Blockers)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	keyArtifacts, err := coerceStringArray("key_artifacts", task.KeyArtifacts)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	decisions, err := coerceStringArray("decisions", task.Decisions)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	userConstraints, err := coerceStringArray("user_constraints", task.UserConstraints)
 	if err != nil {
 		return contextcompact.SummaryOutput{}, err
 	}
 
 	output := contextcompact.SummaryOutput{
-		DisplaySummary: strings.TrimSpace(response.DisplaySummary),
+		DisplaySummary: strings.TrimSpace(raw.DisplaySummary),
+		TaskState: agentsession.TaskState{
+			Goal:            task.Goal,
+			Progress:        progress,
+			OpenItems:       openItems,
+			NextStep:        task.NextStep,
+			Blockers:        blockers,
+			KeyArtifacts:    keyArtifacts,
+			Decisions:       decisions,
+			UserConstraints: userConstraints,
+		},
 	}
-	output.TaskState.Goal = response.TaskState.Goal
-	output.TaskState.Progress = cloneStringSlice(response.TaskState.Progress)
-	output.TaskState.OpenItems = cloneStringSlice(response.TaskState.OpenItems)
-	output.TaskState.NextStep = response.TaskState.NextStep
-	output.TaskState.Blockers = cloneStringSlice(response.TaskState.Blockers)
-	output.TaskState.KeyArtifacts = cloneStringSlice(response.TaskState.KeyArtifacts)
-	output.TaskState.Decisions = cloneStringSlice(response.TaskState.Decisions)
-	output.TaskState.UserConstraints = cloneStringSlice(response.TaskState.UserConstraints)
 
 	if output.DisplaySummary == "" {
 		return contextcompact.SummaryOutput{}, errors.New("runtime: compact summary response is empty")
@@ -130,23 +162,48 @@ func parseCompactSummaryOutput(content string) (contextcompact.SummaryOutput, er
 }
 
 // decodeCompactSummaryResponse 对 compact JSON 响应执行严格解码，拒绝未知字段与尾随垃圾内容。
-func decodeCompactSummaryResponse(jsonText string) (compactSummaryResponse, error) {
+func decodeCompactSummaryResponse(jsonText string) (tolerantSummaryResponse, error) {
 	decoder := json.NewDecoder(strings.NewReader(jsonText))
 	decoder.DisallowUnknownFields()
 
-	var response compactSummaryResponse
+	var response tolerantSummaryResponse
 	if err := decoder.Decode(&response); err != nil {
-		return compactSummaryResponse{}, err
+		return tolerantSummaryResponse{}, err
 	}
 	if err := decoder.Decode(&struct{}{}); err != nil && !errors.Is(err, io.EOF) {
-		return compactSummaryResponse{}, errors.New("runtime: compact summary response contains trailing JSON content")
+		return tolerantSummaryResponse{}, errors.New("runtime: compact summary response contains trailing JSON content")
 	}
 	return response, nil
 }
 
-// cloneStringSlice 复制字符串切片，避免结果复用解析对象的底层数组。
-func cloneStringSlice(items []string) []string {
-	return append([]string(nil), items...)
+// coerceStringArray 尝试将 json.RawMessage 解析为 []string，容忍单个 string 值。
+func coerceStringArray(fieldName string, raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	// 根据首字节判断 JSON 类型，避免双重 Unmarshal
+	switch raw[0] {
+	case '[':
+		var arr []string
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, fmt.Errorf("runtime: compact summary task_state.%s must be string array: %w", fieldName, err)
+		}
+		return arr, nil
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, fmt.Errorf("runtime: compact summary task_state.%s must be string: %w", fieldName, err)
+		}
+		trimmed := strings.TrimSpace(s)
+		if trimmed != "" {
+			return []string{trimmed}, nil
+		}
+		return nil, nil
+	case 'n':
+		return nil, nil
+	}
+	return nil, fmt.Errorf("runtime: compact summary task_state.%s must be string or string array", fieldName)
 }
 
 // extractJSONObject 从模型响应中提取首个满足 compact 协议的 JSON 对象，容忍前后噪音。
@@ -159,7 +216,9 @@ func extractJSONObject(text string) (string, error) {
 	for {
 		candidate, err := extractJSONObjectCandidate(text, start)
 		if err == nil {
-			if _, decodeErr := decodeCompactSummaryResponse(candidate); decodeErr == nil {
+			// 与最终解析保持一致：候选对象必须通过严格解码且包含非空 display_summary。
+			if probe, decodeErr := decodeCompactSummaryResponse(candidate); decodeErr == nil &&
+				strings.TrimSpace(probe.DisplaySummary) != "" {
 				return candidate, nil
 			}
 		}

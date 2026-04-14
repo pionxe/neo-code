@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -15,9 +16,7 @@ import (
 )
 
 func validCompactSummaryJSON() string {
-	return strings.Join([]string{
-		`{"task_state":{"goal":"Finish task state refactor","progress":["Persisted task_state in session"],"open_items":["Update runtime tests"],"next_step":"Continue from retained context","blockers":[],"key_artifacts":["internal/runtime/compact_generator.go"],"decisions":["Do not keep old summary-only protocol"],"user_constraints":["No backward compatibility"]},"display_summary":"[compact_summary]\ndone:\n- Persisted durable task state.\n\nin_progress:\n- Continue from the retained recent window.\n\ndecisions:\n- Do not keep the old summary-only protocol.\n\ncode_changes:\n- Updated compact summary generation behavior.\n\nconstraints:\n- Preserve only the minimum information needed to continue the work."}`,
-	}, "")
+	return `{"task_state":{"goal":"Finish task state refactor","progress":["Persisted task_state in session"],"open_items":["Update runtime tests"],"next_step":"Continue from retained context","blockers":[],"key_artifacts":["internal/runtime/compact_generator.go"],"decisions":["Do not keep old summary-only protocol"],"user_constraints":["No backward compatibility"]},"display_summary":"[compact_summary]\ndone:\n- Persisted durable task state.\n\nin_progress:\n- Continue from the retained recent window.\n\ndecisions:\n- Do not keep the old summary-only protocol.\n\ncode_changes:\n- Updated compact summary generation behavior.\n\nconstraints:\n- Preserve only the minimum information needed to continue the work."}`
 }
 
 func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) {
@@ -241,21 +240,142 @@ func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T
 	}
 }
 
-func TestParseCompactSummaryOutputRejectsUnknownTopLevelField(t *testing.T) {
+func TestParseCompactSummaryOutputToleratesStringInsteadOfArray(t *testing.T) {
 	t.Parallel()
 
-	content := `{"task_state":{"goal":"g","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"[compact_summary]\nok","unexpected":"value"}`
-	if _, err := parseCompactSummaryOutput(content); err == nil {
-		t.Fatal("expected unknown top-level field to be rejected")
+	tests := []struct {
+		name   string
+		json   string
+		want   []string
+		wantOK bool
+	}{
+		{
+			name:   "正常数组",
+			json:   `{"task_state":{"goal":"g","progress":["a","b"],"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   []string{"a", "b"},
+			wantOK: true,
+		},
+		{
+			name:   "字符串代替数组",
+			json:   `{"task_state":{"goal":"g","progress":"single item","open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   []string{"single item"},
+			wantOK: true,
+		},
+		{
+			name:   "null代替数组",
+			json:   `{"task_state":{"goal":"g","progress":null,"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   nil,
+			wantOK: true,
+		},
+		{
+			name:   "数字代替数组报错",
+			json:   `{"task_state":{"goal":"g","progress":42,"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   nil,
+			wantOK: false,
+		},
+		{
+			name:   "嵌套对象代替数组报错",
+			json:   `{"task_state":{"goal":"g","progress":{"nested":true},"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   nil,
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := parseCompactSummaryOutput(tt.json)
+			if (err == nil) != tt.wantOK {
+				t.Fatalf("parseCompactSummaryOutput() error = %v, wantOK %v", err, tt.wantOK)
+			}
+			if !tt.wantOK {
+				return
+			}
+			if len(output.TaskState.Progress) != len(tt.want) {
+				t.Fatalf("progress = %v, want %v", output.TaskState.Progress, tt.want)
+			}
+			for i := range output.TaskState.Progress {
+				if output.TaskState.Progress[i] != tt.want[i] {
+					t.Fatalf("progress[%d] = %q, want %q", i, output.TaskState.Progress[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 
-func TestParseCompactSummaryOutputRejectsUnknownTaskStateField(t *testing.T) {
+func TestCoerceStringArray(t *testing.T) {
 	t.Parallel()
 
-	content := `{"task_state":{"goal":"g","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"extra":"x"},"display_summary":"[compact_summary]\nok"}`
-	if _, err := parseCompactSummaryOutput(content); err == nil {
-		t.Fatal("expected unknown task_state field to be rejected")
+	tests := []struct {
+		name    string
+		raw     string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "正常字符串数组",
+			raw:  `["a","b","c"]`,
+			want: []string{"a", "b", "c"},
+		},
+		{
+			name: "单个字符串",
+			raw:  `"single"`,
+			want: []string{"single"},
+		},
+		{
+			name: "空字符串返回nil",
+			raw:  `""`,
+			want: nil,
+		},
+		{
+			name: "null返回nil",
+			raw:  `null`,
+			want: nil,
+		},
+		{
+			name:    "数字返回nil",
+			raw:     `42`,
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "布尔返回nil",
+			raw:     `true`,
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "嵌套对象返回nil",
+			raw:     `{"key":"val"}`,
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "空RawMessage返回nil",
+			raw:  ``,
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := coerceStringArray("progress", json.RawMessage(tt.raw))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("coerceStringArray(%q) error = %v, wantErr %v", tt.raw, err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("coerceStringArray(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("coerceStringArray(%q)[%d] = %q, want %q", tt.raw, i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 
@@ -273,5 +393,40 @@ func TestParseCompactSummaryOutputSkipsNonCompactJSONPreface(t *testing.T) {
 	}
 	if output.TaskState.Goal != "g" {
 		t.Fatalf("expected parsed goal, got %+v", output.TaskState)
+	}
+}
+
+func TestParseCompactSummaryOutputSkipsStrictlyInvalidCandidateAndUsesNext(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Join([]string{
+		`noise {"task_state":{"goal":"bad","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"unexpected":"x"},"display_summary":"[compact_summary]\ninvalid"}`,
+		`{"task_state":{"goal":"good","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"[compact_summary]\nok"}`,
+	}, "\n")
+
+	output, err := parseCompactSummaryOutput(content)
+	if err != nil {
+		t.Fatalf("expected parser to skip invalid strict candidate, got %v", err)
+	}
+	if output.TaskState.Goal != "good" {
+		t.Fatalf("expected second valid candidate, got %+v", output.TaskState)
+	}
+}
+
+func TestParseCompactSummaryOutputRejectsUnknownTopLevelField(t *testing.T) {
+	t.Parallel()
+
+	content := `{"task_state":{"goal":"g","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"[compact_summary]\nok","unexpected":"value"}`
+	if _, err := parseCompactSummaryOutput(content); err == nil {
+		t.Fatal("expected unknown top-level field to be rejected")
+	}
+}
+
+func TestParseCompactSummaryOutputRejectsUnknownTaskStateField(t *testing.T) {
+	t.Parallel()
+
+	content := `{"task_state":{"goal":"g","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"extra":"x"},"display_summary":"[compact_summary]\nok"}`
+	if _, err := parseCompactSummaryOutput(content); err == nil {
+		t.Fatal("expected unknown task_state field to be rejected")
 	}
 }

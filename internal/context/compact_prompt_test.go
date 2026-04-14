@@ -136,3 +136,40 @@ func TestBuildCompactPromptPreservesReactiveMode(t *testing.T) {
 		t.Fatalf("expected reactive mode field in user prompt, got %q", prompt.UserPrompt)
 	}
 }
+
+func TestTruncateArchivedContentHonorsStrictMaxChars(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Join([]string{
+		"[message 0] role=user",
+		"content: old",
+		"[message 1] role=assistant",
+		"content: newer",
+	}, "\n")
+	maxChars := 48
+
+	got := truncateArchivedContent(content, maxChars)
+
+	if len(got) > maxChars {
+		t.Fatalf("expected truncated content length <= %d, got %d", maxChars, len(got))
+	}
+	if !strings.HasPrefix(got, "[... earlier messages truncated ...]") {
+		t.Fatalf("expected truncation notice prefix, got %q", got)
+	}
+}
+
+func TestTruncateArchivedContentHandlesTinyBudget(t *testing.T) {
+	t.Parallel()
+
+	content := "[message 0] role=user\ncontent: abcdefghijklmnopqrstuvwxyz"
+	maxChars := 8
+
+	got := truncateArchivedContent(content, maxChars)
+
+	if len(got) != maxChars {
+		t.Fatalf("expected exact max length %d, got %d", maxChars, len(got))
+	}
+	if got != "[... ear" {
+		t.Fatalf("expected notice prefix slice for tiny budget, got %q", got)
+	}
+}
