@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +18,8 @@ const skillFileName = "SKILL.md"
 const defaultMaxSkillFileBytes int64 = 1 << 20
 
 var headingPattern = regexp.MustCompile(`^\s{0,3}#{1,6}\s+(.+?)\s*$`)
+var firstLevelHeadingPattern = regexp.MustCompile(`^\s{0,3}#\s+(.+?)\s*$`)
+var errSkillFileTooLarge = errors.New("skill file exceeds size limit")
 
 // LocalLoader scans one root directory and loads local skills.
 type LocalLoader struct {
@@ -26,7 +29,7 @@ type LocalLoader struct {
 	statPath           func(string) (os.FileInfo, error)
 	lstatPath          func(string) (os.FileInfo, error)
 	readDir            func(string) ([]os.DirEntry, error)
-	readFile           func(string) ([]byte, error)
+	readSkillFile      func(string, int64) ([]byte, error)
 	maxFileBytes       int64
 	validateDescriptor func(Descriptor) error
 }
@@ -39,7 +42,7 @@ func NewLocalLoader(root string) *LocalLoader {
 		statPath:           os.Stat,
 		lstatPath:          os.Lstat,
 		readDir:            os.ReadDir,
-		readFile:           os.ReadFile,
+		readSkillFile:      readFileWithLimit,
 		maxFileBytes:       defaultMaxSkillFileBytes,
 		validateDescriptor: Descriptor.Validate,
 	}
@@ -71,9 +74,9 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 	if readDir == nil {
 		readDir = os.ReadDir
 	}
-	readFile := l.readFile
-	if readFile == nil {
-		readFile = os.ReadFile
+	readSkillFile := l.readSkillFile
+	if readSkillFile == nil {
+		readSkillFile = readFileWithLimit
 	}
 	validateDescriptor := l.validateDescriptor
 	if validateDescriptor == nil {
@@ -104,10 +107,23 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("skills: read root %q: %w", absRoot, err)
 	}
 
+	snapshot := Snapshot{
+		Skills: make([]Skill, 0, len(entries)+1),
+		Issues: make([]LoadIssue, 0, len(entries)+1),
+	}
+
 	candidates := make([]string, 0, len(entries)+1)
 	rootSkillFile := filepath.Join(absRoot, skillFileName)
-	if _, err := statPath(rootSkillFile); err == nil {
+	_, rootSkillErr := statPath(rootSkillFile)
+	if rootSkillErr == nil {
 		candidates = append(candidates, absRoot)
+	} else if !errors.Is(rootSkillErr, os.ErrNotExist) {
+		snapshot.Issues = append(snapshot.Issues, LoadIssue{
+			Code:    IssueReadFailed,
+			Path:    rootSkillFile,
+			Message: "stat skill file failed",
+			Err:     rootSkillErr,
+		})
 	}
 
 	for _, entry := range entries {
@@ -121,11 +137,6 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 		candidates = append(candidates, filepath.Join(absRoot, name))
 	}
 	sort.Strings(candidates)
-
-	snapshot := Snapshot{
-		Skills: make([]Skill, 0, len(candidates)),
-		Issues: make([]LoadIssue, 0, len(candidates)),
-	}
 	for _, skillDir := range candidates {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
@@ -168,13 +179,22 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 			continue
 		}
 
-		data, readErr := readFile(skillPath)
+		data, readErr := readSkillFile(skillPath, maxFileBytes)
 		if readErr != nil {
 			if errors.Is(readErr, os.ErrNotExist) {
 				snapshot.Issues = append(snapshot.Issues, LoadIssue{
 					Code:    IssueSkillFileMissing,
 					Path:    skillPath,
 					Message: "missing SKILL.md",
+					Err:     readErr,
+				})
+				continue
+			}
+			if errors.Is(readErr, errSkillFileTooLarge) {
+				snapshot.Issues = append(snapshot.Issues, LoadIssue{
+					Code:    IssueReadFailed,
+					Path:    skillPath,
+					Message: fmt.Sprintf("skill file exceeds size limit (%d bytes)", maxFileBytes),
 					Err:     readErr,
 				})
 				continue
@@ -390,13 +410,35 @@ func deriveSkillID(skillDir string) string {
 func firstHeading(body string) string {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
 	for _, line := range lines {
-		m := headingPattern.FindStringSubmatch(line)
+		m := firstLevelHeadingPattern.FindStringSubmatch(line)
 		if len(m) != 2 {
 			continue
 		}
 		return strings.TrimSpace(strings.Trim(m[1], "#"))
 	}
 	return ""
+}
+
+// readFileWithLimit 以受限方式读取技能文件，避免读取阶段超过内存阈值。
+func readFileWithLimit(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("%w: %d", errSkillFileTooLarge, maxBytes)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	limited := io.LimitReader(file, maxBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%w: %d", errSkillFileTooLarge, maxBytes)
+	}
+	return data, nil
 }
 
 func parseSections(body string) map[string]string {

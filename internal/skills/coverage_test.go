@@ -531,7 +531,7 @@ do it`,
 				if skill.Descriptor.ID != "go-review" {
 					t.Fatalf("unexpected id: %q", skill.Descriptor.ID)
 				}
-				if skill.Descriptor.Name != "references" {
+				if skill.Descriptor.Name != "go-review" {
 					t.Fatalf("unexpected name from first heading: %q", skill.Descriptor.Name)
 				}
 				if skill.Descriptor.Version != "v1" {
@@ -713,8 +713,11 @@ func TestLoaderHelperFunctions(t *testing.T) {
 	if got := firstHeading("no heading"); got != "" {
 		t.Fatalf("firstHeading = %q, want empty", got)
 	}
-	if got := firstHeading("## My Heading\ncontent"); got != "My Heading" {
+	if got := firstHeading("# My Heading\ncontent"); got != "My Heading" {
 		t.Fatalf("firstHeading = %q, want My Heading", got)
+	}
+	if got := firstHeading("## Section Heading\ncontent"); got != "" {
+		t.Fatalf("firstHeading(level2) = %q, want empty", got)
 	}
 
 	if got := normalizedHeading("## Tool-Hints "); got != "tool-hints" {

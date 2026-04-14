@@ -3,10 +3,12 @@ package skills
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLocalLoaderLoad(t *testing.T) {
@@ -289,6 +291,108 @@ func TestLocalLoaderLoadFileConstraints(t *testing.T) {
 	})
 }
 
+func TestLocalLoaderLoadReportsRootSkillStatError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkillFile(t, root, "good", "## Instruction\ngood")
+
+	loader := NewLocalLoader(root)
+	originStat := loader.statPath
+	rootSkillPath := filepath.Join(root, skillFileName)
+	loader.statPath = func(path string) (os.FileInfo, error) {
+		if path == rootSkillPath {
+			return nil, os.ErrPermission
+		}
+		return originStat(path)
+	}
+
+	snapshot, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(snapshot.Skills) != 1 {
+		t.Fatalf("expected 1 loaded skill, got %d", len(snapshot.Skills))
+	}
+
+	requireLoadIssue(t, snapshot, "root skill stat failure", func(issue LoadIssue) bool {
+		return issue.Code == IssueReadFailed && issue.Path == rootSkillPath && errors.Is(issue.Err, os.ErrPermission)
+	})
+}
+
+func TestLocalLoaderLoadEnforcesSizeLimitAtReadTime(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkillFile(t, root, "good", "## Instruction\ngood")
+
+	largeDir := filepath.Join(root, "large-race")
+	if err := os.MkdirAll(largeDir, 0o755); err != nil {
+		t.Fatalf("mkdir large dir: %v", err)
+	}
+	largePath := filepath.Join(largeDir, skillFileName)
+	large := bytes.Repeat([]byte("a"), int(defaultMaxSkillFileBytes)+1)
+	if err := os.WriteFile(largePath, large, 0o644); err != nil {
+		t.Fatalf("write large SKILL.md: %v", err)
+	}
+
+	loader := NewLocalLoader(root)
+	originLstat := loader.lstatPath
+	loader.lstatPath = func(path string) (os.FileInfo, error) {
+		if path == largePath {
+			return fixedRegularFileInfo{name: skillFileName, size: 1}, nil
+		}
+		return originLstat(path)
+	}
+
+	snapshot, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(snapshot.Skills) != 1 {
+		t.Fatalf("expected 1 loaded skill, got %d", len(snapshot.Skills))
+	}
+
+	requireLoadIssue(t, snapshot, "enforced read limit", func(issue LoadIssue) bool {
+		return issue.Code == IssueReadFailed && issue.Path == largePath && strings.Contains(issue.Message, "size limit")
+	})
+}
+
+func TestParseLocalSkillNameFallbackUsesOnlyLevelOneHeading(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "heading-fallback")
+	skillPath := filepath.Join(skillDir, skillFileName)
+	raw := `---
+id: heading-fallback
+---
+## References
+- [Doc](./doc.md)
+`
+
+	skill, issues, err := parseLocalSkill(root, skillDir, skillPath, raw)
+	if err != nil {
+		t.Fatalf("parseLocalSkill() error = %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("expected no issues, got %+v", issues)
+	}
+	if skill.Descriptor.Name != skill.Descriptor.ID {
+		t.Fatalf("expected name fallback to id, got name=%q id=%q", skill.Descriptor.Name, skill.Descriptor.ID)
+	}
+}
+
+func requireLoadIssue(t *testing.T, snapshot Snapshot, desc string, match func(LoadIssue) bool) {
+	t.Helper()
+	for _, issue := range snapshot.Issues {
+		if match(issue) {
+			return
+		}
+	}
+	t.Fatalf("%s: expected matching issue, got %+v", desc, snapshot.Issues)
+}
+
 func writeSkillFile(t *testing.T, root string, dir string, content string) {
 	t.Helper()
 	skillDir := filepath.Join(root, dir)
@@ -299,3 +403,15 @@ func writeSkillFile(t *testing.T, root string, dir string, content string) {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 }
+
+type fixedRegularFileInfo struct {
+	name string
+	size int64
+}
+
+func (f fixedRegularFileInfo) Name() string       { return f.name }
+func (f fixedRegularFileInfo) Size() int64        { return f.size }
+func (f fixedRegularFileInfo) Mode() os.FileMode  { return 0o644 }
+func (f fixedRegularFileInfo) ModTime() time.Time { return time.Time{} }
+func (f fixedRegularFileInfo) IsDir() bool        { return false }
+func (f fixedRegularFileInfo) Sys() any           { return nil }
