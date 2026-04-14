@@ -36,11 +36,23 @@ func TestNewServerUsesDefaultsAndOverrides(t *testing.T) {
 	if server.listenFn == nil {
 		t.Fatal("default listen function should not be nil")
 	}
+	if server.maxConnections != DefaultMaxConnections {
+		t.Fatalf("default max connections = %d, want %d", server.maxConnections, DefaultMaxConnections)
+	}
+	if server.readTimeout != DefaultReadTimeout {
+		t.Fatalf("default read timeout = %v, want %v", server.readTimeout, DefaultReadTimeout)
+	}
+	if server.writeTimeout != DefaultWriteTimeout {
+		t.Fatalf("default write timeout = %v, want %v", server.writeTimeout, DefaultWriteTimeout)
+	}
 
 	customLogger := log.New(io.Discard, "custom", 0)
 	customServer, err := NewServer(ServerOptions{
-		ListenAddress: "  custom-address  ",
-		Logger:        customLogger,
+		ListenAddress:  "  custom-address  ",
+		Logger:         customLogger,
+		MaxConnections: 7,
+		ReadTimeout:    150 * time.Millisecond,
+		WriteTimeout:   250 * time.Millisecond,
 		listenFn: func(string) (net.Listener, error) {
 			return nil, nil
 		},
@@ -53,6 +65,15 @@ func TestNewServerUsesDefaultsAndOverrides(t *testing.T) {
 	}
 	if customServer.logger != customLogger {
 		t.Fatal("custom logger was not used")
+	}
+	if customServer.maxConnections != 7 {
+		t.Fatalf("custom max connections = %d, want %d", customServer.maxConnections, 7)
+	}
+	if customServer.readTimeout != 150*time.Millisecond {
+		t.Fatalf("custom read timeout = %v, want %v", customServer.readTimeout, 150*time.Millisecond)
+	}
+	if customServer.writeTimeout != 250*time.Millisecond {
+		t.Fatalf("custom write timeout = %v, want %v", customServer.writeTimeout, 250*time.Millisecond)
 	}
 }
 
@@ -322,6 +343,84 @@ func TestServerHandleConnectionInvalidJSONFrame(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("handleConnection did not exit")
 	}
+}
+
+func TestRegisterConnectionRejectsWhenLimitExceeded(t *testing.T) {
+	server := &Server{
+		listener:       &simpleListener{},
+		maxConnections: 1,
+		conns:          make(map[net.Conn]struct{}),
+	}
+
+	conn1Server, conn1Client := net.Pipe()
+	defer conn1Client.Close()
+	defer conn1Server.Close()
+	if got := server.registerConnection(conn1Server); got != registerConnectionAccepted {
+		t.Fatalf("first register result = %v, want accepted", got)
+	}
+
+	conn2Server, conn2Client := net.Pipe()
+	defer conn2Client.Close()
+	defer conn2Server.Close()
+	if got := server.registerConnection(conn2Server); got != registerConnectionLimitExceeded {
+		t.Fatalf("second register result = %v, want limit exceeded", got)
+	}
+
+	server.untrackConnection(conn1Server)
+	server.wg.Done()
+}
+
+func TestServerHandleConnectionReadTimeoutClosesConnection(t *testing.T) {
+	server := &Server{
+		logger:      log.New(io.Discard, "", 0),
+		readTimeout: 20 * time.Millisecond,
+	}
+	serverConn, clientConn := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.handleConnection(context.Background(), serverConn, nil)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("handleConnection should exit after read timeout")
+	}
+
+	var buf [1]byte
+	_, err := clientConn.Read(buf[:])
+	if !errors.Is(err, io.EOF) && (err == nil || !strings.Contains(err.Error(), "closed pipe")) {
+		t.Fatalf("expected closed connection after timeout, got %v", err)
+	}
+	_ = clientConn.Close()
+}
+
+func TestServerHandleConnectionWriteTimeoutClosesConnection(t *testing.T) {
+	server := &Server{
+		logger:       log.New(io.Discard, "", 0),
+		readTimeout:  time.Second,
+		writeTimeout: 20 * time.Millisecond,
+	}
+	serverConn, clientConn := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.handleConnection(context.Background(), serverConn, nil)
+	}()
+
+	_, err := io.WriteString(clientConn, `{"type":"request","action":"ping","request_id":"write-timeout"}`+"\n")
+	if err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("handleConnection should exit after write timeout")
+	}
+
+	_ = clientConn.Close()
 }
 
 type failingReader struct{}

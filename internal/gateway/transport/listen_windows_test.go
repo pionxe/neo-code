@@ -13,8 +13,6 @@ import (
 )
 
 func TestListenNamedPipeAcceptsConnection(t *testing.T) {
-	t.Parallel()
-
 	pipePath := fmt.Sprintf(`\\.\pipe\neocode-gateway-test-%d`, time.Now().UnixNano())
 	listener, err := Listen(pipePath)
 	if err != nil {
@@ -53,8 +51,6 @@ func TestListenNamedPipeAcceptsConnection(t *testing.T) {
 }
 
 func TestNewRestrictedPipeConfigContainsExpectedSIDs(t *testing.T) {
-	t.Parallel()
-
 	config, err := newRestrictedPipeConfig()
 	if err != nil {
 		t.Fatalf("new restricted pipe config: %v", err)

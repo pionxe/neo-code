@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"neo-code/internal/gateway/transport"
 )
@@ -20,6 +21,13 @@ import (
 const (
 	// MaxFrameSize 定义单条 JSON 帧允许的最大字节数，避免异常输入导致内存放大。
 	MaxFrameSize int64 = 1 << 20 // 1 MiB
+
+	// DefaultMaxConnections 定义服务允许的最大并发连接数，超过上限的连接会被快速拒绝。
+	DefaultMaxConnections = 128
+	// DefaultReadTimeout 定义单次读帧的最大等待时间，避免慢连接长期占用资源。
+	DefaultReadTimeout = 30 * time.Second
+	// DefaultWriteTimeout 定义单次写帧的最大等待时间，避免写阻塞占用处理协程。
+	DefaultWriteTimeout = 30 * time.Second
 )
 
 var (
@@ -31,22 +39,36 @@ var (
 
 // ServerOptions 描述网关服务启动所需的可选配置。
 type ServerOptions struct {
-	ListenAddress string
-	Logger        *log.Logger
-	listenFn      func(address string) (net.Listener, error)
+	ListenAddress  string
+	Logger         *log.Logger
+	MaxConnections int
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	listenFn       func(address string) (net.Listener, error)
 }
 
 // Server 提供基于本地 IPC 的网关服务骨架实现。
 type Server struct {
-	listenAddress string
-	logger        *log.Logger
-	listenFn      func(address string) (net.Listener, error)
+	listenAddress  string
+	logger         *log.Logger
+	listenFn       func(address string) (net.Listener, error)
+	maxConnections int
+	readTimeout    time.Duration
+	writeTimeout   time.Duration
 
 	mu       sync.Mutex
 	listener net.Listener
 	conns    map[net.Conn]struct{}
 	wg       sync.WaitGroup
 }
+
+type registerConnectionResult int
+
+const (
+	registerConnectionAccepted registerConnectionResult = iota
+	registerConnectionServerClosed
+	registerConnectionLimitExceeded
+)
 
 // NewServer 创建网关服务实例，并解析默认监听地址。
 func NewServer(options ServerOptions) (*Server, error) {
@@ -69,11 +91,29 @@ func NewServer(options ServerOptions) (*Server, error) {
 		listenFn = transport.Listen
 	}
 
+	maxConnections := options.MaxConnections
+	if maxConnections <= 0 {
+		maxConnections = DefaultMaxConnections
+	}
+
+	readTimeout := options.ReadTimeout
+	if readTimeout <= 0 {
+		readTimeout = DefaultReadTimeout
+	}
+
+	writeTimeout := options.WriteTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = DefaultWriteTimeout
+	}
+
 	return &Server{
-		listenAddress: listenAddress,
-		logger:        logger,
-		listenFn:      listenFn,
-		conns:         make(map[net.Conn]struct{}),
+		listenAddress:  listenAddress,
+		logger:         logger,
+		listenFn:       listenFn,
+		maxConnections: maxConnections,
+		readTimeout:    readTimeout,
+		writeTimeout:   writeTimeout,
+		conns:          make(map[net.Conn]struct{}),
 	}, nil
 }
 
@@ -114,12 +154,17 @@ func (s *Server) Serve(ctx context.Context, runtimePort RuntimePort) error {
 			return fmt.Errorf("gateway: accept connection: %w", acceptErr)
 		}
 
-		if !s.registerConnection(conn) {
+		switch s.registerConnection(conn) {
+		case registerConnectionAccepted:
+		case registerConnectionServerClosed:
+			_ = conn.Close()
+			continue
+		case registerConnectionLimitExceeded:
+			s.logger.Printf("reject connection: max connections %d reached", s.maxConnections)
 			_ = conn.Close()
 			continue
 		}
 
-		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
 			defer s.untrackConnection(conn)
@@ -178,15 +223,19 @@ func (s *Server) snapshotConnections() map[net.Conn]struct{} {
 	return copied
 }
 
-// registerConnection 在服务可用时登记连接，若网关已关闭则拒绝登记。
-func (s *Server) registerConnection(conn net.Conn) bool {
+// registerConnection 在服务可用且未超限时登记连接，并原子增加连接处理 WaitGroup 计数。
+func (s *Server) registerConnection(conn net.Conn) registerConnectionResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.listener == nil {
-		return false
+		return registerConnectionServerClosed
+	}
+	if len(s.conns) >= s.maxConnections {
+		return registerConnectionLimitExceeded
 	}
 	s.conns[conn] = struct{}{}
-	return true
+	s.wg.Add(1)
+	return registerConnectionAccepted
 }
 
 // untrackConnection 移除已结束连接，避免连接集合持续增长。
@@ -212,6 +261,11 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 		default:
 		}
 
+		if err := s.applyReadDeadline(conn); err != nil {
+			s.logger.Printf("set read deadline failed: %v", err)
+			return
+		}
+
 		frame, err := decodeFrame(reader)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -220,9 +274,13 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 			if errors.Is(err, errFrameEmpty) {
 				continue
 			}
+			if isTimeoutError(err) {
+				s.logger.Printf("read frame timeout: %v", err)
+				return
+			}
 			if errors.Is(err, errFrameTooLarge) {
 				s.logger.Printf("decode frame failed: %v", err)
-				_ = encoder.Encode(errorFrame(MessageFrame{}, NewFrameError(
+				_ = s.writeFrame(conn, encoder, errorFrame(MessageFrame{}, NewFrameError(
 					ErrorCodeInvalidFrame,
 					fmt.Sprintf("frame exceeds max size %d bytes", MaxFrameSize),
 				)))
@@ -230,16 +288,50 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 			}
 
 			s.logger.Printf("decode frame failed: %v", err)
-			_ = encoder.Encode(errorFrame(MessageFrame{}, NewFrameError(ErrorCodeInvalidFrame, "invalid json frame")))
+			_ = s.writeFrame(conn, encoder, errorFrame(MessageFrame{}, NewFrameError(ErrorCodeInvalidFrame, "invalid json frame")))
 			return
 		}
 
 		response := s.dispatchFrame(ctx, frame, runtimePort)
-		if err := encoder.Encode(response); err != nil {
-			s.logger.Printf("write frame failed: %v", err)
+		if !s.writeFrame(conn, encoder, response) {
 			return
 		}
 	}
+}
+
+// applyReadDeadline 为当前连接设置下一次读操作超时，避免慢读连接长期占用协程。
+func (s *Server) applyReadDeadline(conn net.Conn) error {
+	if s.readTimeout <= 0 {
+		return nil
+	}
+	return conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+}
+
+// applyWriteDeadline 为当前连接设置下一次写操作超时，避免写阻塞导致协程泄漏。
+func (s *Server) applyWriteDeadline(conn net.Conn) error {
+	if s.writeTimeout <= 0 {
+		return nil
+	}
+	return conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+}
+
+// writeFrame 统一处理响应写回及写超时设置，失败时返回 false 供上层快速终止连接循环。
+func (s *Server) writeFrame(conn net.Conn, encoder *json.Encoder, frame MessageFrame) bool {
+	if err := s.applyWriteDeadline(conn); err != nil {
+		s.logger.Printf("set write deadline failed: %v", err)
+		return false
+	}
+	if err := encoder.Encode(frame); err != nil {
+		s.logger.Printf("write frame failed: %v", err)
+		return false
+	}
+	return true
+}
+
+// isTimeoutError 判断错误是否为网络超时，用于区分慢连接超时与协议错误。
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // decodeFrame 从连接读取一条 JSON 帧并执行长度与格式校验。

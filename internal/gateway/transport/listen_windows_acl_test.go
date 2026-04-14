@@ -13,8 +13,6 @@ import (
 )
 
 func TestDefaultListenAddressWindows(t *testing.T) {
-	t.Parallel()
-
 	address, err := DefaultListenAddress()
 	if err != nil {
 		t.Fatalf("default listen address: %v", err)
@@ -25,8 +23,6 @@ func TestDefaultListenAddressWindows(t *testing.T) {
 }
 
 func TestNewCleanupListenerBranches(t *testing.T) {
-	t.Parallel()
-
 	base := &stubNetListener{}
 	if got := newCleanupListener(base, nil); got != base {
 		t.Fatal("expected original listener when cleanup is nil")
@@ -48,8 +44,6 @@ func TestNewCleanupListenerBranches(t *testing.T) {
 }
 
 func TestBuildRestrictedPipeSecurityDescriptorContainsExpectedACEs(t *testing.T) {
-	t.Parallel()
-
 	sddl, err := buildRestrictedPipeSecurityDescriptor()
 	if err != nil {
 		t.Fatalf("build restricted descriptor: %v", err)
