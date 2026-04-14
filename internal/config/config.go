@@ -11,7 +11,6 @@ import (
 
 const (
 	DefaultWorkdir        = "."
-	DefaultMaxLoops       = 8
 	DefaultToolTimeoutSec = 20
 )
 
@@ -21,7 +20,6 @@ type Config struct {
 	CurrentModel     string           `yaml:"current_model"`
 	Workdir          string           `yaml:"-"`
 	Shell            string           `yaml:"shell"`
-	MaxLoops         int              `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
 	Context          ContextConfig    `yaml:"context,omitempty"`
 	Tools            ToolsConfig      `yaml:"tools,omitempty"`
@@ -33,7 +31,6 @@ func StaticDefaults() *Config {
 	return &Config{
 		Workdir:        DefaultWorkdir,
 		Shell:          defaultShell(),
-		MaxLoops:       DefaultMaxLoops,
 		ToolTimeoutSec: DefaultToolTimeoutSec,
 		Context:        defaultContextConfig(),
 		Tools: ToolsConfig{
@@ -68,9 +65,6 @@ func (c *Config) applyStaticDefaults(defaults Config) {
 	}
 	if strings.TrimSpace(c.Shell) == "" {
 		c.Shell = defaults.Shell
-	}
-	if c.MaxLoops <= 0 {
-		c.MaxLoops = defaults.MaxLoops
 	}
 	if c.ToolTimeoutSec <= 0 {
 		c.ToolTimeoutSec = defaults.ToolTimeoutSec

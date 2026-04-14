@@ -23,8 +23,6 @@ const (
 	ModeAuto Mode = "auto"
 	// ModeReactive runs the provider-error-triggered compact flow.
 	ModeReactive Mode = "reactive"
-	// ModeLoopLimit runs the continuation checkpoint flow triggered before loop-budget exit.
-	ModeLoopLimit Mode = "loop_limit"
 )
 
 // ErrorMode classifies compact result errors.
@@ -129,7 +127,7 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 		return Result{}, err
 	}
 
-	if input.Mode != ModeManual && input.Mode != ModeAuto && input.Mode != ModeReactive && input.Mode != ModeLoopLimit {
+	if input.Mode != ModeManual && input.Mode != ModeAuto && input.Mode != ModeReactive {
 		return Result{}, fmt.Errorf("compact: unsupported mode %q", input.Mode)
 	}
 

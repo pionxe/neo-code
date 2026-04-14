@@ -123,6 +123,16 @@ shell: powershell
 			err: "field workdir not found",
 		},
 		{
+			name: "removed max_loops key is rejected",
+			data: `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+max_loops: 8
+`,
+			err: "field max_loops not found",
+		},
+		{
 			name: "legacy persisted providers list is rejected",
 			data: `
 selected_provider: openai
@@ -1519,9 +1529,6 @@ func TestStaticReturnsCompleteSkeleton(t *testing.T) {
 	if cfg.Shell == "" {
 		t.Fatal("expected shell to be set")
 	}
-	if cfg.MaxLoops == 0 {
-		t.Fatal("expected max_loops to be set")
-	}
 	if cfg.ToolTimeoutSec == 0 {
 		t.Fatal("expected tool_timeout_sec to be set")
 	}
@@ -1808,8 +1815,5 @@ func TestConfigCloneNilReceiverReturnsDefaults(t *testing.T) {
 	}
 	if cloned.Shell == "" {
 		t.Fatal("expected cloned nil config to have default shell")
-	}
-	if cloned.MaxLoops == 0 {
-		t.Fatal("expected cloned nil config to have default max_loops")
 	}
 }
