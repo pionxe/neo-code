@@ -133,25 +133,16 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			s.transitionRunPhase(ctx, &state, controlplane.PhaseVerify)
 
 			var evidence []controlplane.ProgressEvidenceRecord
-			hasProgress := false
 			toolCallCount := len(turnResult.assistant.ToolCalls)
 			state.mu.Lock()
 			if len(state.session.Messages) >= toolCallCount {
 				for i := len(state.session.Messages) - toolCallCount; i < len(state.session.Messages); i++ {
-					msg := state.session.Messages[i]
-					if msg.Role == providertypes.RoleTool && !msg.IsError {
-						hasProgress = true
+					if msg := state.session.Messages[i]; msg.Role == providertypes.RoleTool && !msg.IsError {
+						evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceNewInfoNonDup})
 						break
 					}
 				}
 			}
-			state.mu.Unlock()
-
-			if hasProgress {
-				evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceNewInfoNonDup})
-			}
-
-			state.mu.Lock()
 			state.progress = controlplane.ApplyProgressEvidence(state.progress, evidence)
 			streak := state.progress.LastScore.NoProgressStreak
 			currentScore := state.progress.LastScore
@@ -159,7 +150,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 
-			limit := resolveNoProgressStreakLimit(snapshot.config)
+			limit := snapshot.noProgressStreakLimit
 			if streak >= limit {
 				err = ErrNoProgressStreakLimit
 				return err
@@ -223,24 +214,26 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	streak := state.progress.LastScore.NoProgressStreak
 	state.mu.Unlock()
 
-	limit := resolveNoProgressStreakLimit(cfg)
+	limit := resolveNoProgressStreakLimit(cfg.Runtime)
 	systemPrompt := builtContext.SystemPrompt
 
 	if streak == limit-1 {
-		if strings.TrimSpace(systemPrompt) == "" {
+		trimmed := strings.TrimSpace(systemPrompt)
+		if trimmed == "" {
 			systemPrompt = selfHealingReminder
 		} else {
-			systemPrompt = systemPrompt + "\n\n" + selfHealingReminder
+			systemPrompt = trimmed + "\n\n" + selfHealingReminder
 		}
 	}
 
 	model := strings.TrimSpace(cfg.CurrentModel)
 	return turnSnapshot{
-		config:         cfg,
-		providerConfig: resolvedProvider.ToRuntimeConfig(),
-		model:          model,
-		workdir:        activeWorkdir,
-		toolTimeout:    time.Duration(cfg.ToolTimeoutSec) * time.Second,
+		config:                cfg,
+		providerConfig:        resolvedProvider.ToRuntimeConfig(),
+		model:                 model,
+		workdir:               activeWorkdir,
+		toolTimeout:           time.Duration(cfg.ToolTimeoutSec) * time.Second,
+		noProgressStreakLimit: limit,
 		request: providertypes.GenerateRequest{
 			Model:        model,
 			SystemPrompt: systemPrompt,
@@ -251,12 +244,11 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 }
 
 // resolveNoProgressStreakLimit 统一解析熔断阈值，避免运行期出现无效值导致分支行为不一致。
-func resolveNoProgressStreakLimit(cfg config.Config) int {
-	limit := cfg.Runtime.MaxNoProgressStreak
-	if limit <= 0 {
+func resolveNoProgressStreakLimit(rc config.RuntimeConfig) int {
+	if rc.MaxNoProgressStreak <= 0 {
 		return config.DefaultMaxNoProgressStreak
 	}
-	return limit
+	return rc.MaxNoProgressStreak
 }
 
 // callProviderWithRetry 使用冻结后的 turnSnapshot 执行 provider 调用与必要重试。

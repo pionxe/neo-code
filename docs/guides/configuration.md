@@ -86,7 +86,7 @@ context:
 
 | 字段 | 说明 |
 |------|------|
-| `runtime.max_no_progress_streak` | 连续“无进展”轮次熔断阈值，默认 `3`；当达到 `limit-1` 时会向模型注入一次系统级纠偏提示 |
+| `runtime.max_no_progress_streak` | 连续”无进展”轮次熔断阈值，默认 `3`；streak 达到 `limit-1`（默认第 2 轮）时向模型注入一次系统级纠偏提示，达到 `limit`（默认第 3 轮）时终止运行 |
 
 ### `tools` 字段
 

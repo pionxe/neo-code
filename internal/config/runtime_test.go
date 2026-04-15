@@ -40,7 +40,9 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		t.Fatalf("expected valid config, got %v", err)
 	}
 
-	if err := (RuntimeConfig{MaxNoProgressStreak: 0}).Validate(); err == nil {
-		t.Fatal("expected validation error for zero MaxNoProgressStreak")
+	for _, bad := range []int{0, -1, -99} {
+		if err := (RuntimeConfig{MaxNoProgressStreak: bad}).Validate(); err == nil {
+			t.Fatalf("expected validation error for MaxNoProgressStreak=%d", bad)
+		}
 	}
 }
