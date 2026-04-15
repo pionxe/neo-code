@@ -2,7 +2,7 @@
 
 ## Runtime 事件类型
 
-当前 runtime 对外暴露一组小而稳定的事件：
+当前 runtime 对外暴露一组小而稳定的事件（1A 硬切后不再保留旧事件镜像）：
 
 - `user_message`
 - `agent_chunk`
@@ -11,15 +11,18 @@
 - `tool_start`
 - `tool_chunk`
 - `tool_result`
-- `run_canceled`
-- `error`
+- `phase_changed`
+- `progress_evaluated`
+- `stop_reason_decided`
 - `provider_retry`
-- `permission_request`
+- `permission_requested`
 - `permission_resolved`
 - `token_usage`
 - `compact_start`
-- `compact_done`
+- `compact_applied`
 - `compact_error`
+
+这三类 compact 事件同时用于 `manual`、`auto` 与 `reactive` 三种来源，调用方可通过 payload 中的 `trigger_mode` 区分。
 
 ## ReAct 主循环
 
@@ -30,11 +33,15 @@
 5. 如命中 token 阈值自动压缩建议，则先执行一次 compact，再在同一轮内重建请求。
 6. 冻结当前 turn 的 `provider / model / tools / workdir / request` 快照。
 7. 调用 `Provider.Generate`，并把流式事件桥接给 TUI。
-8. 如 provider 返回“上下文过长”错误，则触发一次 `reactive` compact，并仅在同一 turn 内重建一次当前请求。
+8. 如 provider 返回“上下文过长”错误，则触发 `reactive` compact，并在同一 run 内最多做 3 次逐步降级的恢复尝试。
 9. 保存 assistant 完整回复。
 10. 执行返回的工具调用，并保存每一个工具结果。
 11. 如果最终 assistant 回复后没有后续工具调用，则在 runtime 收口处安排一次后台 memo 自动提取。
 12. 如果仍需继续推理，则进入下一轮；否则结束。
+
+补充说明：
+- runtime 不再设置内部 `max_loops` 停止条件；单次 run 仅在拿到最终 assistant 回复、遇到错误或收到外部取消时结束。
+- 由于 session 锁覆盖整个 run 生命周期，同一会话如果持续陷入工具调用循环，会一直占用该会话直到模型自行收口、报错或被取消。
 
 ### Memo 自动提取调度
 
@@ -43,6 +50,10 @@
 - runtime 只负责在结束点调度，不直接执行提取逻辑；实际 debounce、尾随执行与持久化去重由 `internal/memo` 内部处理。
 - 调度时会绑定当次 provider/model 快照，后台任务不会重新读取全局当前配置，避免把历史会话消息发送到后续切换后的 provider。
 - 自动提取失败只记日志，不额外发出 TUI 事件，也不影响主链路完成。
+- `memo` 的最近消息窗口会复用 `internal/context` 的只读投影规则，只保留 provider-safe 的消息序列。
+- assistant 含 `tool_calls` 时，只有在窗口内能同时保留对应 `tool` 响应时才会注入；缺响应、空内容或已被 micro compact 清空的 assistant/tool 片段会整组丢弃，保留项会先投影为模型可消费的结构化文本。
+- recent window 的总消息数有硬预算：`min(limit*2, 24)`；超过预算的整段 tool span 会被跳过，避免窗口体积失控。
+- 进入 `memo` 提取前，tool 文本会二次收敛为 `content_excerpt`，并按 `600` rune 上限截断。
 
 补充约束：
 - 同一 turn 内的 provider retry 只重放冻结后的 turn 快照，不会重新读取配置。
@@ -90,6 +101,8 @@
 - `internal/provider/streaming` 统一累积文本、tool call 增量和 `message_done`
 - runtime 将累积过程映射成 `RuntimeEvent`
 - TUI 使用 Bubble Tea `Cmd` 监听事件，并在处理完成后继续订阅
+- `provider.GenerateText` 只在上游 `Generate` 成功返回时，才把缺失 `message_done` 视为流式中断。
+- 如果 provider 在真正开始流式输出前直接返回 HTTP/ProviderError，则优先保留原始错误，不再额外包装成 `message_done` 缺失。
 
 同一套流式累积逻辑同时复用于：
 - 普通 `Run()` 的 assistant 回复收敛

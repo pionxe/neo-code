@@ -61,7 +61,9 @@ URL Scheme 派发骨架命令（EPIC-GW-02A）：
 go run ./cmd/neocode url-dispatch --url "neocode://review?path=README.md"
 ```
 
-> `url-dispatch` 当前仅提供参数与命令骨架，实际派发能力在 EPIC-GW-02 实现。
+> `url-dispatch` 会将 `neocode://` URL 转发到本地 Gateway，并输出结构化响应。
+>
+> 注意：当前 MVP 版本仅支持 `review` 动作，且必须携带 `path` 参数（如 `neocode://review?path=README.md`）；其余动作会在网关侧被拦截拒绝。
 
 设置 API Key 示例（按你使用的 provider 选择）：
 

@@ -123,6 +123,16 @@ shell: powershell
 			err: "field workdir not found",
 		},
 		{
+			name: "removed max_loops key is rejected",
+			data: `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+max_loops: 8
+`,
+			err: "field max_loops not found",
+		},
+		{
 			name: "legacy persisted providers list is rejected",
 			data: `
 selected_provider: openai
@@ -1082,6 +1092,13 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 	if compactCfg.MaxSummaryChars != DefaultCompactMaxSummaryChars {
 		t.Fatalf("expected max_summary_chars=%d, got %d", DefaultCompactMaxSummaryChars, compactCfg.MaxSummaryChars)
 	}
+	if compactCfg.ReadTimeMaxMessageSpans != DefaultCompactReadTimeMaxMessageSpans {
+		t.Fatalf(
+			"expected read_time_max_message_spans=%d, got %d",
+			DefaultCompactReadTimeMaxMessageSpans,
+			compactCfg.ReadTimeMaxMessageSpans,
+		)
+	}
 	if compactCfg.MicroCompactDisabled {
 		t.Fatalf("expected micro compact to be enabled by default")
 	}
@@ -1089,6 +1106,7 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 	cfg.Context.Compact.ManualStrategy = CompactManualStrategyFullReplace
 	cfg.Context.Compact.ManualKeepRecentMessages = 2
 	cfg.Context.Compact.MaxSummaryChars = 900
+	cfg.Context.Compact.ReadTimeMaxMessageSpans = 30
 	cfg.Context.Compact.MicroCompactDisabled = true
 	if err := loader.Save(context.Background(), cfg); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -1107,6 +1125,9 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 	if !strings.Contains(text, "micro_compact_disabled: true") {
 		t.Fatalf("expected persisted config to include micro_compact_disabled, got:\n%s", text)
 	}
+	if !strings.Contains(text, "read_time_max_message_spans: 30") {
+		t.Fatalf("expected persisted config to include read_time_max_message_spans, got:\n%s", text)
+	}
 
 	reloaded, err := loader.Load(context.Background())
 	if err != nil {
@@ -1120,6 +1141,9 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 	}
 	if reloaded.Context.Compact.MaxSummaryChars != 900 {
 		t.Fatalf("expected max_summary_chars=900, got %d", reloaded.Context.Compact.MaxSummaryChars)
+	}
+	if reloaded.Context.Compact.ReadTimeMaxMessageSpans != 30 {
+		t.Fatalf("expected read_time_max_message_spans=30, got %d", reloaded.Context.Compact.ReadTimeMaxMessageSpans)
 	}
 	if !reloaded.Context.Compact.MicroCompactDisabled {
 		t.Fatalf("expected micro_compact_disabled to persist")
@@ -1138,6 +1162,7 @@ func TestCompactConfigValidateFailures(t *testing.T) {
 				ManualStrategy:           "invalid",
 				ManualKeepRecentMessages: 10,
 				MaxSummaryChars:          1200,
+				ReadTimeMaxMessageSpans:  24,
 			},
 			expectErr: "manual_strategy",
 		},
@@ -1147,6 +1172,7 @@ func TestCompactConfigValidateFailures(t *testing.T) {
 				ManualStrategy:           CompactManualStrategyKeepRecent,
 				ManualKeepRecentMessages: 0,
 				MaxSummaryChars:          1200,
+				ReadTimeMaxMessageSpans:  24,
 			},
 			expectErr: "manual_keep_recent_messages",
 		},
@@ -1156,8 +1182,19 @@ func TestCompactConfigValidateFailures(t *testing.T) {
 				ManualStrategy:           CompactManualStrategyKeepRecent,
 				ManualKeepRecentMessages: 10,
 				MaxSummaryChars:          0,
+				ReadTimeMaxMessageSpans:  24,
 			},
 			expectErr: "max_summary_chars",
+		},
+		{
+			name: "invalid read time max spans",
+			compact: CompactConfig{
+				ManualStrategy:           CompactManualStrategyKeepRecent,
+				ManualKeepRecentMessages: 10,
+				MaxSummaryChars:          1200,
+				ReadTimeMaxMessageSpans:  0,
+			},
+			expectErr: "read_time_max_message_spans",
 		},
 	}
 
@@ -1177,6 +1214,7 @@ func TestCompactConfigValidateSupportsFullReplace(t *testing.T) {
 		ManualStrategy:           CompactManualStrategyFullReplace,
 		ManualKeepRecentMessages: 10,
 		MaxSummaryChars:          1200,
+		ReadTimeMaxMessageSpans:  24,
 	}).Validate()
 	if err != nil {
 		t.Fatalf("expected full_replace strategy to validate, got %v", err)
@@ -1261,6 +1299,7 @@ func TestContextConfigApplyDefaultsPropagatesAutoCompactDefaults(t *testing.T) {
 			ManualStrategy:           CompactManualStrategyKeepRecent,
 			ManualKeepRecentMessages: 10,
 			MaxSummaryChars:          1200,
+			ReadTimeMaxMessageSpans:  24,
 		},
 	})
 
@@ -1350,6 +1389,7 @@ func TestAutoCompactConfigContextConfigValidate(t *testing.T) {
 			ManualStrategy:           CompactManualStrategyKeepRecent,
 			ManualKeepRecentMessages: 10,
 			MaxSummaryChars:          1200,
+			ReadTimeMaxMessageSpans:  24,
 		},
 	}
 
@@ -1489,9 +1529,6 @@ func TestStaticReturnsCompleteSkeleton(t *testing.T) {
 	if cfg.Shell == "" {
 		t.Fatal("expected shell to be set")
 	}
-	if cfg.MaxLoops == 0 {
-		t.Fatal("expected max_loops to be set")
-	}
 	if cfg.ToolTimeoutSec == 0 {
 		t.Fatal("expected tool_timeout_sec to be set")
 	}
@@ -1555,11 +1592,15 @@ func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
 				SupportedContentTypes: []string{"text/html"},
 			},
 		},
+		Runtime: RuntimeConfig{
+			MaxNoProgressStreak: 3,
+		},
 		Context: ContextConfig{
 			Compact: CompactConfig{
 				ManualStrategy:           "invalid_strategy",
 				ManualKeepRecentMessages: 10,
 				MaxSummaryChars:          1200,
+				ReadTimeMaxMessageSpans:  24,
 			},
 		},
 	}
@@ -1641,6 +1682,52 @@ func TestMarshalPersistedConfigEndsWithNewline(t *testing.T) {
 	}
 	if data[len(data)-1] != '\n' {
 		t.Fatal("expected marshaled data to end with newline")
+	}
+}
+
+func TestParseCurrentConfigRoundTripRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
+	snapshot := testDefaultConfig().Clone()
+	snapshot.Runtime.MaxNoProgressStreak = 5
+
+	data, err := marshalPersistedConfig(snapshot)
+	if err != nil {
+		t.Fatalf("marshalPersistedConfig() error = %v", err)
+	}
+
+	parsed, err := parseCurrentConfig(data, StaticDefaults().Context, StaticDefaults().Memo)
+	if err != nil {
+		t.Fatalf("parseCurrentConfig() error = %v", err)
+	}
+	if parsed.Runtime.MaxNoProgressStreak != 5 {
+		t.Fatalf("expected max_no_progress_streak=5, got %d", parsed.Runtime.MaxNoProgressStreak)
+	}
+}
+
+func TestParseCurrentConfigInvalidRuntimeValueDefaultsBeforeValidation(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`
+selected_provider: openai
+current_model: gpt-4.1
+shell: bash
+runtime:
+  max_no_progress_streak: -2
+`)
+
+	parsed, err := parseCurrentConfig(raw, StaticDefaults().Context, StaticDefaults().Memo)
+	if err != nil {
+		t.Fatalf("parseCurrentConfig() error = %v", err)
+	}
+	parsed.Providers = cloneProviders(testDefaultConfig().Providers)
+	parsed.applyStaticDefaults(*StaticDefaults())
+	if err := parsed.ValidateSnapshot(); err != nil {
+		t.Fatalf("ValidateSnapshot() error = %v", err)
+	}
+	if parsed.Runtime.MaxNoProgressStreak != DefaultMaxNoProgressStreak {
+		t.Fatalf("expected default max_no_progress_streak=%d, got %d",
+			DefaultMaxNoProgressStreak, parsed.Runtime.MaxNoProgressStreak)
 	}
 }
 
@@ -1777,8 +1864,5 @@ func TestConfigCloneNilReceiverReturnsDefaults(t *testing.T) {
 	}
 	if cloned.Shell == "" {
 		t.Fatal("expected cloned nil config to have default shell")
-	}
-	if cloned.MaxLoops == 0 {
-		t.Fatal("expected cloned nil config to have default max_loops")
 	}
 }

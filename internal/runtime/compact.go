@@ -154,7 +154,7 @@ func (s *Service) runCompactForSession(
 		}
 	}
 
-	s.emit(ctx, EventCompactDone, runID, session.ID, fromCompactResult(result))
+	s.emit(ctx, EventCompactApplied, runID, session.ID, fromCompactResult(result))
 	return session, result, nil
 }
 

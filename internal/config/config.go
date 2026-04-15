@@ -11,7 +11,6 @@ import (
 
 const (
 	DefaultWorkdir        = "."
-	DefaultMaxLoops       = 8
 	DefaultToolTimeoutSec = 20
 )
 
@@ -21,8 +20,8 @@ type Config struct {
 	CurrentModel     string           `yaml:"current_model"`
 	Workdir          string           `yaml:"-"`
 	Shell            string           `yaml:"shell"`
-	MaxLoops         int              `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
+	Runtime          RuntimeConfig    `yaml:"runtime,omitempty"`
 	Context          ContextConfig    `yaml:"context,omitempty"`
 	Tools            ToolsConfig      `yaml:"tools,omitempty"`
 	Memo             MemoConfig       `yaml:"memo,omitempty"`
@@ -33,8 +32,8 @@ func StaticDefaults() *Config {
 	return &Config{
 		Workdir:        DefaultWorkdir,
 		Shell:          defaultShell(),
-		MaxLoops:       DefaultMaxLoops,
 		ToolTimeoutSec: DefaultToolTimeoutSec,
+		Runtime:        defaultRuntimeConfig(),
 		Context:        defaultContextConfig(),
 		Tools: ToolsConfig{
 			WebFetch: defaultWebFetchConfig(),
@@ -51,6 +50,7 @@ func (c *Config) Clone() Config {
 
 	clone := *c
 	clone.Providers = cloneProviders(c.Providers)
+	clone.Runtime = c.Runtime.Clone()
 	clone.Context = c.Context.Clone()
 	clone.Tools = c.Tools.Clone()
 	clone.Memo = c.Memo.Clone()
@@ -69,12 +69,10 @@ func (c *Config) applyStaticDefaults(defaults Config) {
 	if strings.TrimSpace(c.Shell) == "" {
 		c.Shell = defaults.Shell
 	}
-	if c.MaxLoops <= 0 {
-		c.MaxLoops = defaults.MaxLoops
-	}
 	if c.ToolTimeoutSec <= 0 {
 		c.ToolTimeoutSec = defaults.ToolTimeoutSec
 	}
+	c.Runtime.ApplyDefaults(defaults.Runtime)
 	c.Context.ApplyDefaults(defaults.Context)
 	c.Tools.ApplyDefaults(defaults.Tools)
 	c.Memo.ApplyDefaults(defaults.Memo)
@@ -127,6 +125,9 @@ func (c *Config) ValidateSnapshot() error {
 	}
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
+	}
+	if err := c.Runtime.Validate(); err != nil {
+		return fmt.Errorf("config: runtime: %w", err)
 	}
 	if err := c.Context.Validate(); err != nil {
 		return fmt.Errorf("config: context: %w", err)

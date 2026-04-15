@@ -2,11 +2,9 @@ package context
 
 import (
 	"context"
-	"strings"
 
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
-	"neo-code/internal/tools"
 )
 
 // DefaultBuilder preserves the current runtime context-building behavior.
@@ -81,12 +79,12 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 
 	return BuildResult{
 		SystemPrompt:         composeSystemPrompt(sections...),
-		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages), input.TaskState, input.Compact, b.microCompactPolicies),
+		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages, input.Compact), input.TaskState, input.Compact, b.microCompactPolicies),
 		AutoCompactSuggested: shouldAutoCompact,
 	}, nil
 }
 
-// applyReadTimeContextProjection 负责在 provider 请求前按开关应用只读上下文投影，避免改写原始会话消息。
+// applyReadTimeContextProjection 负责在 provider 读取路径上应用只读上下文投影，避免改写原始会话消息。
 func applyReadTimeContextProjection(
 	messages []providertypes.Message,
 	taskState agentsession.TaskState,
@@ -99,25 +97,5 @@ func applyReadTimeContextProjection(
 	} else {
 		projected = microCompactMessagesWithPolicies(messages, policies, options.MicroCompactRetainedToolSpans)
 	}
-	return projectToolMessagesForModel(projected)
-}
-
-// projectToolMessagesForModel 仅在 provider 读取路径上格式化 tool 消息，避免污染持久化会话内容。
-func projectToolMessagesForModel(messages []providertypes.Message) []providertypes.Message {
-	for i := range messages {
-		message := messages[i]
-		if message.Role != providertypes.RoleTool {
-			continue
-		}
-		if len(message.ToolMetadata) == 0 {
-			continue
-		}
-		content := strings.TrimSpace(message.Content)
-		if content == "" || content == microCompactClearedMessage {
-			continue
-		}
-		messages[i].Content = tools.FormatToolMessageForModel(message)
-		messages[i].ToolMetadata = nil
-	}
-	return messages
+	return ProjectToolMessagesForModel(projected)
 }

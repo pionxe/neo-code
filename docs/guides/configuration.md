@@ -35,10 +35,11 @@ custom provider 目录：
 
 ```yaml
 selected_provider: openai
-current_model: gpt-4.1
+current_model: gpt-5.4
 shell: bash
-max_loops: 8
 tool_timeout_sec: 20
+runtime:
+  max_no_progress_streak: 3
 
 tools:
   webfetch:
@@ -52,6 +53,7 @@ context:
   compact:
     manual_strategy: keep_recent
     manual_keep_recent_messages: 10
+    read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
   auto_compact:
@@ -66,7 +68,6 @@ context:
 | `selected_provider` | 当前选中的 provider 名称 |
 | `current_model` | 当前选中的模型 ID |
 | `shell` | 默认 shell，Windows 默认 `powershell`，其他平台默认 `bash` |
-| `max_loops` | Agent 主循环最大轮数 |
 | `tool_timeout_sec` | 工具执行超时（秒） |
 
 ### `context` 字段
@@ -75,10 +76,17 @@ context:
 |------|------|
 | `context.compact.manual_strategy` | `/compact` 手动压缩策略，支持 `keep_recent` / `full_replace` |
 | `context.compact.manual_keep_recent_messages` | `keep_recent` 策略下保留的最近消息数 |
+| `context.compact.read_time_max_message_spans` | context 读时保留的 message span 上限，用于降低“继续”时较早文件读取结果被过早裁掉的风险 |
 | `context.compact.max_summary_chars` | compact summary 最大字符数 |
 | `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
 | `context.auto_compact.enabled` | 是否启用自动压缩 |
 | `context.auto_compact.input_token_threshold` | 自动压缩输入 token 阈值 |
+
+### `runtime` 字段
+
+| 字段 | 说明 |
+|------|------|
+| `runtime.max_no_progress_streak` | 连续”无进展”轮次熔断阈值，默认 `3`；streak 达到 `limit-1`（默认第 2 轮）时向模型注入一次系统级纠偏提示，达到 `limit`（默认第 3 轮）时终止运行 |
 
 ### `tools` 字段
 

@@ -25,8 +25,8 @@ type persistedConfig struct {
 	SelectedProvider string                 `yaml:"selected_provider,omitempty"`
 	CurrentModel     string                 `yaml:"current_model,omitempty"`
 	Shell            string                 `yaml:"shell"`
-	MaxLoops         int                    `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int                    `yaml:"tool_timeout_sec,omitempty"`
+	Runtime          RuntimeConfig          `yaml:"runtime,omitempty"`
 	Context          persistedContextConfig `yaml:"context,omitempty"`
 	Tools            ToolsConfig            `yaml:"tools,omitempty"`
 	Memo             persistedMemoConfig    `yaml:"memo,omitempty"`
@@ -43,6 +43,7 @@ type persistedCompactConfig struct {
 	MaxSummaryChars               int    `yaml:"max_summary_chars,omitempty"`
 	MicroCompactDisabled          bool   `yaml:"micro_compact_disabled,omitempty"`
 	MicroCompactRetainedToolSpans int    `yaml:"micro_compact_retained_tool_spans,omitempty"`
+	ReadTimeMaxMessageSpans       int    `yaml:"read_time_max_message_spans,omitempty"`
 	MaxArchivedPromptChars        int    `yaml:"max_archived_prompt_chars,omitempty"`
 }
 
@@ -203,8 +204,8 @@ func parseCurrentConfig(data []byte, contextDefaults ContextConfig, memoDefaults
 		SelectedProvider: strings.TrimSpace(file.SelectedProvider),
 		CurrentModel:     strings.TrimSpace(file.CurrentModel),
 		Shell:            strings.TrimSpace(file.Shell),
-		MaxLoops:         file.MaxLoops,
 		ToolTimeoutSec:   file.ToolTimeoutSec,
+		Runtime:          file.Runtime,
 		Context:          fromPersistedContextConfig(file.Context, contextDefaults),
 		Tools:            file.Tools,
 		Memo:             fromPersistedMemoConfig(file.Memo, memoDefaults),
@@ -218,8 +219,8 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 		SelectedProvider: snapshot.SelectedProvider,
 		CurrentModel:     snapshot.CurrentModel,
 		Shell:            snapshot.Shell,
-		MaxLoops:         snapshot.MaxLoops,
 		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
+		Runtime:          snapshot.Runtime,
 		Context:          newPersistedContextConfig(snapshot.Context),
 		Tools:            snapshot.Tools,
 		Memo:             newPersistedMemoConfig(snapshot.Memo),
@@ -244,6 +245,7 @@ func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 			MaxSummaryChars:               cfg.Compact.MaxSummaryChars,
 			MicroCompactDisabled:          cfg.Compact.MicroCompactDisabled,
 			MicroCompactRetainedToolSpans: cfg.Compact.MicroCompactRetainedToolSpans,
+			ReadTimeMaxMessageSpans:       cfg.Compact.ReadTimeMaxMessageSpans,
 			MaxArchivedPromptChars:        cfg.Compact.MaxArchivedPromptChars,
 		},
 		AutoCompact: persistedAutoCompactConfig{
@@ -262,6 +264,7 @@ func fromPersistedContextConfig(file persistedContextConfig, defaults ContextCon
 			MaxSummaryChars:               file.Compact.MaxSummaryChars,
 			MicroCompactDisabled:          file.Compact.MicroCompactDisabled,
 			MicroCompactRetainedToolSpans: file.Compact.MicroCompactRetainedToolSpans,
+			ReadTimeMaxMessageSpans:       file.Compact.ReadTimeMaxMessageSpans,
 			MaxArchivedPromptChars:        file.Compact.MaxArchivedPromptChars,
 		},
 		AutoCompact: AutoCompactConfig{

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	agentcontext "neo-code/internal/context"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -43,7 +44,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, messages []providertypes.Mes
 		return nil, errors.New("memo: text generator is nil")
 	}
 
-	recent := recentMessagesForExtraction(messages, llmExtractorRecentMessageLimit)
+	recent := agentcontext.BuildRecentMessagesForModel(messages, llmExtractorRecentMessageLimit)
 	if len(recent) == 0 || !containsUserMessage(recent) {
 		return nil, nil
 	}
@@ -103,25 +104,6 @@ func buildExtractionPrompt(now time.Time) string {
 输出格式：
 [{"type":"user","title":"...","content":"...","keywords":["..."]}]
 `, currentDate))
-}
-
-// recentMessagesForExtraction 截取最近的非 tool 消息，保留原始顺序。
-func recentMessagesForExtraction(messages []providertypes.Message, limit int) []providertypes.Message {
-	if len(messages) == 0 || limit <= 0 {
-		return nil
-	}
-
-	filtered := make([]providertypes.Message, 0, len(messages))
-	for _, message := range messages {
-		if message.Role == providertypes.RoleTool {
-			continue
-		}
-		filtered = append(filtered, cloneProviderMessage(message))
-	}
-	if len(filtered) <= limit {
-		return filtered
-	}
-	return filtered[len(filtered)-limit:]
 }
 
 // containsUserMessage 检查待提取消息中是否包含用户输入。
@@ -222,19 +204,4 @@ func extractJSONArray(text string) (string, error) {
 	}
 
 	return "", errors.New("memo: extraction response contains an incomplete JSON array")
-}
-
-// cloneProviderMessage 深拷贝消息结构，避免后台提取读取到运行时后续修改。
-func cloneProviderMessage(message providertypes.Message) providertypes.Message {
-	cloned := message
-	if len(message.ToolCalls) > 0 {
-		cloned.ToolCalls = append([]providertypes.ToolCall(nil), message.ToolCalls...)
-	}
-	if len(message.ToolMetadata) > 0 {
-		cloned.ToolMetadata = make(map[string]string, len(message.ToolMetadata))
-		for key, value := range message.ToolMetadata {
-			cloned.ToolMetadata[key] = value
-		}
-	}
-	return cloned
 }

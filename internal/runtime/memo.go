@@ -26,26 +26,3 @@ func isSuccessfulRememberToolCall(callName string, result tools.ToolResult, exec
 	}
 	return strings.TrimSpace(callName) == tools.ToolNameMemoRemember
 }
-
-// cloneMessages 深拷贝消息切片，避免后台调度读取到后续运行态修改。
-func cloneMessages(messages []providertypes.Message) []providertypes.Message {
-	if len(messages) == 0 {
-		return nil
-	}
-
-	cloned := make([]providertypes.Message, 0, len(messages))
-	for _, message := range messages {
-		next := message
-		if len(message.ToolCalls) > 0 {
-			next.ToolCalls = append([]providertypes.ToolCall(nil), message.ToolCalls...)
-		}
-		if len(message.ToolMetadata) > 0 {
-			next.ToolMetadata = make(map[string]string, len(message.ToolMetadata))
-			for key, value := range message.ToolMetadata {
-				next.ToolMetadata[key] = value
-			}
-		}
-		cloned = append(cloned, next)
-	}
-	return cloned
-}

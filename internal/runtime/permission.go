@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
@@ -164,13 +165,18 @@ func (s *Service) awaitPermissionDecision(
 	input permissionExecutionInput,
 	permissionErr *tools.PermissionDecisionError,
 ) (approvalflow.Decision, string, error) {
+	askMu, releaseAskLock := s.acquirePermissionAskLock(input.RunID, input.SessionID)
+	defer releaseAskLock()
+	askMu.Lock()
+	defer askMu.Unlock()
+
 	requestID, resultCh, err := s.approvalBroker.Open()
 	if err != nil {
 		return "", "", err
 	}
 	defer s.approvalBroker.Close(requestID)
 
-	s.emit(ctx, EventPermissionRequest, input.RunID, input.SessionID, PermissionRequestPayload{
+	s.emit(ctx, EventPermissionRequested, input.RunID, input.SessionID, PermissionRequestPayload{
 		RequestID:    requestID,
 		ToolCallID:   input.Call.ID,
 		ToolName:     input.Call.Name,
@@ -190,6 +196,55 @@ func (s *Service) awaitPermissionDecision(
 	case decision := <-resultCh:
 		return decision, requestID, nil
 	}
+}
+
+// acquirePermissionAskLock 按运行维度获取审批串行锁，避免跨运行的审批互相阻塞。
+func (s *Service) acquirePermissionAskLock(runID string, sessionID string) (*sync.Mutex, func()) {
+	lockKey := permissionAskLockKey(runID, sessionID)
+
+	s.permissionAskMapMu.Lock()
+	if s.permissionAskLocks == nil {
+		s.permissionAskLocks = make(map[string]*permissionAskLockEntry)
+	}
+
+	entry, ok := s.permissionAskLocks[lockKey]
+	if !ok {
+		entry = &permissionAskLockEntry{}
+		s.permissionAskLocks[lockKey] = entry
+	}
+	entry.refs++
+	s.permissionAskMapMu.Unlock()
+
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			s.permissionAskMapMu.Lock()
+			defer s.permissionAskMapMu.Unlock()
+
+			current, exists := s.permissionAskLocks[lockKey]
+			if !exists || current != entry {
+				return
+			}
+			current.refs--
+			if current.refs <= 0 {
+				delete(s.permissionAskLocks, lockKey)
+			}
+		})
+	}
+	return &entry.mu, release
+}
+
+// permissionAskLockKey 生成审批串行锁键，优先按运行隔离，缺失时退化为会话或全局键。
+func permissionAskLockKey(runID string, sessionID string) string {
+	trimmedRunID := strings.TrimSpace(runID)
+	if trimmedRunID != "" {
+		return "run:" + trimmedRunID
+	}
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID != "" {
+		return "session:" + trimmedSessionID
+	}
+	return "global"
 }
 
 // emitPermissionResolved 将权限处理结果统一映射为 runtime 事件。

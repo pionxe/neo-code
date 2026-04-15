@@ -18,6 +18,7 @@ context:
   compact:
     manual_strategy: keep_recent
     manual_keep_recent_messages: 10
+    read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
   auto_compact:
@@ -29,6 +30,8 @@ context:
   控制手动 compact 的策略，支持 `keep_recent` 和 `full_replace`。
 - `manual_keep_recent_messages`
   在 `keep_recent` 模式下保留最近消息数量，并按 tool call 与 tool result 的原子块整体保留。
+- `read_time_max_message_spans`
+  控制 `context.Builder` 读时 trim 可保留的 message span 上限；该值越大，普通“继续”续跑时越不容易在未触发 compact 前丢掉较早的文件读取结果。
 - `max_summary_chars`
   控制 compact summary 的最大字符数。
 - `micro_compact_disabled`
@@ -61,7 +64,7 @@ context:
    优先复用会话记录的 `provider` / `model`，缺失时回退到当前配置。
 6. summary generator 调用模型生成完整 `task_state` 与 display summary。
 7. runner 校验 display summary 结构与长度，必要时截断，并写入 `task_state.last_updated_at`。
-8. compact 成功时回写 `session.TaskState` 与会话消息并发出 `compact_done`；失败时发出 `compact_error`。
+8. compact 成功时回写 `session.TaskState` 与会话消息并发出 `compact_applied`；失败时发出 `compact_error`。
 
 其中 `reactive` mode 在 context 包内与 `manual` 复用同一条压缩管线：
 
@@ -73,9 +76,9 @@ context:
 当 provider 返回“上下文过长”错误时，runtime 会：
 
 1. 识别 provider 归一化后的 typed error，必要时回退到错误文本匹配。
-2. 触发一次 `compact.Run(mode=reactive)`。
-3. 继续复用 `compact_start`、`compact_done`、`compact_error` 事件，并通过 `trigger_mode=reactive` 区分来源。
-4. 每次 `Run()` 最多只执行一次 reactive 重试，避免无限循环。
+2. 触发 `compact.Run(mode=reactive)`，并在仍然命中“上下文过长”时继续做逐步降级恢复。
+3. 继续复用 `compact_start`、`compact_applied`、`compact_error` 事件，并通过 `trigger_mode=reactive` 区分来源。
+4. 每次 `Run()` 最多执行 3 次 reactive compact 降级尝试；每次尝试都会进一步收缩 `manual_keep_recent_messages`，超过上限后返回最后一次 provider 错误。
 
 ## 生成协议
 
@@ -138,13 +141,14 @@ constraints:
 compact 相关 runtime 事件包括：
 
 - `compact_start`
-- `compact_done`
+- `compact_applied`
 - `compact_error`
 
-`compact_done` payload 包含：
+`compact_applied` payload 包含：
 
 - `applied`
 - `before_chars`
+- `before_tokens`
 - `after_chars`
 - `saved_ratio`
 - `trigger_mode`

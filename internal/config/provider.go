@@ -183,7 +183,7 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() provider.RuntimeConfig {
 const (
 	OpenAIName             = "openai"
 	OpenAIDefaultBaseURL   = "https://api.openai.com/v1"
-	OpenAIDefaultModel     = "gpt-4.1"
+	OpenAIDefaultModel     = "gpt-5.4"
 	OpenAIDefaultAPIKeyEnv = "OPENAI_API_KEY"
 
 	GeminiName             = "gemini"

@@ -799,13 +799,65 @@ var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentrun
 	agentruntime.EventAgentChunk:                               runtimeEventAgentChunkHandler,
 	agentruntime.EventToolChunk:                                runtimeEventToolChunkHandler,
 	agentruntime.EventAgentDone:                                runtimeEventAgentDoneHandler,
-	agentruntime.EventRunCanceled:                              runtimeEventRunCanceledHandler,
-	agentruntime.EventError:                                    runtimeEventErrorHandler,
 	agentruntime.EventProviderRetry:                            runtimeEventProviderRetryHandler,
-	agentruntime.EventPermissionRequest:                        runtimeEventPermissionRequestHandler,
+	agentruntime.EventPermissionRequested:                      runtimeEventPermissionRequestHandler,
 	agentruntime.EventPermissionResolved:                       runtimeEventPermissionResolvedHandler,
-	agentruntime.EventCompactDone:                              runtimeEventCompactDoneHandler,
+	agentruntime.EventCompactApplied:                           runtimeEventCompactDoneHandler,
 	agentruntime.EventCompactError:                             runtimeEventCompactErrorHandler,
+	agentruntime.EventPhaseChanged:                             runtimeEventPhaseChangedHandler,
+	agentruntime.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
+}
+
+// runtimeEventPhaseChangedHandler 处理 phase 迁移并更新进度标签。
+func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(agentruntime.PhaseChangedPayload)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(payload.To)) {
+	case "plan":
+		a.setRunProgress(0.3, "Planning")
+	case "execute":
+		a.setRunProgress(0.6, "Running tools")
+	case "verify":
+		a.setRunProgress(0.82, "Verifying")
+	}
+	return false
+}
+
+// runtimeEventStopReasonDecidedHandler 处理唯一终止事实事件。
+func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(agentruntime.StopReasonDecidedPayload)
+	if !ok {
+		return false
+	}
+	a.state.IsAgentRunning = false
+	a.state.StreamingReply = false
+	a.state.CurrentTool = ""
+	a.state.ActiveRunID = ""
+	a.pendingPermission = nil
+	a.clearRunProgress()
+
+	reason := strings.ToLower(strings.TrimSpace(string(payload.Reason)))
+	switch reason {
+	case "success":
+		if strings.TrimSpace(a.state.ExecutionError) == "" {
+			a.state.StatusText = statusReady
+		}
+	case "canceled":
+		a.state.ExecutionError = ""
+		a.state.StatusText = statusCanceled
+		a.appendActivity("run", "Canceled current run", "", false)
+	default:
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "runtime stopped"
+		}
+		a.state.ExecutionError = detail
+		a.state.StatusText = detail
+		a.appendActivity("run", "Runtime stopped", detail, true)
+	}
+	return false
 }
 
 // handleRuntimeEvent 通过注册表分发 runtime 事件，避免巨型 switch 膨胀。
@@ -1013,7 +1065,7 @@ func runtimeEventProviderRetryHandler(a *App, event agentruntime.RuntimeEvent) b
 	return false
 }
 
-// runtimeEventPermissionRequestHandler 处理 permission_request 事件并激活审批面板。
+// runtimeEventPermissionRequestHandler 处理 permission_requested 事件并激活审批面板。
 func runtimeEventPermissionRequestHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := parsePermissionRequestPayload(event.Payload)
 	if !ok {
@@ -1082,7 +1134,7 @@ func (a *App) refreshPermissionPromptLayout() {
 	a.applyComponentLayout(false)
 }
 
-// runtimeEventCompactDoneHandler 处理 compact 完成事件。
+// runtimeEventCompactDoneHandler 处理 compact_applied 事件。
 func runtimeEventCompactDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.CompactResult)
 	if !ok {
