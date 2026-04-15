@@ -36,6 +36,9 @@ const (
 )
 
 var workspaceCommandExecutor = defaultWorkspaceCommandExecutor
+var readClipboardImage = tuiinfra.ReadClipboardImage
+var saveClipboardImageToTempFile = tuiinfra.SaveImageToTempFile
+var detectImageMimeType = tuiinfra.DetectImageMimeType
 
 func isWorkspaceCommandInput(input string) bool {
 	return strings.HasPrefix(strings.TrimSpace(input), workspaceCommandPrefix)
@@ -296,7 +299,7 @@ func (a *App) addImageAttachment(path string) error {
 		return fmt.Errorf("image size exceeds %d MB limit", imageMaxSizeBytes/(1024*1024))
 	}
 
-	mimeType := tuiinfra.DetectImageMimeType(absPath)
+	mimeType := detectImageMimeType(absPath)
 	if mimeType == "" {
 		return fmt.Errorf("unsupported image format")
 	}
@@ -359,7 +362,7 @@ func (a *App) addImageFromClipboard() error {
 		return fmt.Errorf("maximum %d image attachments allowed", maxImageAttachments)
 	}
 
-	data, err := tuiinfra.ReadClipboardImage()
+	data, err := readClipboardImage()
 	if err != nil {
 		return fmt.Errorf("failed to read clipboard image: %w", err)
 	}
@@ -372,12 +375,12 @@ func (a *App) addImageFromClipboard() error {
 		return fmt.Errorf("image size exceeds %d MB limit", imageMaxSizeBytes/(1024*1024))
 	}
 
-	tmpPath, err := tuiinfra.SaveImageToTempFile(data, "paste")
+	tmpPath, err := saveClipboardImageToTempFile(data, "paste")
 	if err != nil {
 		return fmt.Errorf("failed to save clipboard image: %w", err)
 	}
 
-	mimeType := tuiinfra.DetectImageMimeType(tmpPath)
+	mimeType := detectImageMimeType(tmpPath)
 	if mimeType == "" {
 		return fmt.Errorf("unsupported image format from clipboard")
 	}

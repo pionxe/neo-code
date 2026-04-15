@@ -14,13 +14,8 @@ func SaveImageToTempFile(data []byte, prefix string) (string, error) {
 		return "", err
 	}
 	tmpFile := f.Name()
-
-	if _, err = f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpFile)
-		return "", err
-	}
-	if err = f.Close(); err != nil {
+	_ = f.Close()
+	if err = os.WriteFile(tmpFile, data, 0o600); err != nil {
 		_ = os.Remove(tmpFile)
 		return "", err
 	}

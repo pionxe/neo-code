@@ -983,6 +983,190 @@ func TestRuntimeEventRunContextHandler(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventRunContextHandlerInvalidatesModelCapabilityCache(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.CurrentProvider = "provider-a"
+	app.state.CurrentModel = "model-a"
+	app.currentModelCapabilities = modelCapabilityState{
+		checked:            true,
+		supportsImageInput: true,
+	}
+
+	payload := tuiservices.RuntimeRunContextPayload{
+		Provider: "provider-b",
+		Model:    "model-b",
+	}
+	_ = runtimeEventRunContextHandler(&app, agentruntime.RuntimeEvent{Payload: payload})
+	if app.currentModelCapabilities.checked {
+		t.Fatalf("expected capability cache to be invalidated when provider/model changes")
+	}
+}
+
+func TestSyncConfigStateInvalidatesModelCapabilityCache(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.CurrentProvider = "provider-a"
+	app.state.CurrentModel = "model-a"
+	app.currentModelCapabilities = modelCapabilityState{
+		checked:            true,
+		supportsImageInput: true,
+	}
+
+	app.syncConfigState(config.Config{
+		SelectedProvider: "provider-b",
+		CurrentModel:     "model-b",
+		Workdir:          app.state.CurrentWorkdir,
+	})
+	if app.currentModelCapabilities.checked {
+		t.Fatalf("expected capability cache to be invalidated")
+	}
+}
+
+func TestUpdatePasteImageShortcutFailure(t *testing.T) {
+	app, _ := newTestApp(t)
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if !strings.Contains(strings.ToLower(app.state.StatusText), "clipboard") {
+		t.Fatalf("expected clipboard failure status, got %q", app.state.StatusText)
+	}
+}
+
+func TestUpdateEnterSessionOpensSessionPicker(t *testing.T) {
+	app, runtime := newTestApp(t)
+	runtime.listSessions = []agentsession.Summary{
+		{ID: "s1", Title: "Session 1", UpdatedAt: time.Now()},
+	}
+	app.input.SetValue("/session")
+	app.state.InputText = "/session"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.state.ActivePicker != pickerSession {
+		t.Fatalf("expected session picker to open")
+	}
+	if app.state.StatusText != statusChooseSession {
+		t.Fatalf("expected status %q, got %q", statusChooseSession, app.state.StatusText)
+	}
+}
+
+func TestUpdateEnterImageReferencePath(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.input.SetValue("@image:/path/does-not-exist.png")
+	app.state.InputText = "@image:/path/does-not-exist.png"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.input.Value() != "" {
+		t.Fatalf("expected input to be reset after image reference handling")
+	}
+	if strings.TrimSpace(app.state.StatusText) == "" {
+		t.Fatalf("expected status text to reflect image reference failure")
+	}
+}
+
+func TestUpdateSendWithUnsupportedImageInput(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingImageAttachments = []pendingImageAttachment{
+		{Name: "a.png", MimeType: "image/png", Path: "/tmp/a.png", Size: 1},
+	}
+	app.providerSvc = stubProviderService{
+		providers: []configstate.ProviderOption{{ID: app.state.CurrentProvider, Name: app.state.CurrentProvider}},
+		models: []providertypes.ModelDescriptor{{
+			ID:   app.state.CurrentModel,
+			Name: app.state.CurrentModel,
+			CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateUnsupported,
+			},
+		}},
+	}
+	app.input.SetValue("hello")
+	app.state.InputText = "hello"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.state.IsAgentRunning {
+		t.Fatalf("expected send to be blocked for unsupported model image input")
+	}
+	if app.hasImageAttachments() {
+		t.Fatalf("expected pending image attachments to be cleared on unsupported model")
+	}
+	if app.state.StatusText != "Model does not support images" {
+		t.Fatalf("unexpected status text: %q", app.state.StatusText)
+	}
+}
+
+func TestUpdatePickerSessionEnterActivatesSelectedSession(t *testing.T) {
+	app, runtime := newTestApp(t)
+	now := time.Now()
+	runtime.listSessions = []agentsession.Summary{
+		{ID: "s1", Title: "One", UpdatedAt: now.Add(-time.Minute)},
+		{ID: "s2", Title: "Two", UpdatedAt: now},
+	}
+	runtime.loadSessions = map[string]agentsession.Session{
+		"s2": {
+			ID:      "s2",
+			Title:   "Two",
+			Workdir: app.state.CurrentWorkdir,
+			Messages: []providertypes.Message{
+				{Role: roleUser, Content: "hello"},
+			},
+		},
+	}
+	if err := app.refreshSessionPicker(); err != nil {
+		t.Fatalf("refreshSessionPicker() error = %v", err)
+	}
+	app.openPicker(pickerSession, statusChooseSession, &app.sessionPicker, "")
+	app.sessionPicker.Select(1)
+
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.state.ActiveSessionID != "s2" || app.state.ActiveSessionTitle != "Two" {
+		t.Fatalf("expected selected session to be activated, got id=%q title=%q", app.state.ActiveSessionID, app.state.ActiveSessionTitle)
+	}
+	if len(app.activeMessages) != 1 {
+		t.Fatalf("expected messages to refresh from selected session")
+	}
+}
+
+func TestActivateSessionByIDNotFound(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.Sessions = []agentsession.Summary{{ID: "s1", Title: "one"}}
+	if err := app.activateSessionByID("missing"); err == nil {
+		t.Fatalf("expected session not found error")
+	}
+}
+
+func TestHandleImmediateSlashCommandSession(t *testing.T) {
+	app, runtime := newTestApp(t)
+	runtime.listSessions = []agentsession.Summary{
+		{ID: "s1", Title: "Session 1", UpdatedAt: time.Now()},
+	}
+	handled, cmd := app.handleImmediateSlashCommand("/session")
+	if !handled {
+		t.Fatalf("expected /session to be handled immediately")
+	}
+	if cmd != nil {
+		_ = cmd()
+	}
+	if app.state.ActivePicker != pickerSession {
+		t.Fatalf("expected session picker opened by immediate slash command")
+	}
+}
+
 func TestRuntimeEventToolStatusHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	payload := tuiservices.RuntimeToolStatusPayload{ToolCallID: "tool-1", ToolName: "bash", Status: string(tuistate.ToolLifecyclePlanned)}

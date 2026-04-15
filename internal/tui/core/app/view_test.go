@@ -50,6 +50,23 @@ func TestRenderPickerSessionMode(t *testing.T) {
 	}
 }
 
+func TestRenderPickerProviderAndFileMode(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	app.state.ActivePicker = pickerProvider
+	app.providerPicker.SetItems([]list.Item{selectionItem{id: "p1", name: "Provider 1"}})
+	providerView := app.renderPicker(48, 14)
+	if !strings.Contains(providerView, providerPickerTitle) {
+		t.Fatalf("expected provider picker title")
+	}
+
+	app.state.ActivePicker = pickerFile
+	fileView := app.renderPicker(48, 14)
+	if !strings.Contains(fileView, filePickerTitle) {
+		t.Fatalf("expected file picker title")
+	}
+}
+
 func TestBuildPickerLayoutExpandsPopupSpace(t *testing.T) {
 	app, _ := newTestApp(t)
 
@@ -75,6 +92,18 @@ func TestRenderWaterfallUsesDynamicTranscriptHeight(t *testing.T) {
 	view := app.renderWaterfall(80, 24)
 	if strings.TrimSpace(view) == "" {
 		t.Fatalf("expected non-empty waterfall view")
+	}
+}
+
+func TestRenderWaterfallThinkingState(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActivePicker = pickerNone
+	app.state.IsAgentRunning = true
+	app.state.StatusText = statusThinking
+
+	view := app.renderWaterfall(80, 24)
+	if !strings.Contains(view, "Thinking...") {
+		t.Fatalf("expected thinking hint in waterfall view")
 	}
 }
 
@@ -167,5 +196,41 @@ func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
 	bodyRightEdge := lipgloss.Width(strings.TrimRight(contentLine, " "))
 	if tagRightEdge != bodyRightEdge {
 		t.Fatalf("expected user tag and body right edges to match, got tag=%d body=%d\n%q\n%q", tagRightEdge, bodyRightEdge, tagLine, contentLine)
+	}
+}
+
+func TestBuildPickerLayoutClampMin(t *testing.T) {
+	app, _ := newTestApp(t)
+	got := app.buildPickerLayout(10, 8)
+	if got.panelWidth != pickerPanelMinWidth {
+		t.Fatalf("expected panel width clamp to min %d, got %d", pickerPanelMinWidth, got.panelWidth)
+	}
+	if got.panelHeight != pickerPanelMinHeight {
+		t.Fatalf("expected panel height clamp to min %d, got %d", pickerPanelMinHeight, got.panelHeight)
+	}
+}
+
+func TestRenderWaterfallWithActivePicker(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActivePicker = pickerSession
+	app.sessionPicker.SetItems([]list.Item{
+		sessionItem{Summary: agentsession.Summary{
+			ID:        "session-1",
+			Title:     "Session One",
+			UpdatedAt: time.Now(),
+		}},
+	})
+
+	view := app.renderWaterfall(90, 24)
+	if !strings.Contains(view, sessionPickerTitle) {
+		t.Fatalf("expected picker waterfall view to include session picker title")
+	}
+}
+
+func TestRenderBody(t *testing.T) {
+	app, _ := newTestApp(t)
+	out := app.renderBody(layout{contentWidth: 90, contentHeight: 24})
+	if strings.TrimSpace(out) == "" {
+		t.Fatalf("expected renderBody output")
 	}
 }
