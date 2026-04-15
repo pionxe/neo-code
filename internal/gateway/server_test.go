@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"neo-code/internal/gateway/protocol"
 )
 
 func TestServerHandleConnectionPing(t *testing.T) {
@@ -28,32 +30,40 @@ func TestServerHandleConnectionPing(t *testing.T) {
 	encoder := json.NewEncoder(clientConn)
 	decoder := json.NewDecoder(clientConn)
 
-	if err := encoder.Encode(MessageFrame{
-		Type:      FrameTypeRequest,
-		Action:    FrameActionPing,
-		RequestID: "req-1",
+	if err := encoder.Encode(protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-1"`),
+		Method:  protocol.MethodGatewayPing,
+		Params:  json.RawMessage(`{}`),
 	}); err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
 
-	var response MessageFrame
+	var response protocol.JSONRPCResponse
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-
-	if response.Type != FrameTypeAck {
-		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	if response.Error != nil {
+		t.Fatalf("unexpected rpc error: %+v", response.Error)
 	}
-	if response.Action != FrameActionPing {
-		t.Fatalf("response action = %q, want %q", response.Action, FrameActionPing)
-	}
-	if response.RequestID != "req-1" {
-		t.Fatalf("response request_id = %q, want %q", response.RequestID, "req-1")
+	resultFrame, err := decodeJSONRPCResultFrame(response)
+	if err != nil {
+		t.Fatalf("decode result frame: %v", err)
 	}
 
-	payloadMap, ok := response.Payload.(map[string]any)
+	if resultFrame.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", resultFrame.Type, FrameTypeAck)
+	}
+	if resultFrame.Action != FrameActionPing {
+		t.Fatalf("response action = %q, want %q", resultFrame.Action, FrameActionPing)
+	}
+	if resultFrame.RequestID != "req-1" {
+		t.Fatalf("response request_id = %q, want %q", resultFrame.RequestID, "req-1")
+	}
+
+	payloadMap, ok := resultFrame.Payload.(map[string]any)
 	if !ok {
-		t.Fatalf("response payload type = %T, want map[string]any", response.Payload)
+		t.Fatalf("response payload type = %T, want map[string]any", resultFrame.Payload)
 	}
 	if got, _ := payloadMap["message"].(string); got != "pong" {
 		t.Fatalf("response payload message = %q, want %q", got, "pong")
@@ -82,28 +92,27 @@ func TestServerHandleConnectionUnsupportedAction(t *testing.T) {
 	encoder := json.NewEncoder(clientConn)
 	decoder := json.NewDecoder(clientConn)
 
-	if err := encoder.Encode(MessageFrame{
-		Type:      FrameTypeRequest,
-		Action:    FrameActionRun,
-		RequestID: "req-2",
-		InputText: "hello",
+	if err := encoder.Encode(protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-2"`),
+		Method:  "gateway.run",
+		Params:  json.RawMessage(`{"input_text":"hello"}`),
 	}); err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
 
-	var response MessageFrame
+	var response protocol.JSONRPCResponse
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-
-	if response.Type != FrameTypeError {
-		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
-	}
 	if response.Error == nil {
-		t.Fatal("response error is nil")
+		t.Fatal("response rpc error is nil")
 	}
-	if response.Error.Code != ErrorCodeUnsupportedAction.String() {
-		t.Fatalf("error code = %q, want %q", response.Error.Code, ErrorCodeUnsupportedAction.String())
+	if response.Error.Code != protocol.JSONRPCCodeMethodNotFound {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeMethodNotFound)
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeUnsupportedAction.String() {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeUnsupportedAction.String())
 	}
 
 	_ = clientConn.Close()
@@ -129,7 +138,7 @@ func TestServerHandleConnectionRejectsOversizedFrame(t *testing.T) {
 	decoder := json.NewDecoder(clientConn)
 	oversizedPayload := strings.Repeat("a", int(MaxFrameSize)+128)
 	requestFrame := fmt.Sprintf(
-		`{"type":"request","action":"ping","request_id":"req-oversize","input_text":"%s"}`+"\n",
+		`{"jsonrpc":"2.0","id":"req-oversize","method":"gateway.ping","params":{"input_text":"%s"}}`+"\n",
 		oversizedPayload,
 	)
 
@@ -139,18 +148,18 @@ func TestServerHandleConnectionRejectsOversizedFrame(t *testing.T) {
 		writeDone <- err
 	}()
 
-	var response MessageFrame
+	var response protocol.JSONRPCResponse
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode oversized response: %v", err)
 	}
-	if response.Type != FrameTypeError {
-		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
-	}
 	if response.Error == nil {
-		t.Fatal("response error is nil")
+		t.Fatal("response rpc error is nil")
 	}
-	if response.Error.Code != ErrorCodeInvalidFrame.String() {
-		t.Fatalf("error code = %q, want %q", response.Error.Code, ErrorCodeInvalidFrame.String())
+	if response.Error.Code != protocol.JSONRPCCodeInvalidRequest {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInvalidRequest)
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeInvalidFrame.String() {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeInvalidFrame.String())
 	}
 	if !strings.Contains(response.Error.Message, "frame exceeds max size") {
 		t.Fatalf("error message = %q, want contains %q", response.Error.Message, "frame exceeds max size")
@@ -188,4 +197,15 @@ func TestServerHandleConnectionRejectsOversizedFrame(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("handleConnection did not exit")
 	}
+}
+
+func decodeJSONRPCResultFrame(response protocol.JSONRPCResponse) (MessageFrame, error) {
+	if response.Result == nil {
+		return MessageFrame{}, errors.New("rpc result is nil")
+	}
+	var frame MessageFrame
+	if err := json.Unmarshal(response.Result, &frame); err != nil {
+		return MessageFrame{}, err
+	}
+	return frame, nil
 }

@@ -1,11 +1,13 @@
 package urlscheme
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -110,28 +112,69 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		Payload:   intent,
 	}
 
+	requestIDRaw, err := marshalJSONRawMessage(requestFrame.RequestID)
+	if err != nil {
+		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode request id: %v", err))
+	}
+	requestParamsRaw, err := marshalJSONRawMessage(intent)
+	if err != nil {
+		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode request params: %v", err))
+	}
+	rpcRequest := protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      requestIDRaw,
+		Method:  protocol.MethodWakeOpenURL,
+		Params:  requestParamsRaw,
+	}
+
 	if err := ensureDispatchContextActive(ctx); err != nil {
 		return DispatchResult{}, toDispatchError(err)
 	}
 	encoder := json.NewEncoder(conn)
-	if err := encoder.Encode(requestFrame); err != nil {
+	if err := encoder.Encode(rpcRequest); err != nil {
 		if ctx != nil && ctx.Err() != nil {
 			ctxErr := ctx.Err()
 			return DispatchResult{}, toDispatchError(ctxErr)
 		}
-		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("write request frame: %v", err))
+		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("write request rpc: %v", err))
 	}
 
-	var responseFrame gateway.MessageFrame
+	var rpcResponse protocol.JSONRPCResponse
 	if err := ensureDispatchContextActive(ctx); err != nil {
 		return DispatchResult{}, toDispatchError(err)
 	}
 	decoder := json.NewDecoder(conn)
-	if err := decoder.Decode(&responseFrame); err != nil {
+	if err := decoder.Decode(&rpcResponse); err != nil {
 		if ctx != nil && ctx.Err() != nil {
 			ctxErr := ctx.Err()
 			return DispatchResult{}, toDispatchError(ctxErr)
 		}
+		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response rpc: %v", err))
+	}
+	if strings.TrimSpace(rpcResponse.JSONRPC) != protocol.JSONRPCVersion {
+		return DispatchResult{}, newDispatchError(
+			ErrorCodeUnexpectedResponse,
+			"unexpected response jsonrpc version",
+		)
+	}
+	if !rawJSONMessageEqual(rpcResponse.ID, rpcRequest.ID) {
+		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, "rpc correlation failed: id mismatch")
+	}
+	if rpcResponse.Error != nil && rpcResponse.Result != nil {
+		return DispatchResult{}, newDispatchError(
+			ErrorCodeUnexpectedResponse,
+			"unexpected response payload: both result and error are present",
+		)
+	}
+	if rpcResponse.Error != nil {
+		return DispatchResult{}, toDispatchErrorFromJSONRPC(rpcResponse.Error)
+	}
+	if rpcResponse.Result == nil {
+		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, "gateway response missing result payload")
+	}
+
+	responseFrame, err := decodeResponseFrameResult(rpcResponse.Result)
+	if err != nil {
 		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response frame: %v", err))
 	}
 	if responseFrame.Action != requestFrame.Action || responseFrame.RequestID != requestFrame.RequestID {
@@ -199,6 +242,60 @@ func watchDispatchCancellation(ctx context.Context, conn net.Conn) func() {
 	return func() {
 		close(done)
 	}
+}
+
+// toDispatchErrorFromJSONRPC 将 JSON-RPC 错误对象映射为 url-dispatch 稳定错误。
+func toDispatchErrorFromJSONRPC(rpcError *protocol.JSONRPCError) error {
+	if rpcError == nil {
+		return newDispatchError(ErrorCodeUnexpectedResponse, "gateway returned empty rpc error payload")
+	}
+
+	code := strings.TrimSpace(protocol.GatewayCodeFromJSONRPCError(rpcError))
+	if code == "" {
+		code = mapJSONRPCCodeToDispatchCode(rpcError.Code)
+	}
+	message := strings.TrimSpace(rpcError.Message)
+	if message == "" {
+		message = "gateway returned empty rpc error message"
+	}
+	return newDispatchError(code, message)
+}
+
+// mapJSONRPCCodeToDispatchCode 为缺少 gateway_code 的响应提供兜底错误码映射。
+func mapJSONRPCCodeToDispatchCode(code int) string {
+	switch code {
+	case protocol.JSONRPCCodeMethodNotFound:
+		return gateway.ErrorCodeUnsupportedAction.String()
+	case protocol.JSONRPCCodeInvalidRequest, protocol.JSONRPCCodeInvalidParams, protocol.JSONRPCCodeParseError:
+		return gateway.ErrorCodeInvalidFrame.String()
+	case protocol.JSONRPCCodeInternalError:
+		return gateway.ErrorCodeInternalError.String()
+	default:
+		return ErrorCodeInternal
+	}
+}
+
+// decodeResponseFrameResult 将 JSON-RPC result 安全解码回 MessageFrame。
+func decodeResponseFrameResult(result json.RawMessage) (gateway.MessageFrame, error) {
+	var frame gateway.MessageFrame
+	if err := json.Unmarshal(result, &frame); err != nil {
+		return gateway.MessageFrame{}, err
+	}
+	return frame, nil
+}
+
+// rawJSONMessageEqual 比较两段 JSON 原文在去除首尾空白后的字节是否一致。
+func rawJSONMessageEqual(left, right json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(left), bytes.TrimSpace(right))
+}
+
+// marshalJSONRawMessage 将任意对象编码为 json.RawMessage，便于构造 JSON-RPC 请求字段。
+func marshalJSONRawMessage(payload any) (json.RawMessage, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }
 
 // toDispatchError 将不同来源错误转换为统一结构化错误。

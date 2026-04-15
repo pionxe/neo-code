@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"neo-code/internal/gateway"
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/gateway/transport"
 )
 
@@ -40,25 +41,50 @@ func TestDispatcherDispatchSuccess(t *testing.T) {
 		decoder := json.NewDecoder(serverConn)
 		encoder := json.NewEncoder(serverConn)
 
-		var requestFrame gateway.MessageFrame
-		if err := decoder.Decode(&requestFrame); err != nil {
-			t.Errorf("decode request frame: %v", err)
+		var rpcRequest protocol.JSONRPCRequest
+		if err := decoder.Decode(&rpcRequest); err != nil {
+			t.Errorf("decode request rpc: %v", err)
 			return
 		}
-		if requestFrame.Action != gateway.FrameActionWakeOpenURL {
-			t.Errorf("request action = %q, want %q", requestFrame.Action, gateway.FrameActionWakeOpenURL)
+		if rpcRequest.Method != protocol.MethodWakeOpenURL {
+			t.Errorf("request method = %q, want %q", rpcRequest.Method, protocol.MethodWakeOpenURL)
+			return
+		}
+		if rpcRequest.JSONRPC != protocol.JSONRPCVersion {
+			t.Errorf("request jsonrpc = %q, want %q", rpcRequest.JSONRPC, protocol.JSONRPCVersion)
+			return
+		}
+		if len(bytes.TrimSpace(rpcRequest.ID)) == 0 {
+			t.Error("request id should not be empty")
+			return
+		}
+		var params protocol.WakeIntent
+		if err := json.Unmarshal(rpcRequest.Params, &params); err != nil {
+			t.Errorf("decode request params: %v", err)
+			return
+		}
+		if params.Action != protocol.WakeActionReview {
+			t.Errorf("request params action = %q, want %q", params.Action, protocol.WakeActionReview)
+			return
+		}
+		if got := params.Params["path"]; got != "README.md" {
+			t.Errorf("request params[path] = %q, want %q", got, "README.md")
 			return
 		}
 
-		if err := encoder.Encode(gateway.MessageFrame{
-			Type:      gateway.FrameTypeAck,
-			Action:    gateway.FrameActionWakeOpenURL,
-			RequestID: requestFrame.RequestID,
-			Payload: map[string]any{
-				"message": "wake intent accepted",
-			},
+		if err := encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      rpcRequest.ID,
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-1",
+				Payload: map[string]any{
+					"message": "wake intent accepted",
+				},
+			}),
 		}); err != nil {
-			t.Errorf("encode response frame: %v", err)
+			t.Errorf("encode response rpc: %v", err)
 		}
 	}()
 
@@ -94,16 +120,16 @@ func TestDispatcherDispatchReturnsGatewayError(t *testing.T) {
 	go func() {
 		decoder := json.NewDecoder(serverConn)
 		encoder := json.NewEncoder(serverConn)
-		var requestFrame gateway.MessageFrame
-		_ = decoder.Decode(&requestFrame)
-		_ = encoder.Encode(gateway.MessageFrame{
-			Type:      gateway.FrameTypeError,
-			Action:    requestFrame.Action,
-			RequestID: requestFrame.RequestID,
-			Error: &gateway.FrameError{
-				Code:    gateway.ErrorCodeInvalidAction.String(),
-				Message: "unsupported wake action",
-			},
+		var rpcRequest protocol.JSONRPCRequest
+		_ = decoder.Decode(&rpcRequest)
+		_ = encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      rpcRequest.ID,
+			Error: protocol.NewJSONRPCError(
+				protocol.JSONRPCCodeInvalidParams,
+				"unsupported wake action",
+				gateway.ErrorCodeInvalidAction.String(),
+			),
 		})
 	}()
 
@@ -139,12 +165,16 @@ func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
 	go func() {
 		decoder := json.NewDecoder(serverConn)
 		encoder := json.NewEncoder(serverConn)
-		var requestFrame gateway.MessageFrame
-		_ = decoder.Decode(&requestFrame)
-		_ = encoder.Encode(gateway.MessageFrame{
-			Type:      gateway.FrameTypeEvent,
-			Action:    requestFrame.Action,
-			RequestID: requestFrame.RequestID,
+		var rpcRequest protocol.JSONRPCRequest
+		_ = decoder.Decode(&rpcRequest)
+		_ = encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      rpcRequest.ID,
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeEvent,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-3",
+			}),
 		})
 	}()
 
@@ -179,12 +209,16 @@ func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
 	go func() {
 		decoder := json.NewDecoder(serverConn)
 		encoder := json.NewEncoder(serverConn)
-		var requestFrame gateway.MessageFrame
-		_ = decoder.Decode(&requestFrame)
-		_ = encoder.Encode(gateway.MessageFrame{
-			Type:      gateway.FrameTypeAck,
-			Action:    requestFrame.Action,
-			RequestID: "wake-mismatch",
+		var rpcRequest protocol.JSONRPCRequest
+		_ = decoder.Decode(&rpcRequest)
+		_ = encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      rpcRequest.ID,
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-mismatch",
+			}),
 		})
 	}()
 
@@ -302,9 +336,9 @@ func TestDispatcherDispatchInterruptsBlockedReadOnContextCancel(t *testing.T) {
 		defer close(serverDone)
 
 		decoder := json.NewDecoder(serverConn)
-		var frame gateway.MessageFrame
-		if err := decoder.Decode(&frame); err != nil {
-			t.Errorf("decode request frame: %v", err)
+		var rpcRequest protocol.JSONRPCRequest
+		if err := decoder.Decode(&rpcRequest); err != nil {
+			t.Errorf("decode request rpc: %v", err)
 			return
 		}
 		close(requestArrived)
@@ -573,12 +607,12 @@ func TestDispatcherDispatchAdditionalErrorBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("gateway error frame missing payload", func(t *testing.T) {
+	t.Run("gateway response missing result payload", func(t *testing.T) {
 		dispatcher := &Dispatcher{
 			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
 			dialFn: func(string) (net.Conn, error) {
 				return &stubDispatchConn{
-					readBuffer: bytes.NewBufferString(`{"type":"error","action":"wake.openUrl","request_id":"wake-14"}` + "\n"),
+					readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"wake-14"}` + "\n"),
 				}, nil
 			},
 			requestIDFn: func() string { return "wake-14" },
@@ -588,7 +622,7 @@ func TestDispatcherDispatchAdditionalErrorBranches(t *testing.T) {
 			RawURL: "neocode://review?path=README.md",
 		})
 		if err == nil {
-			t.Fatal("expected missing error payload branch")
+			t.Fatal("expected missing result payload branch")
 		}
 		var dispatchErr *DispatchError
 		if !errors.As(err, &dispatchErr) {
@@ -598,6 +632,200 @@ func TestDispatcherDispatchAdditionalErrorBranches(t *testing.T) {
 			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
 		}
 	})
+
+	t.Run("response rpc version mismatch", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{
+					readBuffer: bytes.NewBufferString(`{"jsonrpc":"1.0","id":"wake-15","result":{}}` + "\n"),
+				}, nil
+			},
+			requestIDFn: func() string { return "wake-15" },
+		}
+
+		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{RawURL: "neocode://review?path=README.md"})
+		if err == nil {
+			t.Fatal("expected rpc version mismatch error")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeUnexpectedResponse {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
+		}
+	})
+
+	t.Run("response rpc id mismatch", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{
+					readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"wake-other","result":{}}` + "\n"),
+				}, nil
+			},
+			requestIDFn: func() string { return "wake-16" },
+		}
+
+		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{RawURL: "neocode://review?path=README.md"})
+		if err == nil {
+			t.Fatal("expected rpc id mismatch error")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeUnexpectedResponse {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
+		}
+	})
+
+	t.Run("response contains both result and error", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{
+					readBuffer: bytes.NewBufferString(
+						`{"jsonrpc":"2.0","id":"wake-17","result":{},"error":{"code":-32603,"message":"boom"}}` + "\n",
+					),
+				}, nil
+			},
+			requestIDFn: func() string { return "wake-17" },
+		}
+
+		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{RawURL: "neocode://review?path=README.md"})
+		if err == nil {
+			t.Fatal("expected both result and error payload failure")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeUnexpectedResponse {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
+		}
+	})
+
+	t.Run("rpc error without gateway_code uses fallback code map", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{
+					readBuffer: bytes.NewBufferString(
+						`{"jsonrpc":"2.0","id":"wake-18","error":{"code":-32601,"message":"method not found"}}` + "\n",
+					),
+				}, nil
+			},
+			requestIDFn: func() string { return "wake-18" },
+		}
+
+		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{RawURL: "neocode://review?path=README.md"})
+		if err == nil {
+			t.Fatal("expected rpc error mapping failure")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != gateway.ErrorCodeUnsupportedAction.String() {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, gateway.ErrorCodeUnsupportedAction.String())
+		}
+	})
+
+	t.Run("rpc error with empty message uses fallback text", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{
+					readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"wake-19","error":{"code":-32603,"message":""}}` + "\n"),
+				}, nil
+			},
+			requestIDFn: func() string { return "wake-19" },
+		}
+
+		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{RawURL: "neocode://review?path=README.md"})
+		if err == nil {
+			t.Fatal("expected rpc error mapping failure")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != gateway.ErrorCodeInternalError.String() {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, gateway.ErrorCodeInternalError.String())
+		}
+		if !strings.Contains(dispatchErr.Message, "empty rpc error message") {
+			t.Fatalf("error message = %q, want fallback text", dispatchErr.Message)
+		}
+	})
+
+	t.Run("decode response frame failed", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{
+					readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"wake-20","result":"not-frame"}` + "\n"),
+				}, nil
+			},
+			requestIDFn: func() string { return "wake-20" },
+		}
+
+		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{RawURL: "neocode://review?path=README.md"})
+		if err == nil {
+			t.Fatal("expected decode frame failure")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeUnexpectedResponse {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
+		}
+	})
+}
+
+func TestDispatcherJSONRPCHelpers(t *testing.T) {
+	marshalErr := toDispatchErrorFromJSONRPC(&protocol.JSONRPCError{
+		Code:    protocol.JSONRPCCodeInternalError,
+		Message: "boom",
+	})
+	var dispatchErr *DispatchError
+	if !errors.As(marshalErr, &dispatchErr) {
+		t.Fatalf("error type = %T, want *DispatchError", marshalErr)
+	}
+	if dispatchErr.Code != gateway.ErrorCodeInternalError.String() {
+		t.Fatalf("error code = %q, want %q", dispatchErr.Code, gateway.ErrorCodeInternalError.String())
+	}
+
+	emptyErr := toDispatchErrorFromJSONRPC(nil)
+	if !errors.As(emptyErr, &dispatchErr) {
+		t.Fatalf("error type = %T, want *DispatchError", emptyErr)
+	}
+	if dispatchErr.Code != ErrorCodeUnexpectedResponse {
+		t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
+	}
+
+	if mapJSONRPCCodeToDispatchCode(protocol.JSONRPCCodeMethodNotFound) != gateway.ErrorCodeUnsupportedAction.String() {
+		t.Fatal("method_not_found should map to unsupported_action")
+	}
+	if mapJSONRPCCodeToDispatchCode(protocol.JSONRPCCodeInvalidParams) != gateway.ErrorCodeInvalidFrame.String() {
+		t.Fatal("invalid_params should map to invalid_frame")
+	}
+	if mapJSONRPCCodeToDispatchCode(123456) != ErrorCodeInternal {
+		t.Fatal("unknown rpc code should map to internal_error")
+	}
+
+	if _, err := decodeResponseFrameResult(json.RawMessage(`"not-frame"`)); err == nil {
+		t.Fatal("expected decodeResponseFrameResult unmarshal failure")
+	}
+	if _, err := decodeResponseFrameResult(json.RawMessage(`{"type":"ack","action":"wake.openUrl","request_id":"x"`)); err == nil {
+		t.Fatal("expected decodeResponseFrameResult malformed json failure")
+	}
+
+	if _, err := marshalJSONRawMessage(make(chan int)); err == nil {
+		t.Fatal("expected marshalJSONRawMessage failure")
+	}
 }
 
 type stubDispatchConn struct {
@@ -660,4 +888,14 @@ func (a stubDispatchAddr) Network() string {
 
 func (a stubDispatchAddr) String() string {
 	return string(a)
+}
+
+func mustMarshalRawJSON(t *testing.T, payload any) json.RawMessage {
+	t.Helper()
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal raw json: %v", err)
+	}
+	return json.RawMessage(raw)
 }

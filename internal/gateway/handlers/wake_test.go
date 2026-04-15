@@ -59,6 +59,9 @@ func TestWakeOpenURLHandlerHandleUnsafePath(t *testing.T) {
 		"../../etc/passwd",
 		"/etc/passwd",
 		"..\\Windows\\system32",
+		"C:foo",
+		`\\?\C:\Windows\System32`,
+		`\\.\pipe\neocode`,
 	}
 
 	handler := NewWakeOpenURLHandler()
@@ -90,6 +93,9 @@ func TestIsSafeReviewPath(t *testing.T) {
 		{name: "parent traversal", path: "../secret.txt", want: false},
 		{name: "parent traversal nested", path: "a/../../secret.txt", want: false},
 		{name: "absolute unix path", path: "/tmp/file", want: false},
+		{name: "windows drive relative path", path: "C:foo", want: false},
+		{name: "windows device path namespace", path: `\\?\C:\tmp\file`, want: false},
+		{name: "windows device pipe namespace", path: `\\.\pipe\name`, want: false},
 		{name: "empty", path: "", want: false},
 		{name: "dot current dir", path: ".", want: false},
 	}
