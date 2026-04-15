@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"io"
 	"io/fs"
 	"mime"
 	"os"
@@ -37,7 +38,7 @@ func DetectImageMimeType(path string) string {
 		return detected
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := readMagicHeader(path, 512)
 	if err != nil {
 		return ""
 	}
@@ -69,4 +70,20 @@ func IsSupportedImageFormat(path string) bool {
 
 func ReadImageFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// readMagicHeader 仅读取文件头部用于类型探测，避免把整文件加载到内存。
+func readMagicHeader(path string, maxBytes int) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	buffer := make([]byte, maxBytes)
+	n, err := io.ReadFull(file, buffer)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return nil, err
+	}
+	return buffer[:n], nil
 }

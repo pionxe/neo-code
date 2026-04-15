@@ -58,6 +58,7 @@ func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string
 
 type stubRuntime struct {
 	events          chan agentruntime.RuntimeEvent
+	runInputs       []agentruntime.UserInput
 	resolveCalls    []agentruntime.PermissionResolutionInput
 	resolveErr      error
 	cancelInvoked   bool
@@ -72,6 +73,7 @@ func newStubRuntime() *stubRuntime {
 }
 
 func (s *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) error {
+	s.runInputs = append(s.runInputs, input)
 	return nil
 }
 

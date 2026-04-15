@@ -421,15 +421,17 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.state.CurrentTool = ""
 
 			if a.hasImageAttachments() {
-				a.appendActivity("multimodal", "Sending message with images", fmt.Sprintf("%d image(s) attached", len(a.pendingImageAttachments)), false)
+				a.appendActivity("multimodal", "Sending message with image metadata", fmt.Sprintf("%d image(s) attached", len(a.pendingImageAttachments)), false)
 			}
 
-			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Content: input})
+			composedInput := a.composeMessageWithImageAttachments(input)
+			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Content: composedInput})
 			a.rebuildTranscript()
 			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
 			a.state.ActiveRunID = runID
 			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.CurrentWorkdir)
-			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, input))
+			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, composedInput))
+			a.clearImageAttachments()
 			return a, tea.Batch(cmds...)
 		}
 	}
@@ -769,6 +771,10 @@ func (a *App) syncActiveSessionTitle() {
 }
 
 func (a *App) syncConfigState(cfg config.Config) {
+	if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(cfg.SelectedProvider)) ||
+		!strings.EqualFold(strings.TrimSpace(a.state.CurrentModel), strings.TrimSpace(cfg.CurrentModel)) {
+		a.invalidateModelCapabilityCache()
+	}
 	a.state.CurrentProvider = cfg.SelectedProvider
 	a.state.CurrentModel = cfg.CurrentModel
 	if strings.TrimSpace(a.state.CurrentWorkdir) == "" {
@@ -951,9 +957,15 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 		a.state.ActiveRunID = mapped.RunID
 	}
 	if strings.TrimSpace(mapped.Provider) != "" {
+		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(mapped.Provider)) {
+			a.invalidateModelCapabilityCache()
+		}
 		a.state.CurrentProvider = mapped.Provider
 	}
 	if strings.TrimSpace(mapped.Model) != "" {
+		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentModel), strings.TrimSpace(mapped.Model)) {
+			a.invalidateModelCapabilityCache()
+		}
 		a.state.CurrentModel = mapped.Model
 	}
 	if strings.TrimSpace(mapped.Workdir) != "" {

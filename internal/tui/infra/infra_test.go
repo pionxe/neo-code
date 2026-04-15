@@ -297,6 +297,41 @@ func TestDefaultWorkspaceCommandExecutor(t *testing.T) {
 	}
 }
 
+func TestSaveImageToTempFileCreatesUniquePaths(t *testing.T) {
+	first, err := SaveImageToTempFile([]byte("first"), "paste")
+	if err != nil {
+		t.Fatalf("SaveImageToTempFile(first) error = %v", err)
+	}
+	defer os.Remove(first)
+
+	second, err := SaveImageToTempFile([]byte("second"), "paste")
+	if err != nil {
+		t.Fatalf("SaveImageToTempFile(second) error = %v", err)
+	}
+	defer os.Remove(second)
+
+	if first == second {
+		t.Fatalf("expected unique temp file paths, got %q", first)
+	}
+	if !strings.Contains(filepath.Base(first), "paste-") || !strings.Contains(filepath.Base(second), "paste-") {
+		t.Fatalf("expected sanitized prefix in temp names, got %q and %q", first, second)
+	}
+}
+
+func TestDetectImageMimeTypeByMagicHeader(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "blob.bin")
+	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	payload := append(pngHeader, []byte("payload")...)
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatalf("write test image: %v", err)
+	}
+
+	if got := DetectImageMimeType(path); got != "image/png" {
+		t.Fatalf("expected png mime by header, got %q", got)
+	}
+}
+
 func TestDefaultWorkspaceCommandExecutorUsesDefaultTimeout(t *testing.T) {
 	workdir := t.TempDir()
 	shellName, successCmd, _, _, _ := workspaceExecutorCommands()

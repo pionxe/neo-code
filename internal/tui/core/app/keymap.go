@@ -98,7 +98,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Send, k.Newline, k.CancelAgent, k.NewSession},
 		{k.FocusInput, k.NextPanel, k.PrevPanel},
-		{k.ToggleHelp, k.Quit, k.ScrollUp, k.ScrollDown},
+		{k.ToggleHelp, k.Quit, k.PasteImage, k.ScrollUp},
 		{k.PageUp, k.PageDown, k.Top, k.Bottom},
 	}
 }
