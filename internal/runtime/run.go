@@ -18,6 +18,8 @@ import (
 	"neo-code/internal/tools"
 )
 
+const selfHealingReminder = "System Reminder: You have made multiple consecutive attempts without making substantial progress. Please stop your current repetitive or ineffective strategy. Carefully review the previous errors, change your approach, or ask the user directly for help."
+
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
 // 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
 // 新会话在创建后再绑定会话锁，不同会话可并行执行。
@@ -131,25 +133,16 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			s.transitionRunPhase(ctx, &state, controlplane.PhaseVerify)
 
 			var evidence []controlplane.ProgressEvidenceRecord
-			hasProgress := false
 			toolCallCount := len(turnResult.assistant.ToolCalls)
 			state.mu.Lock()
 			if len(state.session.Messages) >= toolCallCount {
 				for i := len(state.session.Messages) - toolCallCount; i < len(state.session.Messages); i++ {
-					msg := state.session.Messages[i]
-					if msg.Role == providertypes.RoleTool && !msg.IsError {
-						hasProgress = true
+					if msg := state.session.Messages[i]; msg.Role == providertypes.RoleTool && !msg.IsError {
+						evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceNewInfoNonDup})
 						break
 					}
 				}
 			}
-			state.mu.Unlock()
-
-			if hasProgress {
-				evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceNewInfoNonDup})
-			}
-
-			state.mu.Lock()
 			state.progress = controlplane.ApplyProgressEvidence(state.progress, evidence)
 			streak := state.progress.LastScore.NoProgressStreak
 			currentScore := state.progress.LastScore
@@ -157,11 +150,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 
-			limit := snapshot.config.Runtime.MaxNoProgressStreak
-			if limit <= 0 {
-				limit = config.DefaultMaxNoProgressStreak
-			}
-
+			limit := snapshot.noProgressStreakLimit
 			if streak >= limit {
 				err = ErrNoProgressStreakLimit
 				return err
@@ -225,33 +214,41 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	streak := state.progress.LastScore.NoProgressStreak
 	state.mu.Unlock()
 
-	limit := cfg.Runtime.MaxNoProgressStreak
-	if limit <= 0 {
-		limit = config.DefaultMaxNoProgressStreak
-	}
+	limit := resolveNoProgressStreakLimit(cfg.Runtime)
+	systemPrompt := builtContext.SystemPrompt
 
-	messages := builtContext.Messages
 	if streak == limit-1 {
-		messages = append(messages, providertypes.Message{
-			Role:    providertypes.RoleUser,
-			Content: "System Reminder: You have made multiple consecutive attempts without making substantial progress. Please stop your current repetitive or ineffective strategy. Carefully review the previous errors, change your approach, or ask the user directly for help.",
-		})
+		trimmed := strings.TrimSpace(systemPrompt)
+		if trimmed == "" {
+			systemPrompt = selfHealingReminder
+		} else {
+			systemPrompt = trimmed + "\n\n" + selfHealingReminder
+		}
 	}
 
 	model := strings.TrimSpace(cfg.CurrentModel)
 	return turnSnapshot{
-		config:         cfg,
-		providerConfig: resolvedProvider.ToRuntimeConfig(),
-		model:          model,
-		workdir:        activeWorkdir,
-		toolTimeout:    time.Duration(cfg.ToolTimeoutSec) * time.Second,
+		config:                cfg,
+		providerConfig:        resolvedProvider.ToRuntimeConfig(),
+		model:                 model,
+		workdir:               activeWorkdir,
+		toolTimeout:           time.Duration(cfg.ToolTimeoutSec) * time.Second,
+		noProgressStreakLimit: limit,
 		request: providertypes.GenerateRequest{
 			Model:        model,
-			SystemPrompt: builtContext.SystemPrompt,
-			Messages:     messages,
+			SystemPrompt: systemPrompt,
+			Messages:     builtContext.Messages,
 			Tools:        toolSpecs,
 		},
 	}, false, nil
+}
+
+// resolveNoProgressStreakLimit 统一解析熔断阈值，避免运行期出现无效值导致分支行为不一致。
+func resolveNoProgressStreakLimit(rc config.RuntimeConfig) int {
+	if rc.MaxNoProgressStreak <= 0 {
+		return config.DefaultMaxNoProgressStreak
+	}
+	return rc.MaxNoProgressStreak
 }
 
 // callProviderWithRetry 使用冻结后的 turnSnapshot 执行 provider 调用与必要重试。
