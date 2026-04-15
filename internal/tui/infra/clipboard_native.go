@@ -1,10 +1,8 @@
+//go:build windows || darwin
+
 package infra
 
-import (
-	"os"
-
-	"golang.design/x/clipboard"
-)
+import "golang.design/x/clipboard"
 
 var clipboardInitialized bool
 
@@ -45,22 +43,4 @@ func ReadClipboardImage() ([]byte, error) {
 		return nil, nil
 	}
 	return data, nil
-}
-
-func SaveImageToTempFile(data []byte, prefix string) (string, error) {
-	tmpDir := os.TempDir()
-	tmpFile := tmpDir + "/" + prefix + "_" + "image.png"
-
-	f, err := os.Create(tmpFile)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	_, err = f.Write(data)
-	if err != nil {
-		return "", err
-	}
-
-	return tmpFile, nil
 }
