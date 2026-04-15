@@ -147,7 +147,7 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 	w.stepCount++
 	delta := strings.TrimSpace(stepOutput.Delta)
 	if delta != "" {
-		w.trace = append(w.trace, delta)
+		w.trace = appendTraceBounded(w.trace, delta, traceWindowSize)
 	}
 
 	if stepOutput.Done {
@@ -174,6 +174,10 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 
 // bindCapabilityToPolicy 将 capability 约束在角色策略允许的工具集合内。
 func bindCapabilityToPolicy(capability Capability, policy RolePolicy) (Capability, error) {
+	if len(capability.AllowedPaths) > 0 {
+		return Capability{}, errorsf("capability allowed paths is not supported yet")
+	}
+
 	allowedPolicyTools := dedupeAndTrim(policy.AllowedTools)
 	allowedSet := make(map[string]struct{}, len(allowedPolicyTools))
 	for _, tool := range allowedPolicyTools {
@@ -200,6 +204,17 @@ func bindCapabilityToPolicy(capability Capability, policy RolePolicy) (Capabilit
 	}
 	capability.AllowedTools = effective
 	return capability, nil
+}
+
+// appendTraceBounded 将新增 trace 追加到切片尾部，并保证内部存储长度不超过上限。
+func appendTraceBounded(trace []string, delta string, limit int) []string {
+	trace = append(trace, delta)
+	if limit <= 0 || len(trace) <= limit {
+		return trace
+	}
+	start := len(trace) - limit
+	copy(trace, trace[start:])
+	return trace[:limit]
 }
 
 // cloneRecentTrace 复制最近 limit 条 trace，避免每步复制完整历史导致复杂度放大。

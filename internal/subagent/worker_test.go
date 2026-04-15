@@ -276,6 +276,16 @@ func TestWorkerStartCapabilityPolicyGuard(t *testing.T) {
 		t.Fatalf("expected disallowed capability tool to fail")
 	}
 
+	wPath, err := NewWorker(RoleReviewer, policy, nil)
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+	if err := wPath.Start(Task{ID: "t-cap-path", Goal: "goal"}, Budget{}, Capability{
+		AllowedPaths: []string{"/tmp/workspace"},
+	}); err == nil {
+		t.Fatalf("expected unsupported allowed paths to fail")
+	}
+
 	w2, err := NewWorker(RoleReviewer, policy, nil)
 	if err != nil {
 		t.Fatalf("NewWorker() error = %v", err)
@@ -340,6 +350,57 @@ func TestWorkerTraceWindow(t *testing.T) {
 	}
 	if observedTraceLen != traceWindowSize {
 		t.Fatalf("trace len = %d, want %d", observedTraceLen, traceWindowSize)
+	}
+}
+
+func TestWorkerTraceStorageBounded(t *testing.T) {
+	t.Parallel()
+
+	policy, err := DefaultRolePolicy(RoleResearcher)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+
+	w, err := NewWorker(RoleResearcher, policy, EngineFunc(func(ctx context.Context, input StepInput) (StepOutput, error) {
+		if input.StepIndex < traceWindowSize+8 {
+			return StepOutput{Delta: "delta", Done: false}, nil
+		}
+		return StepOutput{
+			Delta: "delta",
+			Done:  true,
+			Output: Output{
+				Summary:     "done",
+				Findings:    []string{"f1"},
+				Patches:     []string{"p1"},
+				Risks:       []string{"r1"},
+				NextActions: []string{"n1"},
+				Artifacts:   []string{"a1"},
+			},
+		}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+	if err := w.Start(Task{ID: "t-trace-bounded", Goal: "goal"}, Budget{MaxSteps: traceWindowSize + 16}, Capability{}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	for {
+		step, stepErr := w.Step(context.Background())
+		if stepErr != nil {
+			t.Fatalf("Step() error = %v", stepErr)
+		}
+		if step.Done {
+			break
+		}
+	}
+
+	impl, ok := w.(*worker)
+	if !ok {
+		t.Fatalf("expected *worker implementation")
+	}
+	if len(impl.trace) != traceWindowSize {
+		t.Fatalf("trace storage len = %d, want %d", len(impl.trace), traceWindowSize)
 	}
 }
 

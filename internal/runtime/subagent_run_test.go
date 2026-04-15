@@ -3,9 +3,11 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/subagent"
 )
 
@@ -74,6 +76,17 @@ func TestServiceRunSubAgentTaskSuccess(t *testing.T) {
 		EventSubAgentCompleted,
 	})
 	assertEventsRunID(t, events, "sub-run-success")
+	for _, evt := range events {
+		if evt.Type != EventSubAgentProgress {
+			continue
+		}
+		if evt.Timestamp.IsZero() {
+			t.Fatalf("progress event timestamp should be set: %+v", evt)
+		}
+		if evt.PayloadVersion != controlplane.PayloadVersion {
+			t.Fatalf("progress event payload version = %d, want %d", evt.PayloadVersion, controlplane.PayloadVersion)
+		}
+	}
 }
 
 func TestServiceRunSubAgentTaskFailureFlows(t *testing.T) {
@@ -190,6 +203,116 @@ func TestServiceRunSubAgentTaskFailureFlows(t *testing.T) {
 		events := collectRuntimeEvents(service.Events())
 		assertEventSequence(t, events, []EventType{EventSubAgentFailed})
 	})
+
+	t.Run("custom worker failed without explicit error should return fallback", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewWithFactory(nil, nil, nil, nil, nil)
+		service.SetSubAgentFactory(stubSubAgentFactory{
+			create: func(role subagent.Role) (subagent.WorkerRuntime, error) {
+				return &stubSubAgentWorker{
+					result: subagent.Result{
+						Role:       role,
+						TaskID:     "task-fallback-error",
+						State:      subagent.StateFailed,
+						StopReason: subagent.StopReasonError,
+					},
+					stepResult: subagent.StepResult{
+						State: subagent.StateFailed,
+						Done:  true,
+						Step:  1,
+					},
+				}, nil
+			},
+		})
+
+		_, err := service.RunSubAgentTask(context.Background(), SubAgentTaskInput{
+			RunID: "sub-run-fallback-error",
+			Role:  subagent.RoleReviewer,
+			Task: subagent.Task{
+				ID:   "task-fallback-error",
+				Goal: "review",
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected fallback error")
+		}
+		if !strings.Contains(err.Error(), "state=failed") || !strings.Contains(err.Error(), "stop_reason=error") {
+			t.Fatalf("error = %q, want state/stop_reason fallback", err.Error())
+		}
+	})
+}
+
+type stubSubAgentFactory struct {
+	create func(role subagent.Role) (subagent.WorkerRuntime, error)
+}
+
+func (s stubSubAgentFactory) Create(role subagent.Role) (subagent.WorkerRuntime, error) {
+	return s.create(role)
+}
+
+type stubSubAgentWorker struct {
+	startErr    error
+	stepResult  subagent.StepResult
+	stepErr     error
+	result      subagent.Result
+	resultErr   error
+	current     subagent.State
+	stopInvoked bool
+}
+
+func (s *stubSubAgentWorker) Start(task subagent.Task, budget subagent.Budget, capability subagent.Capability) error {
+	if s.startErr != nil {
+		return s.startErr
+	}
+	if s.current == "" {
+		s.current = subagent.StateRunning
+	}
+	s.result.Role = firstNonEmptyRole(s.result.Role, subagent.RoleReviewer)
+	if strings.TrimSpace(s.result.TaskID) == "" {
+		s.result.TaskID = task.ID
+	}
+	return nil
+}
+
+func (s *stubSubAgentWorker) Step(ctx context.Context) (subagent.StepResult, error) {
+	if s.stepResult.State == "" {
+		s.stepResult.State = s.current
+	}
+	if s.stepResult.Done {
+		s.current = s.result.State
+	}
+	return s.stepResult, s.stepErr
+}
+
+func (s *stubSubAgentWorker) Stop(reason subagent.StopReason) error {
+	s.stopInvoked = true
+	s.current = subagent.StateCanceled
+	s.result.State = subagent.StateCanceled
+	s.result.StopReason = reason
+	return nil
+}
+
+func (s *stubSubAgentWorker) Result() (subagent.Result, error) {
+	return s.result, s.resultErr
+}
+
+func (s *stubSubAgentWorker) State() subagent.State {
+	if s.current == "" {
+		return subagent.StateIdle
+	}
+	return s.current
+}
+
+func (s *stubSubAgentWorker) Policy() subagent.RolePolicy {
+	return subagent.RolePolicy{}
+}
+
+func firstNonEmptyRole(role subagent.Role, fallback subagent.Role) subagent.Role {
+	if role != "" {
+		return role
+	}
+	return fallback
 }
 
 func TestServiceRunSubAgentTaskInputValidation(t *testing.T) {

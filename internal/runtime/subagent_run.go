@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/subagent"
 )
 
@@ -118,7 +120,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		if result.State == subagent.StateSucceeded {
 			return result, nil
 		}
-		return result, errors.New(result.Error)
+		return result, subAgentResultError(result)
 	}
 }
 
@@ -132,13 +134,17 @@ func emitSubAgentProgress(s *Service, input SubAgentTaskInput, stepResult subage
 		Delta:  stepResult.Delta,
 		Error:  errorText(stepErr),
 	}
+	event := RuntimeEvent{
+		Type:           EventSubAgentProgress,
+		RunID:          input.RunID,
+		SessionID:      input.SessionID,
+		Turn:           turnUnspecified,
+		Timestamp:      time.Now(),
+		PayloadVersion: controlplane.PayloadVersion,
+		Payload:        payload,
+	}
 	select {
-	case s.events <- RuntimeEvent{
-		Type:      EventSubAgentProgress,
-		RunID:     input.RunID,
-		SessionID: input.SessionID,
-		Payload:   payload,
-	}:
+	case s.events <- event:
 	default:
 	}
 }
@@ -170,4 +176,12 @@ func errorText(err error) string {
 		return ""
 	}
 	return strings.TrimSpace(err.Error())
+}
+
+// subAgentResultError 将子代理终态结果转换为可诊断错误，避免空错误文本丢失上下文。
+func subAgentResultError(result subagent.Result) error {
+	if text := strings.TrimSpace(result.Error); text != "" {
+		return errors.New(text)
+	}
+	return fmt.Errorf("subagent ended with state=%s stop_reason=%s", result.State, result.StopReason)
 }
