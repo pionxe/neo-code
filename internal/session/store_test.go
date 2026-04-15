@@ -643,6 +643,56 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 	}
 }
 
+func TestJSONStoreSaveRoundTripsMetadataOnlyToolMessage(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+
+	session := &Session{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            "metadata-only-tool-message",
+		Title:         "Metadata Only Tool Message",
+		CreatedAt:     time.Now().Add(-time.Hour),
+		UpdatedAt:     time.Now(),
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Content: "inspect"},
+			{
+				Role: providertypes.RoleAssistant,
+				ToolCalls: []providertypes.ToolCall{
+					{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+				},
+			},
+			{
+				Role:       providertypes.RoleTool,
+				ToolCallID: "call-1",
+				Content:    "",
+				ToolMetadata: map[string]string{
+					"tool_name": "filesystem_read_file",
+					"path":      "README.md",
+				},
+			},
+		},
+	}
+
+	if err := store.Save(context.Background(), session); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	loaded, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load saved session: %v", err)
+	}
+	if loaded.Messages[2].Content != "" {
+		t.Fatalf("expected empty content to round-trip, got %q", loaded.Messages[2].Content)
+	}
+	if loaded.Messages[2].ToolMetadata["tool_name"] != "filesystem_read_file" ||
+		loaded.Messages[2].ToolMetadata["path"] != "README.md" {
+		t.Fatalf("expected metadata-only tool message round-trip, got %+v", loaded.Messages[2].ToolMetadata)
+	}
+}
+
 func TestDecodeStoredSummaryUsesLightweightMetadataPath(t *testing.T) {
 	t.Parallel()
 

@@ -777,3 +777,45 @@ func TestProjectToolMessagesForModelKeepsBuilderProjectionBehavior(t *testing.T)
 		t.Fatal("expected source messages to remain unchanged")
 	}
 }
+
+func TestDefaultBuilderBuildProjectsMetadataOnlyToolResult(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	result, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Content: "inspect README"},
+			{
+				Role: providertypes.RoleAssistant,
+				ToolCalls: []providertypes.ToolCall{
+					{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+				},
+			},
+			{
+				Role:         providertypes.RoleTool,
+				ToolCallID:   "call-1",
+				Content:      "   ",
+				ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
+			},
+		},
+		Metadata: testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(result.Messages) != 3 {
+		t.Fatalf("len(result.Messages) = %d, want 3", len(result.Messages))
+	}
+	toolMessage := result.Messages[2]
+	if toolMessage.Role != providertypes.RoleTool {
+		t.Fatalf("expected tool message at index 2, got %+v", toolMessage)
+	}
+	if !strings.Contains(toolMessage.Content, "tool result") ||
+		!strings.Contains(toolMessage.Content, "tool: filesystem_read_file") ||
+		!strings.Contains(toolMessage.Content, "meta.path: README.md") {
+		t.Fatalf("expected metadata-only tool result to be projected, got %q", toolMessage.Content)
+	}
+	if toolMessage.ToolMetadata != nil {
+		t.Fatalf("expected projected tool metadata to be cleared, got %#v", toolMessage.ToolMetadata)
+	}
+}

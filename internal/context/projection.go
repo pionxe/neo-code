@@ -145,7 +145,10 @@ func isInjectableToolMessage(message providertypes.Message) bool {
 		return false
 	}
 	content := strings.TrimSpace(message.Content)
-	return content != "" && content != microCompactClearedMessage
+	if content == microCompactClearedMessage {
+		return false
+	}
+	return content != "" || len(message.ToolMetadata) > 0
 }
 
 // recentWindowMessageBudget 计算 recent window 可保留的消息总数硬上限，避免窗口体积失控。

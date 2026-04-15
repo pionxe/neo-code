@@ -299,6 +299,48 @@ func TestLLMExtractorExtractKeepsProjectedToolCallSpan(t *testing.T) {
 	}
 }
 
+func TestLLMExtractorExtractKeepsMetadataOnlyToolCallSpan(t *testing.T) {
+	generator := &stubTextGenerator{response: `[]`}
+	extractor := NewLLMExtractor(generator)
+
+	_, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember this"},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call_1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+		{
+			Role:         providertypes.RoleTool,
+			ToolCallID:   "call_1",
+			Content:      "",
+			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(generator.messages) != 3 {
+		t.Fatalf("len(generator.messages) = %d, want 3", len(generator.messages))
+	}
+	toolMessage := generator.messages[2]
+	if toolMessage.Role != providertypes.RoleTool {
+		t.Fatalf("expected projected tool message, got %#v", toolMessage)
+	}
+	if !strings.Contains(toolMessage.Content, "tool result") ||
+		!strings.Contains(toolMessage.Content, "tool: filesystem_read_file") ||
+		!strings.Contains(toolMessage.Content, "meta.path: README.md") {
+		t.Fatalf("expected metadata-only tool text, got %q", toolMessage.Content)
+	}
+	if strings.Contains(toolMessage.Content, "content:\n") {
+		t.Fatalf("expected metadata-only projection to omit content section, got %q", toolMessage.Content)
+	}
+	if toolMessage.ToolMetadata != nil {
+		t.Fatalf("expected projected tool metadata to be cleared, got %#v", toolMessage.ToolMetadata)
+	}
+}
+
 func TestLLMExtractorExtractSkipsOrphanAndClearedToolMessages(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
 	extractor := NewLLMExtractor(generator)

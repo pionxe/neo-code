@@ -545,6 +545,76 @@ func TestServiceRun(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:  "metadata-only tool result is projected on follow-up provider round",
+			input: UserInput{RunID: "run-tool-metadata-only", Content: "inspect file"},
+			providerStreams: [][]providertypes.StreamEvent{
+				{
+					providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
+					providertypes.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"README.md"}`),
+				},
+				{
+					providertypes.NewTextDeltaStreamEvent("done"),
+				},
+			},
+			registerTool: &stubTool{
+				name: "filesystem_read_file",
+				executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+					return tools.ToolResult{
+						Name:    "filesystem_read_file",
+						Content: "",
+						Metadata: map[string]any{
+							"path": "README.md",
+						},
+					}, nil
+				},
+			},
+			contextBuilder: &stubContextBuilder{
+				buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+					return agentcontext.BuildResult{
+						SystemPrompt: "stub system prompt",
+						Messages:     projectToolMessagesForProviderTest(input.Messages),
+					}, nil
+				},
+			},
+			expectProviderCalls: 2,
+			expectToolCalls:     1,
+			expectMessageRoles:  []string{"user", "assistant", "tool", "assistant"},
+			expectEventTypes:    []EventType{EventUserMessage, EventToolStart, EventToolResult, EventAgentDone},
+			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
+				t.Helper()
+				if len(scripted.requests) != 2 {
+					t.Fatalf("expected 2 provider requests, got %d", len(scripted.requests))
+				}
+				second := scripted.requests[1]
+				foundToolResult := false
+				for _, message := range second.Messages {
+					if message.Role == providertypes.RoleTool &&
+						message.ToolCallID == "call-1" &&
+						strings.Contains(message.Content, "tool result") &&
+						strings.Contains(message.Content, "tool: filesystem_read_file") &&
+						strings.Contains(message.Content, "meta.path: README.md") {
+						foundToolResult = true
+						if strings.Contains(message.Content, "content:\n") {
+							t.Fatalf("expected metadata-only projection to omit content section, got %q", message.Content)
+						}
+						break
+					}
+				}
+				if !foundToolResult {
+					t.Fatalf("expected projected metadata-only tool result in second provider request: %+v", second.Messages)
+				}
+
+				session := onlySession(t, store)
+				if session.Messages[2].Role != providertypes.RoleTool || session.Messages[2].Content != "" {
+					t.Fatalf("expected persisted tool message to keep empty raw content, got %+v", session.Messages[2])
+				}
+				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_read_file" ||
+					session.Messages[2].ToolMetadata["path"] != "README.md" {
+					t.Fatalf("expected persisted metadata-only tool message to keep sanitized metadata, got %+v", session.Messages[2].ToolMetadata)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -3031,17 +3101,7 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 
 // projectToolMessagesForProviderTest 模拟 context 层在 provider 请求前对 tool 消息做的只读投影。
 func projectToolMessagesForProviderTest(messages []providertypes.Message) []providertypes.Message {
-	projected := append([]providertypes.Message(nil), messages...)
-	for i, message := range projected {
-		if message.Role != providertypes.RoleTool || len(message.ToolMetadata) == 0 {
-			continue
-		}
-		next := message
-		next.Content = tools.FormatToolMessageForModel(message)
-		next.ToolMetadata = nil
-		projected[i] = next
-	}
-	return projected
+	return agentcontext.ProjectToolMessagesForModel(cloneMessages(messages))
 }
 
 func containsError(err error, target string) bool {

@@ -9,6 +9,8 @@ import (
 	"neo-code/internal/tools"
 )
 
+const toolNameMetadataKey = "tool_name"
+
 // appendUserMessageAndSave 将用户消息追加到会话并立即持久化。
 func (s *Service) appendUserMessageAndSave(ctx context.Context, state *runState, content string) error {
 	message := providertypes.Message{
@@ -55,18 +57,44 @@ func (s *Service) appendToolMessageAndSave(
 	result tools.ToolResult,
 ) error {
 	state.mu.Lock()
-	toolMessage := providertypes.Message{
-		Role:         providertypes.RoleTool,
-		Content:      result.Content,
-		ToolCallID:   call.ID,
-		IsError:      result.IsError,
-		ToolMetadata: tools.SanitizeToolMetadata(result.Name, result.Metadata),
-	}
+	toolMessage := normalizeToolMessageForPersistence(call, result)
 	state.session.Messages = append(state.session.Messages, toolMessage)
 	state.touchSession()
 	sessionSnapshot := cloneSessionForPersistence(state.session)
 	state.mu.Unlock()
 	return s.sessionStore.Save(ctx, &sessionSnapshot)
+}
+
+// normalizeToolMessageForPersistence 负责在写入会话前收敛工具结果，避免成功结果落成完全空语义消息。
+func normalizeToolMessageForPersistence(call providertypes.ToolCall, result tools.ToolResult) providertypes.Message {
+	toolName := strings.TrimSpace(result.Name)
+	if toolName == "" {
+		toolName = strings.TrimSpace(call.Name)
+	}
+
+	sanitizedMetadata := tools.SanitizeToolMetadata(toolName, result.Metadata)
+	content := result.Content
+	if !result.IsError && strings.TrimSpace(content) == "" && !hasNonToolNameToolMetadata(sanitizedMetadata) {
+		content = "ok"
+	}
+
+	return providertypes.Message{
+		Role:         providertypes.RoleTool,
+		Content:      content,
+		ToolCallID:   call.ID,
+		IsError:      result.IsError,
+		ToolMetadata: sanitizedMetadata,
+	}
+}
+
+// hasNonToolNameToolMetadata 判断 metadata 中是否存在除 tool_name 外的语义字段。
+func hasNonToolNameToolMetadata(metadata map[string]string) bool {
+	for key := range metadata {
+		if key != toolNameMetadataKey {
+			return true
+		}
+	}
+	return false
 }
 
 // cloneSessionForPersistence 复制会话快照，避免持久化阶段与并发写入共享可变切片/映射。

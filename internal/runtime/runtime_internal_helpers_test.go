@@ -177,6 +177,120 @@ func TestAppendToolMessageAndSaveSanitizesMetadata(t *testing.T) {
 	}
 }
 
+func TestAppendToolMessageAndSavePreservesMetadataOnlySuccessResult(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-append-tool-metadata-only")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := &Service{sessionStore: store}
+	state := newRunState("run-append-tool-metadata-only", session)
+	call := providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"}
+	result := tools.ToolResult{
+		Name:    "filesystem_read_file",
+		Content: "",
+		Metadata: map[string]any{
+			"path": "README.md",
+		},
+	}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
+	}
+
+	msg := state.session.Messages[0]
+	if msg.Content != "" {
+		t.Fatalf("expected metadata-only success result to keep empty content, got %q", msg.Content)
+	}
+	if msg.ToolMetadata["tool_name"] != "filesystem_read_file" || msg.ToolMetadata["path"] != "README.md" {
+		t.Fatalf("expected metadata-only success result to keep sanitized metadata, got %+v", msg.ToolMetadata)
+	}
+}
+
+func TestAppendToolMessageAndSaveNormalizesSemanticallyEmptySuccessResult(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-append-tool-empty-success")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := &Service{sessionStore: store}
+	state := newRunState("run-append-tool-empty-success", session)
+	call := providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"}
+	result := tools.ToolResult{
+		Name:    "filesystem_read_file",
+		Content: "   ",
+	}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
+	}
+
+	msg := state.session.Messages[0]
+	if msg.Content != "ok" {
+		t.Fatalf("expected empty success result to be normalized to ok, got %q", msg.Content)
+	}
+	if msg.ToolMetadata["tool_name"] != "filesystem_read_file" {
+		t.Fatalf("expected tool_name metadata to be preserved after normalization, got %+v", msg.ToolMetadata)
+	}
+}
+
+func TestAppendToolMessageAndSaveNormalizesToolNameOnlyMetadataSuccessResult(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-append-tool-name-only-metadata-success")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := &Service{sessionStore: store}
+	state := newRunState("run-append-tool-name-only-metadata-success", session)
+	call := providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"}
+	result := tools.ToolResult{
+		Name:    "filesystem_read_file",
+		Content: "   ",
+		Metadata: map[string]any{
+			"unsupported_key": "ignored",
+		},
+	}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
+	}
+
+	msg := state.session.Messages[0]
+	if msg.Content != "ok" {
+		t.Fatalf("expected tool_name-only metadata success to normalize content to ok, got %q", msg.Content)
+	}
+	if len(msg.ToolMetadata) != 1 || msg.ToolMetadata["tool_name"] != "filesystem_read_file" {
+		t.Fatalf("expected only tool_name metadata to remain, got %+v", msg.ToolMetadata)
+	}
+}
+
+func TestAppendToolMessageAndSaveFallsBackToCallNameForToolMetadata(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-append-tool-name-fallback")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := &Service{sessionStore: store}
+	state := newRunState("run-append-tool-name-fallback", session)
+	call := providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"}
+	result := tools.ToolResult{
+		Content: "ok",
+	}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
+	}
+
+	msg := state.session.Messages[0]
+	if msg.ToolMetadata["tool_name"] != "filesystem_read_file" {
+		t.Fatalf("expected tool_name fallback from call name, got %+v", msg.ToolMetadata)
+	}
+}
+
 func TestAppendToolMessageAndSaveUnlocksStateBeforePersist(t *testing.T) {
 	t.Parallel()
 

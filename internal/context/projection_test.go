@@ -43,10 +43,10 @@ func TestProjectToolMessagesForModelSkipsMessagesThatCannotBeProjected(t *testin
 		t.Fatalf("non-tool message should remain unchanged, got %+v", projected[0])
 	}
 	if projected[1].Content != "tool output" || projected[1].ToolMetadata != nil {
-		t.Fatalf("tool without metadata-free projection should remain unchanged, got %+v", projected[1])
+		t.Fatalf("tool without projection metadata should remain unchanged, got %+v", projected[1])
 	}
-	if projected[2].Content != "   " || projected[2].ToolMetadata == nil {
-		t.Fatalf("empty tool content should not be projected, got %+v", projected[2])
+	if !strings.Contains(projected[2].Content, "tool result") || projected[2].ToolMetadata != nil {
+		t.Fatalf("metadata-only tool message should be projected, got %+v", projected[2])
 	}
 	if projected[3].Content != microCompactClearedMessage || projected[3].ToolMetadata == nil {
 		t.Fatalf("cleared tool content should not be projected, got %+v", projected[3])
@@ -221,7 +221,7 @@ func TestMatchedToolCallSpanRejectsInvalidAssistantStates(t *testing.T) {
 	}
 }
 
-func TestMatchedToolCallSpanRequiresInjectableResponsesAndSkipsDuplicates(t *testing.T) {
+func TestMatchedToolCallSpanRequiresProjectableResponsesAndSkipsDuplicates(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
@@ -244,8 +244,32 @@ func TestMatchedToolCallSpanRequiresInjectableResponsesAndSkipsDuplicates(t *tes
 	if len(span) != 3 {
 		t.Fatalf("len(span) = %d, want 3 (%+v)", len(span), span)
 	}
-	if span[0] != 0 || span[1] != 2 || span[2] != 5 {
+	if span[0] != 0 || span[1] != 1 || span[2] != 5 {
 		t.Fatalf("unexpected span indexes %+v", span)
+	}
+}
+
+func TestMatchedToolCallSpanAcceptsMetadataOnlyResponses(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "webfetch", Arguments: `{}`},
+			},
+		},
+		{
+			Role:         providertypes.RoleTool,
+			ToolCallID:   "call-1",
+			Content:      "   ",
+			ToolMetadata: map[string]string{"tool_name": "webfetch", "status_code": "200"},
+		},
+	}
+
+	span := matchedToolCallSpan(messages, 0)
+	if len(span) != 2 || span[0] != 0 || span[1] != 1 {
+		t.Fatalf("unexpected metadata-only span %+v", span)
 	}
 }
 
@@ -284,6 +308,11 @@ func TestIsInjectableToolMessage(t *testing.T) {
 			name:    "empty",
 			message: providertypes.Message{Role: providertypes.RoleTool, Content: "   "},
 			want:    false,
+		},
+		{
+			name:    "metadata-only",
+			message: providertypes.Message{Role: providertypes.RoleTool, Content: "   ", ToolMetadata: map[string]string{"tool_name": "bash"}},
+			want:    true,
 		},
 		{
 			name:    "cleared",
