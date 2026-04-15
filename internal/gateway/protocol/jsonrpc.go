@@ -1,0 +1,274 @@
+package protocol
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
+
+const (
+	// JSONRPCVersion 表示当前网关控制面固定使用的 JSON-RPC 协议版本。
+	JSONRPCVersion = "2.0"
+)
+
+const (
+	// MethodGatewayPing 表示网关探活方法。
+	MethodGatewayPing = "gateway.ping"
+	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
+	MethodWakeOpenURL = "wake.openUrl"
+)
+
+const (
+	// JSONRPCCodeParseError 表示请求体不是合法 JSON。
+	JSONRPCCodeParseError = -32700
+	// JSONRPCCodeInvalidRequest 表示请求结构不符合 JSON-RPC 规范。
+	JSONRPCCodeInvalidRequest = -32600
+	// JSONRPCCodeMethodNotFound 表示方法未注册。
+	JSONRPCCodeMethodNotFound = -32601
+	// JSONRPCCodeInvalidParams 表示参数不合法。
+	JSONRPCCodeInvalidParams = -32602
+	// JSONRPCCodeInternalError 表示服务端内部错误。
+	JSONRPCCodeInternalError = -32603
+)
+
+const (
+	// GatewayCodeInvalidFrame 表示请求帧结构非法。
+	GatewayCodeInvalidFrame = "invalid_frame"
+	// GatewayCodeInvalidAction 表示动作参数非法。
+	GatewayCodeInvalidAction = "invalid_action"
+	// GatewayCodeInvalidMultimodalPayload 表示多模态负载非法。
+	GatewayCodeInvalidMultimodalPayload = "invalid_multimodal_payload"
+	// GatewayCodeMissingRequiredField 表示缺少必填字段。
+	GatewayCodeMissingRequiredField = "missing_required_field"
+	// GatewayCodeUnsupportedAction 表示动作尚未实现。
+	GatewayCodeUnsupportedAction = "unsupported_action"
+	// GatewayCodeInternalError 表示网关内部错误。
+	GatewayCodeInternalError = "internal_error"
+	// GatewayCodeUnsafePath 表示路径存在安全风险。
+	GatewayCodeUnsafePath = "unsafe_path"
+)
+
+// JSONRPCRequest 表示控制面接收到的 JSON-RPC 请求。
+type JSONRPCRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+// JSONRPCResponse 表示控制面输出的 JSON-RPC 响应。
+type JSONRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *JSONRPCError   `json:"error,omitempty"`
+}
+
+// JSONRPCError 表示 JSON-RPC 错误负载。
+type JSONRPCError struct {
+	Code    int               `json:"code"`
+	Message string            `json:"message"`
+	Data    *JSONRPCErrorData `json:"data,omitempty"`
+}
+
+// JSONRPCErrorData 表示网关扩展错误字段。
+type JSONRPCErrorData struct {
+	GatewayCode string `json:"gateway_code,omitempty"`
+}
+
+// NormalizedRequest 表示从 JSON-RPC 归一化后的内部请求模型。
+type NormalizedRequest struct {
+	ID        json.RawMessage
+	RequestID string
+	Action    string
+	SessionID string
+	Workdir   string
+	Payload   any
+}
+
+// NormalizeJSONRPCRequest 将 JSON-RPC 请求归一化为内部请求模型，并做方法级参数解析。
+func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRPCError) {
+	normalized := NormalizedRequest{}
+
+	requestID, idErr := normalizeJSONRPCID(request.ID)
+	normalized.ID = cloneJSONRawMessage(request.ID)
+	normalized.RequestID = requestID
+	if idErr != nil {
+		return normalized, idErr
+	}
+
+	if strings.TrimSpace(request.JSONRPC) != JSONRPCVersion {
+		return normalized, NewJSONRPCError(
+			JSONRPCCodeInvalidRequest,
+			"invalid jsonrpc version",
+			GatewayCodeInvalidFrame,
+		)
+	}
+
+	method := strings.TrimSpace(request.Method)
+	if method == "" {
+		return normalized, NewJSONRPCError(
+			JSONRPCCodeInvalidRequest,
+			"missing required field: method",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	switch method {
+	case MethodGatewayPing:
+		normalized.Action = "ping"
+		return normalized, nil
+	case MethodWakeOpenURL:
+		intent, parseErr := decodeWakeIntentParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = MethodWakeOpenURL
+		normalized.SessionID = strings.TrimSpace(intent.SessionID)
+		normalized.Workdir = strings.TrimSpace(intent.Workdir)
+		normalized.Payload = intent
+		return normalized, nil
+	default:
+		return normalized, NewJSONRPCError(
+			JSONRPCCodeMethodNotFound,
+			"method not found",
+			GatewayCodeUnsupportedAction,
+		)
+	}
+}
+
+// NewJSONRPCResultResponse 创建 JSON-RPC 成功响应。
+func NewJSONRPCResultResponse(id json.RawMessage, result any) JSONRPCResponse {
+	return JSONRPCResponse{
+		JSONRPC: JSONRPCVersion,
+		ID:      cloneJSONRawMessage(id),
+		Result:  result,
+	}
+}
+
+// NewJSONRPCErrorResponse 创建 JSON-RPC 错误响应。
+func NewJSONRPCErrorResponse(id json.RawMessage, rpcError *JSONRPCError) JSONRPCResponse {
+	return JSONRPCResponse{
+		JSONRPC: JSONRPCVersion,
+		ID:      cloneJSONRawMessage(id),
+		Error:   rpcError,
+	}
+}
+
+// NewJSONRPCError 创建带 gateway_code 的 JSON-RPC 错误对象。
+func NewJSONRPCError(code int, message, gatewayCode string) *JSONRPCError {
+	errorPayload := &JSONRPCError{
+		Code:    code,
+		Message: message,
+	}
+	if strings.TrimSpace(gatewayCode) != "" {
+		errorPayload.Data = &JSONRPCErrorData{GatewayCode: gatewayCode}
+	}
+	return errorPayload
+}
+
+// GatewayCodeFromJSONRPCError 从 JSON-RPC 错误负载中提取稳定 gateway_code。
+func GatewayCodeFromJSONRPCError(rpcError *JSONRPCError) string {
+	if rpcError == nil || rpcError.Data == nil {
+		return ""
+	}
+	return strings.TrimSpace(rpcError.Data.GatewayCode)
+}
+
+// MapGatewayCodeToJSONRPCCode 将稳定网关错误码映射到 JSON-RPC 错误码。
+func MapGatewayCodeToJSONRPCCode(gatewayCode string) int {
+	switch strings.TrimSpace(gatewayCode) {
+	case GatewayCodeUnsupportedAction:
+		return JSONRPCCodeMethodNotFound
+	case GatewayCodeInvalidAction,
+		GatewayCodeInvalidFrame,
+		GatewayCodeInvalidMultimodalPayload,
+		GatewayCodeMissingRequiredField,
+		GatewayCodeUnsafePath:
+		return JSONRPCCodeInvalidParams
+	case GatewayCodeInternalError:
+		return JSONRPCCodeInternalError
+	default:
+		return JSONRPCCodeInternalError
+	}
+}
+
+// normalizeJSONRPCID 校验并提取请求 ID，确保控制面请求具备可关联标识。
+func normalizeJSONRPCID(id json.RawMessage) (string, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(id)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", NewJSONRPCError(
+			JSONRPCCodeInvalidRequest,
+			"missing required field: id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	if trimmed[0] == '"' {
+		var decoded string
+		if err := json.Unmarshal(trimmed, &decoded); err != nil {
+			return "", NewJSONRPCError(
+				JSONRPCCodeInvalidRequest,
+				"invalid field: id",
+				GatewayCodeInvalidFrame,
+			)
+		}
+		decoded = strings.TrimSpace(decoded)
+		if decoded == "" {
+			return "", NewJSONRPCError(
+				JSONRPCCodeInvalidRequest,
+				"invalid field: id",
+				GatewayCodeInvalidFrame,
+			)
+		}
+		return decoded, nil
+	}
+
+	identifier := strings.TrimSpace(string(trimmed))
+	if identifier == "" {
+		return "", NewJSONRPCError(
+			JSONRPCCodeInvalidRequest,
+			"invalid field: id",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	return identifier, nil
+}
+
+// decodeWakeIntentParams 对 wake.openUrl 的 params 执行延迟反序列化与最小校验。
+func decodeWakeIntentParams(raw json.RawMessage) (WakeIntent, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return WakeIntent{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var intent WakeIntent
+	if err := json.Unmarshal(trimmed, &intent); err != nil {
+		return WakeIntent{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for wake.openUrl",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	intent.Action = strings.ToLower(strings.TrimSpace(intent.Action))
+	intent.SessionID = strings.TrimSpace(intent.SessionID)
+	intent.Workdir = strings.TrimSpace(intent.Workdir)
+	if len(intent.Params) == 0 {
+		intent.Params = nil
+	}
+	return intent, nil
+}
+
+// cloneJSONRawMessage 复制 RawMessage，避免共享底层切片导致的并发风险。
+func cloneJSONRawMessage(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	cloned := make([]byte, len(raw))
+	copy(cloned, raw)
+	return json.RawMessage(cloned)
+}

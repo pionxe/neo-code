@@ -88,7 +88,7 @@ func isSafeReviewPath(path string) bool {
 	if trimmed == "" {
 		return false
 	}
-	if filepath.IsAbs(trimmed) {
+	if filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "\\") {
 		return false
 	}
 	if containsParentTraversalSegment(trimmed) {

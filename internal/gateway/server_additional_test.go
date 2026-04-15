@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"neo-code/internal/gateway/protocol"
 )
 
 func TestNewServerUsesDefaultsAndOverrides(t *testing.T) {
@@ -236,9 +238,9 @@ func TestCloseReturnsContextErrorWhenWaitCanceled(t *testing.T) {
 	server.wg.Done()
 }
 
-func TestDecodeFrameTrailingJSON(t *testing.T) {
-	reader := bufio.NewReader(strings.NewReader(`{"type":"request","action":"ping"} {"extra":1}` + "\n"))
-	_, err := decodeFrame(reader)
+func TestDecodeRPCRequestTrailingJSON(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader(`{"jsonrpc":"2.0","id":"x","method":"gateway.ping"} {"extra":1}` + "\n"))
+	_, err := decodeRPCRequest(reader)
 	if err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("expected trailing json error, got %v", err)
 	}
@@ -289,6 +291,56 @@ func TestDispatchFrameValidationError(t *testing.T) {
 	}
 }
 
+func TestDispatchRPCRequestNormalizeError(t *testing.T) {
+	server := &Server{}
+	response := server.dispatchRPCRequest(context.Background(), protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		Method:  protocol.MethodGatewayPing,
+	}, nil)
+	if response.Error == nil {
+		t.Fatal("expected rpc normalize error")
+	}
+	if response.Error.Code != protocol.JSONRPCCodeInvalidRequest {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInvalidRequest)
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeMissingRequiredField.String() {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeMissingRequiredField.String())
+	}
+}
+
+func TestDispatchRPCRequestConvertsFrameErrorWithoutPayload(t *testing.T) {
+	server := &Server{}
+	originalHandlers := requestFrameHandlers
+	requestFrameHandlers = map[FrameAction]requestFrameHandler{
+		FrameActionPing: func(frame MessageFrame) MessageFrame {
+			return MessageFrame{
+				Type:      FrameTypeError,
+				Action:    frame.Action,
+				RequestID: frame.RequestID,
+				Error:     nil,
+			}
+		},
+	}
+	t.Cleanup(func() {
+		requestFrameHandlers = originalHandlers
+	})
+
+	response := server.dispatchRPCRequest(context.Background(), protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"rpc-err-1"`),
+		Method:  protocol.MethodGatewayPing,
+	}, nil)
+	if response.Error == nil {
+		t.Fatal("expected rpc error response")
+	}
+	if response.Error.Code != protocol.JSONRPCCodeInternalError {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInternalError)
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeInternalError.String() {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeInternalError.String())
+	}
+}
+
 func TestServerHandleConnectionSkipsEmptyFrame(t *testing.T) {
 	server := &Server{logger: log.New(io.Discard, "", 0)}
 	serverConn, clientConn := net.Pipe()
@@ -299,15 +351,22 @@ func TestServerHandleConnectionSkipsEmptyFrame(t *testing.T) {
 	}()
 
 	_, _ = io.WriteString(clientConn, "\n")
-	_, _ = io.WriteString(clientConn, `{"type":"request","action":"ping","request_id":"empty-then-ping"}`+"\n")
+	_, _ = io.WriteString(clientConn, `{"jsonrpc":"2.0","id":"empty-then-ping","method":"gateway.ping","params":{}}`+"\n")
 
 	decoder := json.NewDecoder(clientConn)
-	var response MessageFrame
+	var response protocol.JSONRPCResponse
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Type != FrameTypeAck || response.Action != FrameActionPing {
-		t.Fatalf("unexpected response after empty frame: %#v", response)
+	if response.Error != nil {
+		t.Fatalf("unexpected rpc error after empty frame: %+v", response.Error)
+	}
+	resultFrame, err := decodeJSONRPCResultFrame(response)
+	if err != nil {
+		t.Fatalf("decode result frame: %v", err)
+	}
+	if resultFrame.Type != FrameTypeAck || resultFrame.Action != FrameActionPing {
+		t.Fatalf("unexpected response after empty frame: %#v", resultFrame)
 	}
 
 	_ = clientConn.Close()
@@ -329,15 +388,18 @@ func TestServerHandleConnectionInvalidJSONFrame(t *testing.T) {
 
 	_, _ = io.WriteString(clientConn, "{invalid-json}\n")
 	decoder := json.NewDecoder(clientConn)
-	var response MessageFrame
+	var response protocol.JSONRPCResponse
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Type != FrameTypeError {
-		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	if response.Error == nil {
+		t.Fatal("response rpc error is nil")
 	}
-	if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
-		t.Fatalf("response error = %#v, want invalid frame", response.Error)
+	if response.Error.Code != protocol.JSONRPCCodeParseError {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeParseError)
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeInvalidFrame.String() {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeInvalidFrame.String())
 	}
 
 	_ = clientConn.Close()
@@ -412,7 +474,7 @@ func TestServerHandleConnectionWriteTimeoutClosesConnection(t *testing.T) {
 		server.handleConnection(context.Background(), serverConn, nil)
 	}()
 
-	_, err := io.WriteString(clientConn, `{"type":"request","action":"ping","request_id":"write-timeout"}`+"\n")
+	_, err := io.WriteString(clientConn, `{"jsonrpc":"2.0","id":"write-timeout","method":"gateway.ping","params":{}}`+"\n")
 	if err != nil {
 		t.Fatalf("write request: %v", err)
 	}

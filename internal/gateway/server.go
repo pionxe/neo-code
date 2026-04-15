@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/gateway/transport"
 )
 
@@ -261,7 +262,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 			return
 		}
 
-		frame, err := decodeFrame(reader)
+		rpcRequest, err := decodeRPCRequest(reader)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return
@@ -275,20 +276,31 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 			}
 			if errors.Is(err, errFrameTooLarge) {
 				s.logger.Printf("decode frame failed: %v", err)
-				_ = s.writeFrame(conn, encoder, errorFrame(MessageFrame{}, NewFrameError(
-					ErrorCodeInvalidFrame,
-					fmt.Sprintf("frame exceeds max size %d bytes", MaxFrameSize),
-				)))
+				_ = s.writeRPCResponse(conn, encoder, protocol.NewJSONRPCErrorResponse(
+					nil,
+					protocol.NewJSONRPCError(
+						protocol.JSONRPCCodeInvalidParams,
+						fmt.Sprintf("frame exceeds max size %d bytes", MaxFrameSize),
+						protocol.GatewayCodeInvalidFrame,
+					),
+				))
 				return
 			}
 
 			s.logger.Printf("decode frame failed: %v", err)
-			_ = s.writeFrame(conn, encoder, errorFrame(MessageFrame{}, NewFrameError(ErrorCodeInvalidFrame, "invalid json frame")))
+			_ = s.writeRPCResponse(conn, encoder, protocol.NewJSONRPCErrorResponse(
+				nil,
+				protocol.NewJSONRPCError(
+					protocol.JSONRPCCodeParseError,
+					"invalid json-rpc request",
+					protocol.GatewayCodeInvalidFrame,
+				),
+			))
 			return
 		}
 
-		response := s.dispatchFrame(ctx, frame, runtimePort)
-		if !s.writeFrame(conn, encoder, response) {
+		rpcResponse := s.dispatchRPCRequest(ctx, rpcRequest, runtimePort)
+		if !s.writeRPCResponse(conn, encoder, rpcResponse) {
 			return
 		}
 	}
@@ -310,13 +322,13 @@ func (s *Server) applyWriteDeadline(conn net.Conn) error {
 	return conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 }
 
-// writeFrame 统一处理响应写回及写超时设置，失败时返回 false 供上层快速终止连接循环。
-func (s *Server) writeFrame(conn net.Conn, encoder *json.Encoder, frame MessageFrame) bool {
+// writeRPCResponse 统一处理 JSON-RPC 响应写回及写超时设置，失败时返回 false 供上层快速终止连接循环。
+func (s *Server) writeRPCResponse(conn net.Conn, encoder *json.Encoder, response protocol.JSONRPCResponse) bool {
 	if err := s.applyWriteDeadline(conn); err != nil {
 		s.logger.Printf("set write deadline failed: %v", err)
 		return false
 	}
-	if err := encoder.Encode(frame); err != nil {
+	if err := encoder.Encode(response); err != nil {
 		s.logger.Printf("write frame failed: %v", err)
 		return false
 	}
@@ -329,27 +341,66 @@ func isTimeoutError(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-// decodeFrame 从连接读取一条 JSON 帧并执行长度与格式校验。
-func decodeFrame(reader *bufio.Reader) (MessageFrame, error) {
+// decodeRPCRequest 从连接读取一条 JSON-RPC 请求并执行长度与格式校验。
+func decodeRPCRequest(reader *bufio.Reader) (protocol.JSONRPCRequest, error) {
 	payload, err := readFramePayload(reader, MaxFrameSize)
 	if err != nil {
-		return MessageFrame{}, err
+		return protocol.JSONRPCRequest{}, err
 	}
 
 	limitedReader := &io.LimitedReader{R: bytes.NewReader(payload), N: MaxFrameSize}
 	decoder := json.NewDecoder(limitedReader)
 
-	var frame MessageFrame
-	if err := decoder.Decode(&frame); err != nil {
-		return MessageFrame{}, err
+	var request protocol.JSONRPCRequest
+	if err := decoder.Decode(&request); err != nil {
+		return protocol.JSONRPCRequest{}, err
 	}
 
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return MessageFrame{}, fmt.Errorf("frame contains trailing json values")
+		return protocol.JSONRPCRequest{}, fmt.Errorf("frame contains trailing json values")
 	}
 
-	return frame, nil
+	return request, nil
+}
+
+// dispatchRPCRequest 将 JSON-RPC 请求归一化为 MessageFrame，并复用既有分发逻辑处理。
+func (s *Server) dispatchRPCRequest(
+	ctx context.Context,
+	request protocol.JSONRPCRequest,
+	runtimePort RuntimePort,
+) protocol.JSONRPCResponse {
+	normalized, rpcErr := protocol.NormalizeJSONRPCRequest(request)
+	if rpcErr != nil {
+		return protocol.NewJSONRPCErrorResponse(normalized.ID, rpcErr)
+	}
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameAction(normalized.Action),
+		RequestID: normalized.RequestID,
+		SessionID: normalized.SessionID,
+		Workdir:   normalized.Workdir,
+		Payload:   normalized.Payload,
+	}
+
+	responseFrame := s.dispatchFrame(ctx, frame, runtimePort)
+	if responseFrame.Type != FrameTypeError {
+		return protocol.NewJSONRPCResultResponse(normalized.ID, responseFrame)
+	}
+
+	frameErr := responseFrame.Error
+	if frameErr == nil {
+		frameErr = NewFrameError(ErrorCodeInternalError, "gateway response missing error payload")
+	}
+	return protocol.NewJSONRPCErrorResponse(
+		normalized.ID,
+		protocol.NewJSONRPCError(
+			protocol.MapGatewayCodeToJSONRPCCode(frameErr.Code),
+			frameErr.Message,
+			frameErr.Code,
+		),
+	)
 }
 
 // readFramePayload 按换行边界读取单条帧，并限制单帧最大字节数。
