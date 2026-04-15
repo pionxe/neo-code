@@ -38,6 +38,12 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 		t.Fatalf("expected existing MaxRepeatCycleStreak=8 to be preserved, got %d", cfg.MaxRepeatCycleStreak)
 	}
 
+	cfg = RuntimeConfig{MaxNoProgressStreak: 2, MaxRepeatCycleStreak: -1}
+	cfg.ApplyDefaults(defaults)
+	if cfg.MaxRepeatCycleStreak != 5 {
+		t.Fatalf("expected negative MaxRepeatCycleStreak=-1 to be replaced by default=5, got %d", cfg.MaxRepeatCycleStreak)
+	}
+
 	var nilCfg *RuntimeConfig
 	nilCfg.ApplyDefaults(defaults)
 }
@@ -45,7 +51,7 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 func TestRuntimeConfigValidate(t *testing.T) {
 	t.Parallel()
 
-	if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 0}).Validate(); err != nil {
+	if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 1}).Validate(); err != nil {
 		t.Fatalf("expected valid config, got %v", err)
 	}
 
@@ -55,7 +61,7 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		}
 	}
 
-	for _, bad := range []int{-1, -99} {
+	for _, bad := range []int{0, -1, -99} {
 		if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: bad}).Validate(); err == nil {
 			t.Fatalf("expected validation error for MaxRepeatCycleStreak=%d", bad)
 		}

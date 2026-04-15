@@ -46,8 +46,8 @@ func (c RuntimeConfig) Validate() error {
 	if c.MaxNoProgressStreak <= 0 {
 		return errors.New("max_no_progress_streak must be greater than 0")
 	}
-	if c.MaxRepeatCycleStreak < 0 {
-		return errors.New("max_repeat_cycle_streak must be greater than or equal to 0")
+	if c.MaxRepeatCycleStreak <= 0 {
+		return errors.New("max_repeat_cycle_streak must be greater than 0")
 	}
 	return nil
 }

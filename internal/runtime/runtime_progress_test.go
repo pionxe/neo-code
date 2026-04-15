@@ -226,6 +226,22 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 	if !errors.Is(err, ErrRepeatCycleLimit) {
 		t.Fatalf("expected ErrRepeatCycleLimit, got %v", err)
 	}
+
+	events := collectRuntimeEvents(service.Events())
+
+	assertEventContains(t, events, EventStopReasonDecided)
+	for _, e := range events {
+		if e.Type == EventStopReasonDecided {
+			payload := e.Payload.(StopReasonDecidedPayload)
+			if payload.Reason != controlplane.StopReasonError {
+				t.Errorf("expected StopReasonError, got %s", payload.Reason)
+			}
+			if payload.Detail != ErrRepeatCycleLimit.Error() {
+				t.Errorf("expected detail to be %q, got %q", ErrRepeatCycleLimit.Error(), payload.Detail)
+			}
+		}
+	}
+
 	if !promptInjected {
 		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
 	}
