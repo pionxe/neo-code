@@ -51,24 +51,30 @@ func renderImagePlaceholder(image *providertypes.ImagePart, mode imageRenderMode
 
 	switch image.SourceType {
 	case providertypes.ImageSourceRemote:
+		if mode == imageRenderModeDisplay {
+			return "[Image]"
+		}
+		if mode == imageRenderModeTranscript {
+			return "[Image:remote]"
+		}
 		url := strings.TrimSpace(image.URL)
 		if url == "" {
 			return "[Image]"
 		}
+		return "[Image:remote] " + url
+	case providertypes.ImageSourceSessionAsset:
 		if mode == imageRenderModeDisplay {
 			return "[Image]"
 		}
-		return "[Image:remote] " + url
-	case providertypes.ImageSourceSessionAsset:
+		if mode == imageRenderModeTranscript {
+			return "[Image:session_asset]"
+		}
 		if image.Asset == nil {
 			return "[Image]"
 		}
 		assetID := strings.TrimSpace(image.Asset.ID)
 		mime := strings.TrimSpace(image.Asset.MimeType)
 		if assetID == "" {
-			return "[Image]"
-		}
-		if mode == imageRenderModeDisplay {
 			return "[Image]"
 		}
 		if mime == "" {

@@ -18,13 +18,19 @@ func TestRenderMemoPartsUsesImagePlaceholder(t *testing.T) {
 	}
 }
 
-func TestHasMemoRelevantUserInputTreatsImageAsInput(t *testing.T) {
+func TestHasMemoRelevantUserInputRequiresNonEmptyText(t *testing.T) {
 	t.Parallel()
 
 	if hasMemoRelevantUserInput([]providertypes.ContentPart{providertypes.NewTextPart("  ")}) {
 		t.Fatalf("blank text should not be treated as meaningful input")
 	}
-	if !hasMemoRelevantUserInput([]providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/img.png")}) {
-		t.Fatalf("image should be treated as meaningful user input")
+	if hasMemoRelevantUserInput([]providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/img.png")}) {
+		t.Fatalf("image-only input should not trigger memo extraction")
+	}
+	if !hasMemoRelevantUserInput([]providertypes.ContentPart{
+		providertypes.NewRemoteImagePart("https://example.com/img.png"),
+		providertypes.NewTextPart("caption"),
+	}) {
+		t.Fatalf("non-empty text should be treated as meaningful user input")
 	}
 }

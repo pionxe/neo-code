@@ -411,7 +411,7 @@ func TestExtractJSONArrayErrors(t *testing.T) {
 	}
 }
 
-func TestLLMExtractorExtractImageOnlyUserMessageTriggersGenerator(t *testing.T) {
+func TestLLMExtractorExtractImageOnlyUserMessageSkipsGenerator(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
 	extractor := NewLLMExtractor(generator)
 
@@ -424,7 +424,7 @@ func TestLLMExtractorExtractImageOnlyUserMessageTriggersGenerator(t *testing.T) 
 	if len(entries) != 0 {
 		t.Fatalf("len(entries) = %d, want 0", len(entries))
 	}
-	if generator.calls != 1 {
-		t.Fatalf("Generate() calls = %d, want 1", generator.calls)
+	if generator.calls != 0 {
+		t.Fatalf("Generate() calls = %d, want 0", generator.calls)
 	}
 }

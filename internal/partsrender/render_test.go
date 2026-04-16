@@ -26,12 +26,13 @@ func TestRenderTranscriptParts(t *testing.T) {
 	t.Parallel()
 
 	parts := []providertypes.ContentPart{
-		providertypes.NewTextPart("look"),
+		providertypes.NewTextPart("look "),
+		providertypes.NewRemoteImagePart("https://example.com/a.png?token=secret"),
 		providertypes.NewSessionAssetImagePart("asset-2", ""),
 	}
 
 	got := RenderTranscriptParts(parts)
-	want := "look[Image:session_asset] asset-2"
+	want := "look [Image:remote][Image:session_asset]"
 	if got != want {
 		t.Fatalf("RenderTranscriptParts() = %q, want %q", got, want)
 	}
