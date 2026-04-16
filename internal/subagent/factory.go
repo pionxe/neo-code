@@ -33,4 +33,3 @@ func (f *WorkerFactory) Create(role Role) (WorkerRuntime, error) {
 	}
 	return NewWorker(role, policy, engine)
 }
-

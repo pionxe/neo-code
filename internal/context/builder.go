@@ -9,9 +9,10 @@ import (
 
 // DefaultBuilder preserves the current runtime context-building behavior.
 type DefaultBuilder struct {
-	promptSources        []promptSectionSource
-	trimPolicy           messageTrimPolicy
-	microCompactPolicies MicroCompactPolicySource
+	promptSources           []promptSectionSource
+	trimPolicy              messageTrimPolicy
+	microCompactPolicies    MicroCompactPolicySource
+	microCompactSummarizers MicroCompactSummarizerSource
 }
 
 // NewBuilder returns the default context builder implementation.
@@ -36,9 +37,32 @@ func NewBuilderWithToolPolicies(policies MicroCompactPolicySource) Builder {
 	}
 }
 
+// NewBuilderWithToolPoliciesAndSummarizers 返回带工具策略与内容摘要器的上下文构建器。
+func NewBuilderWithToolPoliciesAndSummarizers(policies MicroCompactPolicySource, summarizers MicroCompactSummarizerSource) Builder {
+	systemSource := &systemStateSource{gitRunner: runGitCommand}
+	return &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			corePromptSource{},
+			&projectRulesSource{},
+			taskStateSource{},
+			todosSource{},
+			skillPromptSource{},
+			systemSource,
+		},
+		trimPolicy:              spanMessageTrimPolicy{},
+		microCompactPolicies:    policies,
+		microCompactSummarizers: summarizers,
+	}
+}
+
 // NewBuilderWithMemo 返回带记忆注入能力的上下文构建器。
 // memoSource 为 nil 时等价于 NewBuilderWithToolPolicies。
 func NewBuilderWithMemo(policies MicroCompactPolicySource, memoSource SectionSource) Builder {
+	return NewBuilderWithMemoAndSummarizers(policies, nil, memoSource)
+}
+
+// NewBuilderWithMemoAndSummarizers 返回带记忆注入与内容摘要器的上下文构建器。
+func NewBuilderWithMemoAndSummarizers(policies MicroCompactPolicySource, summarizers MicroCompactSummarizerSource, memoSource SectionSource) Builder {
 	systemSource := &systemStateSource{gitRunner: runGitCommand}
 	sources := []promptSectionSource{
 		corePromptSource{},
@@ -52,9 +76,10 @@ func NewBuilderWithMemo(policies MicroCompactPolicySource, memoSource SectionSou
 	}
 	sources = append(sources, systemSource)
 	return &DefaultBuilder{
-		promptSources:        sources,
-		trimPolicy:           spanMessageTrimPolicy{},
-		microCompactPolicies: policies,
+		promptSources:           sources,
+		trimPolicy:              spanMessageTrimPolicy{},
+		microCompactPolicies:    policies,
+		microCompactSummarizers: summarizers,
 	}
 }
 
@@ -83,7 +108,7 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 
 	return BuildResult{
 		SystemPrompt:         composeSystemPrompt(sections...),
-		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages, input.Compact), input.TaskState, input.Compact, b.microCompactPolicies),
+		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages, input.Compact), input.TaskState, input.Compact, b.microCompactPolicies, b.microCompactSummarizers),
 		AutoCompactSuggested: shouldAutoCompact,
 	}, nil
 }
@@ -94,12 +119,13 @@ func applyReadTimeContextProjection(
 	taskState agentsession.TaskState,
 	options CompactOptions,
 	policies MicroCompactPolicySource,
+	summarizers MicroCompactSummarizerSource,
 ) []providertypes.Message {
 	var projected []providertypes.Message
 	if options.DisableMicroCompact || !taskState.Established() {
 		projected = cloneContextMessages(messages)
 	} else {
-		projected = microCompactMessagesWithPolicies(messages, policies, options.MicroCompactRetainedToolSpans)
+		projected = microCompactMessagesWithPolicies(messages, policies, options.MicroCompactRetainedToolSpans, summarizers)
 	}
 	return ProjectToolMessagesForModel(projected)
 }
