@@ -1,5 +1,7 @@
 package types
 
+import "strings"
+
 // RoleSystem 标识系统消息。
 const RoleSystem = "system"
 
@@ -24,7 +26,17 @@ type Message struct {
 
 // IsEmpty checks if the message has no content parts and no tool calls.
 func (m *Message) IsEmpty() bool {
-	return len(m.Parts) == 0 && len(m.ToolCalls) == 0
+	if len(m.ToolCalls) > 0 {
+		return false
+	}
+
+	for _, part := range m.Parts {
+		if part.Kind != ContentPartText || strings.TrimSpace(part.Text) != "" {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Validate ensures the message is well-formed.

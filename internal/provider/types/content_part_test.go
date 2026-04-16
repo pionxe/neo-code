@@ -76,6 +76,11 @@ func TestValidateParts(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "unsupported image source type",
+			parts:   []ContentPart{{Kind: ContentPartImage, Image: &ImagePart{SourceType: ImageSourceType("local_file"), URL: "file://tmp/test.png"}}},
+			wantErr: true,
+		},
+		{
 			name:    "unknown kind",
 			parts:   []ContentPart{{Kind: "unknown"}},
 			wantErr: true,

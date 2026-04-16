@@ -80,24 +80,34 @@ func NewSessionAssetImagePart(id, mimeType string) ContentPart {
 // ValidateParts checks if the given parts are valid.
 func ValidateParts(parts []ContentPart) error {
 	for _, part := range parts {
-		if part.Kind == ContentPartText {
+		switch part.Kind {
+		case ContentPartText:
 			if part.Image != nil {
 				return errors.New("text part cannot contain image payload")
 			}
-		} else if part.Kind == ContentPartImage {
-			if part.Image == nil {
+		case ContentPartImage:
+			image := part.Image
+			if image == nil {
 				return errors.New("image part must contain image payload")
 			}
-			if part.Image.SourceType == ImageSourceRemote && part.Image.URL == "" {
-				return errors.New("remote image part must contain url")
+
+			switch image.SourceType {
+			case ImageSourceRemote:
+				if image.URL == "" {
+					return errors.New("remote image part must contain url")
+				}
+			case ImageSourceSessionAsset:
+				if image.Asset == nil || image.Asset.ID == "" {
+					return errors.New("session asset image part must contain asset ID")
+				}
+			default:
+				return errors.New("image part contains unsupported source type")
 			}
-			if part.Image.SourceType == ImageSourceSessionAsset && (part.Image.Asset == nil || part.Image.Asset.ID == "") {
-				return errors.New("session asset image part must contain asset ID")
-			}
-		} else {
+		default:
 			return errors.New("unknown content part kind")
 		}
 	}
+
 	return nil
 }
 

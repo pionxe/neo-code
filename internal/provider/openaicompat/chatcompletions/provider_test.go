@@ -151,7 +151,7 @@ func TestNewAndBuildRequest(t *testing.T) {
 				{Kind: providertypes.ContentPartImage, Image: &providertypes.ImagePart{SourceType: "unknown"}},
 			},
 		})
-		if err == nil || !strings.Contains(err.Error(), "unsupported image part payload") {
+		if err == nil || !strings.Contains(err.Error(), "unsupported source type") {
 			t.Fatalf("expected unsupported image error, got %v", err)
 		}
 
