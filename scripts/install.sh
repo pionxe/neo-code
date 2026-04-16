@@ -2,7 +2,7 @@
 set -e
 
 # 配置仓库信息
-REPO="pionxe/neo-code" 
+REPO="1024XEngineer/neo-code" 
 PROJECT_NAME="neo-code"
 BINARY_NAME="neocode"
 
