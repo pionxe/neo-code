@@ -85,6 +85,20 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("unexpected user message: %+v", user)
 		}
 
+		multiText, err := ToOpenAIMessage(providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("hello "),
+				providertypes.NewTextPart("world"),
+			},
+		})
+		if err != nil {
+			t.Fatalf("ToOpenAIMessage() multiText error = %v", err)
+		}
+		if multiText.Content != "hello world" {
+			t.Fatalf("unexpected multiText content: %+v", multiText.Content)
+		}
+
 		assistant, err := ToOpenAIMessage(providertypes.Message{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
@@ -139,6 +153,16 @@ func TestNewAndBuildRequest(t *testing.T) {
 		})
 		if err == nil || !strings.Contains(err.Error(), "unsupported image part payload") {
 			t.Fatalf("expected unsupported image error, got %v", err)
+		}
+
+		_, err = ToOpenAIMessage(providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewRemoteImagePart(""),
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "invalid message parts") {
+			t.Fatalf("expected invalid parts error, got %v", err)
 		}
 	})
 }
@@ -348,6 +372,14 @@ func testCfg(baseURL, model, apiKey string) provider.RuntimeConfig {
 	}
 }
 
+func userTextGenerateRequest(text string) providertypes.GenerateRequest {
+	return providertypes.GenerateRequest{
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(text)}},
+		},
+	}
+}
+
 func mustProvider(t *testing.T) *Provider {
 	t.Helper()
 	p, err := New(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), &http.Client{})
@@ -393,11 +425,7 @@ func mustDone(t *testing.T, evt providertypes.StreamEvent) providertypes.Message
 	return payload
 }
 
-func ioNopCloser(body string) io.ReadCloser { return &readCloser{Reader: strings.NewReader(body)} }
-
-type readCloser struct{ *strings.Reader }
-
-func (r *readCloser) Close() error { return nil }
+func ioNopCloser(body string) io.ReadCloser { return io.NopCloser(strings.NewReader(body)) }
 
 type failingReadCloser struct{ err error }
 
@@ -539,7 +567,7 @@ func TestGenerateVariants(t *testing.T) {
 		}
 
 		if err := mustProvider(t).Generate(context.Background(), providertypes.GenerateRequest{
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
+			Messages: userTextGenerateRequest("hello").Messages,
 			Tools:    []providertypes.ToolSpec{{Name: "bad", Schema: map[string]any{"bad": func() {}}}},
 		}, nil); err == nil || !strings.Contains(err.Error(), "marshal request") {
 			t.Fatalf("expected marshal error, got %v", err)
@@ -550,9 +578,7 @@ func TestGenerateVariants(t *testing.T) {
 		t.Parallel()
 
 		invalidURL := &Provider{cfg: testCfg("://bad", "gpt-4.1", "test-key"), client: &http.Client{}}
-		if err := invalidURL.Generate(context.Background(), providertypes.GenerateRequest{
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
-		}, nil); err == nil || !strings.Contains(err.Error(), "build request") {
+		if err := invalidURL.Generate(context.Background(), userTextGenerateRequest("hello"), nil); err == nil || !strings.Contains(err.Error(), "build request") {
 			t.Fatalf("expected build request error, got %v", err)
 		}
 
@@ -562,9 +588,7 @@ func TestGenerateVariants(t *testing.T) {
 				return nil, io.ErrClosedPipe
 			})},
 		}
-		if err := sendErr.Generate(context.Background(), providertypes.GenerateRequest{
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
-		}, nil); err == nil || !strings.Contains(err.Error(), "send request") {
+		if err := sendErr.Generate(context.Background(), userTextGenerateRequest("hello"), nil); err == nil || !strings.Contains(err.Error(), "send request") {
 			t.Fatalf("expected send request error, got %v", err)
 		}
 	})
@@ -582,9 +606,7 @@ func TestGenerateVariants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("New() error = %v", err)
 		}
-		if err := p.Generate(context.Background(), providertypes.GenerateRequest{
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
-		}, nil); err == nil || !strings.Contains(err.Error(), "invalid api key") {
+		if err := p.Generate(context.Background(), userTextGenerateRequest("hello"), nil); err == nil || !strings.Contains(err.Error(), "invalid api key") {
 			t.Fatalf("expected parsed provider error, got %v", err)
 		}
 	})

@@ -49,14 +49,15 @@ func BuildRequest(cfg provider.RuntimeConfig, req providertypes.GenerateRequest)
 		payload.ToolChoice = "auto"
 		payload.Tools = make([]ToolDefinition, 0, len(req.Tools))
 		for _, spec := range req.Tools {
-			payload.Tools = append(payload.Tools, ToolDefinition{
+			def := ToolDefinition{
 				Type: "function",
 				Function: FunctionDefinition{
 					Name:        spec.Name,
 					Description: spec.Description,
 					Parameters:  spec.Schema,
 				},
-			})
+			}
+			payload.Tools = append(payload.Tools, def)
 		}
 	}
 
@@ -65,6 +66,10 @@ func BuildRequest(cfg provider.RuntimeConfig, req providertypes.GenerateRequest)
 
 // ToOpenAIMessage 将通用 Message 转换为 OpenAI 协议消息格式。
 func ToOpenAIMessage(message providertypes.Message) (Message, error) {
+	if err := providertypes.ValidateParts(message.Parts); err != nil {
+		return Message{}, fmt.Errorf("%sinvalid message parts: %w", shared.ErrorPrefix, err)
+	}
+
 	out := Message{
 		Role:       message.Role,
 		ToolCallID: message.ToolCallID,
@@ -79,34 +84,36 @@ func ToOpenAIMessage(message providertypes.Message) (Message, error) {
 	}
 
 	if !hasImage {
-		var text string
+		var textBuilder strings.Builder
 		for _, part := range message.Parts {
 			if part.Kind == providertypes.ContentPartText {
-				text += part.Text
+				textBuilder.WriteString(part.Text)
 			}
 		}
-		if text != "" {
+		if text := textBuilder.String(); text != "" {
 			out.Content = text
 		}
 	} else {
 		var contentParts []MessageContentPart
 		for _, part := range message.Parts {
-			if part.Kind == providertypes.ContentPartText {
+			switch part.Kind {
+			case providertypes.ContentPartText:
 				contentParts = append(contentParts, MessageContentPart{
 					Type: "text",
 					Text: part.Text,
 				})
-			} else if part.Kind == providertypes.ContentPartImage {
-				if part.Image != nil && part.Image.SourceType == providertypes.ImageSourceRemote {
+			case providertypes.ContentPartImage:
+				switch {
+				case part.Image != nil && part.Image.SourceType == providertypes.ImageSourceRemote:
 					contentParts = append(contentParts, MessageContentPart{
 						Type: "image_url",
 						ImageURL: &ImageURL{
 							URL: part.Image.URL,
 						},
 					})
-				} else if part.Image != nil && part.Image.SourceType == providertypes.ImageSourceSessionAsset {
+				case part.Image != nil && part.Image.SourceType == providertypes.ImageSourceSessionAsset:
 					return Message{}, errors.New("session_asset image is not supported in this phase")
-				} else {
+				default:
 					return Message{}, errors.New("unsupported image part payload")
 				}
 			}
