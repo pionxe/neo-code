@@ -13,6 +13,7 @@ func SaveImageToTempFile(data []byte, prefix string) (string, error) {
 	if cleaned := sanitizeTempPrefix(prefix); cleaned != "" {
 		pattern = cleaned + "-*.png"
 	}
+
 	tempDir := strings.TrimSpace(os.Getenv("TMPDIR"))
 	f, err := os.CreateTemp(tempDir, pattern)
 	if err != nil {
