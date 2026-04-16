@@ -3,6 +3,7 @@ package infra
 import (
 	"errors"
 	"os"
+	"strings"
 )
 
 var errClipboardImageUnsupported = errors.New("clipboard image is not supported on this platform")
@@ -12,7 +13,7 @@ func SaveImageToTempFile(data []byte, prefix string) (string, error) {
 	if cleaned := sanitizeTempPrefix(prefix); cleaned != "" {
 		pattern = cleaned + "-*.png"
 	}
-	tempDir := os.Getenv("TMPDIR")
+	tempDir := strings.TrimSpace(os.Getenv("TMPDIR"))
 	f, err := os.CreateTemp(tempDir, pattern)
 	if err != nil {
 		return "", err
