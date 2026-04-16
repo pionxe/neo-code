@@ -1,0 +1,220 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+	"time"
+
+	"neo-code/internal/gateway/protocol"
+)
+
+func TestStreamRelayBindAndFallbackSession(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			_ = message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	if bindErr := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: "session-1",
+		RunID:     "run-1",
+		Channel:   StreamChannelAll,
+		Explicit:  true,
+	}); bindErr != nil {
+		t.Fatalf("bind connection: %v", bindErr)
+	}
+
+	fallbackSessionID := relay.ResolveFallbackSessionID(connectionID)
+	if fallbackSessionID != "session-1" {
+		t.Fatalf("fallback session id = %q, want %q", fallbackSessionID, "session-1")
+	}
+}
+
+func TestStreamRelayPublishRuntimeEventNoCrossSession(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	messageChA := make(chan RelayMessage, 2)
+	messageChB := make(chan RelayMessage, 2)
+	registerConnectionForRelayTest(t, relay, ctx, StreamChannelWS, "session-a", "run-a", messageChA)
+	registerConnectionForRelayTest(t, relay, ctx, StreamChannelWS, "session-b", "run-b", messageChB)
+
+	relay.PublishRuntimeEvent(RuntimeEvent{
+		Type:      RuntimeEventTypeRunProgress,
+		SessionID: "session-a",
+		RunID:     "run-a",
+		Payload: map[string]string{
+			"chunk": "hello",
+		},
+	})
+
+	select {
+	case message := <-messageChA:
+		if message.Kind != relayMessageKindJSON {
+			t.Fatalf("message kind = %q, want %q", message.Kind, relayMessageKindJSON)
+		}
+		notification, ok := message.Payload.(protocol.JSONRPCNotification)
+		if !ok {
+			t.Fatalf("payload type = %T, want protocol.JSONRPCNotification", message.Payload)
+		}
+		if notification.Method != protocol.MethodGatewayEvent {
+			t.Fatalf("method = %q, want %q", notification.Method, protocol.MethodGatewayEvent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected session-a to receive runtime event")
+	}
+
+	select {
+	case <-messageChB:
+		t.Fatal("session-b should not receive session-a event")
+	default:
+	}
+}
+
+func TestStreamRelayQueueOverflowDropsSlowConnection(t *testing.T) {
+	blockWrite := make(chan struct{})
+	relay := NewStreamRelay(StreamRelayOptions{
+		QueueSize: 1,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			_ = message
+			<-blockWrite
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer close(blockWrite)
+
+	response := protocol.NewJSONRPCErrorResponse(
+		json.RawMessage(`"queue-1"`),
+		protocol.NewJSONRPCError(protocol.JSONRPCCodeInternalError, "boom", protocol.GatewayCodeInternalError),
+	)
+	if !relay.SendJSONRPCResponse(connectionID, response) {
+		t.Fatal("first enqueue should succeed")
+	}
+
+	dropped := false
+	for attempt := 0; attempt < 8; attempt++ {
+		if !relay.SendJSONRPCResponse(connectionID, response) {
+			dropped = true
+			break
+		}
+	}
+	if !dropped {
+		t.Fatal("expected slow connection to be dropped when queue overflows")
+	}
+}
+
+func TestStreamRelayCleanupExpiredBindings(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{
+		BindingTTL:      20 * time.Millisecond,
+		CleanupInterval: 5 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	relay.Start(ctx, nil)
+
+	connectionID := NewConnectionID()
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			_ = message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	if bindErr := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: "session-expire",
+		Channel:   StreamChannelAll,
+		Explicit:  true,
+	}); bindErr != nil {
+		t.Fatalf("bind connection: %v", bindErr)
+	}
+
+	time.Sleep(60 * time.Millisecond)
+	if sessionID := relay.ResolveFallbackSessionID(connectionID); sessionID != "" {
+		t.Fatalf("expired fallback session id = %q, want empty", sessionID)
+	}
+}
+
+func registerConnectionForRelayTest(
+	t *testing.T,
+	relay *StreamRelay,
+	ctx context.Context,
+	channel StreamChannel,
+	sessionID string,
+	runID string,
+	messageCh chan RelayMessage,
+) {
+	t.Helper()
+
+	connectionID := NewConnectionID()
+	connectionCtx, cancelConnection := context.WithCancel(ctx)
+	connectionCtx = WithConnectionID(connectionCtx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      channel,
+		Context:      connectionCtx,
+		Cancel:       cancelConnection,
+		Write: func(message RelayMessage) error {
+			messageCh <- message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	t.Cleanup(func() {
+		relay.dropConnection(connectionID)
+	})
+
+	if bindErr := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: sessionID,
+		RunID:     runID,
+		Channel:   StreamChannelAll,
+		Explicit:  true,
+	}); bindErr != nil {
+		t.Fatalf("bind connection: %v", bindErr)
+	}
+}
