@@ -68,7 +68,7 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		t.Fatalf("unexpected loaded messages: %+v", loaded.Messages)
 	}
 
-	rawPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), newer.ID+".json")
+	rawPath := sessionFilePathForTest(baseDir, workspaceRoot, newer.ID)
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		t.Fatalf("read saved session: %v", err)
@@ -77,7 +77,7 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		t.Fatalf("expected persisted session file to include workdir, got:\n%s", string(raw))
 	}
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "invalid.json"), "{invalid")
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "invalid"), "{invalid")
 	if err := os.MkdirAll(filepath.Join(sessionDirectory(baseDir, workspaceRoot), "directory"), 0o755); err != nil {
 		t.Fatalf("mkdir stray directory: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestJSONStoreCorruptedSessionBehaviors(t *testing.T) {
 		t.Fatalf("Save valid session: %v", err)
 	}
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "broken.json"), "{broken")
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "broken"), "{broken")
 
 	_, err := store.Load(context.Background(), "broken")
 	if err == nil || !strings.Contains(err.Error(), "decode session broken") {
@@ -280,7 +280,7 @@ func TestJSONStoreSaveReplaceFailureWhenTargetIsNonEmptyDirectory(t *testing.T) 
 	baseDir := t.TempDir()
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
-	targetDir := filepath.Join(sessionDirectory(baseDir, workspaceRoot), "blocked.json")
+	targetDir := sessionFilePathForTest(baseDir, workspaceRoot, "blocked")
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatalf("mkdir target dir: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestJSONStoreSaveWriteTempFailure(t *testing.T) {
 	if err := os.MkdirAll(sessionsPath, 0o755); err != nil {
 		t.Fatalf("mkdir sessions path: %v", err)
 	}
-	tempDir := filepath.Join(sessionsPath, "temp-blocked.json.tmp")
+	tempDir := sessionFilePathForTest(baseDir, workspaceRoot, "temp-blocked") + ".tmp"
 	if err := os.MkdirAll(tempDir, 0o755); err != nil {
 		t.Fatalf("mkdir temp dir: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestJSONStoreLoadDecodeErrorWithNonJSONPayload(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "decode-bad.json"), "{not-json")
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "decode-bad"), "{not-json")
 
 	_, err := store.Load(context.Background(), "decode-bad")
 	if err == nil || !strings.Contains(err.Error(), "decode session decode-bad") {
@@ -505,7 +505,7 @@ func TestJSONStoreLoadRejectsMissingSchemaVersion(t *testing.T) {
 
 	mustWriteSessionFile(
 		t,
-		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-schema.json"),
+		sessionFilePathForTest(baseDir, workspaceRoot, "missing-schema"),
 		`{"id":"missing-schema","title":"x","task_state":{"goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"last_updated_at":"0001-01-01T00:00:00Z"},"messages":[]}`,
 	)
 
@@ -524,7 +524,7 @@ func TestJSONStoreLoadRejectsMissingTaskState(t *testing.T) {
 
 	mustWriteSessionFile(
 		t,
-		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-task-state.json"),
+		sessionFilePathForTest(baseDir, workspaceRoot, "missing-task-state"),
 		`{"schema_version":2,"id":"missing-task-state","title":"x","messages":[]}`,
 	)
 
@@ -552,11 +552,11 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 		t.Fatalf("save valid session: %v", err)
 	}
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "malformed.json"), "{malformed")
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "empty-id.json"), `{"id":"   ","title":"x"}`)
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "malformed"), "{malformed")
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "empty-id"), `{"id":"   ","title":"x"}`)
 	mustWriteSessionFile(
 		t,
-		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-task-state-summary.json"),
+		sessionFilePathForTest(baseDir, workspaceRoot, "missing-task-state-summary"),
 		`{"schema_version":2,"id":"missing-task-state-summary","title":"x","created_at":"2026-04-13T00:00:00Z","updated_at":"2026-04-13T00:00:00Z"}`,
 	)
 
@@ -610,7 +610,7 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 		t.Fatalf("save session: %v", err)
 	}
 
-	rawPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), session.ID+".json")
+	rawPath := sessionFilePathForTest(baseDir, workspaceRoot, session.ID)
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		t.Fatalf("read raw file: %v", err)
@@ -803,7 +803,7 @@ func TestJSONStoreLoadClampsOversizedTaskState(t *testing.T) {
 	}, "\n")
 	mustWriteSessionFile(
 		t,
-		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "task-state-clamp-load.json"),
+		sessionFilePathForTest(baseDir, workspaceRoot, "task-state-clamp-load"),
 		payload,
 	)
 
@@ -887,7 +887,7 @@ func TestJSONStoreLoadAllowsMissingTodosField(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "no-todos.json"), strings.Join([]string{
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "no-todos"), strings.Join([]string{
 		`{`,
 		`  "schema_version": 2,`,
 		`  "id": "no-todos",`,
@@ -948,7 +948,7 @@ func TestJSONStoreLoadRejectsInvalidTodos(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "invalid-todos-load.json"), strings.Join([]string{
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "invalid-todos-load"), strings.Join([]string{
 		`{`,
 		`  "schema_version": 2,`,
 		`  "id": "invalid-todos-load",`,
@@ -1008,4 +1008,8 @@ func mustWriteSessionFile(t *testing.T, path string, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func sessionFilePathForTest(baseDir string, workspaceRoot string, sessionID string) string {
+	return filepath.Join(sessionDirectory(baseDir, workspaceRoot), sessionID, sessionFileName)
 }

@@ -168,6 +168,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		providerRegistry,
 		contextBuilder,
 	)
+	runtimeSvc.SetSessionAssetStore(sessionStore)
 	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, loader.BaseDir()))
 	runtimeSvc.SetAutoCompactThresholdResolver(runtimeAutoCompactThresholdResolverFunc(
 		func(ctx context.Context, cfg config.Config) (int, error) {

@@ -62,11 +62,12 @@ type customProviderSettings struct {
 // loadCustomProviders 扫描 baseDir/providers 下的一层子目录，并将其中的 provider.yaml 解析为运行时配置。
 func loadCustomProviders(baseDir string) ([]ProviderConfig, error) {
 	providersDir := filepath.Join(strings.TrimSpace(baseDir), providersDirName)
+	if err := os.MkdirAll(providersDir, 0o755); err != nil {
+		return nil, fmt.Errorf("config: create providers dir: %w", err)
+	}
+
 	entries, err := os.ReadDir(providersDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("config: read providers dir: %w", err)
 	}
 

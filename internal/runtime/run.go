@@ -272,10 +272,11 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		toolTimeout:           time.Duration(cfg.ToolTimeoutSec) * time.Second,
 		noProgressStreakLimit: limit,
 		request: providertypes.GenerateRequest{
-			Model:        model,
-			SystemPrompt: systemPrompt,
-			Messages:     builtContext.Messages,
-			Tools:        toolSpecs,
+			Model:              model,
+			SystemPrompt:       systemPrompt,
+			Messages:           builtContext.Messages,
+			Tools:              toolSpecs,
+			SessionAssetReader: s.buildSessionAssetReader(ctx, state.session.ID),
 		},
 	}, false, nil
 }

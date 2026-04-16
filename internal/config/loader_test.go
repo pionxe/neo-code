@@ -1050,8 +1050,12 @@ func TestLoadCustomProvidersReadDirAndStatErrors(t *testing.T) {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
 
-		if _, err := loadCustomProviders(baseDir); err == nil {
-			t.Fatal("expected read providers dir error")
+		_, err := loadCustomProviders(baseDir)
+		if err == nil {
+			t.Fatal("expected create providers dir error")
+		}
+		if !strings.Contains(err.Error(), "create providers dir") {
+			t.Fatalf("expected create providers dir error, got %v", err)
 		}
 	})
 
@@ -1061,15 +1065,44 @@ func TestLoadCustomProvidersReadDirAndStatErrors(t *testing.T) {
 		if err := os.MkdirAll(providerDir, 0o755); err != nil {
 			t.Fatalf("MkdirAll() error = %v", err)
 		}
-		if err := os.Chmod(providerDir, 0o000); err != nil {
-			t.Fatalf("Chmod() error = %v", err)
+		// Windows 上 chmod(000) 不一定阻断访问，这里改为稳定的“provider.yaml 是目录”场景触发读取错误。
+		if err := os.MkdirAll(filepath.Join(providerDir, customProviderConfigName), 0o755); err != nil {
+			t.Fatalf("MkdirAll(provider.yaml dir) error = %v", err)
 		}
-		defer func() { _ = os.Chmod(providerDir, 0o755) }()
 
-		if _, err := loadCustomProviders(baseDir); err == nil {
-			t.Fatal("expected stat error")
+		_, err := loadCustomProviders(baseDir)
+		if err == nil {
+			t.Fatal("expected custom provider read error")
+		}
+		if !strings.Contains(err.Error(), "read") {
+			t.Fatalf("expected read error, got %v", err)
 		}
 	})
+}
+
+func TestLoadCustomProvidersCreatesProvidersDirWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	providersPath := filepath.Join(baseDir, providersDirName)
+	if _, err := os.Stat(providersPath); !os.IsNotExist(err) {
+		t.Fatalf("expected providers dir to be missing, got %v", err)
+	}
+
+	providers, err := loadCustomProviders(baseDir)
+	if err != nil {
+		t.Fatalf("loadCustomProviders() error = %v", err)
+	}
+	if len(providers) != 0 {
+		t.Fatalf("expected no custom providers, got %d", len(providers))
+	}
+	info, err := os.Stat(providersPath)
+	if err != nil {
+		t.Fatalf("expected providers dir to be created, got %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected providers path to be directory")
+	}
 }
 
 func TestLoadCustomProviderReadErrors(t *testing.T) {

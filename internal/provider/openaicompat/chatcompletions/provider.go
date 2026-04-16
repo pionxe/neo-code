@@ -38,7 +38,7 @@ func New(cfg provider.RuntimeConfig, client *http.Client) (*Provider, error) {
 // Generate 发起 SSE 流式生成请求。
 // 流中途断连或协议错误时直接返回错误，由上层调用方决定重试策略。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	payload, err := BuildRequest(p.cfg, req)
+	payload, err := BuildRequest(ctx, p.cfg, req)
 	if err != nil {
 		return err
 	}

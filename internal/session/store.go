@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +18,15 @@ import (
 )
 
 const sessionsDirName = "sessions"
+
+const (
+	sessionFileName = "session.json"
+	assetsDirName   = "assets"
+	// maxSessionAssetWriteBytes 定义会话附件写入上限（20 MiB）。
+	maxSessionAssetWriteBytes int64 = 20 * 1024 * 1024
+)
+
+var storageIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
 // Session 表示单个会话的持久化模型，包含基础元数据与消息历史。
 // Provider / Model 用于在 compact 等流程中优先复用会话最近一次成功运行的模型配置。
@@ -83,6 +94,9 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 	if err := validateSessionSchema(*session); err != nil {
 		return err
 	}
+	if err := validateStorageID("session id", session.ID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
 
 	session.TaskState = normalizeAndClampTaskState(session.TaskState)
 	session.ActivatedSkills = normalizeSkillActivations(session.ActivatedSkills)
@@ -109,6 +123,9 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 	payload = append(payload, '\n')
 
 	target := s.filePath(session.ID)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("session: create session dir: %w", err)
+	}
 	temp := target + ".tmp"
 	if err := os.WriteFile(temp, payload, 0o644); err != nil {
 		return fmt.Errorf("session: write temp session: %w", err)
@@ -127,6 +144,10 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 func (s *JSONStore) Load(ctx context.Context, id string) (Session, error) {
 	if err := ctx.Err(); err != nil {
 		return Session{}, err
+	}
+
+	if err := validateStorageID("session id", id); err != nil {
+		return Session{}, fmt.Errorf("session: %w", err)
 	}
 
 	s.mu.RLock()
@@ -164,7 +185,7 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 
 	summaries := make([]Summary, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if !entry.IsDir() {
 			continue
 		}
 
@@ -174,7 +195,7 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 		default:
 		}
 
-		data, readErr := os.ReadFile(filepath.Join(s.baseDir, entry.Name()))
+		data, readErr := os.ReadFile(filepath.Join(s.baseDir, entry.Name(), sessionFileName))
 		if readErr != nil {
 			continue
 		}
@@ -198,7 +219,159 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 
 // filePath 生成会话 ID 对应的 JSON 文件路径。
 func (s *JSONStore) filePath(id string) string {
-	return filepath.Join(s.baseDir, id+".json")
+	return filepath.Join(s.sessionDir(id), sessionFileName)
+}
+
+// sessionDir 返回指定会话在当前工作区分桶下的目录路径。
+func (s *JSONStore) sessionDir(id string) string {
+	return filepath.Join(s.baseDir, id)
+}
+
+// assetsDir 返回指定会话附件目录路径。
+func (s *JSONStore) assetsDir(sessionID string) string {
+	return filepath.Join(s.sessionDir(sessionID), assetsDirName)
+}
+
+// assetPath 返回指定会话附件二进制文件路径。
+func (s *JSONStore) assetPath(sessionID string, assetID string) string {
+	return filepath.Join(s.assetsDir(sessionID), assetID+".bin")
+}
+
+// assetMetaPath 返回指定会话附件元数据文件路径。
+func (s *JSONStore) assetMetaPath(sessionID string, assetID string) string {
+	return filepath.Join(s.assetsDir(sessionID), assetID+".json")
+}
+
+// SaveAsset 将会话附件二进制内容写入当前工作区会话目录，并返回附件元数据。
+func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader, mimeType string) (AssetMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
+	if r == nil {
+		return AssetMeta{}, errors.New("session: asset reader is nil")
+	}
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return AssetMeta{}, fmt.Errorf("session: %w", err)
+	}
+
+	meta, err := newAssetMeta(mimeType)
+	if err != nil {
+		return AssetMeta{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	assetDir := s.assetsDir(sessionID)
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		return AssetMeta{}, fmt.Errorf("session: create assets dir: %w", err)
+	}
+
+	target := s.assetPath(sessionID, meta.ID)
+	temp := target + ".tmp"
+	f, err := os.OpenFile(temp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return AssetMeta{}, fmt.Errorf("session: create temp asset: %w", err)
+	}
+
+	written, copyErr := io.Copy(f, io.LimitReader(r, maxSessionAssetWriteBytes+1))
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(temp)
+		return AssetMeta{}, fmt.Errorf("session: write temp asset: %w", copyErr)
+	}
+	if written > maxSessionAssetWriteBytes {
+		_ = os.Remove(temp)
+		return AssetMeta{}, fmt.Errorf("session: asset size exceeds %d bytes", maxSessionAssetWriteBytes)
+	}
+	if closeErr != nil {
+		_ = os.Remove(temp)
+		return AssetMeta{}, fmt.Errorf("session: close temp asset: %w", closeErr)
+	}
+
+	meta.Size = written
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(temp)
+		return AssetMeta{}, fmt.Errorf("session: replace asset file: %w", err)
+	}
+	if err := os.Rename(temp, target); err != nil {
+		_ = os.Remove(temp)
+		return AssetMeta{}, fmt.Errorf("session: commit asset file: %w", err)
+	}
+
+	metaData, err := encodeStoredAssetMeta(meta)
+	if err != nil {
+		_ = os.Remove(target)
+		return AssetMeta{}, err
+	}
+	metaTarget := s.assetMetaPath(sessionID, meta.ID)
+	metaTemp := metaTarget + ".tmp"
+	if err := os.WriteFile(metaTemp, metaData, 0o644); err != nil {
+		_ = os.Remove(target)
+		_ = os.Remove(metaTemp)
+		return AssetMeta{}, fmt.Errorf("session: write temp asset meta: %w", err)
+	}
+	if err := os.Remove(metaTarget); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(target)
+		_ = os.Remove(metaTemp)
+		return AssetMeta{}, fmt.Errorf("session: replace asset meta file: %w", err)
+	}
+	if err := os.Rename(metaTemp, metaTarget); err != nil {
+		_ = os.Remove(target)
+		_ = os.Remove(metaTemp)
+		return AssetMeta{}, fmt.Errorf("session: commit asset meta file: %w", err)
+	}
+
+	return meta, nil
+}
+
+// Open 读取会话附件二进制内容并返回可关闭流与附件元数据。
+func (s *JSONStore) Open(ctx context.Context, sessionID string, assetID string) (io.ReadCloser, AssetMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, AssetMeta{}, err
+	}
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return nil, AssetMeta{}, fmt.Errorf("session: %w", err)
+	}
+	if err := validateStorageID("asset id", assetID); err != nil {
+		return nil, AssetMeta{}, fmt.Errorf("session: %w", err)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	meta, err := s.Stat(ctx, sessionID, assetID)
+	if err != nil {
+		return nil, AssetMeta{}, err
+	}
+
+	file, err := os.Open(s.assetPath(sessionID, assetID))
+	if err != nil {
+		return nil, AssetMeta{}, err
+	}
+	return file, meta, nil
+}
+
+// Stat 返回会话附件的元数据而不读取实际内容。
+func (s *JSONStore) Stat(ctx context.Context, sessionID string, assetID string) (AssetMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return AssetMeta{}, fmt.Errorf("session: %w", err)
+	}
+	if err := validateStorageID("asset id", assetID); err != nil {
+		return AssetMeta{}, fmt.Errorf("session: %w", err)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	data, err := os.ReadFile(s.assetMetaPath(sessionID, assetID))
+	if err != nil {
+		return AssetMeta{}, err
+	}
+	return decodeStoredAssetMeta(data)
 }
 
 // New 创建一个默认标题策略的新会话对象。
@@ -349,4 +522,16 @@ func decodeStoredSummary(data []byte) (Summary, error) {
 		CreatedAt: stored.CreatedAt,
 		UpdatedAt: stored.UpdatedAt,
 	}, nil
+}
+
+// validateStorageID 校验会话/附件 ID，避免路径穿越和非法文件名。
+func validateStorageID(label string, id string) error {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return fmt.Errorf("%s is empty", label)
+	}
+	if !storageIDPattern.MatchString(trimmed) {
+		return fmt.Errorf("%s %q contains unsupported characters", label, id)
+	}
+	return nil
 }

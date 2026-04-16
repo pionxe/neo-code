@@ -1,6 +1,8 @@
 package chatcompletions
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,9 +15,11 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
+const maxSessionAssetReadBytes = providertypes.MaxSessionAssetBytes
+
 // BuildRequest 将 provider.GenerateRequest 转换为 Chat Completions 请求结构。
 // 模型优先取 req.Model，其次使用配置中的默认模型。
-func BuildRequest(cfg provider.RuntimeConfig, req providertypes.GenerateRequest) (Request, error) {
+func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providertypes.GenerateRequest) (Request, error) {
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = strings.TrimSpace(cfg.DefaultModel)
@@ -38,7 +42,7 @@ func BuildRequest(cfg provider.RuntimeConfig, req providertypes.GenerateRequest)
 	}
 
 	for _, message := range req.Messages {
-		msg, err := ToOpenAIMessage(message)
+		msg, err := ToOpenAIMessage(ctx, message, req.SessionAssetReader)
 		if err != nil {
 			return Request{}, err
 		}
@@ -65,7 +69,7 @@ func BuildRequest(cfg provider.RuntimeConfig, req providertypes.GenerateRequest)
 }
 
 // ToOpenAIMessage 将通用 Message 转换为 OpenAI 协议消息格式。
-func ToOpenAIMessage(message providertypes.Message) (Message, error) {
+func ToOpenAIMessage(ctx context.Context, message providertypes.Message, assetReader providertypes.SessionAssetReader) (Message, error) {
 	if err := providertypes.ValidateParts(message.Parts); err != nil {
 		return Message{}, fmt.Errorf("%sinvalid message parts: %w", shared.ErrorPrefix, err)
 	}
@@ -112,9 +116,24 @@ func ToOpenAIMessage(message providertypes.Message) (Message, error) {
 						},
 					})
 				case part.Image != nil && part.Image.SourceType == providertypes.ImageSourceSessionAsset:
-					return Message{}, errors.New("session_asset image is not supported in this phase")
+					if part.Image.Asset == nil || strings.TrimSpace(part.Image.Asset.ID) == "" {
+						return Message{}, errors.New("session_asset image missing asset id")
+					}
+					if assetReader == nil {
+						return Message{}, errors.New("session_asset reader is not configured")
+					}
+					imageURL, err := resolveSessionAssetDataURL(ctx, assetReader, part.Image.Asset)
+					if err != nil {
+						return Message{}, err
+					}
+					contentParts = append(contentParts, MessageContentPart{
+						Type: "image_url",
+						ImageURL: &ImageURL{
+							URL: imageURL,
+						},
+					})
 				default:
-					return Message{}, errors.New("unsupported image part payload")
+					return Message{}, errors.New("unsupported source type for image part")
 				}
 			}
 		}
@@ -138,6 +157,46 @@ func ToOpenAIMessage(message providertypes.Message) (Message, error) {
 	}
 
 	return out, nil
+}
+
+// resolveSessionAssetDataURL 读取会话附件并转换为可发送的 data URL，仅在请求阶段临时生成。
+func resolveSessionAssetDataURL(ctx context.Context, assetReader providertypes.SessionAssetReader, asset *providertypes.AssetRef) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	reader, mimeType, err := assetReader.Open(ctx, asset.ID)
+	if err != nil {
+		return "", fmt.Errorf("open session_asset %q: %w", asset.ID, err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(reader, maxSessionAssetReadBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read session_asset %q: %w", asset.ID, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if int64(len(data)) > maxSessionAssetReadBytes {
+		return "", fmt.Errorf("session_asset %q exceeds %d bytes", asset.ID, maxSessionAssetReadBytes)
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("session_asset %q is empty", asset.ID)
+	}
+
+	resolvedMime := strings.TrimSpace(mimeType)
+	if resolvedMime == "" {
+		resolvedMime = strings.TrimSpace(asset.MimeType)
+	}
+	if resolvedMime == "" {
+		return "", fmt.Errorf("session_asset %q missing mime type", asset.ID)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(data)
+	return fmt.Sprintf("data:%s;base64,%s", resolvedMime, encoded), nil
 }
 
 // ParseError 解析 HTTP 错误响应并包装为 ProviderError。

@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +74,7 @@ func TestJSONStoreSaveLoadRoundTripActivatedSkills(t *testing.T) {
 		t.Fatalf("expected normalized loaded activations, got %+v", got)
 	}
 
-	rawPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), session.ID+".json")
+	rawPath := sessionFilePathForTest(baseDir, workspaceRoot, session.ID)
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		t.Fatalf("read saved session: %v", err)
@@ -92,7 +91,7 @@ func TestJSONStoreLoadAllowsMissingActivatedSkillsField(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "no-activated-skills.json"), strings.Join([]string{
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "no-activated-skills"), strings.Join([]string{
 		`{`,
 		`  "schema_version": 2,`,
 		`  "id": "no-activated-skills",`,

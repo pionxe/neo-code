@@ -159,7 +159,7 @@ func TestToOpenAIMessage_BasicMessage(t *testing.T) {
 		Role:  "user",
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello world")},
 	}
-	result, err := chatcompletions.ToOpenAIMessage(msg)
+	result, err := chatcompletions.ToOpenAIMessage(context.Background(), msg, nil)
 	if err != nil {
 		t.Fatalf("ToOpenAIMessage() basic error = %v", err)
 	}
@@ -180,7 +180,7 @@ func TestToOpenAIMessage_ToolRoleMessage(t *testing.T) {
 		Parts:      []providertypes.ContentPart{providertypes.NewTextPart("result data")},
 		ToolCallID: "call_123",
 	}
-	result, err := chatcompletions.ToOpenAIMessage(msg)
+	result, err := chatcompletions.ToOpenAIMessage(context.Background(), msg, nil)
 	if err != nil {
 		t.Fatalf("ToOpenAIMessage() tool role error = %v", err)
 	}
@@ -200,7 +200,7 @@ func TestToOpenAIMessage_AssistantWithToolCalls(t *testing.T) {
 			{ID: "call_2", Name: "write_file", Arguments: `{"path":"test.go","content":"..."}`},
 		},
 	}
-	result, err := chatcompletions.ToOpenAIMessage(msg)
+	result, err := chatcompletions.ToOpenAIMessage(context.Background(), msg, nil)
 	if err != nil {
 		t.Fatalf("ToOpenAIMessage() assistant error = %v", err)
 	}
@@ -225,7 +225,7 @@ func TestToOpenAIMessage_EmptyToolCalls(t *testing.T) {
 	t.Parallel()
 
 	msg := providertypes.Message{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("test")}}
-	result, err := chatcompletions.ToOpenAIMessage(msg)
+	result, err := chatcompletions.ToOpenAIMessage(context.Background(), msg, nil)
 	if err != nil {
 		t.Fatalf("ToOpenAIMessage() empty tool calls error = %v", err)
 	}
@@ -298,7 +298,7 @@ func TestBuildRequest_EmptyModelReturnsError(t *testing.T) {
 		client: &http.Client{},
 	}
 
-	_, buildErr := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{})
+	_, buildErr := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{})
 	if buildErr == nil {
 		t.Fatal("expected error for empty model")
 	}
@@ -315,7 +315,7 @@ func TestBuildRequest_FallsBackToConfigModel(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
+	payload, err := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -332,7 +332,7 @@ func TestBuildRequest_RequestModelTakesPrecedence(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Model: "gpt-4-custom", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
+	payload, err := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{Model: "gpt-4-custom", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -349,7 +349,7 @@ func TestBuildRequest_NoSystemPrompt(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{SystemPrompt: "", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
+	payload, err := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{SystemPrompt: "", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -368,7 +368,7 @@ func TestBuildRequest_NoTools(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}, Tools: nil})
+	payload, err := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}, Tools: nil})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -385,7 +385,7 @@ func TestBuildRequest_EmptyToolsSlice(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}, Tools: []providertypes.ToolSpec{}})
+	payload, err := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}, Tools: []providertypes.ToolSpec{}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -402,7 +402,7 @@ func TestBuildRequest_MultipleTools(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{
+	payload, err := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{
 		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("use tools")}}},
 		Tools: []providertypes.ToolSpec{
 			{Name: "tool_a", Description: "Tool A", Schema: map[string]any{"type": "object"}},
@@ -428,7 +428,7 @@ func TestBuildRequest_WhitespaceSystemPromptSkipped(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{SystemPrompt: "   ", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
+	payload, err := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{SystemPrompt: "   ", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -1191,7 +1191,7 @@ func TestBuildRequestIncludesSystemPromptToolsAndToolMessages(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{
+	payload, err := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{
 		SystemPrompt: "system prompt",
 		Messages: []providertypes.Message{
 			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
