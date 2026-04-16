@@ -161,6 +161,7 @@ func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, w
 
 func messageText(message providertypes.Message) string {
 	return renderMessagePartsForDisplay(message.Parts)
+}
 func (s *snapshotRuntime) GetSessionContext(ctx context.Context, sessionID string) (any, error) {
 	return s.sessionContext, nil
 }
