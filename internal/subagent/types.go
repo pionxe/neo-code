@@ -73,6 +73,7 @@ type Task struct {
 	Goal           string
 	ExpectedOutput string
 	Workspace      string
+	ContextSlice   TaskContextSlice
 }
 
 // Validate 校验任务输入是否合法。
