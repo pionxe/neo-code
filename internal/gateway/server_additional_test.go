@@ -260,7 +260,7 @@ func TestCloseStopsRelayBackgroundLoops(t *testing.T) {
 
 func TestDecodeRPCRequestTrailingJSON(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(`{"jsonrpc":"2.0","id":"x","method":"gateway.ping"} {"extra":1}` + "\n"))
-	_, err := decodeRPCRequest(reader)
+	_, err := decodeRPCRequest(reader, MaxFrameSize)
 	if err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("expected trailing json error, got %v", err)
 	}

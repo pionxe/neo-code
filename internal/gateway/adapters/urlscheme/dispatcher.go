@@ -35,6 +35,7 @@ var dispatchRequestCounter uint64
 type DispatchRequest struct {
 	RawURL        string
 	ListenAddress string
+	AuthToken     string
 }
 
 // DispatchResult 表示 URL Scheme 调度输出。
@@ -103,6 +104,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	stopCancelWatcher := watchDispatchCancellation(ctx, conn)
 	defer stopCancelWatcher()
 
+	authToken := strings.TrimSpace(request.AuthToken)
+	if authToken != "" {
+		if err := d.authenticate(ctx, conn, authToken); err != nil {
+			return DispatchResult{}, err
+		}
+	}
+
 	requestFrame := gateway.MessageFrame{
 		Type:      gateway.FrameTypeRequest,
 		Action:    gateway.FrameActionWakeOpenURL,
@@ -130,26 +138,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	if err := ensureDispatchContextActive(ctx); err != nil {
 		return DispatchResult{}, toDispatchError(err)
 	}
-	encoder := json.NewEncoder(conn)
-	if err := encoder.Encode(rpcRequest); err != nil {
-		if ctx != nil && ctx.Err() != nil {
-			ctxErr := ctx.Err()
-			return DispatchResult{}, toDispatchError(ctxErr)
-		}
-		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("write request rpc: %v", err))
-	}
-
-	var rpcResponse protocol.JSONRPCResponse
-	if err := ensureDispatchContextActive(ctx); err != nil {
-		return DispatchResult{}, toDispatchError(err)
-	}
-	decoder := json.NewDecoder(conn)
-	if err := decoder.Decode(&rpcResponse); err != nil {
-		if ctx != nil && ctx.Err() != nil {
-			ctxErr := ctx.Err()
-			return DispatchResult{}, toDispatchError(ctxErr)
-		}
-		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response rpc: %v", err))
+	rpcResponse, err := d.callRPC(ctx, conn, rpcRequest)
+	if err != nil {
+		return DispatchResult{}, err
 	}
 	if strings.TrimSpace(rpcResponse.JSONRPC) != protocol.JSONRPCVersion {
 		return DispatchResult{}, newDispatchError(
@@ -199,6 +190,77 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	default:
 		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("unsupported response frame type: %s", responseFrame.Type))
 	}
+}
+
+// authenticate 在同一连接上发送 gateway.authenticate，建立连接级认证态。
+func (d *Dispatcher) authenticate(ctx context.Context, conn net.Conn, token string) error {
+	authRequestID := d.requestIDFn() + "-auth"
+	authRequestIDRaw, err := marshalJSONRawMessage(authRequestID)
+	if err != nil {
+		return newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode authenticate id: %v", err))
+	}
+	authParamsRaw, err := marshalJSONRawMessage(protocol.AuthenticateParams{Token: token})
+	if err != nil {
+		return newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode authenticate params: %v", err))
+	}
+
+	authRequest := protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      authRequestIDRaw,
+		Method:  protocol.MethodGatewayAuthenticate,
+		Params:  authParamsRaw,
+	}
+	authResponse, err := d.callRPC(ctx, conn, authRequest)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(authResponse.JSONRPC) != protocol.JSONRPCVersion {
+		return newDispatchError(ErrorCodeUnexpectedResponse, "unexpected auth response jsonrpc version")
+	}
+	if !rawJSONMessageEqual(authResponse.ID, authRequest.ID) {
+		return newDispatchError(ErrorCodeUnexpectedResponse, "rpc correlation failed: auth id mismatch")
+	}
+	if authResponse.Error != nil {
+		return toDispatchErrorFromJSONRPC(authResponse.Error)
+	}
+	if authResponse.Result == nil {
+		return newDispatchError(ErrorCodeUnexpectedResponse, "gateway auth response missing result payload")
+	}
+	frame, err := decodeResponseFrameResult(authResponse.Result)
+	if err != nil {
+		return newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode auth response frame: %v", err))
+	}
+	if frame.Type != gateway.FrameTypeAck || frame.Action != gateway.FrameActionAuthenticate || frame.RequestID != authRequestID {
+		return newDispatchError(ErrorCodeUnexpectedResponse, "unexpected auth response frame")
+	}
+	return nil
+}
+
+// callRPC 在已建立连接上执行一次 JSON-RPC 调用，统一处理上下文取消与编解码错误映射。
+func (d *Dispatcher) callRPC(ctx context.Context, conn net.Conn, request protocol.JSONRPCRequest) (protocol.JSONRPCResponse, error) {
+	if err := ensureDispatchContextActive(ctx); err != nil {
+		return protocol.JSONRPCResponse{}, toDispatchError(err)
+	}
+	encoder := json.NewEncoder(conn)
+	if err := encoder.Encode(request); err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return protocol.JSONRPCResponse{}, toDispatchError(ctx.Err())
+		}
+		return protocol.JSONRPCResponse{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("write request rpc: %v", err))
+	}
+
+	if err := ensureDispatchContextActive(ctx); err != nil {
+		return protocol.JSONRPCResponse{}, toDispatchError(err)
+	}
+	var response protocol.JSONRPCResponse
+	decoder := json.NewDecoder(conn)
+	if err := decoder.Decode(&response); err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return protocol.JSONRPCResponse{}, toDispatchError(ctx.Err())
+		}
+		return protocol.JSONRPCResponse{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response rpc: %v", err))
+	}
+	return response, nil
 }
 
 // Dispatch 使用默认调度器执行 URL 转发。

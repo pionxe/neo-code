@@ -42,9 +42,13 @@ type ServerOptions struct {
 	ListenAddress  string
 	Logger         *log.Logger
 	MaxConnections int
+	MaxFrameSize   int64
 	ReadTimeout    time.Duration
 	WriteTimeout   time.Duration
 	Relay          *StreamRelay
+	Authenticator  TokenAuthenticator
+	ACL            *ControlPlaneACL
+	Metrics        *GatewayMetrics
 	listenFn       func(address string) (net.Listener, error)
 }
 
@@ -54,9 +58,13 @@ type Server struct {
 	logger         *log.Logger
 	listenFn       func(address string) (net.Listener, error)
 	maxConnections int
+	maxFrameSize   int64
 	readTimeout    time.Duration
 	writeTimeout   time.Duration
 	relay          *StreamRelay
+	authenticator  TokenAuthenticator
+	acl            *ControlPlaneACL
+	metrics        *GatewayMetrics
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -104,11 +112,23 @@ func NewServer(options ServerOptions) (*Server, error) {
 		writeTimeout = DefaultWriteTimeout
 	}
 
+	maxFrameSize := options.MaxFrameSize
+	if maxFrameSize <= 0 {
+		maxFrameSize = MaxFrameSize
+	}
+
 	relay := options.Relay
 	if relay == nil {
 		relay = NewStreamRelay(StreamRelayOptions{
-			Logger: logger,
+			Logger:  logger,
+			Metrics: options.Metrics,
 		})
+	}
+
+	authenticator := options.Authenticator
+	acl := options.ACL
+	if acl == nil && authenticator != nil {
+		acl = NewStrictControlPlaneACL()
 	}
 
 	return &Server{
@@ -116,9 +136,13 @@ func NewServer(options ServerOptions) (*Server, error) {
 		logger:         logger,
 		listenFn:       listenFn,
 		maxConnections: maxConnections,
+		maxFrameSize:   maxFrameSize,
 		readTimeout:    readTimeout,
 		writeTimeout:   writeTimeout,
 		relay:          relay,
+		authenticator:  authenticator,
+		acl:            acl,
+		metrics:        options.Metrics,
 		conns:          make(map[net.Conn]struct{}),
 	}, nil
 }
@@ -146,7 +170,7 @@ func (s *Server) Serve(ctx context.Context, runtimePort RuntimePort) error {
 
 	s.logger.Printf("listening on %s", s.listenAddress)
 	if s.relay == nil {
-		s.relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger})
+		s.relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger, Metrics: s.metrics})
 	}
 	s.relay.Start(ctx, runtimePort)
 
@@ -266,6 +290,10 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 	}()
 
 	reader := bufio.NewReader(conn)
+	maxFrameSize := s.maxFrameSize
+	if maxFrameSize <= 0 {
+		maxFrameSize = MaxFrameSize
+	}
 
 	connectionContext, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
@@ -278,6 +306,18 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 	connectionID := NewConnectionID()
 	connectionContext = WithConnectionID(connectionContext, connectionID)
 	connectionContext = WithStreamRelay(connectionContext, relay)
+	connectionContext = WithRequestSource(connectionContext, RequestSourceIPC)
+	connectionContext = WithConnectionAuthState(connectionContext, NewConnectionAuthState())
+	if s.authenticator != nil {
+		connectionContext = WithTokenAuthenticator(connectionContext, s.authenticator)
+	}
+	if s.acl != nil {
+		connectionContext = WithRequestACL(connectionContext, s.acl)
+	}
+	if s.metrics != nil {
+		connectionContext = WithGatewayMetrics(connectionContext, s.metrics)
+	}
+	connectionContext = WithGatewayLogger(connectionContext, s.logger)
 
 	encoder := json.NewEncoder(conn)
 	registerErr := relay.RegisterConnection(ConnectionRegistration{
@@ -316,7 +356,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 			return
 		}
 
-		rpcRequest, err := decodeRPCRequest(reader)
+		rpcRequest, err := decodeRPCRequest(reader, maxFrameSize)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return
@@ -334,7 +374,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 					nil,
 					protocol.NewJSONRPCError(
 						protocol.JSONRPCCodeInvalidRequest,
-						fmt.Sprintf("frame exceeds max size %d bytes", MaxFrameSize),
+						fmt.Sprintf("frame exceeds max size %d bytes", maxFrameSize),
 						protocol.GatewayCodeInvalidFrame,
 					),
 				))
@@ -383,13 +423,13 @@ func isTimeoutError(err error) bool {
 }
 
 // decodeRPCRequest 从连接读取一条 JSON-RPC 请求并执行长度与格式校验。
-func decodeRPCRequest(reader *bufio.Reader) (protocol.JSONRPCRequest, error) {
-	payload, err := readFramePayload(reader, MaxFrameSize)
+func decodeRPCRequest(reader *bufio.Reader, maxFrameSize int64) (protocol.JSONRPCRequest, error) {
+	payload, err := readFramePayload(reader, maxFrameSize)
 	if err != nil {
 		return protocol.JSONRPCRequest{}, err
 	}
 
-	limitedReader := &io.LimitedReader{R: bytes.NewReader(payload), N: MaxFrameSize}
+	limitedReader := &io.LimitedReader{R: bytes.NewReader(payload), N: maxFrameSize}
 	decoder := json.NewDecoder(limitedReader)
 
 	var request protocol.JSONRPCRequest

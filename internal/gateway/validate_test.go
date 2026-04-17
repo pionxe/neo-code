@@ -23,6 +23,15 @@ func TestValidateFrame_BasicRules(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			name: "authenticate missing payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionAuthenticate,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
+		{
 			name: "valid wake open url request",
 			frame: MessageFrame{
 				Type:   FrameTypeRequest,

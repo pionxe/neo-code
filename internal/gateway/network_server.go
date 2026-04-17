@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/net/websocket"
 
 	"neo-code/internal/gateway/protocol"
@@ -30,12 +31,14 @@ const (
 	DefaultNetworkWriteTimeout = 15 * time.Second
 	// DefaultNetworkShutdownTimeout 定义网络入口优雅关闭的最大等待时间。
 	DefaultNetworkShutdownTimeout = 2 * time.Second
-	// DefaultNetworkHeartbeatInterval 定义 WS/SSE 长连接的保活心跳周期。
+	// DefaultNetworkHeartbeatInterval 定义 WS/SSE 长连接保活心跳周期。
 	DefaultNetworkHeartbeatInterval = 3 * time.Second
-	// DefaultNetworkMaxRequestBytes 定义 HTTP/WS 单次请求体的最大字节数。
+	// DefaultNetworkMaxRequestBytes 定义 HTTP/WS 单次请求体最大字节数。
 	DefaultNetworkMaxRequestBytes int64 = MaxFrameSize
 	// DefaultNetworkMaxStreamConnections 定义 WS/SSE 长连接总上限。
 	DefaultNetworkMaxStreamConnections = 128
+	// DefaultWSUnauthenticatedTimeout 定义 WS 未认证连接的最大等待时间。
+	DefaultWSUnauthenticatedTimeout = 3 * time.Second
 )
 
 var (
@@ -54,8 +57,14 @@ type NetworkServerOptions struct {
 	HeartbeatInterval    time.Duration
 	MaxRequestBytes      int64
 	MaxStreamConnections int
-	Relay                *StreamRelay
-	listenFn             func(network, address string) (net.Listener, error)
+	// UnauthenticatedWSGracePeriod 定义 WS 连接未认证时的容忍时长。
+	UnauthenticatedWSGracePeriod time.Duration
+	Relay                        *StreamRelay
+	Authenticator                TokenAuthenticator
+	ACL                          *ControlPlaneACL
+	Metrics                      *GatewayMetrics
+	AllowedOrigins               []string
+	listenFn                     func(network, address string) (net.Listener, error)
 }
 
 // NetworkServer 提供 HTTP/WebSocket/SSE 网络访问面的统一入口服务。
@@ -66,10 +75,16 @@ type NetworkServer struct {
 	writeTimeout         time.Duration
 	shutdownTimeout      time.Duration
 	heartbeatInterval    time.Duration
+	unauthenticatedWSTTL time.Duration
 	maxRequestBytes      int64
 	maxStreamConnections int
 	listenFn             func(network, address string) (net.Listener, error)
 	relay                *StreamRelay
+	authenticator        TokenAuthenticator
+	acl                  *ControlPlaneACL
+	metrics              *GatewayMetrics
+	allowedOrigins       []string
+	startedAt            time.Time
 
 	mu         sync.Mutex
 	server     *http.Server
@@ -125,12 +140,29 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 	if maxStreamConnections <= 0 {
 		maxStreamConnections = DefaultNetworkMaxStreamConnections
 	}
+	unauthenticatedWSTTL := options.UnauthenticatedWSGracePeriod
+	if unauthenticatedWSTTL <= 0 {
+		unauthenticatedWSTTL = DefaultWSUnauthenticatedTimeout
+	}
 
 	relay := options.Relay
 	if relay == nil {
 		relay = NewStreamRelay(StreamRelayOptions{
-			Logger: logger,
+			Logger:  logger,
+			Metrics: options.Metrics,
 		})
+	}
+
+	authenticator := options.Authenticator
+	acl := options.ACL
+	if acl == nil && authenticator != nil {
+		acl = NewStrictControlPlaneACL()
+	}
+
+	metrics := options.Metrics
+	allowedOrigins := normalizeControlPlaneOrigins(options.AllowedOrigins)
+	if len(allowedOrigins) == 0 {
+		allowedOrigins = defaultControlPlaneOrigins()
 	}
 
 	return &NetworkServer{
@@ -140,10 +172,16 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		writeTimeout:         writeTimeout,
 		shutdownTimeout:      shutdownTimeout,
 		heartbeatInterval:    heartbeatInterval,
+		unauthenticatedWSTTL: unauthenticatedWSTTL,
 		maxRequestBytes:      maxRequestBytes,
 		maxStreamConnections: maxStreamConnections,
 		listenFn:             listenFn,
 		relay:                relay,
+		authenticator:        authenticator,
+		acl:                  acl,
+		metrics:              metrics,
+		allowedOrigins:       allowedOrigins,
+		startedAt:            time.Now().UTC(),
 		wsConns:              make(map[*websocket.Conn]context.CancelFunc),
 		sseCancels:           make(map[int]context.CancelFunc),
 	}, nil
@@ -161,7 +199,7 @@ func ResolveNetworkListenAddress(override string) (string, error) {
 	return address, nil
 }
 
-// validateLoopbackListenAddress 校验网络监听地址只能绑定到环回接口，避免开放到外网。
+// validateLoopbackListenAddress 校验网络监听地址只能绑定到环回接口，避免暴露到外网。
 func validateLoopbackListenAddress(address string) error {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(address))
 	if err != nil {
@@ -171,6 +209,7 @@ func validateLoopbackListenAddress(address string) error {
 	if normalizedHost == "" {
 		return fmt.Errorf("invalid --http-listen %q: host must be loopback", address)
 	}
+
 	if ip := net.ParseIP(normalizedHost); ip != nil {
 		if !ip.IsLoopback() {
 			return fmt.Errorf("invalid --http-listen %q: host must be loopback", address)
@@ -182,7 +221,6 @@ func validateLoopbackListenAddress(address string) error {
 	if lookupErr != nil || len(resolvedHostIPs) == 0 {
 		return fmt.Errorf("invalid --http-listen %q: host must resolve to loopback addresses", address)
 	}
-
 	for _, resolvedIP := range resolvedHostIPs {
 		if resolvedIP == nil || !resolvedIP.IsLoopback() {
 			return fmt.Errorf("invalid --http-listen %q: host must be loopback", address)
@@ -201,7 +239,10 @@ func (s *NetworkServer) ListenAddress() string {
 // Serve 启动网络访问面服务，并注册 HTTP/WebSocket/SSE 三类入口。
 func (s *NetworkServer) Serve(ctx context.Context, runtimePort RuntimePort) error {
 	if s.relay == nil {
-		s.relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger})
+		s.relay = NewStreamRelay(StreamRelayOptions{
+			Logger:  s.logger,
+			Metrics: s.metrics,
+		})
 	}
 
 	listener, err := s.listenFn("tcp", s.listenAddress)
@@ -274,7 +315,6 @@ func (s *NetworkServer) Close(ctx context.Context) error {
 			shutdownCtx, cancel = context.WithTimeout(shutdownCtx, s.shutdownTimeout)
 			defer cancel()
 		}
-
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			closeErr = errors.Join(closeErr, err)
 			closeErr = errors.Join(closeErr, httpServer.Close())
@@ -286,7 +326,6 @@ func (s *NetworkServer) Close(ctx context.Context) error {
 			closeErr = errors.Join(closeErr, err)
 		}
 	}
-
 	return closeErr
 }
 
@@ -300,12 +339,16 @@ func (s *NetworkServer) isClosed() bool {
 // buildHandler 构建网络访问面的路由入口，并将请求统一转入网关分发链路。
 func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.handleHealthzRequest)
+	mux.HandleFunc("/version", s.handleVersionRequest)
+	mux.HandleFunc("/metrics", s.handlePrometheusMetrics)
+	mux.HandleFunc("/metrics.json", s.handleJSONMetrics)
 	mux.HandleFunc("/rpc", func(writer http.ResponseWriter, request *http.Request) {
 		s.handleRPCRequest(writer, request, runtimePort)
 	})
 	mux.Handle("/ws", websocket.Server{
-		Handshake: func(config *websocket.Config, request *http.Request) error {
-			return validateOriginForWebSocket(request)
+		Handshake: func(_ *websocket.Config, request *http.Request) error {
+			return s.validateWebSocketOrigin(request)
 		},
 		Handler: websocket.Handler(func(conn *websocket.Conn) {
 			s.handleWebSocket(conn, runtimePort)
@@ -322,13 +365,14 @@ func (s *NetworkServer) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		origin := strings.TrimSpace(request.Header.Get("Origin"))
 		if origin != "" {
-			if !isAllowedControlPlaneOrigin(origin) {
+			if !s.isAllowedOrigin(origin) {
 				http.Error(writer, "origin is not allowed", http.StatusForbidden)
 				return
 			}
 			writer.Header().Set("Access-Control-Allow-Origin", origin)
 			writer.Header().Set("Vary", "Origin")
 		}
+
 		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if request.Method == http.MethodOptions {
@@ -339,22 +383,128 @@ func (s *NetworkServer) withCORS(next http.Handler) http.Handler {
 	})
 }
 
+// handleHealthzRequest 返回网关健康状态与连接快照。
+func (s *NetworkServer) handleHealthzRequest(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	connectionSnapshot := map[string]int{}
+	if s.relay != nil {
+		for channel, count := range s.relay.SnapshotConnectionCounts() {
+			connectionSnapshot[strings.TrimSpace(string(channel))] = count
+		}
+	}
+
+	payload := map[string]any{
+		"status":      "ok",
+		"listen":      strings.TrimSpace(s.listenAddress),
+		"uptime_sec":  int(time.Since(s.startedAt).Seconds()),
+		"connections": connectionSnapshot,
+	}
+	writeJSONResponse(writer, http.StatusOK, payload)
+}
+
+// handleVersionRequest 返回网关构建版本信息。
+func (s *NetworkServer) handleVersionRequest(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSONResponse(writer, http.StatusOK, ResolvedBuildInfo())
+}
+
+// handlePrometheusMetrics 输出 Prometheus 文本指标。
+func (s *NetworkServer) handlePrometheusMetrics(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.metrics == nil {
+		http.Error(writer, "metrics disabled", http.StatusServiceUnavailable)
+		return
+	}
+	if !s.isObservabilityRequestAuthorized(request) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.metrics.Registry() == nil {
+		http.Error(writer, "metrics unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	promhttp.HandlerFor(s.metrics.Registry(), promhttp.HandlerOpts{}).ServeHTTP(writer, request)
+}
+
+// handleJSONMetrics 输出 JSON 指标快照。
+func (s *NetworkServer) handleJSONMetrics(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.metrics == nil {
+		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]any{
+			"error": "metrics disabled",
+		})
+		return
+	}
+	if !s.isObservabilityRequestAuthorized(request) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	writeJSONResponse(writer, http.StatusOK, map[string]any{
+		"metrics": s.metrics.Snapshot(),
+	})
+}
+
+// isObservabilityRequestAuthorized 校验 metrics 端点访问 Token。
+func (s *NetworkServer) isObservabilityRequestAuthorized(request *http.Request) bool {
+	return s.isControlPlaneHTTPRequestAuthorized(request)
+}
+
+// isControlPlaneHTTPRequestAuthorized 校验 HTTP 控制面请求是否携带并通过 Bearer Token。
+func (s *NetworkServer) isControlPlaneHTTPRequestAuthorized(request *http.Request) bool {
+	if s.authenticator == nil {
+		return false
+	}
+	token := extractBearerToken(request.Header.Get("Authorization"))
+	return s.authenticator.ValidateToken(token)
+}
+
 // handleRPCRequest 处理 POST /rpc 请求并返回单次 JSON-RPC 响应。
 func (s *NetworkServer) handleRPCRequest(writer http.ResponseWriter, request *http.Request, runtimePort RuntimePort) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.isControlPlaneHTTPRequestAuthorized(request) {
+		writeJSONRPCHTTPResponse(
+			writer,
+			http.StatusUnauthorized,
+			protocol.NewJSONRPCErrorResponse(
+				nil,
+				protocol.NewJSONRPCError(
+					protocol.MapGatewayCodeToJSONRPCCode(ErrorCodeUnauthorized.String()),
+					"unauthorized",
+					ErrorCodeUnauthorized.String(),
+				),
+			),
+		)
+		return
+	}
 
 	request.Body = http.MaxBytesReader(writer, request.Body, s.maxRequestBytes)
 	rpcRequest, rpcErr := decodeJSONRPCRequestFromReader(request.Body)
 	if rpcErr != nil {
-		writeJSONRPCHTTPResponse(writer, protocol.NewJSONRPCErrorResponse(nil, rpcErr))
+		writeJSONRPCHTTPResponse(writer, http.StatusOK, protocol.NewJSONRPCErrorResponse(nil, rpcErr))
 		return
 	}
 
-	response := dispatchRPCRequestFn(request.Context(), rpcRequest, runtimePort)
-	writeJSONRPCHTTPResponse(writer, response)
+	token := extractBearerToken(request.Header.Get("Authorization"))
+	rpcCtx := s.decorateRequestContext(request.Context(), RequestSourceHTTP, token)
+	rpcResponse := dispatchRPCRequestFn(rpcCtx, rpcRequest, runtimePort)
+	statusCode := resolveJSONRPCHTTPStatusCode(rpcResponse)
+	writeJSONRPCHTTPResponse(writer, statusCode, rpcResponse)
 }
 
 // handleWebSocket 处理 WS 入口请求，连接上下文会在关停或异常时主动取消。
@@ -364,22 +514,36 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 		parentContext = request.Context()
 	}
 	connectionContext, cancelConnection := context.WithCancel(parentContext)
+	defer cancelConnection()
+
 	relay := s.relay
 	if relay == nil {
-		relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger})
+		relay = NewStreamRelay(StreamRelayOptions{
+			Logger:  s.logger,
+			Metrics: s.metrics,
+		})
 	}
+
 	connectionID := NewConnectionID()
+	requestToken := ""
+	if request := conn.Request(); request != nil {
+		requestToken = extractBearerToken(request.Header.Get("Authorization"))
+		if requestToken == "" && request.URL != nil {
+			requestToken = strings.TrimSpace(request.URL.Query().Get("token"))
+		}
+	}
+	connectionContext = s.decorateRequestContext(connectionContext, RequestSourceWS, requestToken)
 	connectionContext = WithConnectionID(connectionContext, connectionID)
 	connectionContext = WithStreamRelay(connectionContext, relay)
 
 	if !s.registerWSConnection(conn, cancelConnection) {
-		cancelConnection()
 		_ = conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 		_ = websocket.Message.Send(conn, `{"status":"error","code":"too_many_connections","message":"stream connection limit exceeded"}`)
 		_ = conn.Close()
 		return
 	}
 
+	encoder := json.NewEncoder(conn)
 	registerErr := relay.RegisterConnection(ConnectionRegistration{
 		ConnectionID: connectionID,
 		Channel:      StreamChannelWS,
@@ -394,34 +558,37 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 					return err
 				}
 			}
-			rawPayload, err := json.Marshal(message.Payload)
+			payload, err := json.Marshal(message.Payload)
 			if err != nil {
 				return err
 			}
-			return websocket.Message.Send(conn, string(rawPayload))
+			if err := encoder.Encode(json.RawMessage(payload)); err != nil {
+				return err
+			}
+			return nil
 		},
 		Close: func() {
 			_ = conn.Close()
 		},
 	})
 	if registerErr != nil {
-		cancelConnection()
 		s.unregisterWSConnection(conn)
-		_ = conn.Close()
 		s.logger.Printf("register websocket connection failed: %v", registerErr)
+		_ = conn.Close()
 		return
 	}
+	authState, _ := ConnectionAuthStateFromContext(connectionContext)
+	stopAuthenticationGuard := s.startWSUnauthenticatedConnectionGuard(conn, cancelConnection, authState)
+	defer stopAuthenticationGuard()
 
 	defer func() {
-		cancelConnection()
 		s.unregisterWSConnection(conn)
 		relay.dropConnection(connectionID)
 		_ = conn.Close()
 	}()
 
-	maxPayloadBytes := int(s.maxRequestBytes)
-	if maxPayloadBytes > 0 {
-		conn.MaxPayloadBytes = maxPayloadBytes
+	if s.maxRequestBytes > 0 {
+		conn.MaxPayloadBytes = int(s.maxRequestBytes)
 	}
 
 	stopHeartbeat := make(chan struct{})
@@ -429,10 +596,14 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 	go s.runWSHeartbeatLoop(relay, connectionID, stopHeartbeat)
 
 	for {
-		// 注意：此处不再强制上行读超时，避免单向推送场景下误杀健康连接。
+		select {
+		case <-connectionContext.Done():
+			return
+		default:
+		}
+
 		var rawMessage string
 		if err := websocket.Message.Receive(conn, &rawMessage); err != nil {
-			cancelConnection()
 			if isConnectionClosedError(err) {
 				return
 			}
@@ -449,7 +620,6 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 		}
 
 		if !relay.SendJSONRPCResponse(connectionID, rpcResponse) {
-			cancelConnection()
 			return
 		}
 	}
@@ -475,6 +645,45 @@ func (s *NetworkServer) runWSHeartbeatLoop(relay *StreamRelay, connectionID Conn
 	}
 }
 
+// startWSUnauthenticatedConnectionGuard 在连接建立后启动未认证超时守卫，防止连接池被长期占位。
+func (s *NetworkServer) startWSUnauthenticatedConnectionGuard(
+	conn *websocket.Conn,
+	cancel context.CancelFunc,
+	authState *ConnectionAuthState,
+) func() {
+	if conn == nil || cancel == nil || authState == nil || s.authenticator == nil {
+		return func() {}
+	}
+	if s.unauthenticatedWSTTL <= 0 || authState.IsAuthenticated() {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	timer := time.NewTimer(s.unauthenticatedWSTTL)
+	go func() {
+		defer timer.Stop()
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+			if authState.IsAuthenticated() {
+				return
+			}
+			cancel()
+			_ = conn.SetDeadline(time.Now())
+			_ = conn.Close()
+		}
+	}()
+
+	return func() {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+}
+
 // handleSSERequest 处理 SSE 入口请求，先返回一次结果事件，再持续发送心跳事件。
 func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *http.Request, runtimePort RuntimePort) {
 	if request.Method != http.MethodGet {
@@ -488,8 +697,18 @@ func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *ht
 		return
 	}
 
+	requestToken := ""
+	if request.URL != nil {
+		requestToken = strings.TrimSpace(request.URL.Query().Get("token"))
+	}
+	if s.authenticator != nil && !s.authenticator.ValidateToken(requestToken) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	streamCtx, cancel := context.WithCancel(request.Context())
-	connectionID, registered := s.registerSSEConnection(cancel)
+	streamCtx = s.decorateRequestContext(streamCtx, RequestSourceSSE, requestToken)
+	connectionTag, registered := s.registerSSEConnection(cancel)
 	if !registered {
 		cancel()
 		http.Error(writer, "stream connection limit exceeded", http.StatusServiceUnavailable)
@@ -499,7 +718,10 @@ func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *ht
 
 	relay := s.relay
 	if relay == nil {
-		relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger})
+		relay = NewStreamRelay(StreamRelayOptions{
+			Logger:  s.logger,
+			Metrics: s.metrics,
+		})
 	}
 	streamConnectionID := NewConnectionID()
 	streamCtx = WithConnectionID(streamCtx, streamConnectionID)
@@ -525,14 +747,14 @@ func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *ht
 	})
 	if registerErr != nil {
 		cancel()
-		s.unregisterSSEConnection(connectionID)
+		s.unregisterSSEConnection(connectionTag)
 		http.Error(writer, "failed to register stream connection", http.StatusInternalServerError)
 		return
 	}
 
 	defer func() {
 		cancel()
-		s.unregisterSSEConnection(connectionID)
+		s.unregisterSSEConnection(connectionTag)
 		relay.dropConnection(streamConnectionID)
 	}()
 
@@ -626,7 +848,7 @@ func buildSSETriggerRequest(request *http.Request) protocol.JSONRPCRequest {
 	}
 }
 
-// decodeJSONRPCRequestFromBytes 解析字节流中的 JSON-RPC 请求并检查是否包含多余 JSON 值。
+// decodeJSONRPCRequestFromBytes 解析字节流中的 JSON-RPC 请求并检查是否包含多值 JSON。
 func decodeJSONRPCRequestFromBytes(raw []byte) (protocol.JSONRPCRequest, *protocol.JSONRPCError) {
 	return decodeJSONRPCRequestFromReader(bytes.NewReader(raw))
 }
@@ -652,16 +874,64 @@ func decodeJSONRPCRequestFromReader(reader io.Reader) (protocol.JSONRPCRequest, 
 			protocol.GatewayCodeInvalidFrame,
 		)
 	}
-
 	return request, nil
 }
 
-// writeJSONRPCHTTPResponse 以 JSON 形式写回 HTTP JSON-RPC 响应。
-func writeJSONRPCHTTPResponse(writer http.ResponseWriter, response protocol.JSONRPCResponse) {
+// writeJSONRPCHTTPResponse 以 JSON 形式写回 HTTP JSON-RPC 响应，并按状态码输出 HTTP 头。
+func writeJSONRPCHTTPResponse(writer http.ResponseWriter, statusCode int, response protocol.JSONRPCResponse) {
 	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(statusCode)
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)
 	_ = encoder.Encode(response)
+}
+
+// resolveJSONRPCHTTPStatusCode 根据网关错误码映射 HTTP 响应状态，未命中时回退 200。
+func resolveJSONRPCHTTPStatusCode(response protocol.JSONRPCResponse) int {
+	gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error)
+	switch gatewayCode {
+	case ErrorCodeUnauthorized.String():
+		return http.StatusUnauthorized
+	case ErrorCodeAccessDenied.String():
+		return http.StatusForbidden
+	default:
+		return http.StatusOK
+	}
+}
+
+// writeJSONResponse 以 JSON 形式输出普通 HTTP 响应。
+func writeJSONResponse(writer http.ResponseWriter, statusCode int, payload any) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(statusCode)
+	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(payload)
+}
+
+// decorateRequestContext 为网络请求注入统一 source/auth/acl/metrics/logger 上下文。
+func (s *NetworkServer) decorateRequestContext(base context.Context, source RequestSource, token string) context.Context {
+	ctx := WithRequestSource(base, source)
+	authState := NewConnectionAuthState()
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	trimmedToken := strings.TrimSpace(token)
+	if trimmedToken != "" {
+		ctx = WithRequestToken(ctx, trimmedToken)
+	}
+	if s.authenticator != nil {
+		ctx = WithTokenAuthenticator(ctx, s.authenticator)
+		if trimmedToken != "" && s.authenticator.ValidateToken(trimmedToken) {
+			authState.MarkAuthenticated()
+		}
+	}
+	if s.acl != nil {
+		ctx = WithRequestACL(ctx, s.acl)
+	}
+	if s.metrics != nil {
+		ctx = WithGatewayMetrics(ctx, s.metrics)
+	}
+	ctx = WithGatewayLogger(ctx, s.logger)
+	return ctx
 }
 
 // registerWSConnection 登记一个 WebSocket 长连接，并执行统一并发上限控制。
@@ -675,6 +945,7 @@ func (s *NetworkServer) registerWSConnection(conn *websocket.Conn, cancel contex
 		return false
 	}
 	s.wsConns[conn] = cancel
+	s.updateActiveConnectionMetricsLocked()
 	return true
 }
 
@@ -683,6 +954,7 @@ func (s *NetworkServer) unregisterWSConnection(conn *websocket.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.wsConns, conn)
+	s.updateActiveConnectionMetricsLocked()
 }
 
 // registerSSEConnection 登记一个 SSE 长连接并返回连接标识，用于后续主动中断。
@@ -698,6 +970,7 @@ func (s *NetworkServer) registerSSEConnection(cancel context.CancelFunc) (int, b
 	connectionID := s.nextSSEID
 	s.nextSSEID++
 	s.sseCancels[connectionID] = cancel
+	s.updateActiveConnectionMetricsLocked()
 	return connectionID, true
 }
 
@@ -706,6 +979,16 @@ func (s *NetworkServer) unregisterSSEConnection(connectionID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sseCancels, connectionID)
+	s.updateActiveConnectionMetricsLocked()
+}
+
+// updateActiveConnectionMetricsLocked 在持锁状态下刷新活跃连接指标。
+func (s *NetworkServer) updateActiveConnectionMetricsLocked() {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.SetConnectionsActive(string(StreamChannelWS), len(s.wsConns))
+	s.metrics.SetConnectionsActive(string(StreamChannelSSE), len(s.sseCancels))
 }
 
 // forceCloseStreamConnections 在关停流程中主动切断 WS/SSE 长连接，避免退出被阻塞。
@@ -742,26 +1025,26 @@ func (s *NetworkServer) snapshotStreamConnections() ([]*websocket.Conn, []contex
 		delete(s.sseCancels, connectionID)
 	}
 
+	s.updateActiveConnectionMetricsLocked()
 	return wsConnections, wsCancels, sseCancels
 }
 
 // isAllowedControlPlaneOrigin 校验请求来源是否命中本地控制面允许的 Origin 白名单。
 func isAllowedControlPlaneOrigin(origin string) bool {
+	return isAllowedControlPlaneOriginWithAllowlist(origin, defaultControlPlaneOrigins())
+}
+
+func isAllowedControlPlaneOriginWithAllowlist(origin string, allowlist []string) bool {
 	normalizedOrigin := strings.ToLower(strings.TrimSpace(origin))
-	switch {
-	case normalizedOrigin == "":
-		return false
-	case strings.HasPrefix(normalizedOrigin, "http://localhost:"),
-		normalizedOrigin == "http://localhost",
-		strings.HasPrefix(normalizedOrigin, "http://127.0.0.1:"),
-		normalizedOrigin == "http://127.0.0.1",
-		strings.HasPrefix(normalizedOrigin, "http://[::1]:"),
-		normalizedOrigin == "http://[::1]",
-		strings.HasPrefix(normalizedOrigin, "app://"):
-		return true
-	default:
+	if normalizedOrigin == "" {
 		return false
 	}
+	for _, allow := range allowlist {
+		if originMatchesAllowRule(normalizedOrigin, allow) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateOriginForWebSocket 在握手阶段校验 Origin 白名单，阻断非可信网页来源。
@@ -779,6 +1062,78 @@ func validateOriginForWebSocket(request *http.Request) error {
 	return nil
 }
 
+// isAllowedOrigin 使用服务实例配置的 allowlist 校验来源。
+func (s *NetworkServer) isAllowedOrigin(origin string) bool {
+	allowlist := s.allowedOrigins
+	if len(allowlist) == 0 {
+		allowlist = defaultControlPlaneOrigins()
+	}
+	return isAllowedControlPlaneOriginWithAllowlist(origin, allowlist)
+}
+
+// validateWebSocketOrigin 在握手阶段基于实例 allowlist 校验 WebSocket 来源。
+func (s *NetworkServer) validateWebSocketOrigin(request *http.Request) error {
+	if request == nil {
+		return errors.New("invalid websocket request")
+	}
+	origin := strings.TrimSpace(request.Header.Get("Origin"))
+	if origin == "" {
+		return nil
+	}
+	if !s.isAllowedOrigin(origin) {
+		return fmt.Errorf("websocket origin %q is not allowed", origin)
+	}
+	return nil
+}
+
+func defaultControlPlaneOrigins() []string {
+	return []string{"http://localhost", "http://127.0.0.1", "http://[::1]", "app://"}
+}
+
+func normalizeControlPlaneOrigins(origins []string) []string {
+	normalized := make([]string, 0, len(origins))
+	for _, origin := range origins {
+		trimmed := strings.ToLower(strings.TrimSpace(origin))
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
+}
+
+func originMatchesAllowRule(normalizedOrigin, normalizedAllow string) bool {
+	if normalizedAllow == "" {
+		return false
+	}
+	if strings.HasSuffix(normalizedAllow, "://") {
+		return strings.HasPrefix(normalizedOrigin, normalizedAllow)
+	}
+	if normalizedOrigin == normalizedAllow {
+		return true
+	}
+	if strings.HasPrefix(normalizedAllow, "http://[") && strings.HasSuffix(normalizedAllow, "]") {
+		return strings.HasPrefix(normalizedOrigin, normalizedAllow+":")
+	}
+	if strings.HasPrefix(normalizedAllow, "http://") && !strings.Contains(strings.TrimPrefix(normalizedAllow, "http://"), ":") {
+		return strings.HasPrefix(normalizedOrigin, normalizedAllow+":")
+	}
+	return false
+}
+
+// extractBearerToken 从 Authorization 头中提取 Bearer Token。
+func extractBearerToken(authorization string) string {
+	trimmed := strings.TrimSpace(authorization)
+	if trimmed == "" {
+		return ""
+	}
+	const prefix = "bearer "
+	if len(trimmed) < len(prefix) || !strings.EqualFold(trimmed[:len(prefix)], prefix) {
+		return ""
+	}
+	return strings.TrimSpace(trimmed[len(prefix):])
+}
+
 // isConnectionClosedError 判断错误是否由连接关闭触发，便于安静退出读写循环。
 func isConnectionClosedError(err error) bool {
 	if err == nil {
@@ -788,6 +1143,5 @@ func isConnectionClosedError(err error) bool {
 		return true
 	}
 	lowerMessage := strings.ToLower(err.Error())
-	return strings.Contains(lowerMessage, "closed network connection") ||
-		strings.Contains(lowerMessage, "closed pipe")
+	return strings.Contains(lowerMessage, "closed network connection") || strings.Contains(lowerMessage, "closed pipe")
 }

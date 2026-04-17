@@ -136,7 +136,10 @@ func TestWithCORSAllowlistBehavior(t *testing.T) {
 }
 
 func TestNetworkServerHTTPRPCAndCORS(t *testing.T) {
-	server := newTestNetworkServer(t, NetworkServerOptions{})
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Authenticator: staticTokenAuthenticator{token: "gateway-token"},
+		ACL:           NewStrictControlPlaneACL(),
+	})
 	testContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -162,6 +165,7 @@ func TestNetworkServerHTTPRPCAndCORS(t *testing.T) {
 	}
 	request.Header.Set("Origin", "http://localhost:3000")
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer gateway-token")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("post /rpc: %v", err)
@@ -226,7 +230,11 @@ func TestNetworkServerRejectsDisallowedCORSOrigin(t *testing.T) {
 }
 
 func TestNetworkServerRPCErrorBranches(t *testing.T) {
-	server := newTestNetworkServer(t, NetworkServerOptions{MaxRequestBytes: 16})
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		MaxRequestBytes: 16,
+		Authenticator:   staticTokenAuthenticator{token: "gateway-token"},
+		ACL:             NewStrictControlPlaneACL(),
+	})
 	testContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -262,6 +270,7 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 			t.Fatalf("new request: %v", err)
 		}
 		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer gateway-token")
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatalf("post /rpc: %v", err)
@@ -286,6 +295,7 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 			t.Fatalf("new request: %v", err)
 		}
 		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer gateway-token")
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatalf("post /rpc: %v", err)
@@ -297,6 +307,94 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 		}
 		if rpcResponse.Error == nil || rpcResponse.Error.Code != protocol.JSONRPCCodeParseError {
 			t.Fatalf("rpc error = %#v, want parse error", rpcResponse.Error)
+		}
+	})
+
+	t.Run("unauthorized rpc maps to http 401", func(t *testing.T) {
+		secureServer := newTestNetworkServer(t, NetworkServerOptions{
+			Authenticator: staticTokenAuthenticator{token: "gateway-token"},
+			ACL:           NewStrictControlPlaneACL(),
+		})
+		secureContext, secureCancel := context.WithCancel(context.Background())
+		defer secureCancel()
+
+		secureDone := make(chan error, 1)
+		go func() {
+			secureDone <- secureServer.Serve(secureContext, nil)
+		}()
+		t.Cleanup(func() {
+			_ = secureServer.Close(context.Background())
+			select {
+			case <-secureDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("secure network serve goroutine did not exit")
+			}
+		})
+
+		secureAddress := waitForNetworkAddress(t, secureServer)
+		request, err := http.NewRequest(
+			http.MethodPost,
+			"http://"+secureAddress+"/rpc",
+			strings.NewReader(`{"jsonrpc":"2.0","id":"unauth","method":"gateway.ping","params":{}}`),
+		)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatalf("post /rpc: %v", err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("acl denied rpc maps to http 403", func(t *testing.T) {
+		deniedACL := &ControlPlaneACL{
+			mode:    ACLModeStrict,
+			allow:   map[RequestSource]map[string]struct{}{RequestSourceHTTP: {}},
+			enabled: true,
+		}
+		secureServer := newTestNetworkServer(t, NetworkServerOptions{
+			Authenticator: staticTokenAuthenticator{token: "gateway-token"},
+			ACL:           deniedACL,
+		})
+		secureContext, secureCancel := context.WithCancel(context.Background())
+		defer secureCancel()
+
+		secureDone := make(chan error, 1)
+		go func() {
+			secureDone <- secureServer.Serve(secureContext, nil)
+		}()
+		t.Cleanup(func() {
+			_ = secureServer.Close(context.Background())
+			select {
+			case <-secureDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("acl network serve goroutine did not exit")
+			}
+		})
+
+		secureAddress := waitForNetworkAddress(t, secureServer)
+		request, err := http.NewRequest(
+			http.MethodPost,
+			"http://"+secureAddress+"/rpc",
+			strings.NewReader(`{"jsonrpc":"2.0","id":"denied","method":"gateway.ping","params":{}}`),
+		)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		request.Header.Set("Authorization", "Bearer gateway-token")
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatalf("post /rpc: %v", err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusForbidden)
 		}
 	})
 }
@@ -420,6 +518,81 @@ func TestNetworkServerWebSocketReadTimeoutDoesNotKillIdleConnection(t *testing.T
 	}
 }
 
+func TestNetworkServerWebSocketUnauthenticatedConnectionTimeout(t *testing.T) {
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Authenticator:                staticTokenAuthenticator{token: "gateway-token"},
+		ACL:                          NewStrictControlPlaneACL(),
+		MaxStreamConnections:         1,
+		UnauthenticatedWSGracePeriod: 120 * time.Millisecond,
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+	wsConn, err := websocket.Dial("ws://"+listenAddress+"/ws", "", "http://localhost:3000")
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = wsConn.Close() })
+
+	waitForWebSocketConnectionCount(t, server, 1, 2*time.Second)
+	waitForWebSocketConnectionCount(t, server, 0, 2*time.Second)
+
+	waitForWebSocketClosed(t, wsConn, 2*time.Second)
+}
+
+func TestNetworkServerWebSocketAuthenticatedConnectionBypassesTimeout(t *testing.T) {
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Authenticator:                staticTokenAuthenticator{token: "gateway-token"},
+		ACL:                          NewStrictControlPlaneACL(),
+		UnauthenticatedWSGracePeriod: 120 * time.Millisecond,
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+	wsConn, err := websocket.Dial("ws://"+listenAddress+"/ws?token=gateway-token", "", "http://localhost:3000")
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = wsConn.Close() })
+
+	time.Sleep(250 * time.Millisecond)
+	if err := websocket.Message.Send(wsConn, `{"jsonrpc":"2.0","id":"ws-auth-ok","method":"gateway.ping","params":{}}`); err != nil {
+		t.Fatalf("send ping after auth grace period: %v", err)
+	}
+	ackFrame := receiveWSAckFrame(t, wsConn)
+	if ackFrame.RequestID != "ws-auth-ok" {
+		t.Fatalf("request_id = %q, want %q", ackFrame.RequestID, "ws-auth-ok")
+	}
+}
+
 func TestNetworkServerWebSocketDispatchContextCancelledOnShutdown(t *testing.T) {
 	originalDispatch := dispatchRPCRequestFn
 	t.Cleanup(func() { dispatchRPCRequestFn = originalDispatch })
@@ -517,6 +690,67 @@ func TestDecodeJSONRPCRequestFromReaderTrailingJSON(t *testing.T) {
 	if rpcErr.Code != protocol.JSONRPCCodeParseError {
 		t.Fatalf("rpc error code = %d, want %d", rpcErr.Code, protocol.JSONRPCCodeParseError)
 	}
+}
+
+func TestNetworkServerVersionAndObservabilityAuthHelpers(t *testing.T) {
+	server := &NetworkServer{
+		authenticator: stubTokenAuthenticator{token: "token-1"},
+	}
+
+	t.Run("version method not allowed", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/version", nil)
+		server.handleVersionRequest(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+	})
+
+	t.Run("version get returns build info", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/version", nil)
+		request.Header.Set("Authorization", "Bearer token-1")
+		server.handleVersionRequest(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+		}
+		var payload map[string]string
+		if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode version response: %v", err)
+		}
+		if payload["version"] == "" || payload["commit"] == "" {
+			t.Fatalf("unexpected version payload: %#v", payload)
+		}
+	})
+
+	t.Run("version remains public when authenticator enabled", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/version", nil)
+		server.handleVersionRequest(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("observability auth uses bearer token", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		request.Header.Set("Authorization", "Bearer token-1")
+		if !server.isObservabilityRequestAuthorized(request) {
+			t.Fatal("expected valid bearer token to pass")
+		}
+		request.Header.Set("Authorization", "Bearer wrong")
+		if server.isObservabilityRequestAuthorized(request) {
+			t.Fatal("expected invalid token to be rejected")
+		}
+	})
+
+	t.Run("observability auth denies when authenticator nil", func(t *testing.T) {
+		openServer := &NetworkServer{}
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		if openServer.isObservabilityRequestAuthorized(request) {
+			t.Fatal("expected request to be rejected without authenticator")
+		}
+	})
 }
 
 func TestNetworkServerCloseInterruptsStreams(t *testing.T) {
@@ -649,6 +883,187 @@ func TestNetworkServerStreamsReceiveGatewayEventNotification(t *testing.T) {
 	}
 }
 
+func TestNetworkServerObservabilityEndpointsAuth(t *testing.T) {
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Authenticator: staticTokenAuthenticator{token: "gateway-token"},
+		Metrics:       NewGatewayMetrics(),
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+
+	healthResponse, err := http.Get("http://" + listenAddress + "/healthz")
+	if err != nil {
+		t.Fatalf("get /healthz: %v", err)
+	}
+	defer healthResponse.Body.Close()
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Fatalf("/healthz status = %d, want %d", healthResponse.StatusCode, http.StatusOK)
+	}
+
+	versionResponse, err := http.Get("http://" + listenAddress + "/version")
+	if err != nil {
+		t.Fatalf("get /version: %v", err)
+	}
+	defer versionResponse.Body.Close()
+	if versionResponse.StatusCode != http.StatusOK {
+		t.Fatalf("/version status = %d, want %d", versionResponse.StatusCode, http.StatusOK)
+	}
+
+	metricsResponse, err := http.Get("http://" + listenAddress + "/metrics")
+	if err != nil {
+		t.Fatalf("get /metrics: %v", err)
+	}
+	defer metricsResponse.Body.Close()
+	if metricsResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("/metrics status = %d, want %d", metricsResponse.StatusCode, http.StatusUnauthorized)
+	}
+
+	queryTokenMetricsResponse, err := http.Get("http://" + listenAddress + "/metrics?token=gateway-token")
+	if err != nil {
+		t.Fatalf("get /metrics with query token: %v", err)
+	}
+	defer queryTokenMetricsResponse.Body.Close()
+	if queryTokenMetricsResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("/metrics with query token status = %d, want %d", queryTokenMetricsResponse.StatusCode, http.StatusUnauthorized)
+	}
+
+	authorizedMetricsRequest, err := http.NewRequest(http.MethodGet, "http://"+listenAddress+"/metrics", nil)
+	if err != nil {
+		t.Fatalf("new /metrics request: %v", err)
+	}
+	authorizedMetricsRequest.Header.Set("Authorization", "Bearer gateway-token")
+	authorizedMetricsResponse, err := http.DefaultClient.Do(authorizedMetricsRequest)
+	if err != nil {
+		t.Fatalf("authorized get /metrics: %v", err)
+	}
+	defer authorizedMetricsResponse.Body.Close()
+	if authorizedMetricsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("authorized /metrics status = %d, want %d", authorizedMetricsResponse.StatusCode, http.StatusOK)
+	}
+
+	authorizedJSONMetricsRequest, err := http.NewRequest(http.MethodGet, "http://"+listenAddress+"/metrics.json", nil)
+	if err != nil {
+		t.Fatalf("new /metrics.json request: %v", err)
+	}
+	authorizedJSONMetricsRequest.Header.Set("Authorization", "Bearer gateway-token")
+	authorizedJSONMetricsResponse, err := http.DefaultClient.Do(authorizedJSONMetricsRequest)
+	if err != nil {
+		t.Fatalf("authorized get /metrics.json: %v", err)
+	}
+	defer authorizedJSONMetricsResponse.Body.Close()
+	if authorizedJSONMetricsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("authorized /metrics.json status = %d, want %d", authorizedJSONMetricsResponse.StatusCode, http.StatusOK)
+	}
+
+	queryTokenJSONMetricsResponse, err := http.Get("http://" + listenAddress + "/metrics.json?token=gateway-token")
+	if err != nil {
+		t.Fatalf("get /metrics.json with query token: %v", err)
+	}
+	defer queryTokenJSONMetricsResponse.Body.Close()
+	if queryTokenJSONMetricsResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf(
+			"/metrics.json with query token status = %d, want %d",
+			queryTokenJSONMetricsResponse.StatusCode,
+			http.StatusUnauthorized,
+		)
+	}
+}
+
+func TestNetworkServerMetricsEndpointReturnsUnavailableWhenDisabled(t *testing.T) {
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Metrics: nil,
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+	metricsResponse, err := http.Get("http://" + listenAddress + "/metrics")
+	if err != nil {
+		t.Fatalf("get /metrics: %v", err)
+	}
+	defer metricsResponse.Body.Close()
+	if metricsResponse.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/metrics status = %d, want %d", metricsResponse.StatusCode, http.StatusServiceUnavailable)
+	}
+	metricsBody, err := io.ReadAll(metricsResponse.Body)
+	if err != nil {
+		t.Fatalf("read /metrics response body: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(metricsBody)), "metrics disabled") {
+		t.Fatalf("/metrics body = %q, want contains %q", string(metricsBody), "metrics disabled")
+	}
+
+	metricsJSONResponse, err := http.Get("http://" + listenAddress + "/metrics.json")
+	if err != nil {
+		t.Fatalf("get /metrics.json: %v", err)
+	}
+	defer metricsJSONResponse.Body.Close()
+	if metricsJSONResponse.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/metrics.json status = %d, want %d", metricsJSONResponse.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	var metricsJSONBody map[string]any
+	if err := json.NewDecoder(metricsJSONResponse.Body).Decode(&metricsJSONBody); err != nil {
+		t.Fatalf("decode /metrics.json body: %v", err)
+	}
+	if metricsJSONBody["error"] != "metrics disabled" {
+		t.Fatalf("/metrics.json error = %v, want %q", metricsJSONBody["error"], "metrics disabled")
+	}
+}
+
+func TestWithCORSCustomAllowOrigins(t *testing.T) {
+	server := &NetworkServer{
+		allowedOrigins: []string{"http://custom.local"},
+	}
+	handler := server.withCORS(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	}))
+
+	allowedRequest := httptest.NewRequest(http.MethodGet, "/rpc", nil)
+	allowedRequest.Header.Set("Origin", "http://custom.local:3000")
+	allowedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRecorder, allowedRequest)
+	if allowedRecorder.Code != http.StatusOK {
+		t.Fatalf("allowed status = %d, want %d", allowedRecorder.Code, http.StatusOK)
+	}
+
+	rejectedRequest := httptest.NewRequest(http.MethodGet, "/rpc", nil)
+	rejectedRequest.Header.Set("Origin", "http://localhost:3000")
+	rejectedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(rejectedRecorder, rejectedRequest)
+	if rejectedRecorder.Code != http.StatusForbidden {
+		t.Fatalf("rejected status = %d, want %d", rejectedRecorder.Code, http.StatusForbidden)
+	}
+}
+
 // newTestNetworkServer 创建默认测试网络服务实例，统一收敛测试参数。
 func newTestNetworkServer(t *testing.T, overrides NetworkServerOptions) *NetworkServer {
 	t.Helper()
@@ -698,6 +1113,48 @@ func waitForNetworkAddress(t *testing.T, server *NetworkServer) string {
 			}
 		}
 	}
+}
+
+// waitForWebSocketConnectionCount 轮询等待 WS 连接数达到目标值，便于验证超时剔除是否生效。
+func waitForWebSocketConnectionCount(t *testing.T, server *NetworkServer, want int, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			server.mu.Lock()
+			got := len(server.wsConns)
+			server.mu.Unlock()
+			t.Fatalf("timed out waiting websocket connections = %d, got %d", want, got)
+		case <-ticker.C:
+			server.mu.Lock()
+			got := len(server.wsConns)
+			server.mu.Unlock()
+			if got == want {
+				return
+			}
+		}
+	}
+}
+
+// waitForWebSocketClosed 循环读取直到连接关闭；会忽略关闭前可能滞留在缓冲区中的心跳消息。
+func waitForWebSocketClosed(t *testing.T, wsConn *websocket.Conn, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_ = wsConn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+		var rawMessage string
+		err := websocket.Message.Receive(wsConn, &rawMessage)
+		if err != nil {
+			return
+		}
+	}
+	t.Fatal("expected websocket connection to be closed before timeout")
 }
 
 // receiveWSAckFrame 连续读取 WS 消息直到拿到 JSON-RPC ACK 结果帧。
@@ -854,6 +1311,14 @@ type noFlushResponseWriter struct {
 	header http.Header
 	status int
 	body   strings.Builder
+}
+
+type staticTokenAuthenticator struct {
+	token string
+}
+
+func (a staticTokenAuthenticator) ValidateToken(token string) bool {
+	return strings.TrimSpace(token) != "" && strings.TrimSpace(token) == strings.TrimSpace(a.token)
 }
 
 func (w *noFlushResponseWriter) Header() http.Header {

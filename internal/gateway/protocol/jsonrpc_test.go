@@ -23,6 +23,28 @@ func TestNormalizeJSONRPCRequestPing(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCRequestAuthenticate(t *testing.T) {
+	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"auth-1"`),
+		Method:  MethodGatewayAuthenticate,
+		Params:  json.RawMessage(`{"token":"abc"}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize authenticate request: %v", rpcErr)
+	}
+	if normalized.Action != "authenticate" {
+		t.Fatalf("action = %q, want %q", normalized.Action, "authenticate")
+	}
+	params, ok := normalized.Payload.(AuthenticateParams)
+	if !ok {
+		t.Fatalf("payload type = %T, want AuthenticateParams", normalized.Payload)
+	}
+	if params.Token != "abc" {
+		t.Fatalf("token = %q, want %q", params.Token, "abc")
+	}
+}
+
 func TestNormalizeJSONRPCRequestPingWithNumericID(t *testing.T) {
 	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
@@ -158,6 +180,27 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 			},
 			wantCode:        JSONRPCCodeInvalidRequest,
 			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "authenticate missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayAuthenticate,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "authenticate missing token",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayAuthenticate,
+				Params:  json.RawMessage(`{"token":"   "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
 		},
 		{
 			name: "missing method",
@@ -314,6 +357,12 @@ func TestJSONRPCHelpers(t *testing.T) {
 	}
 	if MapGatewayCodeToJSONRPCCode(GatewayCodeInvalidAction) != JSONRPCCodeInvalidParams {
 		t.Fatal("invalid_action should map to invalid_params")
+	}
+	if MapGatewayCodeToJSONRPCCode(GatewayCodeUnauthorized) != JSONRPCCodeInvalidParams {
+		t.Fatal("unauthorized should map to invalid_params")
+	}
+	if MapGatewayCodeToJSONRPCCode(GatewayCodeAccessDenied) != JSONRPCCodeInvalidParams {
+		t.Fatal("access_denied should map to invalid_params")
 	}
 	if MapGatewayCodeToJSONRPCCode("unknown") != JSONRPCCodeInternalError {
 		t.Fatal("unknown code should map to internal_error")

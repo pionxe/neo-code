@@ -15,9 +15,10 @@ type requestFrameHandler func(ctx context.Context, frame MessageFrame) MessageFr
 var wakeOpenURLHandler = handlers.NewWakeOpenURLHandler()
 
 var requestFrameHandlers = map[FrameAction]requestFrameHandler{
-	FrameActionPing:        handlePingFrame,
-	FrameActionBindStream:  handleBindStreamFrame,
-	FrameActionWakeOpenURL: handleWakeOpenURLFrame,
+	FrameActionAuthenticate: handleAuthenticateFrame,
+	FrameActionPing:         handlePingFrame,
+	FrameActionBindStream:   handleBindStreamFrame,
+	FrameActionWakeOpenURL:  handleWakeOpenURLFrame,
 }
 
 // dispatchRequestFrame 统一分发 request 帧到对应动作处理器。
@@ -37,6 +38,36 @@ func handlePingFrame(_ context.Context, frame MessageFrame) MessageFrame {
 		RequestID: frame.RequestID,
 		Payload: map[string]string{
 			"message": "pong",
+			"version": GatewayVersion,
+		},
+	}
+}
+
+// handleAuthenticateFrame 处理 gateway.authenticate 请求并更新连接级认证状态。
+func handleAuthenticateFrame(ctx context.Context, frame MessageFrame) MessageFrame {
+	params, err := decodeAuthenticatePayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+
+	authenticator, hasAuthenticator := TokenAuthenticatorFromContext(ctx)
+	if !hasAuthenticator {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "token authenticator is unavailable"))
+	}
+	if !authenticator.ValidateToken(params.Token) {
+		return errorFrame(frame, NewFrameError(ErrorCodeUnauthorized, "invalid auth token"))
+	}
+
+	if authState, ok := ConnectionAuthStateFromContext(ctx); ok {
+		authState.MarkAuthenticated()
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionAuthenticate,
+		RequestID: frame.RequestID,
+		Payload: map[string]string{
+			"message": "authenticated",
 		},
 	}
 }
@@ -107,6 +138,10 @@ type bindStreamParams struct {
 	Channel   StreamChannel
 }
 
+type authenticateParams struct {
+	Token string
+}
+
 // decodeBindStreamParams 将 payload 解析为 bind_stream 所需参数。
 func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 	switch typed := payload.(type) {
@@ -133,6 +168,42 @@ func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 			return bindStreamParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid bind_stream payload")
 		}
 		return normalizeBindStreamParams(decoded)
+	}
+}
+
+// decodeAuthenticatePayload 将 payload 解析为 authenticate 所需参数。
+func decodeAuthenticatePayload(payload any) (authenticateParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.AuthenticateParams:
+		if strings.TrimSpace(typed.Token) == "" {
+			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
+		}
+		return authenticateParams{Token: strings.TrimSpace(typed.Token)}, nil
+	case *protocol.AuthenticateParams:
+		if typed == nil || strings.TrimSpace(typed.Token) == "" {
+			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
+		}
+		return authenticateParams{Token: strings.TrimSpace(typed.Token)}, nil
+	case map[string]any:
+		token := readStringValue(typed, "token")
+		if token == "" {
+			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
+		}
+		return authenticateParams{Token: token}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return authenticateParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid authenticate payload")
+		}
+		var decoded protocol.AuthenticateParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return authenticateParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid authenticate payload")
+		}
+		token := strings.TrimSpace(decoded.Token)
+		if token == "" {
+			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
+		}
+		return authenticateParams{Token: token}, nil
 	}
 }
 

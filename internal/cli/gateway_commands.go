@@ -11,11 +11,14 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"neo-code/internal/config"
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/adapters/urlscheme"
+	gatewayauth "neo-code/internal/gateway/auth"
 )
 
 const (
@@ -29,6 +32,8 @@ var (
 	newGatewayServer      = defaultNewGatewayServer
 	newGatewayNetwork     = defaultNewGatewayNetworkServer
 	dispatchURLThroughIPC = urlscheme.Dispatch
+	newAuthManager        = gatewayauth.NewManager
+	loadAuthToken         = loadGatewayAuthToken
 	exitProcess           = os.Exit
 	writeDispatchError    = writeURLDispatchErrorOutput
 	writeDispatchSuccess  = writeURLDispatchSuccessOutput
@@ -38,11 +43,28 @@ type gatewayCommandOptions struct {
 	ListenAddress string
 	HTTPAddress   string
 	LogLevel      string
+	TokenFile     string
+	ACLMode       string
+
+	MaxFrameBytes            int
+	IPCMaxConnections        int
+	HTTPMaxRequestBytes      int
+	HTTPMaxStreamConnections int
+
+	IPCReadSec      int
+	IPCWriteSec     int
+	HTTPReadSec     int
+	HTTPWriteSec    int
+	HTTPShutdownSec int
+
+	MetricsEnabled           bool
+	MetricsEnabledOverridden bool
 }
 
 type urlDispatchCommandOptions struct {
 	URL           string
 	ListenAddress string
+	TokenFile     string
 }
 
 type urlDispatchSuccessOutput struct {
@@ -90,6 +112,22 @@ func newGatewayCommand() *cobra.Command {
 				ListenAddress: strings.TrimSpace(options.ListenAddress),
 				HTTPAddress:   strings.TrimSpace(options.HTTPAddress),
 				LogLevel:      normalizedLogLevel,
+				TokenFile:     strings.TrimSpace(options.TokenFile),
+				ACLMode:       strings.TrimSpace(options.ACLMode),
+
+				MaxFrameBytes:            options.MaxFrameBytes,
+				IPCMaxConnections:        options.IPCMaxConnections,
+				HTTPMaxRequestBytes:      options.HTTPMaxRequestBytes,
+				HTTPMaxStreamConnections: options.HTTPMaxStreamConnections,
+
+				IPCReadSec:      options.IPCReadSec,
+				IPCWriteSec:     options.IPCWriteSec,
+				HTTPReadSec:     options.HTTPReadSec,
+				HTTPWriteSec:    options.HTTPWriteSec,
+				HTTPShutdownSec: options.HTTPShutdownSec,
+
+				MetricsEnabled:           options.MetricsEnabled,
+				MetricsEnabledOverridden: cmd.Flags().Changed("metrics-enabled"),
 			})
 		},
 	}
@@ -102,6 +140,28 @@ func newGatewayCommand() *cobra.Command {
 		"gateway network listen address (loopback only)",
 	)
 	cmd.Flags().StringVar(&options.LogLevel, "log-level", defaultGatewayLogLevel, "gateway log level: debug|info|warn|error")
+	cmd.Flags().StringVar(&options.TokenFile, "token-file", "", "gateway auth token file path (default ~/.neocode/auth.json)")
+	cmd.Flags().StringVar(&options.ACLMode, "acl-mode", "", "gateway acl mode override (strict)")
+	cmd.Flags().IntVar(&options.MaxFrameBytes, "max-frame-bytes", 0, "gateway max frame bytes override")
+	cmd.Flags().IntVar(&options.IPCMaxConnections, "ipc-max-connections", 0, "gateway ipc max connections override")
+	cmd.Flags().IntVar(&options.HTTPMaxRequestBytes, "http-max-request-bytes", 0, "gateway http max request bytes override")
+	cmd.Flags().IntVar(
+		&options.HTTPMaxStreamConnections,
+		"http-max-stream-connections",
+		0,
+		"gateway http max stream connections override",
+	)
+	cmd.Flags().IntVar(&options.IPCReadSec, "ipc-read-sec", 0, "gateway ipc read timeout seconds override")
+	cmd.Flags().IntVar(&options.IPCWriteSec, "ipc-write-sec", 0, "gateway ipc write timeout seconds override")
+	cmd.Flags().IntVar(&options.HTTPReadSec, "http-read-sec", 0, "gateway http read timeout seconds override")
+	cmd.Flags().IntVar(&options.HTTPWriteSec, "http-write-sec", 0, "gateway http write timeout seconds override")
+	cmd.Flags().IntVar(
+		&options.HTTPShutdownSec,
+		"http-shutdown-sec",
+		0,
+		"gateway http shutdown timeout seconds override",
+	)
+	cmd.Flags().BoolVar(&options.MetricsEnabled, "metrics-enabled", false, "gateway metrics enable override")
 
 	return cmd
 }
@@ -124,22 +184,66 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 
 	signalContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	gatewayConfig, err := config.LoadGatewayConfig(signalContext, "")
+	if err != nil {
+		return err
+	}
+	applyGatewayFlagOverrides(&gatewayConfig, options)
+	if err := gatewayConfig.Validate(); err != nil {
+		return fmt.Errorf("gateway config override invalid: %w", err)
+	}
+	acl, err := buildGatewayControlPlaneACL(gatewayConfig.Security.ACLMode)
+	if err != nil {
+		return err
+	}
+
+	tokenFile := strings.TrimSpace(options.TokenFile)
+	if tokenFile == "" {
+		tokenFile = strings.TrimSpace(gatewayConfig.Security.TokenFile)
+	}
+
+	authManager, err := newAuthManager(tokenFile)
+	if err != nil {
+		return fmt.Errorf("initialize gateway auth manager: %w", err)
+	}
+	var metrics *gateway.GatewayMetrics
+	if gatewayConfig.Observability.Enabled() {
+		metrics = gateway.NewGatewayMetrics()
+	}
 	relay := gateway.NewStreamRelay(gateway.StreamRelayOptions{
-		Logger: logger,
+		Logger:  logger,
+		Metrics: metrics,
 	})
 
 	ipcServer, err := newGatewayServer(gateway.ServerOptions{
-		ListenAddress: options.ListenAddress,
-		Logger:        logger,
-		Relay:         relay,
+		ListenAddress:  options.ListenAddress,
+		Logger:         logger,
+		MaxConnections: gatewayConfig.Limits.IPCMaxConnections,
+		MaxFrameSize:   int64(gatewayConfig.Limits.MaxFrameBytes),
+		ReadTimeout:    time.Duration(gatewayConfig.Timeouts.IPCReadSec) * time.Second,
+		WriteTimeout:   time.Duration(gatewayConfig.Timeouts.IPCWriteSec) * time.Second,
+		Relay:          relay,
+		Authenticator:  authManager,
+		ACL:            acl,
+		Metrics:        metrics,
 	})
 	if err != nil {
 		return err
 	}
 	networkServer, err := newGatewayNetwork(gateway.NetworkServerOptions{
-		ListenAddress: options.HTTPAddress,
-		Logger:        logger,
-		Relay:         relay,
+		ListenAddress:        options.HTTPAddress,
+		Logger:               logger,
+		ReadTimeout:          time.Duration(gatewayConfig.Timeouts.HTTPReadSec) * time.Second,
+		WriteTimeout:         time.Duration(gatewayConfig.Timeouts.HTTPWriteSec) * time.Second,
+		ShutdownTimeout:      time.Duration(gatewayConfig.Timeouts.HTTPShutdownSec) * time.Second,
+		MaxRequestBytes:      int64(gatewayConfig.Limits.HTTPMaxRequestBytes),
+		MaxStreamConnections: gatewayConfig.Limits.HTTPMaxStreamConnections,
+		Relay:                relay,
+		Authenticator:        authManager,
+		ACL:                  acl,
+		Metrics:              metrics,
+		AllowedOrigins:       gatewayConfig.Security.AllowOrigins,
 	})
 	if err != nil {
 		_ = ipcServer.Close(context.Background())
@@ -166,6 +270,61 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	}()
 
 	return ipcServer.Serve(signalContext, nil)
+}
+
+// buildGatewayControlPlaneACL 基于配置构造控制面 ACL 策略，未知模式直接拒绝启动。
+func buildGatewayControlPlaneACL(aclMode string) (*gateway.ControlPlaneACL, error) {
+	normalizedACLMode := strings.ToLower(strings.TrimSpace(aclMode))
+	if normalizedACLMode == "" {
+		normalizedACLMode = string(gateway.ACLModeStrict)
+	}
+	switch normalizedACLMode {
+	case string(gateway.ACLModeStrict):
+		return gateway.NewStrictControlPlaneACL(), nil
+	default:
+		return nil, fmt.Errorf("unsupported gateway acl mode %q", aclMode)
+	}
+}
+
+// applyGatewayFlagOverrides 将 CLI flags 覆盖到网关配置，优先级高于 config.yaml。
+func applyGatewayFlagOverrides(gatewayConfig *config.GatewayConfig, options gatewayCommandOptions) {
+	if gatewayConfig == nil {
+		return
+	}
+	if options.ACLMode != "" {
+		gatewayConfig.Security.ACLMode = options.ACLMode
+	}
+	if options.MaxFrameBytes > 0 {
+		gatewayConfig.Limits.MaxFrameBytes = options.MaxFrameBytes
+	}
+	if options.IPCMaxConnections > 0 {
+		gatewayConfig.Limits.IPCMaxConnections = options.IPCMaxConnections
+	}
+	if options.HTTPMaxRequestBytes > 0 {
+		gatewayConfig.Limits.HTTPMaxRequestBytes = options.HTTPMaxRequestBytes
+	}
+	if options.HTTPMaxStreamConnections > 0 {
+		gatewayConfig.Limits.HTTPMaxStreamConnections = options.HTTPMaxStreamConnections
+	}
+	if options.IPCReadSec > 0 {
+		gatewayConfig.Timeouts.IPCReadSec = options.IPCReadSec
+	}
+	if options.IPCWriteSec > 0 {
+		gatewayConfig.Timeouts.IPCWriteSec = options.IPCWriteSec
+	}
+	if options.HTTPReadSec > 0 {
+		gatewayConfig.Timeouts.HTTPReadSec = options.HTTPReadSec
+	}
+	if options.HTTPWriteSec > 0 {
+		gatewayConfig.Timeouts.HTTPWriteSec = options.HTTPWriteSec
+	}
+	if options.HTTPShutdownSec > 0 {
+		gatewayConfig.Timeouts.HTTPShutdownSec = options.HTTPShutdownSec
+	}
+	if options.MetricsEnabledOverridden {
+		enabled := options.MetricsEnabled
+		gatewayConfig.Observability.MetricsEnabled = &enabled
+	}
 }
 
 // defaultNewGatewayServer 创建默认网关服务实例，供命令层启动流程调用。
@@ -204,6 +363,7 @@ func newURLDispatchCommand() *cobra.Command {
 			dispatchErr := runURLDispatchCommand(cmd.Context(), urlDispatchCommandOptions{
 				URL:           normalizedURL,
 				ListenAddress: strings.TrimSpace(options.ListenAddress),
+				TokenFile:     strings.TrimSpace(options.TokenFile),
 			})
 			if dispatchErr != nil {
 				exitProcess(1)
@@ -215,15 +375,27 @@ func newURLDispatchCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&options.URL, "url", "", "neocode:// URL to dispatch")
 	cmd.Flags().StringVar(&options.ListenAddress, "listen", "", "gateway listen address override")
+	cmd.Flags().StringVar(&options.TokenFile, "token-file", "", "gateway auth token file path (default ~/.neocode/auth.json)")
 
 	return cmd
 }
 
 // defaultURLDispatchCommandRunner 执行 URL 唤醒请求并将结果以结构化 JSON 输出。
 func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCommandOptions) error {
+	authToken, authErr := loadAuthToken(options.TokenFile)
+	if authErr != nil {
+		writeErr := writeDispatchError(os.Stderr, authErr)
+		if writeErr != nil {
+			_ = writeURLDispatchFallbackErrorOutput(os.Stderr)
+		}
+		exitProcess(1)
+		return nil
+	}
+
 	result, err := dispatchURLThroughIPC(ctx, urlscheme.DispatchRequest{
 		RawURL:        options.URL,
 		ListenAddress: options.ListenAddress,
+		AuthToken:     authToken,
 	})
 	if err != nil {
 		writeErr := writeDispatchError(os.Stderr, err)
@@ -243,6 +415,21 @@ func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCom
 		return nil
 	}
 	return nil
+}
+
+// loadGatewayAuthToken 读取静默认证 token；若文件不存在则回退为空以兼容无鉴权模式。
+func loadGatewayAuthToken(path string) (string, error) {
+	token, err := gatewayauth.LoadTokenFromFile(path)
+	if err == nil {
+		return token, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "no such file") {
+		return "", nil
+	}
+	return "", err
 }
 
 // normalizeDispatchURL 对 url-dispatch 输入做最小归一化，详细校验交由 dispatcher 完成。

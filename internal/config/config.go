@@ -25,6 +25,7 @@ type Config struct {
 	Context          ContextConfig    `yaml:"context,omitempty"`
 	Tools            ToolsConfig      `yaml:"tools,omitempty"`
 	Memo             MemoConfig       `yaml:"memo,omitempty"`
+	Gateway          GatewayConfig    `yaml:"gateway,omitempty"`
 }
 
 // StaticDefaults 返回 config 层负责的静态默认值骨架，不包含 provider 装配和选择状态修复。
@@ -39,7 +40,8 @@ func StaticDefaults() *Config {
 			WebFetch: defaultWebFetchConfig(),
 			MCP:      defaultMCPConfig(),
 		},
-		Memo: defaultMemoConfig(),
+		Memo:    defaultMemoConfig(),
+		Gateway: defaultGatewayConfig(),
 	}
 }
 
@@ -54,6 +56,7 @@ func (c *Config) Clone() Config {
 	clone.Context = c.Context.Clone()
 	clone.Tools = c.Tools.Clone()
 	clone.Memo = c.Memo.Clone()
+	clone.Gateway = c.Gateway.Clone()
 	return clone
 }
 
@@ -76,6 +79,7 @@ func (c *Config) applyStaticDefaults(defaults Config) {
 	c.Context.ApplyDefaults(defaults.Context)
 	c.Tools.ApplyDefaults(defaults.Tools)
 	c.Memo.ApplyDefaults(defaults.Memo)
+	c.Gateway.ApplyDefaults(defaults.Gateway)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
@@ -134,6 +138,9 @@ func (c *Config) ValidateSnapshot() error {
 	}
 	if err := c.Memo.Validate(); err != nil {
 		return fmt.Errorf("config: memo: %w", err)
+	}
+	if err := c.Gateway.Validate(); err != nil {
+		return fmt.Errorf("config: gateway: %w", err)
 	}
 
 	return nil

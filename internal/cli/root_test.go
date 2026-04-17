@@ -18,6 +18,7 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/adapters/urlscheme"
+	gatewayauth "neo-code/internal/gateway/auth"
 )
 
 func TestNewRootCommandPassesWorkdirFlagToLauncher(t *testing.T) {
@@ -286,6 +287,47 @@ func TestDefaultGatewayCommandRunnerReturnsConstructorError(t *testing.T) {
 	}
 }
 
+func TestDefaultGatewayCommandRunnerReturnsLoadConfigError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := defaultGatewayCommandRunner(ctx, gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
+		LogLevel:      "info",
+	})
+	if err == nil {
+		t.Fatal("expected load config error")
+	}
+}
+
+func TestDefaultGatewayCommandRunnerReturnsAuthManagerError(t *testing.T) {
+	originalNewGatewayServer := newGatewayServer
+	originalNewGatewayNetwork := newGatewayNetwork
+	originalNewAuthManager := newAuthManager
+	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+
+	newAuthManager = func(string) (*gatewayauth.Manager, error) {
+		return nil, errors.New("auth manager failed")
+	}
+	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+		return &stubGatewayServer{listenAddress: "stub://gateway"}, nil
+	}
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+		return &stubGatewayServer{listenAddress: "127.0.0.1:8080"}, nil
+	}
+
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
+		LogLevel:      "info",
+	})
+	if err == nil || !strings.Contains(err.Error(), "initialize gateway auth manager") {
+		t.Fatalf("expected auth manager error, got %v", err)
+	}
+}
+
 func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
 	originalNewGatewayNetwork := newGatewayNetwork
@@ -384,6 +426,103 @@ func TestDefaultGatewayCommandRunnerReturnsNetworkConstructorError(t *testing.T)
 	if !ipcServer.closeCalled {
 		t.Fatal("expected ipc server Close to be called when network constructor fails")
 	}
+}
+
+func TestDefaultGatewayCommandRunnerRejectsInvalidACLMode(t *testing.T) {
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
+		LogLevel:      "info",
+		ACLMode:       "custom",
+	})
+	if err == nil {
+		t.Fatal("expected invalid acl mode error")
+	}
+	if !strings.Contains(err.Error(), "gateway config override invalid") {
+		t.Fatalf("error = %v, want contains %q", err, "gateway config override invalid")
+	}
+	if !strings.Contains(err.Error(), "acl_mode must be") {
+		t.Fatalf("error = %v, want contains %q", err, "acl_mode must be")
+	}
+}
+
+func TestBuildGatewayControlPlaneACL(t *testing.T) {
+	t.Run("strict mode", func(t *testing.T) {
+		acl, err := buildGatewayControlPlaneACL("strict")
+		if err != nil {
+			t.Fatalf("buildGatewayControlPlaneACL() error = %v", err)
+		}
+		if acl == nil {
+			t.Fatal("expected non-nil acl")
+		}
+	})
+
+	t.Run("empty mode uses strict", func(t *testing.T) {
+		acl, err := buildGatewayControlPlaneACL("  ")
+		if err != nil {
+			t.Fatalf("buildGatewayControlPlaneACL() error = %v", err)
+		}
+		if acl == nil {
+			t.Fatal("expected non-nil acl")
+		}
+	})
+
+	t.Run("unsupported mode", func(t *testing.T) {
+		acl, err := buildGatewayControlPlaneACL("allow-all")
+		if err == nil {
+			t.Fatal("expected unsupported mode error")
+		}
+		if acl != nil {
+			t.Fatalf("acl = %#v, want nil", acl)
+		}
+		if !strings.Contains(err.Error(), "unsupported gateway acl mode") {
+			t.Fatalf("error = %v, want contains unsupported mode message", err)
+		}
+	})
+}
+
+func TestApplyGatewayFlagOverrides(t *testing.T) {
+	t.Run("nil config no-op", func(t *testing.T) {
+		applyGatewayFlagOverrides(nil, gatewayCommandOptions{})
+	})
+
+	t.Run("all override fields", func(t *testing.T) {
+		gatewayConfig := config.StaticDefaults().Gateway
+		applyGatewayFlagOverrides(&gatewayConfig, gatewayCommandOptions{
+			ACLMode:                  "strict",
+			MaxFrameBytes:            2048,
+			IPCMaxConnections:        32,
+			HTTPMaxRequestBytes:      4096,
+			HTTPMaxStreamConnections: 16,
+			IPCReadSec:               11,
+			IPCWriteSec:              12,
+			HTTPReadSec:              13,
+			HTTPWriteSec:             14,
+			HTTPShutdownSec:          15,
+			MetricsEnabledOverridden: true,
+			MetricsEnabled:           false,
+		})
+
+		if gatewayConfig.Security.ACLMode != "strict" {
+			t.Fatalf("acl_mode = %q, want strict", gatewayConfig.Security.ACLMode)
+		}
+		if gatewayConfig.Limits.MaxFrameBytes != 2048 || gatewayConfig.Limits.IPCMaxConnections != 32 {
+			t.Fatalf("limits = %#v, want overrides applied", gatewayConfig.Limits)
+		}
+		if gatewayConfig.Limits.HTTPMaxRequestBytes != 4096 || gatewayConfig.Limits.HTTPMaxStreamConnections != 16 {
+			t.Fatalf("http limits = %#v, want overrides applied", gatewayConfig.Limits)
+		}
+		if gatewayConfig.Timeouts.IPCReadSec != 11 || gatewayConfig.Timeouts.IPCWriteSec != 12 {
+			t.Fatalf("ipc timeouts = %#v, want overrides applied", gatewayConfig.Timeouts)
+		}
+		if gatewayConfig.Timeouts.HTTPReadSec != 13 || gatewayConfig.Timeouts.HTTPWriteSec != 14 ||
+			gatewayConfig.Timeouts.HTTPShutdownSec != 15 {
+			t.Fatalf("http timeouts = %#v, want overrides applied", gatewayConfig.Timeouts)
+		}
+		if gatewayConfig.Observability.MetricsEnabled == nil || *gatewayConfig.Observability.MetricsEnabled {
+			t.Fatalf("metrics_enabled = %#v, want false", gatewayConfig.Observability.MetricsEnabled)
+		}
+	})
 }
 
 func TestDefaultNewGatewayServer(t *testing.T) {
@@ -671,6 +810,53 @@ func TestURLDispatchSubcommandDefaultRunnerError(t *testing.T) {
 	}
 }
 
+func TestURLDispatchSubcommandDefaultRunnerLoadTokenError(t *testing.T) {
+	originalRunner := runURLDispatchCommand
+	originalExitProcess := exitProcess
+	originalLoadAuthToken := loadAuthToken
+	originalWriteDispatchError := writeDispatchError
+	originalPreload := runGlobalPreload
+	originalStderr := os.Stderr
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+	t.Cleanup(func() { exitProcess = originalExitProcess })
+	t.Cleanup(func() { loadAuthToken = originalLoadAuthToken })
+	t.Cleanup(func() { writeDispatchError = originalWriteDispatchError })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	t.Cleanup(func() { os.Stderr = originalStderr })
+	runGlobalPreload = func(context.Context) error { return nil }
+	runURLDispatchCommand = defaultURLDispatchCommandRunner
+	loadAuthToken = func(string) (string, error) { return "", errors.New("read token failed") }
+
+	exitCode := 0
+	exitProcess = func(code int) { exitCode = code }
+	writeDispatchError = writeURLDispatchErrorOutput
+
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stderr pipe: %v", err)
+	}
+	t.Cleanup(func() { _ = stderrReader.Close() })
+	os.Stderr = stderrWriter
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch", "--url", "neocode://review?path=README.md"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+
+	_ = stderrWriter.Close()
+	stderrOutput, readErr := io.ReadAll(stderrReader)
+	if readErr != nil {
+		t.Fatalf("read stderr: %v", readErr)
+	}
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want %d", exitCode, 1)
+	}
+	if !strings.Contains(string(stderrOutput), `"status":"error"`) {
+		t.Fatalf("stderr = %q, want contains error status", string(stderrOutput))
+	}
+}
+
 func TestURLDispatchSubcommandDefaultRunnerErrorFallsBackWhenJSONWriteFails(t *testing.T) {
 	originalRunner := runURLDispatchCommand
 	originalDispatch := dispatchURLThroughIPC
@@ -784,6 +970,60 @@ func TestURLDispatchSubcommandDefaultRunnerSuccess(t *testing.T) {
 	}
 	if !strings.Contains(string(stdoutOutput), string(gateway.FrameActionWakeOpenURL)) {
 		t.Fatalf("stdout = %q, want contains %q", string(stdoutOutput), gateway.FrameActionWakeOpenURL)
+	}
+}
+
+func TestURLDispatchSubcommandDefaultRunnerPassesAuthToken(t *testing.T) {
+	originalRunner := runURLDispatchCommand
+	originalDispatch := dispatchURLThroughIPC
+	originalLoadAuthToken := loadAuthToken
+	originalExitProcess := exitProcess
+	originalPreload := runGlobalPreload
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+	t.Cleanup(func() { dispatchURLThroughIPC = originalDispatch })
+	t.Cleanup(func() { loadAuthToken = originalLoadAuthToken })
+	t.Cleanup(func() { exitProcess = originalExitProcess })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	runGlobalPreload = func(context.Context) error { return nil }
+	exitProcess = func(code int) {
+		t.Fatalf("unexpected exit with code %d", code)
+	}
+
+	runURLDispatchCommand = defaultURLDispatchCommandRunner
+	loadAuthToken = func(path string) (string, error) {
+		if path != "/tmp/auth.json" {
+			t.Fatalf("token path = %q, want %q", path, "/tmp/auth.json")
+		}
+		return "auth-token", nil
+	}
+
+	receivedToken := ""
+	dispatchURLThroughIPC = func(_ context.Context, request urlscheme.DispatchRequest) (urlscheme.DispatchResult, error) {
+		receivedToken = request.AuthToken
+		return urlscheme.DispatchResult{
+			ListenAddress: "/tmp/gateway.sock",
+			Response: gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-1",
+				Payload: map[string]any{
+					"message": "wake intent accepted",
+				},
+			},
+		}, nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{
+		"url-dispatch",
+		"--url", "neocode://review?path=README.md",
+		"--token-file", "/tmp/auth.json",
+	})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if receivedToken != "auth-token" {
+		t.Fatalf("received token = %q, want %q", receivedToken, "auth-token")
 	}
 }
 
@@ -1067,6 +1307,16 @@ func TestWriteURLDispatchErrorOutput(t *testing.T) {
 			t.Fatalf("output = %q, want contains internal_error", buffer.String())
 		}
 	})
+}
+
+func TestLoadGatewayAuthTokenFallback(t *testing.T) {
+	token, err := loadGatewayAuthToken(filepath.Join(t.TempDir(), "missing-auth.json"))
+	if err != nil {
+		t.Fatalf("loadGatewayAuthToken() error = %v", err)
+	}
+	if token != "" {
+		t.Fatalf("token = %q, want empty token for missing file", token)
+	}
 }
 
 type quitModel struct{}

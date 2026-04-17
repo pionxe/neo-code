@@ -171,6 +171,27 @@ go run ./cmd/neocode --workdir /path/to/workspace
 - 不提交明文密钥、个人配置或会话数据
 - 不提交无关改动与临时文件
 
+## 网关运维与安全（GW-06）
+
+- 静默认证（Silent Auth）：
+  - 启动 `neocode gateway` 时会自动读取 `~/.neocode/auth.json`。
+  - 若凭证不存在或损坏，会自动生成高强度 token 并写回该文件。
+  - `url-dispatch` 会自动读取同一 token 并先发送 `gateway.authenticate`，再发送业务请求。
+- 认证与授权顺序：`Auth -> ACL -> Dispatch`。
+  - 未认证返回 `unauthorized`。
+  - 已认证但不允许的方法返回 `access_denied`。
+- 运维端点：
+  - 免鉴权：`GET /healthz`、`GET /version`
+  - 需鉴权：`GET /metrics`、`GET /metrics.json`（`Authorization: Bearer <token>`）
+- 关键默认治理参数（可通过 `config.yaml` 的 `gateway.*` 配置）：
+  - `max_frame_bytes=1MiB`
+  - `ipc_max_connections=128`
+  - `http_max_request_bytes=1MiB`
+  - `http_max_stream_connections=128`
+  - `ipc_read/write_sec=30/30`
+  - `http_read/write/shutdown_sec=15/15/2`
+- 详细设计文档：[`docs/gateway-detailed-design.md`](docs/gateway-detailed-design.md)
+
 ## License
 
 MIT

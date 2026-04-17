@@ -280,6 +280,91 @@ func TestServerHandleConnectionRelaysRuntimeEventAfterBindStream(t *testing.T) {
 	}
 }
 
+func TestServerHandleConnectionAuthenticateFlow(t *testing.T) {
+	t.Parallel()
+
+	server := &Server{
+		logger:        log.New(io.Discard, "", 0),
+		authenticator: staticTokenAuthenticator{token: "secret-token"},
+		acl:           NewStrictControlPlaneACL(),
+	}
+	serverConn, clientConn := net.Pipe()
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		server.handleConnection(context.Background(), serverConn, nil)
+	}()
+
+	encoder := json.NewEncoder(clientConn)
+	decoder := json.NewDecoder(clientConn)
+
+	if err := encoder.Encode(protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"unauth-1"`),
+		Method:  protocol.MethodGatewayPing,
+		Params:  json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("encode unauthorized ping: %v", err)
+	}
+	var unauthorizedResponse protocol.JSONRPCResponse
+	if err := decoder.Decode(&unauthorizedResponse); err != nil {
+		t.Fatalf("decode unauthorized response: %v", err)
+	}
+	if unauthorizedResponse.Error == nil {
+		t.Fatal("expected unauthorized error")
+	}
+	if code := protocol.GatewayCodeFromJSONRPCError(unauthorizedResponse.Error); code != ErrorCodeUnauthorized.String() {
+		t.Fatalf("gateway_code = %q, want %q", code, ErrorCodeUnauthorized.String())
+	}
+
+	if err := encoder.Encode(protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"auth-1"`),
+		Method:  protocol.MethodGatewayAuthenticate,
+		Params:  json.RawMessage(`{"token":"secret-token"}`),
+	}); err != nil {
+		t.Fatalf("encode authenticate request: %v", err)
+	}
+	var authResponse protocol.JSONRPCResponse
+	if err := decoder.Decode(&authResponse); err != nil {
+		t.Fatalf("decode authenticate response: %v", err)
+	}
+	if authResponse.Error != nil {
+		t.Fatalf("unexpected auth error: %+v", authResponse.Error)
+	}
+
+	if err := encoder.Encode(protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"ping-2"`),
+		Method:  protocol.MethodGatewayPing,
+		Params:  json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("encode authorized ping: %v", err)
+	}
+	var pingResponse protocol.JSONRPCResponse
+	if err := decoder.Decode(&pingResponse); err != nil {
+		t.Fatalf("decode ping response: %v", err)
+	}
+	if pingResponse.Error != nil {
+		t.Fatalf("unexpected ping error: %+v", pingResponse.Error)
+	}
+	pingFrame, err := decodeJSONRPCResultFrame(pingResponse)
+	if err != nil {
+		t.Fatalf("decode ping frame: %v", err)
+	}
+	if pingFrame.Action != FrameActionPing {
+		t.Fatalf("action = %q, want %q", pingFrame.Action, FrameActionPing)
+	}
+
+	_ = clientConn.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleConnection did not exit")
+	}
+}
+
 type runtimePortEventStub struct {
 	events <-chan RuntimeEvent
 }

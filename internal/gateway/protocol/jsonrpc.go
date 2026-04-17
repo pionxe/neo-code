@@ -12,6 +12,8 @@ const (
 )
 
 const (
+	// MethodGatewayAuthenticate 表示连接握手认证方法。
+	MethodGatewayAuthenticate = "gateway.authenticate"
 	// MethodGatewayPing 表示网关探活方法。
 	MethodGatewayPing = "gateway.ping"
 	// MethodGatewayBindStream 表示客户端向网关声明流式订阅绑定的方法。
@@ -40,7 +42,7 @@ const (
 	GatewayCodeInvalidFrame = "invalid_frame"
 	// GatewayCodeInvalidAction 表示动作参数非法。
 	GatewayCodeInvalidAction = "invalid_action"
-	// GatewayCodeInvalidMultimodalPayload 表示多模态负载非法。
+	// GatewayCodeInvalidMultimodalPayload 表示多模态载荷非法。
 	GatewayCodeInvalidMultimodalPayload = "invalid_multimodal_payload"
 	// GatewayCodeMissingRequiredField 表示缺少必填字段。
 	GatewayCodeMissingRequiredField = "missing_required_field"
@@ -50,6 +52,10 @@ const (
 	GatewayCodeInternalError = "internal_error"
 	// GatewayCodeUnsafePath 表示路径存在安全风险。
 	GatewayCodeUnsafePath = "unsafe_path"
+	// GatewayCodeUnauthorized 表示请求未通过认证校验。
+	GatewayCodeUnauthorized = "unauthorized"
+	// GatewayCodeAccessDenied 表示请求已认证但未通过 ACL 校验。
+	GatewayCodeAccessDenied = "access_denied"
 )
 
 // JSONRPCRequest 表示控制面接收到的 JSON-RPC 请求。
@@ -75,7 +81,7 @@ type JSONRPCNotification struct {
 	Params  any    `json:"params,omitempty"`
 }
 
-// JSONRPCError 表示 JSON-RPC 错误负载。
+// JSONRPCError 表示 JSON-RPC 错误载荷。
 type JSONRPCError struct {
 	Code    int               `json:"code"`
 	Message string            `json:"message"`
@@ -96,6 +102,11 @@ type NormalizedRequest struct {
 	RunID     string
 	Workdir   string
 	Payload   any
+}
+
+// AuthenticateParams 表示 gateway.authenticate 的标准化参数。
+type AuthenticateParams struct {
+	Token string `json:"token"`
 }
 
 // BindStreamParams 表示 gateway.bindStream 的标准化参数载荷。
@@ -134,6 +145,14 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 	}
 
 	switch method {
+	case MethodGatewayAuthenticate:
+		params, parseErr := decodeAuthenticateParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "authenticate"
+		normalized.Payload = params
+		return normalized, nil
 	case MethodGatewayPing:
 		normalized.Action = "ping"
 		return normalized, nil
@@ -193,7 +212,7 @@ func NewJSONRPCErrorResponse(id json.RawMessage, rpcError *JSONRPCError) JSONRPC
 	}
 }
 
-// NewJSONRPCNotification 创建 JSON-RPC 通知负载，供网关向客户端推送事件使用。
+// NewJSONRPCNotification 创建 JSON-RPC 通知载荷，供网关向客户端推送事件使用。
 func NewJSONRPCNotification(method string, params any) JSONRPCNotification {
 	return JSONRPCNotification{
 		JSONRPC: JSONRPCVersion,
@@ -214,7 +233,7 @@ func NewJSONRPCError(code int, message, gatewayCode string) *JSONRPCError {
 	return errorPayload
 }
 
-// GatewayCodeFromJSONRPCError 从 JSON-RPC 错误负载中提取稳定 gateway_code。
+// GatewayCodeFromJSONRPCError 从 JSON-RPC 错误载荷中提取稳定 gateway_code。
 func GatewayCodeFromJSONRPCError(rpcError *JSONRPCError) string {
 	if rpcError == nil || rpcError.Data == nil {
 		return ""
@@ -231,7 +250,9 @@ func MapGatewayCodeToJSONRPCCode(gatewayCode string) int {
 		GatewayCodeInvalidFrame,
 		GatewayCodeInvalidMultimodalPayload,
 		GatewayCodeMissingRequiredField,
-		GatewayCodeUnsafePath:
+		GatewayCodeUnsafePath,
+		GatewayCodeUnauthorized,
+		GatewayCodeAccessDenied:
 		return JSONRPCCodeInvalidParams
 	case GatewayCodeInternalError:
 		return JSONRPCCodeInternalError
@@ -288,6 +309,36 @@ func normalizeJSONRPCID(id json.RawMessage) (string, *JSONRPCError) {
 			GatewayCodeInvalidFrame,
 		)
 	}
+}
+
+// decodeAuthenticateParams 对 gateway.authenticate 的 params 执行反序列化与最小校验。
+func decodeAuthenticateParams(raw json.RawMessage) (AuthenticateParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return AuthenticateParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params AuthenticateParams
+	if err := json.Unmarshal(trimmed, &params); err != nil {
+		return AuthenticateParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.authenticate",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.Token = strings.TrimSpace(params.Token)
+	if params.Token == "" {
+		return AuthenticateParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.token",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
 }
 
 // decodeWakeIntentParams 对 wake.openUrl 的 params 执行延迟反序列化与最小校验。
