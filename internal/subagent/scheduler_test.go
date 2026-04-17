@@ -752,6 +752,9 @@ func TestSchedulerRunRecoveryModeFail(t *testing.T) {
 	if !contains(result.Recovered, "recover-fail") {
 		t.Fatalf("Recovered = %v, want recover-fail", result.Recovered)
 	}
+	if !contains(result.Failed, "recover-fail") {
+		t.Fatalf("Failed = %v, want recover-fail", result.Failed)
+	}
 
 	item, ok := store.FindTodo("recover-fail")
 	if !ok {
@@ -762,6 +765,56 @@ func TestSchedulerRunRecoveryModeFail(t *testing.T) {
 	}
 	if !strings.Contains(item.FailureReason, "recovered interrupted") {
 		t.Fatalf("FailureReason = %q, want recovered interrupted", item.FailureReason)
+	}
+}
+
+func TestSchedulerRunRecoveryExceedRetryLimitMarkedFailed(t *testing.T) {
+	t.Parallel()
+
+	store := newSchedulerStore(t, []agentsession.TodoItem{
+		{
+			ID:         "recover-over-limit",
+			Content:    "recover interrupted task",
+			Status:     agentsession.TodoStatusInProgress,
+			RetryLimit: 1,
+			RetryCount: 1,
+		},
+	})
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("unused"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{
+		MaxConcurrency: 1,
+		PollInterval:   2 * time.Millisecond,
+		RecoveryMode:   SchedulerRecoveryRetry,
+	})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := scheduler.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !contains(result.Recovered, "recover-over-limit") {
+		t.Fatalf("Recovered = %v, want recover-over-limit", result.Recovered)
+	}
+	if !contains(result.Failed, "recover-over-limit") {
+		t.Fatalf("Failed = %v, want recover-over-limit", result.Failed)
+	}
+
+	item, ok := store.FindTodo("recover-over-limit")
+	if !ok {
+		t.Fatalf("FindTodo(recover-over-limit) not found")
+	}
+	if item.Status != agentsession.TodoStatusFailed {
+		t.Fatalf("status = %q, want failed", item.Status)
 	}
 }
 
@@ -914,6 +967,60 @@ func TestSchedulerRunStandardEventSequence(t *testing.T) {
 	}
 }
 
+func TestSchedulerRunProgressEventDeduplicatedForRetryBackoff(t *testing.T) {
+	t.Parallel()
+
+	store := newSchedulerStore(t, []agentsession.TodoItem{
+		{
+			ID:          "backoff",
+			Content:     "wait retry window",
+			Status:      agentsession.TodoStatusPending,
+			RetryCount:  1,
+			RetryLimit:  3,
+			NextRetryAt: time.Now().Add(200 * time.Millisecond),
+		},
+	})
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("unused"), nil
+	})
+
+	var (
+		mu            sync.Mutex
+		progressCount int
+	)
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{
+		MaxConcurrency: 1,
+		PollInterval:   2 * time.Millisecond,
+		Observer: func(event SchedulerEvent) {
+			if event.Type != SchedulerEventSubAgentProgress || event.TaskID != "backoff" || event.Reason != "retry_backoff" {
+				return
+			}
+			mu.Lock()
+			progressCount++
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if _, err := scheduler.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want deadline exceeded", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if progressCount != 1 {
+		t.Fatalf("progressCount = %d, want 1", progressCount)
+	}
+}
+
 func TestSchedulerHandleOneOutcomeIgnoresStaleAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -948,9 +1055,37 @@ func TestSchedulerHandleOneOutcomeIgnoresStaleAttempt(t *testing.T) {
 	if err := scheduler.handleOneOutcome(context.Background(), state, summary); err != nil {
 		t.Fatalf("handleOneOutcome() error = %v", err)
 	}
+	running, ok := state.running["stale"]
+	if !ok {
+		t.Fatalf("running task removed by stale outcome")
+	}
+	if running.attempt != 2 {
+		t.Fatalf("running attempt = %d, want 2", running.attempt)
+	}
 	item, _ := store.FindTodo("stale")
 	if item.Status != agentsession.TodoStatusPending {
 		t.Fatalf("todo status = %q, want pending", item.Status)
+	}
+	if err := store.ClaimTodo("stale", agentsession.TodoOwnerTypeSubAgent, "subagent-stale", item.Revision); err != nil {
+		t.Fatalf("ClaimTodo(stale) error = %v", err)
+	}
+
+	state.outcomes <- taskOutcome{
+		id:      "stale",
+		attempt: 2,
+		result: Result{
+			State: StateSucceeded,
+			Output: Output{
+				Summary: "done",
+			},
+		},
+	}
+	if err := scheduler.handleOneOutcome(context.Background(), state, summary); err != nil {
+		t.Fatalf("handleOneOutcome() for latest attempt error = %v", err)
+	}
+	item, _ = store.FindTodo("stale")
+	if item.Status != agentsession.TodoStatusCompleted {
+		t.Fatalf("todo status = %q, want completed", item.Status)
 	}
 }
 

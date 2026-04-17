@@ -34,6 +34,7 @@ type schedulerState struct {
 	running    map[string]runningTask
 	readySince map[string]time.Time
 	started    map[string]int
+	progress   map[string]string
 	outcomes   chan taskOutcome
 }
 
@@ -60,7 +61,7 @@ func (s *Scheduler) Run(ctx context.Context) (ScheduleResult, error) {
 		return ScheduleResult{}, err
 	}
 
-	recovered, err := s.recoverInterruptedTodos()
+	recovered, recoveredFailed, err := s.recoverInterruptedTodos()
 	if err != nil {
 		return ScheduleResult{}, err
 	}
@@ -77,6 +78,7 @@ func (s *Scheduler) Run(ctx context.Context) (ScheduleResult, error) {
 		Total:     len(graph.order),
 		Retried:   make(map[string]int),
 		Recovered: append([]string(nil), recovered...),
+		Failed:    append([]string(nil), recoveredFailed...),
 	}
 	state := newSchedulerState(s.cfg.MaxConcurrency)
 	finalize := func(current ScheduleResult) ScheduleResult {
@@ -135,14 +137,15 @@ func (s *Scheduler) Run(ctx context.Context) (ScheduleResult, error) {
 }
 
 // recoverInterruptedTodos 在调度开始前恢复遗留 in_progress 任务，确保重启后可继续推进。
-func (s *Scheduler) recoverInterruptedTodos() ([]string, error) {
+func (s *Scheduler) recoverInterruptedTodos() ([]string, []string, error) {
 	items := s.store.ListTodos()
 	if len(items) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	now := s.cfg.Clock()
 	recovered := make([]string, 0, len(items))
+	failed := make([]string, 0, len(items))
 	for _, item := range items {
 		if item.Status != agentsession.TodoStatusInProgress {
 			continue
@@ -185,9 +188,12 @@ func (s *Scheduler) recoverInterruptedTodos() ([]string, error) {
 			if isRevisionConflict(err) {
 				continue
 			}
-			return nil, fmt.Errorf("subagent: recover interrupted todo %q: %w", item.ID, err)
+			return nil, nil, fmt.Errorf("subagent: recover interrupted todo %q: %w", item.ID, err)
 		}
 		recovered = append(recovered, item.ID)
+		if status == agentsession.TodoStatusFailed {
+			failed = append(failed, item.ID)
+		}
 
 		if status == agentsession.TodoStatusBlocked {
 			s.emit(SchedulerEvent{
@@ -207,7 +213,7 @@ func (s *Scheduler) recoverInterruptedTodos() ([]string, error) {
 			})
 		}
 	}
-	return recovered, nil
+	return recovered, failed, nil
 }
 
 // newSchedulerState 初始化调度运行态，避免循环中重复分配映射与通道。
@@ -220,6 +226,7 @@ func newSchedulerState(maxConcurrency int) *schedulerState {
 		running:    make(map[string]runningTask, maxConcurrency),
 		readySince: make(map[string]time.Time, 32),
 		started:    make(map[string]int, 32),
+		progress:   make(map[string]string, 32),
 		outcomes:   make(chan taskOutcome, buffer),
 	}
 }
@@ -244,7 +251,7 @@ func (s *Scheduler) collectReadyTasks(
 
 		depsSatisfied := dependenciesCompleted(item, snapshot)
 		if !depsSatisfied {
-			if err := s.ensureBlocked(item, "dependency_unmet"); err != nil {
+			if err := s.ensureBlocked(item, "dependency_unmet", state); err != nil {
 				return nil, err
 			}
 			continue
@@ -267,7 +274,7 @@ func (s *Scheduler) collectReadyTasks(
 				Running:   len(state.running),
 				At:        now,
 			})
-			s.emit(SchedulerEvent{
+			s.emitProgressIfChanged(state, SchedulerEvent{
 				Type:      SchedulerEventSubAgentProgress,
 				TaskID:    item.ID,
 				Attempt:   item.RetryCount + 1,
@@ -287,7 +294,7 @@ func (s *Scheduler) collectReadyTasks(
 }
 
 // ensureBlocked 将未满足依赖的任务收敛到 blocked 状态并发出可观测事件。
-func (s *Scheduler) ensureBlocked(item agentsession.TodoItem, reason string) error {
+func (s *Scheduler) ensureBlocked(item agentsession.TodoItem, reason string, state *schedulerState) error {
 	if item.Status != agentsession.TodoStatusBlocked {
 		status := agentsession.TodoStatusBlocked
 		patch := agentsession.TodoPatch{Status: &status}
@@ -296,20 +303,25 @@ func (s *Scheduler) ensureBlocked(item agentsession.TodoItem, reason string) err
 		}
 	}
 
+	running := 0
+	if state != nil {
+		running = len(state.running)
+	}
+	now := s.cfg.Clock()
 	s.emit(SchedulerEvent{
 		Type:    SchedulerEventBlocked,
 		TaskID:  item.ID,
 		Reason:  reason,
-		Running: 0,
-		At:      s.cfg.Clock(),
+		Running: running,
+		At:      now,
 	})
-	s.emit(SchedulerEvent{
+	s.emitProgressIfChanged(state, SchedulerEvent{
 		Type:    SchedulerEventSubAgentProgress,
 		TaskID:  item.ID,
 		Attempt: item.RetryCount + 1,
 		Reason:  reason,
-		Running: 0,
-		At:      s.cfg.Clock(),
+		Running: running,
+		At:      now,
 	})
 	return nil
 }
@@ -426,7 +438,7 @@ func (s *Scheduler) startReadyTasks(
 			Running: len(state.running),
 			At:      s.cfg.Clock(),
 		})
-		s.emit(SchedulerEvent{
+		s.emitProgressIfChanged(state, SchedulerEvent{
 			Type:    SchedulerEventSubAgentProgress,
 			TaskID:  item.ID,
 			Attempt: attempt,
@@ -478,16 +490,15 @@ func (s *Scheduler) handleOneOutcome(ctx context.Context, state *schedulerState,
 		return ctx.Err()
 	case outcome := <-state.outcomes:
 		running, ok := state.running[outcome.id]
-		if ok {
-			delete(state.running, outcome.id)
-		}
-		delete(state.readySince, outcome.id)
 		if !ok {
 			return nil
 		}
 		if outcome.attempt != running.attempt {
 			return nil
 		}
+		delete(state.running, outcome.id)
+		delete(state.readySince, outcome.id)
+		delete(state.progress, outcome.id)
 		return s.applyOutcome(outcome, state, summary)
 	case <-time.After(s.cfg.PollInterval):
 		return nil
@@ -741,6 +752,25 @@ func (s *Scheduler) emit(event SchedulerEvent) {
 		event.At = s.cfg.Clock()
 	}
 	s.cfg.Observer(event)
+}
+
+// emitProgressIfChanged 仅在任务进度状态变化时发射 progress 事件，避免轮询路径的重复噪声。
+func (s *Scheduler) emitProgressIfChanged(state *schedulerState, event SchedulerEvent) {
+	if event.Type != SchedulerEventSubAgentProgress {
+		s.emit(event)
+		return
+	}
+	if state == nil {
+		s.emit(event)
+		return
+	}
+
+	key := fmt.Sprintf("%d|%s", event.Attempt, event.Reason)
+	if state.progress[event.TaskID] == key {
+		return
+	}
+	state.progress[event.TaskID] = key
+	s.emit(event)
 }
 
 // mapTodosByID 将 todo 列表转为 ID 索引映射，便于依赖与状态查询。
