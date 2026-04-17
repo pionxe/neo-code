@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +75,11 @@ func (w *worker) Start(task Task, budget Budget, capability Capability) error {
 	w.budget = budget.normalize(w.policy.DefaultBudget)
 	capabilityInput := capability.normalize()
 	if len(capabilityInput.AllowedPaths) == 0 && strings.TrimSpace(task.Workspace) != "" {
-		capabilityInput.AllowedPaths = []string{strings.TrimSpace(task.Workspace)}
+		workspace := strings.TrimSpace(task.Workspace)
+		if err := validateDefaultWorkspacePath(workspace); err != nil {
+			return err
+		}
+		capabilityInput.AllowedPaths = []string{workspace}
 	}
 	effectiveCapability, err := bindCapabilityToPolicy(capabilityInput, w.policy)
 	if err != nil {
@@ -204,6 +209,25 @@ func bindCapabilityToPolicy(capability Capability, policy RolePolicy) (Capabilit
 	}
 	capability.AllowedTools = effective
 	return capability, nil
+}
+
+// validateDefaultWorkspacePath 校验默认注入 capability 的工作区路径，阻断危险根路径绑定。
+func validateDefaultWorkspacePath(workspace string) error {
+	cleaned := filepath.Clean(strings.TrimSpace(workspace))
+	if cleaned == "." {
+		return errorsf("task workspace must not be current directory")
+	}
+	if cleaned == string(filepath.Separator) {
+		return errorsf("task workspace must not be filesystem root")
+	}
+	volume := filepath.VolumeName(cleaned)
+	if volume != "" {
+		suffix := strings.TrimPrefix(cleaned, volume)
+		if suffix == "" || suffix == string(filepath.Separator) {
+			return errorsf("task workspace must not be filesystem root")
+		}
+	}
+	return nil
 }
 
 // appendTraceBounded 将新增 trace 追加到切片尾部，并保证内部存储长度不超过上限。

@@ -3,6 +3,8 @@ package subagent
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -330,6 +332,25 @@ func TestWorkerStartCapabilityPolicyGuard(t *testing.T) {
 	}
 	if len(resultWithWorkspace.Capability.AllowedPaths) != 1 || resultWithWorkspace.Capability.AllowedPaths[0] != "/tmp/sub-task" {
 		t.Fatalf("workspace capability path = %v, want [/tmp/sub-task]", resultWithWorkspace.Capability.AllowedPaths)
+	}
+
+	w4, err := NewWorker(RoleReviewer, policy, nil)
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+	if err := w4.Start(Task{ID: "t-cap-workspace-dot", Goal: "goal", Workspace: "."}, Budget{}, Capability{}); err == nil ||
+		!strings.Contains(err.Error(), "must not be current directory") {
+		t.Fatalf("expected workspace dot rejection, got %v", err)
+	}
+
+	w5, err := NewWorker(RoleReviewer, policy, nil)
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+	rootWorkspace := string(filepath.Separator)
+	if err := w5.Start(Task{ID: "t-cap-workspace-root", Goal: "goal", Workspace: rootWorkspace}, Budget{}, Capability{}); err == nil ||
+		!strings.Contains(err.Error(), "must not be filesystem root") {
+		t.Fatalf("expected workspace root rejection, got %v", err)
 	}
 }
 

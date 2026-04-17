@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
@@ -52,6 +53,15 @@ func (NoopWorkspaceSandbox) Check(ctx context.Context, action security.Action) (
 	return nil, ctx.Err()
 }
 
+var (
+	// ErrPermissionDenied 标记工具请求被权限系统拒绝。
+	ErrPermissionDenied = errors.New("tools: permission denied")
+	// ErrPermissionApprovalRequired 标记工具请求需要用户审批。
+	ErrPermissionApprovalRequired = errors.New("tools: permission approval required")
+	// ErrCapabilityDenied 标记拒绝由 capability token 触发。
+	ErrCapabilityDenied = errors.New("tools: capability denied")
+)
+
 // PermissionDecisionError reports a non-allow permission decision.
 type PermissionDecisionError struct {
 	decision security.Decision
@@ -80,6 +90,22 @@ func (e *PermissionDecisionError) Error() string {
 		}
 	}
 	return "tools: " + reason
+}
+
+// Unwrap 返回可用于 errors.Is 判定的哨兵错误集合。
+func (e *PermissionDecisionError) Unwrap() []error {
+	if e == nil {
+		return nil
+	}
+	switch e.decision {
+	case security.DecisionAsk:
+		return []error{ErrPermissionApprovalRequired}
+	default:
+		if strings.EqualFold(strings.TrimSpace(e.ruleID), security.CapabilityRuleID) {
+			return []error{ErrPermissionDenied, ErrCapabilityDenied}
+		}
+		return []error{ErrPermissionDenied}
+	}
 }
 
 // Decision returns the blocking engine decision.
@@ -137,6 +163,7 @@ type DefaultManager struct {
 	engine           security.PermissionEngine
 	sandbox          WorkspaceSandbox
 	sessionDecisions *sessionPermissionMemory
+	capabilityMu     sync.RWMutex
 	capabilitySigner *security.CapabilitySigner
 }
 
@@ -177,6 +204,8 @@ func (m *DefaultManager) SetCapabilitySigner(signer *security.CapabilitySigner) 
 	if signer == nil {
 		return errors.New("tools: capability signer is nil")
 	}
+	m.capabilityMu.Lock()
+	defer m.capabilityMu.Unlock()
 	m.capabilitySigner = signer
 	return nil
 }
@@ -186,6 +215,18 @@ func (m *DefaultManager) CapabilitySigner() *security.CapabilitySigner {
 	if m == nil {
 		return nil
 	}
+	m.capabilityMu.RLock()
+	defer m.capabilityMu.RUnlock()
+	return m.capabilitySigner
+}
+
+// capabilitySignerSnapshot 返回当前 capability signer 的并发安全快照。
+func (m *DefaultManager) capabilitySignerSnapshot() *security.CapabilitySigner {
+	if m == nil {
+		return nil
+	}
+	m.capabilityMu.RLock()
+	defer m.capabilityMu.RUnlock()
 	return m.capabilitySigner
 }
 
@@ -289,10 +330,11 @@ func (m *DefaultManager) verifyCapabilityToken(action security.Action) error {
 	if token == nil {
 		return nil
 	}
-	if m == nil || m.capabilitySigner == nil {
+	signer := m.capabilitySignerSnapshot()
+	if signer == nil {
 		return errors.New("capability signer is unavailable")
 	}
-	if err := m.capabilitySigner.Verify(*token); err != nil {
+	if err := signer.Verify(*token); err != nil {
 		return fmt.Errorf("invalid capability token signature: %w", err)
 	}
 

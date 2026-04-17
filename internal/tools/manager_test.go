@@ -482,6 +482,9 @@ func TestPermissionDecisionError(t *testing.T) {
 	if errors.Is(err, context.Canceled) {
 		t.Fatalf("permission error should not match unrelated errors")
 	}
+	if !errors.Is(err, ErrPermissionApprovalRequired) {
+		t.Fatalf("ask decision should match ErrPermissionApprovalRequired")
+	}
 
 	denyErr := &PermissionDecisionError{}
 	if !strings.Contains(denyErr.Error(), "permission denied") {
@@ -496,6 +499,9 @@ func TestPermissionDecisionError(t *testing.T) {
 	if denyErr.RememberScope() != "" {
 		t.Fatalf("expected empty remember scope, got %q", denyErr.RememberScope())
 	}
+	if !errors.Is(denyErr, ErrPermissionDenied) {
+		t.Fatalf("default deny should match ErrPermissionDenied")
+	}
 
 	var nilErr *PermissionDecisionError
 	if nilErr.Error() != "" || nilErr.Decision() != "" || nilErr.ToolName() != "" || nilErr.RememberScope() != "" {
@@ -508,6 +514,17 @@ func TestPermissionDecisionError(t *testing.T) {
 	defaultAsk := &PermissionDecisionError{decision: security.DecisionAsk}
 	if !strings.Contains(defaultAsk.Error(), "permission approval required") {
 		t.Fatalf("expected default ask message, got %q", defaultAsk.Error())
+	}
+
+	capabilityErr := &PermissionDecisionError{
+		decision: security.DecisionDeny,
+		ruleID:   security.CapabilityRuleID,
+	}
+	if !errors.Is(capabilityErr, ErrCapabilityDenied) {
+		t.Fatalf("capability deny should match ErrCapabilityDenied")
+	}
+	if !errors.Is(capabilityErr, ErrPermissionDenied) {
+		t.Fatalf("capability deny should also match ErrPermissionDenied")
 	}
 }
 
@@ -1875,7 +1892,9 @@ func TestDefaultManagerExecuteCapabilityTokenWithoutSigner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign token: %v", err)
 	}
+	manager.capabilityMu.Lock()
 	manager.capabilitySigner = nil
+	manager.capabilityMu.Unlock()
 
 	_, execErr := manager.Execute(context.Background(), ToolCallInput{
 		ID:              "call-no-signer",
@@ -1895,6 +1914,9 @@ func TestDefaultManagerExecuteCapabilityTokenWithoutSigner(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(permissionErr.Reason()), "signer is unavailable") {
 		t.Fatalf("expected signer unavailable reason, got %q", permissionErr.Reason())
+	}
+	if !errors.Is(execErr, ErrCapabilityDenied) {
+		t.Fatalf("expected capability denied sentinel, got %v", execErr)
 	}
 	if readTool.callCount != 0 {
 		t.Fatalf("expected denied call not to execute tool, got %d", readTool.callCount)

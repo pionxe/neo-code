@@ -25,6 +25,7 @@ const (
 	reasonReadResponseFailed   = "read response failed"
 	reasonUnsupportedType      = "unsupported content type"
 	reasonEmptyContent         = "content is empty after extraction"
+	reasonRedirectNotAllowed   = "redirect is not allowed"
 	errorMessageUnexpectedHTTP = "unexpected HTTP status %s"
 )
 
@@ -58,11 +59,19 @@ type responseData struct {
 func New(cfg Config) *Tool {
 	normalized := normalizeConfig(cfg)
 	return &Tool{
-		client: &http.Client{
-			Timeout: normalized.Timeout,
-		},
+		client:        newHTTPClient(normalized.Timeout),
 		cfg:           normalized,
 		supportedText: newContentTypeSet(normalized.SupportedContentTypes),
+	}
+}
+
+// newHTTPClient 创建禁止自动重定向的客户端，避免跨域重定向绕过上层网络权限校验。
+func newHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 }
 
@@ -171,6 +180,14 @@ func (t *Tool) handleResponse(targetURL string, resp *http.Response) (tools.Tool
 		Status:      resp.Status,
 		ContentType: detectContentType(resp.Header.Get("Content-Type"), body),
 		Truncated:   truncated,
+	}
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		location := strings.TrimSpace(resp.Header.Get("Location"))
+		details := location
+		if details == "" {
+			details = resp.Status
+		}
+		return t.newErrorResult(data, reasonRedirectNotAllowed, details), fmt.Errorf("webfetch: redirect blocked: %s", details)
 	}
 
 	content, title, err := t.extractContent(data.ContentType, body)

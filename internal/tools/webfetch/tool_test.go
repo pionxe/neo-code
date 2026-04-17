@@ -59,6 +59,8 @@ func TestToolExecute(t *testing.T) {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = w.Write([]byte("upstream failed"))
+		case "/redirect":
+			http.Redirect(w, r, "https://example.com/blocked", http.StatusFound)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -208,6 +210,20 @@ func TestToolExecute(t *testing.T) {
 			},
 			expectStatus:  "502 Bad Gateway",
 			expectType:    "text/plain",
+			expectIsError: true,
+		},
+		{
+			name:       "blocks redirect responses",
+			args:       map[string]string{"url": server.URL + "/redirect"},
+			toolConfig: defaultConfig,
+			expectErr:  "redirect blocked",
+			expectContent: []string{
+				"tool error",
+				"tool: webfetch",
+				"reason: " + reasonRedirectNotAllowed,
+				"https://example.com/blocked",
+			},
+			expectStatus:  "302 Found",
 			expectIsError: true,
 		},
 		{
