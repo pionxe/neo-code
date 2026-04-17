@@ -81,3 +81,22 @@ func TestRequestLatencyMS(t *testing.T) {
 		t.Fatal("requestStartTime should not return zero time")
 	}
 }
+
+func TestEmitRequestLogUsesContextSource(t *testing.T) {
+	t.Parallel()
+
+	buffer := &bytes.Buffer{}
+	logger := log.New(buffer, "", 0)
+	ctx := WithRequestSource(context.Background(), RequestSourceHTTP)
+
+	emitRequestLog(ctx, logger, RequestLogEntry{
+		RequestID: "req-http",
+		Method:    "gateway.ping",
+		Status:    "ok",
+	})
+
+	output := buffer.String()
+	if !strings.Contains(output, `"source":"http"`) {
+		t.Fatalf("output = %q, want http source", output)
+	}
+}

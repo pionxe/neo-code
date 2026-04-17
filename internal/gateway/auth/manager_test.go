@@ -224,3 +224,13 @@ func TestDefaultAuthPathAndLoadOrCreateNilManager(t *testing.T) {
 		t.Fatal("expected nil manager loadOrCreate error")
 	}
 }
+
+func TestManagerGenerateTokenAndWriteCredentialsErrorBranches(t *testing.T) {
+	t.Run("write credentials fails on directory path", func(t *testing.T) {
+		dir := t.TempDir()
+		err := writeCredentials(dir, Credentials{Version: 1, Token: "token"})
+		if err == nil || !strings.Contains(err.Error(), "write auth file") {
+			t.Fatalf("expected write auth file error, got %v", err)
+		}
+	})
+}

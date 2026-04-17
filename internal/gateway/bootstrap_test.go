@@ -327,3 +327,92 @@ func TestHandleAuthenticateFrameBranches(t *testing.T) {
 		}
 	})
 }
+
+type invalidJSONMarshaler struct{}
+
+func (invalidJSONMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte("{"), nil
+}
+
+func TestBootstrapDecodeAdditionalBranches(t *testing.T) {
+	t.Run("decode authenticate pointer nil", func(t *testing.T) {
+		_, frameErr := decodeAuthenticatePayload((*protocol.AuthenticateParams)(nil))
+		if frameErr == nil || frameErr.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("frameErr = %#v, want missing_required_field", frameErr)
+		}
+	})
+
+	t.Run("decode authenticate unmarshal error", func(t *testing.T) {
+		_, frameErr := decodeAuthenticatePayload(invalidJSONMarshaler{})
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("frameErr = %#v, want invalid_frame", frameErr)
+		}
+	})
+
+	t.Run("decode bind stream unmarshal error", func(t *testing.T) {
+		_, frameErr := decodeBindStreamParams(invalidJSONMarshaler{})
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("frameErr = %#v, want invalid_frame", frameErr)
+		}
+	})
+
+	t.Run("decode bind stream pointer nil", func(t *testing.T) {
+		_, frameErr := decodeBindStreamParams((*protocol.BindStreamParams)(nil))
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("frameErr = %#v, want invalid_frame", frameErr)
+		}
+	})
+
+	t.Run("decode bind stream map missing session", func(t *testing.T) {
+		_, frameErr := decodeBindStreamParams(map[string]any{"run_id": "r-1"})
+		if frameErr == nil || frameErr.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("frameErr = %#v, want missing_required_field", frameErr)
+		}
+	})
+
+	t.Run("decode bind stream default struct", func(t *testing.T) {
+		payload := struct {
+			SessionID string `json:"session_id"`
+			RunID     string `json:"run_id"`
+			Channel   string `json:"channel"`
+		}{
+			SessionID: "s-1",
+			RunID:     "r-1",
+			Channel:   "ipc",
+		}
+		params, frameErr := decodeBindStreamParams(payload)
+		if frameErr != nil {
+			t.Fatalf("frameErr = %v", frameErr)
+		}
+		if params.SessionID != "s-1" || params.Channel != StreamChannelIPC {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("decode wake pointer nil", func(t *testing.T) {
+		_, err := decodeWakeIntent((*protocol.WakeIntent)(nil))
+		if err == nil {
+			t.Fatal("expected nil pointer wake payload error")
+		}
+	})
+
+	t.Run("decode wake unmarshal error", func(t *testing.T) {
+		_, err := decodeWakeIntent(invalidJSONMarshaler{})
+		if err == nil {
+			t.Fatal("expected wake decode error")
+		}
+	})
+
+	t.Run("decode wake direct struct", func(t *testing.T) {
+		intent, err := decodeWakeIntent(protocol.WakeIntent{
+			Action: "review",
+			Params: map[string]string{"path": "README.md"},
+		})
+		if err != nil {
+			t.Fatalf("decode wake intent: %v", err)
+		}
+		if intent.Action != "review" {
+			t.Fatalf("action = %q, want review", intent.Action)
+		}
+	})
+}

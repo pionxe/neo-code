@@ -395,3 +395,29 @@ func TestNewJSONRPCErrorResponseWithNilIDEncodesNull(t *testing.T) {
 		t.Fatalf("encoded response id = %#v, want nil", payload["id"])
 	}
 }
+
+func TestJSONRPCHelpersAdditionalBranches(t *testing.T) {
+	if got := MapGatewayCodeToJSONRPCCode(GatewayCodeInternalError); got != JSONRPCCodeInternalError {
+		t.Fatalf("internal mapping = %d, want %d", got, JSONRPCCodeInternalError)
+	}
+	if got := MapGatewayCodeToJSONRPCCode("unknown-code"); got != JSONRPCCodeInternalError {
+		t.Fatalf("default mapping = %d, want %d", got, JSONRPCCodeInternalError)
+	}
+
+	if _, err := normalizeJSONRPCID(json.RawMessage(`null`)); err == nil {
+		t.Fatal("expected null id error")
+	}
+	if _, err := normalizeJSONRPCID(json.RawMessage(`"   "`)); err == nil {
+		t.Fatal("expected blank string id error")
+	}
+
+	if _, err := decodeAuthenticateParams(json.RawMessage(`null`)); err == nil {
+		t.Fatal("expected missing authenticate params error")
+	}
+	if _, err := decodeBindStreamParams(json.RawMessage(`null`)); err == nil {
+		t.Fatal("expected missing bind stream params error")
+	}
+	if _, err := decodeWakeIntentParams(json.RawMessage(`null`)); err == nil {
+		t.Fatal("expected missing wake params error")
+	}
+}

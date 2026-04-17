@@ -824,6 +824,32 @@ func TestDispatcherAuthenticateBranches(t *testing.T) {
 			t.Fatalf("expected unexpected auth frame error, got %v", err)
 		}
 	})
+
+	t.Run("auth version mismatch", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			requestIDFn: func() string { return "wake-auth-4" },
+		}
+		conn := &stubDispatchConn{
+			readBuffer: bytes.NewBufferString(`{"jsonrpc":"1.0","id":"wake-auth-4-auth","result":{}}` + "\n"),
+		}
+		err := dispatcher.authenticate(context.Background(), conn, "token-1")
+		if err == nil || !strings.Contains(err.Error(), "jsonrpc version") {
+			t.Fatalf("expected auth version mismatch error, got %v", err)
+		}
+	})
+
+	t.Run("auth id mismatch", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			requestIDFn: func() string { return "wake-auth-5" },
+		}
+		conn := &stubDispatchConn{
+			readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"other-auth","result":{}}` + "\n"),
+		}
+		err := dispatcher.authenticate(context.Background(), conn, "token-1")
+		if err == nil || !strings.Contains(err.Error(), "id mismatch") {
+			t.Fatalf("expected auth id mismatch error, got %v", err)
+		}
+	})
 }
 
 func TestDispatcherDispatchWithAuthHandshake(t *testing.T) {

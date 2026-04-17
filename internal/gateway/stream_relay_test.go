@@ -485,3 +485,49 @@ func registerConnectionForRelayTest(
 		t.Fatalf("bind connection: %v", bindErr)
 	}
 }
+
+func TestStreamRelayAdditionalCoverageBranches(t *testing.T) {
+	t.Run("snapshot counts skips nil connection entry", func(t *testing.T) {
+		relay := NewStreamRelay(StreamRelayOptions{})
+		relay.mu.Lock()
+		relay.connections[ConnectionID("nil-entry")] = nil
+		relay.mu.Unlock()
+
+		snapshot := relay.SnapshotConnectionCounts()
+		if snapshot[StreamChannelIPC] != 0 || snapshot[StreamChannelWS] != 0 || snapshot[StreamChannelSSE] != 0 {
+			t.Fatalf("unexpected snapshot: %#v", snapshot)
+		}
+	})
+
+	t.Run("send sync response branches", func(t *testing.T) {
+		var nilRelay *StreamRelay
+		if nilRelay.SendJSONRPCResponseSync("cid", protocol.JSONRPCResponse{}) {
+			t.Fatal("nil relay should return false")
+		}
+
+		relay := NewStreamRelay(StreamRelayOptions{})
+		if relay.SendJSONRPCResponseSync("", protocol.JSONRPCResponse{}) {
+			t.Fatal("empty connection id should return false")
+		}
+		if relay.SendJSONRPCResponseSync("missing", protocol.JSONRPCResponse{}) {
+			t.Fatal("missing connection should return false")
+		}
+	})
+
+	t.Run("update active connection metrics", func(t *testing.T) {
+		metrics := NewGatewayMetrics()
+		relay := NewStreamRelay(StreamRelayOptions{Metrics: metrics})
+		relay.mu.Lock()
+		relay.connections[ConnectionID("ipc")] = &relayConnection{channel: StreamChannelIPC}
+		relay.connections[ConnectionID("ws")] = &relayConnection{channel: StreamChannelWS}
+		relay.connections[ConnectionID("sse")] = &relayConnection{channel: StreamChannelSSE}
+		relay.connections[ConnectionID("nil")] = nil
+		relay.updateActiveConnectionMetricsLocked()
+		relay.mu.Unlock()
+
+		entries := metrics.Snapshot()["gateway_connections_active"]
+		if entries["ipc"] != 1 || entries["ws"] != 1 || entries["sse"] != 1 {
+			t.Fatalf("unexpected metrics snapshot: %#v", entries)
+		}
+	})
+}

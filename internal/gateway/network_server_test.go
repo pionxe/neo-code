@@ -668,6 +668,88 @@ func TestNetworkServerVersionAndObservabilityAuthHelpers(t *testing.T) {
 	})
 }
 
+func TestNetworkServerObservabilityHandlerBranches(t *testing.T) {
+	t.Run("prometheus handler branches", func(t *testing.T) {
+		server := &NetworkServer{}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/metrics", nil)
+		server.handlePrometheusMetrics(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+
+		recorder = httptest.NewRecorder()
+		request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		server.handlePrometheusMetrics(recorder, request)
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+		}
+
+		server.metrics = NewGatewayMetrics()
+		server.authenticator = staticTokenAuthenticator{token: "token-1"}
+		recorder = httptest.NewRecorder()
+		request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		server.handlePrometheusMetrics(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+		}
+
+		recorder = httptest.NewRecorder()
+		request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		request.Header.Set("Authorization", "Bearer token-1")
+		server.handlePrometheusMetrics(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("json metrics unauthorized", func(t *testing.T) {
+		server := &NetworkServer{
+			metrics:        NewGatewayMetrics(),
+			authenticator:  staticTokenAuthenticator{token: "token-2"},
+			allowedOrigins: defaultControlPlaneOrigins(),
+		}
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/metrics.json", nil)
+		server.handleJSONMetrics(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+		}
+	})
+}
+
+func TestNetworkServerOriginAndTokenHelpersAdditional(t *testing.T) {
+	normalized := normalizeControlPlaneOrigins([]string{"  HTTP://LOCALHOST ", "", " app://desktop "})
+	if len(normalized) != 2 {
+		t.Fatalf("normalized len = %d, want 2", len(normalized))
+	}
+	if normalized[0] != "http://localhost" || normalized[1] != "app://desktop" {
+		t.Fatalf("normalized = %#v", normalized)
+	}
+
+	if originMatchesAllowRule("http://localhost:3000", "") {
+		t.Fatal("blank allow rule should reject")
+	}
+	if !originMatchesAllowRule("http://[::1]:8080", "http://[::1]") {
+		t.Fatal("ipv6 localhost with port should match")
+	}
+
+	server := &NetworkServer{allowedOrigins: []string{"http://localhost"}}
+	if err := server.validateWebSocketOrigin(nil); err == nil {
+		t.Fatal("nil request should be rejected")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	request.Header.Set("Origin", "http://evil.example")
+	if err := server.validateWebSocketOrigin(request); err == nil {
+		t.Fatal("disallowed origin should be rejected")
+	}
+
+	if token := extractBearerToken("Basic abc"); token != "" {
+		t.Fatalf("token = %q, want empty", token)
+	}
+}
+
 func TestNetworkServerCloseInterruptsStreams(t *testing.T) {
 	server := newTestNetworkServer(t, NetworkServerOptions{})
 	testContext, cancel := context.WithCancel(context.Background())

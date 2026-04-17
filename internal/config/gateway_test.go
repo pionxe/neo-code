@@ -419,3 +419,18 @@ func TestGatewayApplyDefaultsNilReceivers(t *testing.T) {
 	var observabilityCfg *GatewayObservabilityConfig
 	observabilityCfg.ApplyDefaults(GatewayObservabilityConfig{MetricsEnabled: boolPtr(false)})
 }
+
+func TestLoadGatewayConfigReadFileError(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, configName)
+	if err := os.Mkdir(configPath, 0o755); err != nil {
+		t.Fatalf("mkdir config path: %v", err)
+	}
+
+	_, err := LoadGatewayConfig(context.Background(), baseDir)
+	if err == nil || !strings.Contains(err.Error(), "read gateway config file") {
+		t.Fatalf("expected read gateway config file error, got %v", err)
+	}
+}

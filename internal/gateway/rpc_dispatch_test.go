@@ -352,3 +352,37 @@ func TestDispatchRPCRequestMetricsBranches(t *testing.T) {
 		t.Fatalf("expected ok request metric, snapshot=%#v", snapshot["gateway_requests_total"])
 	}
 }
+
+func TestDispatchRPCRequestFrameErrorWithoutPayload(t *testing.T) {
+	originalHandlers := requestFrameHandlers
+	requestFrameHandlers = map[FrameAction]requestFrameHandler{
+		FrameActionPing: func(_ context.Context, frame MessageFrame) MessageFrame {
+			return MessageFrame{Type: FrameTypeError, Action: frame.Action, RequestID: frame.RequestID}
+		},
+	}
+	t.Cleanup(func() { requestFrameHandlers = originalHandlers })
+
+	response := dispatchRPCRequest(context.Background(), protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"rpc-noerr-1"`),
+		Method:  protocol.MethodGatewayPing,
+		Params:  json.RawMessage(`{}`),
+	}, nil)
+	if response.Error == nil {
+		t.Fatal("expected rpc error response")
+	}
+	if code := protocol.GatewayCodeFromJSONRPCError(response.Error); code != ErrorCodeInternalError.String() {
+		t.Fatalf("gateway_code = %q, want %q", code, ErrorCodeInternalError.String())
+	}
+}
+
+func TestHydrateFrameSessionFromPayloadBranch(t *testing.T) {
+	frame := hydrateFrameSessionFromConnection(context.Background(), MessageFrame{
+		Type:    FrameTypeRequest,
+		Action:  FrameActionPing,
+		Payload: map[string]any{"session_id": "s-from-payload"},
+	})
+	if frame.SessionID != "s-from-payload" {
+		t.Fatalf("session_id = %q, want %q", frame.SessionID, "s-from-payload")
+	}
+}
