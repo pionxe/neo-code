@@ -80,6 +80,9 @@ func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string
 
 type stubRuntime struct {
 	events          chan agentruntime.RuntimeEvent
+	prepareInputs   []agentruntime.PrepareInput
+	prepareErr      error
+	preparedOutput  agentruntime.UserInput
 	runInputs       []agentruntime.UserInput
 	resolveCalls    []agentruntime.PermissionResolutionInput
 	resolveErr      error
@@ -99,6 +102,38 @@ type snapshotRuntime struct {
 
 func newStubRuntime() *stubRuntime {
 	return &stubRuntime{events: make(chan agentruntime.RuntimeEvent)}
+}
+
+func (s *stubRuntime) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
+	s.prepareInputs = append(s.prepareInputs, input)
+	if s.prepareErr != nil {
+		return agentruntime.UserInput{}, s.prepareErr
+	}
+	if len(s.preparedOutput.Parts) > 0 {
+		return s.preparedOutput, nil
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		sessionID = "session-prepared"
+	}
+	content := strings.TrimSpace(input.Text)
+	if content == "" {
+		content = "image input"
+	}
+	return agentruntime.UserInput{
+		SessionID: sessionID,
+		RunID:     strings.TrimSpace(input.RunID),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart(content)},
+		Workdir:   strings.TrimSpace(input.Workdir),
+	}, nil
+}
+
+func (s *stubRuntime) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	prepared, err := s.PrepareUserInput(ctx, input)
+	if err != nil {
+		return err
+	}
+	return s.Run(ctx, prepared)
 }
 
 func (s *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) error {
@@ -1474,44 +1509,6 @@ func TestRuntimeEventRunContextHandler(t *testing.T) {
 	}
 }
 
-func TestRuntimeEventRunContextHandlerInvalidatesModelCapabilityCache(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.state.CurrentProvider = "provider-a"
-	app.state.CurrentModel = "model-a"
-	app.currentModelCapabilities = modelCapabilityState{
-		checked:            true,
-		supportsImageInput: true,
-	}
-
-	payload := tuiservices.RuntimeRunContextPayload{
-		Provider: "provider-b",
-		Model:    "model-b",
-	}
-	_ = runtimeEventRunContextHandler(&app, agentruntime.RuntimeEvent{Payload: payload})
-	if app.currentModelCapabilities.checked {
-		t.Fatalf("expected capability cache to be invalidated when provider/model changes")
-	}
-}
-
-func TestSyncConfigStateInvalidatesModelCapabilityCache(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.state.CurrentProvider = "provider-a"
-	app.state.CurrentModel = "model-a"
-	app.currentModelCapabilities = modelCapabilityState{
-		checked:            true,
-		supportsImageInput: true,
-	}
-
-	app.syncConfigState(config.Config{
-		SelectedProvider: "provider-b",
-		CurrentModel:     "model-b",
-		Workdir:          app.state.CurrentWorkdir,
-	})
-	if app.currentModelCapabilities.checked {
-		t.Fatalf("expected capability cache to be invalidated")
-	}
-}
-
 func TestUpdatePasteImageShortcutFailure(t *testing.T) {
 	app, _ := newTestApp(t)
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
@@ -1563,8 +1560,8 @@ func TestUpdateEnterImageReferencePath(t *testing.T) {
 	}
 }
 
-func TestUpdateSendWithUnsupportedImageInput(t *testing.T) {
-	app, _ := newTestApp(t)
+func TestUpdateSendWithUnsupportedImageInputDoesNotPreBlock(t *testing.T) {
+	app, runtime := newTestApp(t)
 	app.pendingImageAttachments = []pendingImageAttachment{
 		{Name: "a.png", MimeType: "image/png", Path: "/tmp/a.png", Size: 1},
 	}
@@ -1586,25 +1583,25 @@ func TestUpdateSendWithUnsupportedImageInput(t *testing.T) {
 		_ = cmd()
 	}
 	app = model.(App)
-	if app.state.IsAgentRunning {
-		t.Fatalf("expected send to be blocked for unsupported model image input")
+	if !app.state.IsAgentRunning {
+		t.Fatalf("expected send not to be pre-blocked by model capability hints")
 	}
 	if app.hasImageAttachments() {
-		t.Fatalf("expected pending image attachments to be cleared on unsupported model")
+		t.Fatalf("expected pending image attachments to be cleared after send")
 	}
-	if app.state.StatusText != "Model does not support images" {
+	if app.state.StatusText != statusThinking {
 		t.Fatalf("unexpected status text: %q", app.state.StatusText)
 	}
-	if app.input.Value() != "hello" {
-		t.Fatalf("expected input to be preserved when send is blocked, got %q", app.input.Value())
+	if app.input.Value() != "" || app.state.InputText != "" {
+		t.Fatalf("expected input to reset after send, got input=%q state=%q", app.input.Value(), app.state.InputText)
 	}
-	if app.state.InputText != "hello" {
-		t.Fatalf("expected state input text to be preserved, got %q", app.state.InputText)
+	if len(runtime.prepareInputs) != 1 || len(runtime.prepareInputs[0].Images) != 1 {
+		t.Fatalf("expected image to flow into prepare pipeline, got %+v", runtime.prepareInputs)
 	}
 }
 
-func TestUpdateSendWithImageAttachmentsWithoutSessionAssets(t *testing.T) {
-	app, _ := newTestApp(t)
+func TestUpdateSendWithImageAttachmentsUsesPreparePipeline(t *testing.T) {
+	app, runtime := newTestApp(t)
 	app.pendingImageAttachments = []pendingImageAttachment{
 		{Name: "a.png", MimeType: "image/png", Path: "/tmp/a.png", Size: 1},
 	}
@@ -1626,20 +1623,72 @@ func TestUpdateSendWithImageAttachmentsWithoutSessionAssets(t *testing.T) {
 		_ = cmd()
 	}
 	app = model.(App)
-	if app.state.IsAgentRunning {
-		t.Fatalf("expected send to be blocked when session assets are unavailable")
+	if !app.state.IsAgentRunning {
+		t.Fatalf("expected send to enter running state")
 	}
 	if app.hasImageAttachments() {
-		t.Fatalf("expected pending image attachments to be cleared when storage is unavailable")
+		t.Fatalf("expected pending image attachments to be cleared after send")
 	}
-	if app.state.StatusText != "Image attachments need session asset support" {
+	if app.state.StatusText != statusThinking {
 		t.Fatalf("unexpected status text: %q", app.state.StatusText)
 	}
-	if app.input.Value() != "hello" {
-		t.Fatalf("expected input to be preserved when send is blocked, got %q", app.input.Value())
+	if app.input.Value() != "" {
+		t.Fatalf("expected input to be reset after send, got %q", app.input.Value())
 	}
-	if app.state.InputText != "hello" {
-		t.Fatalf("expected state input text to be preserved, got %q", app.state.InputText)
+	if app.state.InputText != "" {
+		t.Fatalf("expected state input text to reset after send, got %q", app.state.InputText)
+	}
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input, got %+v", runtime.prepareInputs)
+	}
+	if len(runtime.prepareInputs[0].Images) != 1 || runtime.prepareInputs[0].Images[0].MimeType != "image/png" {
+		t.Fatalf("expected image metadata to flow through prepare input, got %+v", runtime.prepareInputs[0].Images)
+	}
+	if len(runtime.runInputs) != 1 {
+		t.Fatalf("expected one runtime run input, got %+v", runtime.runInputs)
+	}
+}
+
+func TestUpdateSendWithInlineImageReferenceUsesPreparePipeline(t *testing.T) {
+	app, runtime := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	imagePath := filepath.Join(root, "burn.png")
+	if err := os.WriteFile(imagePath, []byte("png"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	app.providerSvc = stubProviderService{
+		providers: []configstate.ProviderOption{{ID: app.state.CurrentProvider, Name: app.state.CurrentProvider}},
+		models: []providertypes.ModelDescriptor{{
+			ID:   app.state.CurrentModel,
+			Name: app.state.CurrentModel,
+			CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateSupported,
+			},
+		}},
+	}
+
+	app.input.SetValue("请分析 @burn.png")
+	app.state.InputText = "请分析 @burn.png"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input, got %+v", runtime.prepareInputs)
+	}
+	if runtime.prepareInputs[0].Text != "请分析" {
+		t.Fatalf("expected inline image token removed from text, got %q", runtime.prepareInputs[0].Text)
+	}
+	if len(runtime.prepareInputs[0].Images) != 1 || runtime.prepareInputs[0].Images[0].MimeType != "" {
+		t.Fatalf("expected one promoted image in prepare input, got %+v", runtime.prepareInputs[0].Images)
+	}
+	if len(runtime.runInputs) != 1 {
+		t.Fatalf("expected one runtime run input, got %+v", runtime.runInputs)
 	}
 }
 
@@ -1778,7 +1827,7 @@ func TestRuntimeEventAgentChunkHandler(t *testing.T) {
 func TestRuntimeEventRunCanceledHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.ActiveRunID = "run-3"
-	runtimeEventRunCanceledHandler(&app, agentruntime.RuntimeEvent{})
+	runtimeEventRunCanceledHandler(&app)
 	if app.state.StatusText != statusCanceled {
 		t.Fatalf("expected canceled status")
 	}

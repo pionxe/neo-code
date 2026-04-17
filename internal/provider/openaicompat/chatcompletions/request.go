@@ -67,7 +67,7 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 				Function: FunctionDefinition{
 					Name:        spec.Name,
 					Description: spec.Description,
-					Parameters:  spec.Schema,
+					Parameters:  normalizeToolSchemaForOpenAI(spec.Schema),
 				},
 			}
 			payload.Tools = append(payload.Tools, def)
@@ -75,6 +75,46 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 	}
 
 	return payload, nil
+}
+
+// normalizeToolSchemaForOpenAI 归一化工具参数 schema，避免 OpenAI chat-completions 顶层关键字约束报错。
+// 仅收敛顶层结构：保证 type=object，并移除顶层 oneOf/anyOf/allOf/enum/not；嵌套语义保持原样。
+func normalizeToolSchemaForOpenAI(schema map[string]any) map[string]any {
+	normalized := cloneSchemaTopLevel(schema)
+	if len(normalized) == 0 {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+
+	typeName, _ := normalized["type"].(string)
+	if strings.TrimSpace(strings.ToLower(typeName)) != "object" {
+		normalized["type"] = "object"
+	}
+
+	if _, ok := normalized["properties"].(map[string]any); !ok {
+		normalized["properties"] = map[string]any{}
+	}
+
+	delete(normalized, "oneOf")
+	delete(normalized, "anyOf")
+	delete(normalized, "allOf")
+	delete(normalized, "enum")
+	delete(normalized, "not")
+	return normalized
+}
+
+// cloneSchemaTopLevel 复制 schema 顶层 map，避免归一化阶段修改调用方原始结构。
+func cloneSchemaTopLevel(schema map[string]any) map[string]any {
+	if len(schema) == 0 {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(schema))
+	for key, value := range schema {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // ToOpenAIMessage 将通用 Message 转换为 OpenAI 协议消息格式。

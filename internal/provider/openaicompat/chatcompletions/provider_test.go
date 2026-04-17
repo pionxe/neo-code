@@ -71,6 +71,39 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("unexpected tools: %+v", payload.Tools)
 		}
 
+		toolSchemaWithTopLevelCombinator := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action": map[string]any{"type": "string"},
+			},
+			"oneOf": []any{
+				map[string]any{"required": []string{"action"}},
+			},
+		}
+		sanitizedPayload, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{
+				{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+			},
+			Tools: []providertypes.ToolSpec{{
+				Name:        "todo_write",
+				Description: "write todos",
+				Schema:      toolSchemaWithTopLevelCombinator,
+			}},
+		})
+		if err != nil {
+			t.Fatalf("BuildRequest() sanitize schema error = %v", err)
+		}
+		gotSchema := sanitizedPayload.Tools[0].Function.Parameters
+		if gotSchema["type"] != "object" {
+			t.Fatalf("expected sanitized schema type object, got %+v", gotSchema["type"])
+		}
+		if _, ok := gotSchema["oneOf"]; ok {
+			t.Fatalf("expected sanitized schema to drop top-level oneOf, got %+v", gotSchema)
+		}
+		if _, ok := toolSchemaWithTopLevelCombinator["oneOf"]; !ok {
+			t.Fatalf("expected original schema not to be mutated")
+		}
+
 		withSessionAsset, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
 			Messages: []providertypes.Message{
 				{

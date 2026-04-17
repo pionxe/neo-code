@@ -28,6 +28,8 @@ const (
 
 // Runtime 定义 runtime 对外暴露的运行、压缩与审批接口。
 type Runtime interface {
+	Submit(ctx context.Context, input PrepareInput) error
+	PrepareUserInput(ctx context.Context, input PrepareInput) (UserInput, error)
 	Run(ctx context.Context, input UserInput) error
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
@@ -51,6 +53,32 @@ type UserInput struct {
 	CapabilityToken *security.CapabilityToken
 }
 
+// UserImageInput 表示用户输入中附带的单个图片引用（路径 + MIME）。
+type UserImageInput struct {
+	Path     string
+	MimeType string
+}
+
+// PrepareInput 表示进入 runtime 归一化前的领域输入（仅包含文本/图片/会话上下文）。
+type PrepareInput struct {
+	SessionID string
+	RunID     string
+	Workdir   string
+	Text      string
+	Images    []UserImageInput
+}
+
+// PreparedInputResult 描述输入归一化完成后的结果快照（标准 UserInput + 本轮保存附件元数据）。
+type PreparedInputResult struct {
+	UserInput   UserInput
+	SavedAssets []agentsession.AssetMeta
+}
+
+// UserInputPreparer 定义 runtime 输入归一化能力：会话绑定、附件持久化与 parts 组装。
+type UserInputPreparer interface {
+	Prepare(ctx context.Context, input PrepareInput, defaultWorkdir string) (PreparedInputResult, error)
+}
+
 // ProviderFactory 负责基于运行期配置创建 provider 实例。
 type ProviderFactory interface {
 	Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error)
@@ -72,6 +100,7 @@ type Service struct {
 	configManager                *config.Manager
 	sessionStore                 agentsession.Store
 	sessionAssetStore            agentsession.AssetStore
+	userInputPreparer            UserInputPreparer
 	toolManager                  tools.Manager
 	providerFactory              ProviderFactory
 	contextBuilder               agentcontext.Builder
@@ -144,6 +173,11 @@ func (s *Service) SetMemoExtractor(extractor MemoExtractor) {
 // SetSessionAssetStore 设置会话附件存储实现，用于 provider 请求阶段读取 session_asset。
 func (s *Service) SetSessionAssetStore(store agentsession.AssetStore) {
 	s.sessionAssetStore = store
+}
+
+// SetUserInputPreparer 设置输入归一化能力实现；runtime 仅做编排调用，不承载具体存储细节。
+func (s *Service) SetUserInputPreparer(preparer UserInputPreparer) {
+	s.userInputPreparer = preparer
 }
 
 // SetSkillsRegistry 设置运行时可选的 skills registry，用于激活校验与上下文注入。

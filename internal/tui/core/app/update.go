@@ -319,7 +319,8 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter, Paste: true}
 		} else {
 			input := strings.TrimSpace(a.input.Value())
-			if input == "" || a.isBusy() {
+			hasImages := a.hasImageAttachments()
+			if (input == "" && !hasImages) || a.isBusy() {
 				return a, tea.Batch(cmds...)
 			}
 
@@ -411,21 +412,18 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
-			if a.hasImageAttachments() && !a.canSendImageInput() {
-				a.state.ExecutionError = "current model does not support image input"
-				a.state.StatusText = "Model does not support images"
-				a.appendActivity("multimodal", "Image input not supported", fmt.Sprintf("Model %s does not support image input", a.state.CurrentModel), true)
-				a.clearImageAttachments()
+			normalizedInput, absorbedImages, err := a.absorbInlineImageReferences(input)
+			if err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("multimodal", "Failed to absorb inline image reference", err.Error(), true)
 				return a, tea.Batch(cmds...)
 			}
-			if a.hasImageAttachments() {
-				a.state.ExecutionError = "image attachments require session asset storage before sending"
-				a.state.StatusText = "Image attachments need session asset support"
-				a.appendActivity("multimodal", "Image attachments not sent", "Session asset storage is not available yet; images were not converted to text.", true)
-				a.clearImageAttachments()
-				return a, tea.Batch(cmds...)
+			if absorbedImages > 0 {
+				input = normalizedInput
 			}
 
+			// image capability precheck is intentionally disabled.
 			// 如果不是立即执行的命令，再执行常规的输入重置
 			a.input.Reset()
 			a.state.InputText = ""
@@ -442,12 +440,23 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.state.StatusText = statusThinking
 			a.state.CurrentTool = ""
 
-			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(input)}})
-			a.rebuildTranscript()
 			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
 			a.state.ActiveRunID = runID
 			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.CurrentWorkdir)
-			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, input))
+			images := make([]agentruntime.UserImageInput, 0, len(a.pendingImageAttachments))
+			for _, attachment := range a.pendingImageAttachments {
+				images = append(images, agentruntime.UserImageInput{
+					Path:     attachment.Path,
+					MimeType: attachment.MimeType,
+				})
+			}
+			cmds = append(cmds, runAgent(a.runtime, agentruntime.PrepareInput{
+				SessionID: a.state.ActiveSessionID,
+				RunID:     runID,
+				Workdir:   requestedWorkdir,
+				Text:      input,
+				Images:    images,
+			}))
 			a.clearImageAttachments()
 			return a, tea.Batch(cmds...)
 		}
@@ -726,6 +735,7 @@ func (a *App) refreshSessionPicker() error {
 }
 
 func (a *App) refreshMessages() error {
+	a.resetSessionRuntimeState()
 	if strings.TrimSpace(a.state.ActiveSessionID) == "" {
 		a.activeMessages = nil
 		a.clearActivities()
@@ -743,6 +753,19 @@ func (a *App) refreshMessages() error {
 	a.setCurrentWorkdir(agentsession.EffectiveWorkdir(session.Workdir, a.configManager.Get().Workdir))
 	a.refreshRuntimeSourceSnapshot()
 	return nil
+}
+
+// resetSessionRuntimeState 在切换/刷新会话前清理运行态缓存，避免跨会话残留工具与用量展示。
+func (a *App) resetSessionRuntimeState() {
+	a.state.IsAgentRunning = false
+	a.state.StreamingReply = false
+	a.state.CurrentTool = ""
+	a.state.ActiveRunID = ""
+	a.state.ToolStates = nil
+	a.state.RunContext = tuistate.ContextWindowState{}
+	a.state.TokenUsage = tuistate.TokenUsageState{}
+	a.pendingPermission = nil
+	a.clearRunProgress()
 }
 
 func (a *App) activateSelectedSession() error {
@@ -789,10 +812,6 @@ func (a *App) syncActiveSessionTitle() {
 }
 
 func (a *App) syncConfigState(cfg config.Config) {
-	if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(cfg.SelectedProvider)) ||
-		!strings.EqualFold(strings.TrimSpace(a.state.CurrentModel), strings.TrimSpace(cfg.CurrentModel)) {
-		a.invalidateModelCapabilityCache()
-	}
 	a.state.CurrentProvider = cfg.SelectedProvider
 	a.state.CurrentModel = cfg.CurrentModel
 	if strings.TrimSpace(a.state.CurrentWorkdir) == "" {
@@ -868,6 +887,9 @@ type runtimeRunSnapshotSource interface {
 
 var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentruntime.RuntimeEvent) bool{
 	agentruntime.EventUserMessage:                              runtimeEventUserMessageHandler,
+	agentruntime.EventInputNormalized:                          runtimeEventInputNormalizedHandler,
+	agentruntime.EventAssetSaved:                               runtimeEventAssetSavedHandler,
+	agentruntime.EventAssetSaveFailed:                          runtimeEventAssetSaveFailedHandler,
 	agentruntime.EventType(tuiservices.RuntimeEventRunContext): runtimeEventRunContextHandler,
 	agentruntime.EventType(tuiservices.RuntimeEventToolStatus): runtimeEventToolStatusHandler,
 	agentruntime.EventType(tuiservices.RuntimeEventUsage):      runtimeEventUsageHandler,
@@ -951,6 +973,59 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 }
 
 // runtimeEventUserMessageHandler 处理用户消息进入运行队列后的状态同步。
+// runtimeEventInputNormalizedHandler 处理输入归一化完成事件并更新运行态提示。
+func runtimeEventInputNormalizedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	if strings.TrimSpace(event.RunID) != "" {
+		a.state.ActiveRunID = strings.TrimSpace(event.RunID)
+	}
+	payload, ok := event.Payload.(agentruntime.InputNormalizedPayload)
+	if !ok {
+		return false
+	}
+	if payload.ImageCount > 0 {
+		a.appendActivity(
+			"multimodal",
+			"Input normalized",
+			fmt.Sprintf("text=%d chars, images=%d", payload.TextLength, payload.ImageCount),
+			false,
+		)
+	}
+	return false
+}
+
+// runtimeEventAssetSavedHandler 处理附件保存成功事件并写入活动面板。
+func runtimeEventAssetSavedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(agentruntime.AssetSavedPayload)
+	if !ok {
+		return false
+	}
+	detail := strings.TrimSpace(payload.AssetID)
+	if detail == "" {
+		detail = "asset saved"
+	}
+	if strings.TrimSpace(payload.Path) != "" {
+		detail = fmt.Sprintf("%s (%s)", detail, filepath.Base(payload.Path))
+	}
+	a.appendActivity("multimodal", "Saved attachment", detail, false)
+	return false
+}
+
+// runtimeEventAssetSaveFailedHandler 处理附件保存失败事件并同步错误状态。
+func runtimeEventAssetSaveFailedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(agentruntime.AssetSaveFailedPayload)
+	if !ok {
+		return false
+	}
+	message := strings.TrimSpace(payload.Message)
+	if message == "" {
+		message = "failed to save attachment"
+	}
+	a.state.ExecutionError = message
+	a.state.StatusText = message
+	a.appendActivity("multimodal", "Failed to save attachment", message, true)
+	return false
+}
+
 func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if strings.TrimSpace(event.RunID) != "" {
 		a.state.ActiveRunID = strings.TrimSpace(event.RunID)
@@ -960,7 +1035,19 @@ func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) boo
 	a.state.CurrentTool = ""
 	a.state.ExecutionError = ""
 	a.setRunProgress(0.15, "Queued")
-	return false
+	payload, ok := event.Payload.(providertypes.Message)
+	if !ok {
+		return false
+	}
+	content := renderMessagePartsForDisplay(payload.Parts)
+	if strings.TrimSpace(content) == "" || a.lastUserMatches(content) {
+		return false
+	}
+	a.activeMessages = append(a.activeMessages, providertypes.Message{
+		Role:  roleUser,
+		Parts: providertypes.CloneParts(payload.Parts),
+	})
+	return true
 }
 
 // runtimeEventRunContextHandler 处理 runtime 上下文事件并回填界面状态。
@@ -975,15 +1062,9 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 		a.state.ActiveRunID = mapped.RunID
 	}
 	if strings.TrimSpace(mapped.Provider) != "" {
-		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(mapped.Provider)) {
-			a.invalidateModelCapabilityCache()
-		}
 		a.state.CurrentProvider = mapped.Provider
 	}
 	if strings.TrimSpace(mapped.Model) != "" {
-		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentModel), strings.TrimSpace(mapped.Model)) {
-			a.invalidateModelCapabilityCache()
-		}
 		a.state.CurrentModel = mapped.Model
 	}
 	if strings.TrimSpace(mapped.Workdir) != "" {
@@ -1112,7 +1193,7 @@ func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool 
 }
 
 // runtimeEventRunCanceledHandler 处理运行取消事件。
-func runtimeEventRunCanceledHandler(a *App, event agentruntime.RuntimeEvent) bool {
+func runtimeEventRunCanceledHandler(a *App) bool {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
@@ -1330,6 +1411,15 @@ func (a *App) lastAssistantMatches(content string) bool {
 
 	last := a.activeMessages[len(a.activeMessages)-1]
 	return last.Role == roleAssistant && strings.TrimSpace(renderMessagePartsForDisplay(last.Parts)) == strings.TrimSpace(content)
+}
+
+// lastUserMatches 判断末条用户消息是否与给定文本一致，避免重复渲染。
+func (a *App) lastUserMatches(content string) bool {
+	if len(a.activeMessages) == 0 {
+		return false
+	}
+	last := a.activeMessages[len(a.activeMessages)-1]
+	return last.Role == roleUser && strings.TrimSpace(renderMessagePartsForDisplay(last.Parts)) == strings.TrimSpace(content)
 }
 
 func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
@@ -1895,15 +1985,10 @@ func ListenForRuntimeEvent(sub <-chan agentruntime.RuntimeEvent) tea.Cmd {
 	)
 }
 
-func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, workdir string, content string) tea.Cmd {
-	return tuiservices.RunAgentCmd(
+func runAgent(runtime agentruntime.Runtime, input agentruntime.PrepareInput) tea.Cmd {
+	return tuiservices.RunSubmitCmd(
 		runtime,
-		agentruntime.UserInput{
-			SessionID: sessionID,
-			RunID:     strings.TrimSpace(runID),
-			Parts:     []providertypes.ContentPart{providertypes.NewTextPart(content)},
-			Workdir:   workdir,
-		},
+		input,
 		func(err error) tea.Msg { return runFinishedMsg{Err: err} },
 	)
 }

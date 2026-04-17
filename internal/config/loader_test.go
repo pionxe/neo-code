@@ -1052,10 +1052,10 @@ func TestLoadCustomProvidersReadDirAndStatErrors(t *testing.T) {
 
 		_, err := loadCustomProviders(baseDir)
 		if err == nil {
-			t.Fatal("expected read providers dir error")
+			t.Fatal("expected create providers dir error")
 		}
-		if !strings.Contains(err.Error(), "read providers dir") {
-			t.Fatalf("expected read providers dir error, got %v", err)
+		if !strings.Contains(err.Error(), "create providers dir") {
+			t.Fatalf("expected create providers dir error, got %v", err)
 		}
 	})
 
@@ -1096,8 +1096,12 @@ func TestLoadCustomProvidersReturnsEmptyWhenProvidersDirMissing(t *testing.T) {
 	if len(providers) != 0 {
 		t.Fatalf("expected no custom providers, got %d", len(providers))
 	}
-	if _, err := os.Stat(providersPath); !os.IsNotExist(err) {
-		t.Fatalf("expected providers dir to remain missing, got %v", err)
+	info, err := os.Stat(providersPath)
+	if err != nil {
+		t.Fatalf("expected providers dir to be created, got %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected providers path to be directory")
 	}
 }
 

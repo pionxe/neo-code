@@ -138,6 +138,9 @@ func (t *Tool) Schema() map[string]any {
 			},
 			"artifacts": map[string]any{
 				"type": "array",
+				"items": map[string]any{
+					"type": "string",
+				},
 			},
 			"reason": map[string]any{
 				"type": "string",
