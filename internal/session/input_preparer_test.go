@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	providertypes "neo-code/internal/provider/types"
 )
@@ -16,7 +17,7 @@ func TestInputPreparerPrepareTextOnly(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
-	store := NewStore(t.TempDir(), workdir)
+	store := newInputPreparerTestStore(t, workdir)
 	preparer := NewInputPreparer(store, store)
 
 	result, err := preparer.Prepare(context.Background(), PrepareInput{
@@ -41,7 +42,7 @@ func TestInputPreparerPrepareTextAndImage(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
-	store := NewStore(t.TempDir(), workdir)
+	store := newInputPreparerTestStore(t, workdir)
 	preparer := NewInputPreparer(store, store)
 
 	imagePath := filepath.Join(workdir, "img.png")
@@ -90,7 +91,7 @@ func TestInputPreparerPrepareImageInfersMimeWhenMissing(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
-	store := NewStore(t.TempDir(), workdir)
+	store := newInputPreparerTestStore(t, workdir)
 	preparer := NewInputPreparer(store, store)
 
 	imagePath := filepath.Join(workdir, "auto.png")
@@ -118,7 +119,7 @@ func TestInputPreparerPrepareImageOnlyUsesImageTitle(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
-	store := NewStore(t.TempDir(), workdir)
+	store := newInputPreparerTestStore(t, workdir)
 	preparer := NewInputPreparer(store, store)
 
 	imagePath := filepath.Join(workdir, "only.png")
@@ -137,7 +138,7 @@ func TestInputPreparerPrepareImageOnlyUsesImageTitle(t *testing.T) {
 		t.Fatalf("expected one image part, got %+v", result.Parts)
 	}
 
-	session, err := store.Load(context.Background(), result.SessionID)
+	session, err := store.LoadSession(context.Background(), result.SessionID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -150,7 +151,7 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
-	store := NewStore(t.TempDir(), workdir)
+	store := newInputPreparerTestStore(t, workdir)
 
 	t.Run("missing store", func(t *testing.T) {
 		preparer := NewInputPreparer(nil, nil)
@@ -219,8 +220,8 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 
 	t.Run("existing session is kept when asset save fails", func(t *testing.T) {
 		existing := NewWithWorkdir("existing", workdir)
-		if err := store.Save(context.Background(), &existing); err != nil {
-			t.Fatalf("Save() error = %v", err)
+		if err := createSessionForPreparerTest(context.Background(), store, existing); err != nil {
+			t.Fatalf("createSessionForPreparerTest() error = %v", err)
 		}
 
 		preparer := NewInputPreparer(store, store)
@@ -233,15 +234,15 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 			t.Fatalf("expected asset save error")
 		}
 
-		if _, loadErr := store.Load(context.Background(), existing.ID); loadErr != nil {
+		if _, loadErr := store.LoadSession(context.Background(), existing.ID); loadErr != nil {
 			t.Fatalf("expected existing session to remain, load error = %v", loadErr)
 		}
 	})
 
 	t.Run("existing session cleanup removes previously saved assets on later failure", func(t *testing.T) {
 		existing := NewWithWorkdir("existing-cleanup", workdir)
-		if err := store.Save(context.Background(), &existing); err != nil {
-			t.Fatalf("Save() error = %v", err)
+		if err := createSessionForPreparerTest(context.Background(), store, existing); err != nil {
+			t.Fatalf("createSessionForPreparerTest() error = %v", err)
 		}
 
 		okImage := filepath.Join(workdir, "ok.png")
@@ -263,7 +264,7 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 			t.Fatalf("expected prepare error")
 		}
 
-		entries, readErr := os.ReadDir(store.assetsDir(existing.ID))
+		entries, readErr := os.ReadDir(filepath.Join(store.assetsDir, existing.ID))
 		if readErr != nil {
 			t.Fatalf("ReadDir() error = %v", readErr)
 		}
@@ -283,8 +284,8 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 		}
 
 		existing := NewWithWorkdir("existing-workdir", currentWorkdir)
-		if err := store.Save(context.Background(), &existing); err != nil {
-			t.Fatalf("Save() error = %v", err)
+		if err := createSessionForPreparerTest(context.Background(), store, existing); err != nil {
+			t.Fatalf("createSessionForPreparerTest() error = %v", err)
 		}
 
 		preparer := NewInputPreparer(store, store)
@@ -299,7 +300,7 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 			t.Fatalf("expected prepare error")
 		}
 
-		loaded, loadErr := store.Load(context.Background(), existing.ID)
+		loaded, loadErr := store.LoadSession(context.Background(), existing.ID)
 		if loadErr != nil {
 			t.Fatalf("Load() error = %v", loadErr)
 		}
@@ -313,7 +314,7 @@ func TestInputPreparerPrepareImagePathAndMimeValidation(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
-	store := NewStore(t.TempDir(), workdir)
+	store := newInputPreparerTestStore(t, workdir)
 	preparer := NewInputPreparer(store, store)
 
 	t.Run("relative path is resolved by workdir", func(t *testing.T) {
@@ -434,10 +435,28 @@ func TestInputPreparerPrepareUpdatesExistingSessionWorkdir(t *testing.T) {
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
 
-	store := NewStore(t.TempDir(), defaultWorkdir)
+	store := newInputPreparerTestStore(t, defaultWorkdir)
 	session := NewWithWorkdir("existing", currentWorkdir)
-	if err := store.Save(context.Background(), &session); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	session.Provider = "provider-a"
+	session.Model = "model-a"
+	session.TokenInputTotal = 13
+	session.TokenOutputTotal = 21
+	session.TaskState = TaskState{
+		Goal:      "keep original state",
+		Progress:  []string{"captured"},
+		NextStep:  "verify workdir-only update",
+		Blockers:  []string{"none"},
+		Decisions: []string{"preserve head fields"},
+	}
+	session.Todos = []TodoItem{{
+		ID:        "todo-preserve",
+		Content:   "must survive prepare workdir update",
+		Status:    TodoStatusInProgress,
+		CreatedAt: session.CreatedAt,
+		UpdatedAt: session.UpdatedAt,
+	}}
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("createSessionForPreparerTest() error = %v", err)
 	}
 
 	preparer := NewInputPreparer(store, store)
@@ -454,11 +473,171 @@ func TestInputPreparerPrepareUpdatesExistingSessionWorkdir(t *testing.T) {
 		t.Fatalf("expected target workdir %q, got %q", targetWorkdir, result.Workdir)
 	}
 
-	loaded, err := store.Load(context.Background(), session.ID)
+	loaded, err := store.LoadSession(context.Background(), session.ID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if loaded.Workdir != targetWorkdir {
 		t.Fatalf("expected persisted workdir %q, got %q", targetWorkdir, loaded.Workdir)
 	}
+	if loaded.Provider != session.Provider {
+		t.Fatalf("expected provider %q, got %q", session.Provider, loaded.Provider)
+	}
+	if loaded.Model != session.Model {
+		t.Fatalf("expected model %q, got %q", session.Model, loaded.Model)
+	}
+	if loaded.TokenInputTotal != session.TokenInputTotal || loaded.TokenOutputTotal != session.TokenOutputTotal {
+		t.Fatalf("expected token totals %d/%d, got %d/%d",
+			session.TokenInputTotal,
+			session.TokenOutputTotal,
+			loaded.TokenInputTotal,
+			loaded.TokenOutputTotal,
+		)
+	}
+	if loaded.TaskState.Goal != session.TaskState.Goal || loaded.TaskState.NextStep != session.TaskState.NextStep {
+		t.Fatalf("expected task state to remain unchanged, got %+v", loaded.TaskState)
+	}
+	if len(loaded.Todos) != 1 || loaded.Todos[0].ID != session.Todos[0].ID || loaded.Todos[0].Status != session.Todos[0].Status {
+		t.Fatalf("expected todos to remain unchanged, got %+v", loaded.Todos)
+	}
+}
+
+func TestInputPreparerPrepareWorkdirUpdatePreservesConcurrentSessionHeadChanges(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	defaultWorkdir := filepath.Join(base, "workspace")
+	if err := os.MkdirAll(defaultWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir default workdir: %v", err)
+	}
+	currentWorkdir := filepath.Join(defaultWorkdir, "current")
+	if err := os.MkdirAll(currentWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir current workdir: %v", err)
+	}
+	targetWorkdir := filepath.Join(currentWorkdir, "nested")
+	if err := os.MkdirAll(targetWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir nested workdir: %v", err)
+	}
+
+	store := newInputPreparerTestStore(t, defaultWorkdir)
+	session := NewWithWorkdir("existing", currentWorkdir)
+	session.Provider = "provider-before"
+	session.Model = "model-before"
+	session.TokenInputTotal = 3
+	session.TokenOutputTotal = 5
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("createSessionForPreparerTest() error = %v", err)
+	}
+
+	concurrentState := UpdateSessionStateInput{
+		SessionID: session.ID,
+		Title:     session.Title,
+		UpdatedAt: session.UpdatedAt.Add(time.Minute),
+		Provider:  "provider-after",
+		Model:     "model-after",
+		Workdir:   currentWorkdir,
+		TaskState: TaskState{
+			Goal:     "newer task state",
+			NextStep: "must survive workdir update",
+		},
+		Todos: []TodoItem{{
+			ID:        "todo-newer",
+			Content:   "written by concurrent run",
+			Status:    TodoStatusCompleted,
+			CreatedAt: session.CreatedAt,
+			UpdatedAt: session.UpdatedAt.Add(time.Minute),
+		}},
+		TokenInputTotal:  55,
+		TokenOutputTotal: 89,
+	}
+
+	preparerStore := &workdirRaceStore{
+		SQLiteStore: store,
+		beforeWorkdirUpdate: func(ctx context.Context) error {
+			return store.UpdateSessionState(ctx, concurrentState)
+		},
+	}
+	preparer := NewInputPreparer(preparerStore, store)
+
+	result, err := preparer.Prepare(context.Background(), PrepareInput{
+		SessionID:        session.ID,
+		Text:             "update workdir",
+		DefaultWorkdir:   defaultWorkdir,
+		RequestedWorkdir: "nested",
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if result.Workdir != targetWorkdir {
+		t.Fatalf("expected target workdir %q, got %q", targetWorkdir, result.Workdir)
+	}
+
+	loaded, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Workdir != targetWorkdir {
+		t.Fatalf("expected persisted workdir %q, got %q", targetWorkdir, loaded.Workdir)
+	}
+	if loaded.Provider != concurrentState.Provider || loaded.Model != concurrentState.Model {
+		t.Fatalf("expected provider/model %q/%q, got %q/%q",
+			concurrentState.Provider, concurrentState.Model, loaded.Provider, loaded.Model)
+	}
+	if loaded.TokenInputTotal != concurrentState.TokenInputTotal || loaded.TokenOutputTotal != concurrentState.TokenOutputTotal {
+		t.Fatalf("expected token totals %d/%d, got %d/%d",
+			concurrentState.TokenInputTotal,
+			concurrentState.TokenOutputTotal,
+			loaded.TokenInputTotal,
+			loaded.TokenOutputTotal,
+		)
+	}
+	if loaded.TaskState.Goal != concurrentState.TaskState.Goal || loaded.TaskState.NextStep != concurrentState.TaskState.NextStep {
+		t.Fatalf("expected newer task state to survive, got %+v", loaded.TaskState)
+	}
+	if len(loaded.Todos) != 1 || loaded.Todos[0].ID != concurrentState.Todos[0].ID || loaded.Todos[0].Status != concurrentState.Todos[0].Status {
+		t.Fatalf("expected newer todos to survive, got %+v", loaded.Todos)
+	}
+}
+
+func createSessionForPreparerTest(ctx context.Context, store *SQLiteStore, session Session) error {
+	_, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:               session.ID,
+		Title:            session.Title,
+		CreatedAt:        session.CreatedAt,
+		UpdatedAt:        session.UpdatedAt,
+		Provider:         session.Provider,
+		Model:            session.Model,
+		Workdir:          session.Workdir,
+		TaskState:        session.TaskState,
+		ActivatedSkills:  session.ActivatedSkills,
+		Todos:            session.Todos,
+		TokenInputTotal:  session.TokenInputTotal,
+		TokenOutputTotal: session.TokenOutputTotal,
+	})
+	return err
+}
+
+func newInputPreparerTestStore(t *testing.T, workdir string) *SQLiteStore {
+	t.Helper()
+
+	store := NewStore(t.TempDir(), workdir)
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	return store
+}
+
+type workdirRaceStore struct {
+	*SQLiteStore
+	beforeWorkdirUpdate func(ctx context.Context) error
+}
+
+// UpdateSessionWorkdir 在真正更新 workdir 前注入一次更晚的会话头写入，用于回归 stale snapshot 覆盖问题。
+func (s *workdirRaceStore) UpdateSessionWorkdir(ctx context.Context, input UpdateSessionWorkdirInput) error {
+	if s.beforeWorkdirUpdate != nil {
+		if err := s.beforeWorkdirUpdate(ctx); err != nil {
+			return err
+		}
+	}
+	return s.SQLiteStore.UpdateSessionWorkdir(ctx, input)
 }

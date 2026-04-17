@@ -74,6 +74,10 @@ type assetCleanupStore interface {
 	DeleteAsset(ctx context.Context, sessionID string, assetID string) error
 }
 
+type sessionCleanupStore interface {
+	DeleteSession(ctx context.Context, sessionID string) error
+}
+
 // NewInputPreparer 创建会话输入归一化组件。
 func NewInputPreparer(store Store, assetStore AssetStore) *InputPreparer {
 	return &InputPreparer{
@@ -333,13 +337,27 @@ func (p *InputPreparer) loadOrCreateSession(
 			return Session{}, false, sessionWorkdirUpdate{}, err
 		}
 		session := NewWithWorkdir(title, sessionWorkdir)
-		if err := p.store.Save(ctx, &session); err != nil {
+		created, err := p.store.CreateSession(ctx, CreateSessionInput{
+			ID:               session.ID,
+			Title:            session.Title,
+			CreatedAt:        session.CreatedAt,
+			UpdatedAt:        session.UpdatedAt,
+			Provider:         session.Provider,
+			Model:            session.Model,
+			Workdir:          session.Workdir,
+			TaskState:        session.TaskState,
+			ActivatedSkills:  session.ActivatedSkills,
+			Todos:            session.Todos,
+			TokenInputTotal:  session.TokenInputTotal,
+			TokenOutputTotal: session.TokenOutputTotal,
+		})
+		if err != nil {
 			return Session{}, false, sessionWorkdirUpdate{}, err
 		}
-		return session, true, sessionWorkdirUpdate{}, nil
+		return created, true, sessionWorkdirUpdate{}, nil
 	}
 
-	session, err := p.store.Load(ctx, sessionID)
+	session, err := p.store.LoadSession(ctx, sessionID)
 	if err != nil {
 		return Session{}, false, sessionWorkdirUpdate{}, err
 	}
@@ -371,7 +389,11 @@ func (p *InputPreparer) rollbackCreatedSession(ctx context.Context, sessionID st
 	if err := ctx.Err(); err != nil {
 		return
 	}
-	_ = p.store.DeleteSession(ctx, sessionID)
+	cleanupStore, ok := p.store.(sessionCleanupStore)
+	if !ok {
+		return
+	}
+	_ = cleanupStore.DeleteSession(ctx, sessionID)
 }
 
 // persistSessionWorkdirUpdate 在 Prepare 其余步骤完成后统一提交会话 workdir 更新，避免失败时出现部分提交。
@@ -379,7 +401,11 @@ func (p *InputPreparer) persistSessionWorkdirUpdate(ctx context.Context, pending
 	if !pending.dirty {
 		return nil
 	}
-	if err := p.store.Save(ctx, &pending.session); err != nil {
+	if err := p.store.UpdateSessionWorkdir(ctx, UpdateSessionWorkdirInput{
+		SessionID: pending.session.ID,
+		UpdatedAt: pending.session.UpdatedAt,
+		Workdir:   pending.session.Workdir,
+	}); err != nil {
 		return err
 	}
 	return nil

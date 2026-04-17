@@ -148,7 +148,7 @@ func TestServicePrepareUserInputDoesNotBlockWhenPrepareEventQueueIsFull(t *testi
 	}
 }
 
-func newPrepareTestService(t *testing.T, workdir string, withPreparer bool) (*Service, *agentsession.JSONStore) {
+func newPrepareTestService(t *testing.T, workdir string, withPreparer bool) (*Service, *agentsession.SQLiteStore) {
 	t.Helper()
 
 	cfg := config.StaticDefaults()
@@ -160,6 +160,9 @@ func newPrepareTestService(t *testing.T, workdir string, withPreparer bool) (*Se
 	}
 
 	store := agentsession.NewStore(t.TempDir(), workdir)
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 	svc := NewWithFactory(manager, nil, store, nil, nil)
 	svc.SetSessionAssetStore(store)
 	if withPreparer {
