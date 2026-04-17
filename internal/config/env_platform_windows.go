@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -42,7 +43,7 @@ func DeleteUserEnvVar(key string) error {
 
 	envKey, err := registry.OpenKey(registry.CURRENT_USER, windowsUserEnvironmentKey, registry.SET_VALUE)
 	if err != nil {
-		if err == registry.ErrNotExist {
+		if isWindowsRegistryNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("config: open windows user env: %w", err)
@@ -50,7 +51,7 @@ func DeleteUserEnvVar(key string) error {
 	defer envKey.Close()
 
 	if err := envKey.DeleteValue(normalizedKey); err != nil {
-		if err == registry.ErrNotExist {
+		if isWindowsRegistryNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("config: delete windows user env %q: %w", normalizedKey, err)
@@ -67,7 +68,7 @@ func LookupUserEnvVar(key string) (string, bool, error) {
 
 	envKey, err := registry.OpenKey(registry.CURRENT_USER, windowsUserEnvironmentKey, registry.QUERY_VALUE)
 	if err != nil {
-		if err == registry.ErrNotExist {
+		if isWindowsRegistryNotExist(err) {
 			return "", false, nil
 		}
 		return "", false, fmt.Errorf("config: open windows user env: %w", err)
@@ -76,12 +77,17 @@ func LookupUserEnvVar(key string) (string, bool, error) {
 
 	value, _, err := envKey.GetStringValue(normalizedKey)
 	if err != nil {
-		if err == registry.ErrNotExist {
+		if isWindowsRegistryNotExist(err) {
 			return "", false, nil
 		}
 		return "", false, fmt.Errorf("config: read windows user env %q: %w", normalizedKey, err)
 	}
 	return value, true, nil
+}
+
+// isWindowsRegistryNotExist 统一判断注册表“键/值不存在”错误，兼容包装错误场景。
+func isWindowsRegistryNotExist(err error) bool {
+	return errors.Is(err, registry.ErrNotExist)
 }
 
 // SupportsUserEnvPersistence 返回当前平台是否支持用户级环境变量持久化。

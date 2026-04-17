@@ -61,8 +61,8 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		return Selection{}, err
 	}
 
-	s.createMu.Lock()
-	defer s.createMu.Unlock()
+	s.manager.LockProviderCreate()
+	defer s.manager.UnlockProviderCreate()
 
 	cfgSnapshot := s.manager.Get()
 	if err := validateCustomProviderCreateConflict(cfgSnapshot, normalized); err != nil {

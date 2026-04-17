@@ -2427,6 +2427,9 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	if err := config.ValidateEnvVarName(request.APIKeyEnv); err != nil {
 		return providerAddRequest{}, err.Error()
 	}
+	if config.IsProtectedEnvVarName(request.APIKeyEnv) {
+		return providerAddRequest{}, fmt.Sprintf("API Key Env %q is protected", request.APIKeyEnv)
+	}
 
 	switch request.Driver {
 	case provider.DriverOpenAICompat:

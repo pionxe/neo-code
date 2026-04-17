@@ -7,9 +7,10 @@ import (
 )
 
 type Manager struct {
-	mu     sync.RWMutex
-	loader *Loader
-	config *Config
+	mu               sync.RWMutex
+	providerCreateMu sync.Mutex
+	loader           *Loader
+	config           *Config
 }
 
 func NewManager(loader *Loader) *Manager {
@@ -93,4 +94,14 @@ func (m *Manager) BaseDir() string {
 
 func (m *Manager) ConfigPath() string {
 	return m.loader.ConfigPath()
+}
+
+// LockProviderCreate 锁定自定义 Provider 创建事务，确保同一 Manager 维度串行执行。
+func (m *Manager) LockProviderCreate() {
+	m.providerCreateMu.Lock()
+}
+
+// UnlockProviderCreate 释放自定义 Provider 创建事务锁。
+func (m *Manager) UnlockProviderCreate() {
+	m.providerCreateMu.Unlock()
 }

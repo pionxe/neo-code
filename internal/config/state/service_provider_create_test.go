@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	configpkg "neo-code/internal/config"
 	"neo-code/internal/provider"
@@ -173,6 +175,99 @@ func TestCreateCustomProviderRejectsInvalidProviderName(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "provider name") {
 		t.Fatalf("expected invalid provider name error, got %v", err)
+	}
+}
+
+func TestCreateCustomProviderSerializesAcrossServicesSharingManager(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	failingService := NewService(manager, newDriverSupporterStub(), errorCatalogStub{err: context.DeadlineExceeded})
+	successService := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{
+			{ID: "shared-model", Name: "shared-model"},
+		},
+	})
+
+	reachedPersist := make(chan struct{})
+	releasePersist := make(chan struct{})
+	var notifyOnce sync.Once
+	persistUserEnvVarForCreate = func(key string, value string) error {
+		if value == "key-a" {
+			notifyOnce.Do(func() { close(reachedPersist) })
+			<-releasePersist
+		}
+		return nil
+	}
+
+	inputA := CreateCustomProviderInput{
+		Name:      "shared-gateway",
+		Driver:    provider.DriverOpenAICompat,
+		BaseURL:   "https://shared.example.com/v1",
+		APIKeyEnv: "SHARED_GATEWAY_API_KEY",
+		APIKey:    "key-a",
+		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
+	}
+	inputB := inputA
+	inputB.APIKey = "key-b"
+
+	restore := captureEnvForCreateProvider(t, inputA.APIKeyEnv)
+	defer restore()
+	_ = os.Unsetenv(inputA.APIKeyEnv)
+
+	errACh := make(chan error, 1)
+	errBCh := make(chan error, 1)
+
+	go func() {
+		_, err := failingService.CreateCustomProvider(context.Background(), inputA)
+		errACh <- err
+	}()
+
+	select {
+	case <-reachedPersist:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting first create flow to reach persist stage")
+	}
+
+	go func() {
+		_, err := successService.CreateCustomProvider(context.Background(), inputB)
+		errBCh <- err
+	}()
+
+	select {
+	case err := <-errBCh:
+		t.Fatalf("expected second create to wait for manager lock, got early result err=%v", err)
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	close(releasePersist)
+
+	if err := <-errACh; err == nil {
+		t.Fatal("expected first create to fail on model selection")
+	}
+	if err := <-errBCh; err != nil {
+		t.Fatalf("expected second create to succeed, got %v", err)
+	}
+
+	cfg := manager.Get()
+	providerCfg, err := cfg.ProviderByName(inputA.Name)
+	if err != nil {
+		t.Fatalf("expected provider %q to exist after serialized create, got %v", inputA.Name, err)
+	}
+	if strings.TrimSpace(providerCfg.APIKeyEnv) != inputA.APIKeyEnv {
+		t.Fatalf("expected provider api_key_env %q, got %q", inputA.APIKeyEnv, providerCfg.APIKeyEnv)
+	}
+
+	providerPath := filepath.Join(manager.BaseDir(), "providers", inputA.Name, "provider.yaml")
+	data, readErr := os.ReadFile(providerPath)
+	if readErr != nil {
+		t.Fatalf("read provider config: %v", readErr)
+	}
+	if !strings.Contains(string(data), "api_key_env: "+inputA.APIKeyEnv) {
+		t.Fatalf("expected provider config to remain after concurrent create flow, got %q", string(data))
 	}
 }
 

@@ -427,6 +427,24 @@ func TestSubmitProviderAddFormRequiresAPIKeyEnv(t *testing.T) {
 	}
 }
 
+func TestSubmitProviderAddFormRejectsProtectedAPIKeyEnv(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startProviderAddForm()
+	app.providerAddForm.Name = "gateway"
+	app.providerAddForm.Driver = provider.DriverOpenAICompat
+	app.providerAddForm.BaseURL = "https://example.com/v1"
+	app.providerAddForm.APIKey = "test-key"
+	app.providerAddForm.APIKeyEnv = "PATH"
+
+	cmd := app.submitProviderAddForm()
+	if cmd != nil {
+		t.Fatalf("expected nil command for protected env key")
+	}
+	if !strings.Contains(app.providerAddForm.Error, "is protected") {
+		t.Fatalf("expected protected env key validation error, got %q", app.providerAddForm.Error)
+	}
+}
+
 func TestTrimLastRune(t *testing.T) {
 	if got := trimLastRune(""); got != "" {
 		t.Fatalf("trimLastRune(empty) = %q, want empty", got)
@@ -2514,6 +2532,17 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 		if req.APIKeyEnv != "OPENAI_COMPAT_API_KEY" {
 			t.Fatalf("expected sanitized env key, got %q", req.APIKeyEnv)
+		}
+	})
+
+	t.Run("rejects protected env key", func(t *testing.T) {
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:      "openai-compat",
+			Driver:    provider.DriverOpenAICompat,
+			APIKey:    "k",
+			APIKeyEnv: "PATH",
+		}); !strings.Contains(err, "protected") {
+			t.Fatalf("expected protected env key error, got %q", err)
 		}
 	})
 
