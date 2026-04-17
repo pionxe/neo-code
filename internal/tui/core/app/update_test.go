@@ -1492,6 +1492,39 @@ func TestRuntimeEventUserMessageHandler(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventUserMessageHandlerDeduplicatesByRunID(t *testing.T) {
+	app, _ := newTestApp(t)
+	payload := providertypes.Message{
+		Role:  roleUser,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("same content")},
+	}
+	event := agentruntime.RuntimeEvent{RunID: "run-1", Payload: payload}
+
+	handled := runtimeEventUserMessageHandler(&app, event)
+	if !handled {
+		t.Fatalf("expected first user message to be rendered")
+	}
+	if len(app.activeMessages) != 1 {
+		t.Fatalf("expected one user message, got %d", len(app.activeMessages))
+	}
+
+	handled = runtimeEventUserMessageHandler(&app, event)
+	if handled {
+		t.Fatalf("expected duplicate run id to be ignored")
+	}
+	if len(app.activeMessages) != 1 {
+		t.Fatalf("expected one user message after duplicate event, got %d", len(app.activeMessages))
+	}
+
+	handled = runtimeEventUserMessageHandler(&app, agentruntime.RuntimeEvent{RunID: "run-2", Payload: payload})
+	if !handled {
+		t.Fatalf("expected same content with new run id to be rendered")
+	}
+	if len(app.activeMessages) != 2 {
+		t.Fatalf("expected two user messages after new run id, got %d", len(app.activeMessages))
+	}
+}
+
 func TestRuntimeEventRunContextHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	payload := tuiservices.RuntimeRunContextPayload{
@@ -1669,8 +1702,8 @@ func TestUpdateSendWithInlineImageReferenceUsesPreparePipeline(t *testing.T) {
 		}},
 	}
 
-	app.input.SetValue("请分析 @burn.png")
-	app.state.InputText = "请分析 @burn.png"
+	app.input.SetValue("请分析 @image:burn.png")
+	app.state.InputText = "请分析 @image:burn.png"
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {

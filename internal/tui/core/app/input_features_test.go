@@ -182,18 +182,38 @@ func TestAbsorbInlineImageReferences(t *testing.T) {
 		t.Fatalf("write image: %v", err)
 	}
 
-	normalized, absorbed, err := app.absorbInlineImageReferences("请分析 @chart.png 趋势")
+	normalized, absorbed, err := app.absorbInlineImageReferences("请分析 @image:chart.png 趋势")
 	if err != nil {
 		t.Fatalf("absorbInlineImageReferences() error = %v", err)
 	}
 	if absorbed != 1 {
 		t.Fatalf("expected one absorbed image, got %d", absorbed)
 	}
-	if normalized != "请分析 趋势" {
+	if normalized != "请分析  趋势" {
 		t.Fatalf("unexpected normalized text: %q", normalized)
 	}
 	if app.getImageAttachmentCount() != 1 {
 		t.Fatalf("expected one pending image attachment, got %d", app.getImageAttachmentCount())
+	}
+}
+
+func TestAbsorbInlineImageReferencesRequiresExplicitPrefix(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	normalized, absorbed, err := app.absorbInlineImageReferences("请分析 @chart.png 趋势")
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 0 {
+		t.Fatalf("expected absorbed image count to be 0, got %d", absorbed)
+	}
+	if normalized != "请分析 @chart.png 趋势" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 0 {
+		t.Fatalf("expected no pending image attachments")
 	}
 }
 
@@ -221,7 +241,7 @@ func TestAbsorbInlineImageReferencesDoesNotRequireFileExistenceInTUI(t *testing.
 	app, _ := newTestApp(t)
 	app.state.CurrentWorkdir = t.TempDir()
 
-	normalized, absorbed, err := app.absorbInlineImageReferences("处理 @not-exist.png")
+	normalized, absorbed, err := app.absorbInlineImageReferences("处理 @image:not-exist.png")
 	if err != nil {
 		t.Fatalf("absorbInlineImageReferences() error = %v", err)
 	}
@@ -236,6 +256,25 @@ func TestAbsorbInlineImageReferencesDoesNotRequireFileExistenceInTUI(t *testing.
 	}
 	if app.getImageAttachments()[0].MimeType != "" {
 		t.Fatalf("expected mime type to stay empty before runtime/session validation")
+	}
+}
+
+func TestAbsorbInlineImageReferencesPreservesWhitespaceLayout(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.CurrentWorkdir = t.TempDir()
+
+	normalized, absorbed, err := app.absorbInlineImageReferences("A  @image:x.png\nB\t @image:y.jpg  C")
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 2 {
+		t.Fatalf("expected absorbed image count to be 2, got %d", absorbed)
+	}
+	if normalized != "A  \nB\t   C" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 2 {
+		t.Fatalf("expected two pending image attachments")
 	}
 }
 

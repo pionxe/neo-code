@@ -761,6 +761,7 @@ func (a *App) resetSessionRuntimeState() {
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
+	a.lastUserMessageRunID = ""
 	a.state.ToolStates = nil
 	a.state.RunContext = tuistate.ContextWindowState{}
 	a.state.TokenUsage = tuistate.TokenUsageState{}
@@ -1027,8 +1028,9 @@ func runtimeEventAssetSaveFailedHandler(a *App, event agentruntime.RuntimeEvent)
 }
 
 func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) bool {
-	if strings.TrimSpace(event.RunID) != "" {
-		a.state.ActiveRunID = strings.TrimSpace(event.RunID)
+	runID := strings.TrimSpace(event.RunID)
+	if runID != "" {
+		a.state.ActiveRunID = runID
 	}
 	a.state.StatusText = statusThinking
 	a.state.StreamingReply = false
@@ -1040,13 +1042,19 @@ func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) boo
 		return false
 	}
 	content := renderMessagePartsForDisplay(payload.Parts)
-	if strings.TrimSpace(content) == "" || a.lastUserMatches(content) {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	if runID != "" && strings.EqualFold(a.lastUserMessageRunID, runID) {
 		return false
 	}
 	a.activeMessages = append(a.activeMessages, providertypes.Message{
 		Role:  roleUser,
 		Parts: providertypes.CloneParts(payload.Parts),
 	})
+	if runID != "" {
+		a.lastUserMessageRunID = runID
+	}
 	return true
 }
 
@@ -1411,15 +1419,6 @@ func (a *App) lastAssistantMatches(content string) bool {
 
 	last := a.activeMessages[len(a.activeMessages)-1]
 	return last.Role == roleAssistant && strings.TrimSpace(renderMessagePartsForDisplay(last.Parts)) == strings.TrimSpace(content)
-}
-
-// lastUserMatches 判断末条用户消息是否与给定文本一致，避免重复渲染。
-func (a *App) lastUserMatches(content string) bool {
-	if len(a.activeMessages) == 0 {
-		return false
-	}
-	last := a.activeMessages[len(a.activeMessages)-1]
-	return last.Role == roleUser && strings.TrimSpace(renderMessagePartsForDisplay(last.Parts)) == strings.TrimSpace(content)
 }
 
 func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
@@ -1949,6 +1948,7 @@ func (a *App) startDraftSession() {
 	a.state.ExecutionError = ""
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
+	a.lastUserMessageRunID = ""
 	a.state.ToolStates = nil
 	a.state.RunContext = tuistate.ContextWindowState{}
 	a.state.TokenUsage = tuistate.TokenUsageState{}
