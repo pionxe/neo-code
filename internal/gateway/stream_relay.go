@@ -64,6 +64,8 @@ type StreamRelayOptions struct {
 	QueueSize       int
 	// MaxBindingsPerConnection 控制单连接可建立的会话绑定上限。
 	MaxBindingsPerConnection int
+	// Metrics 为可选指标收集器，用于上报连接与丢弃统计。
+	Metrics *GatewayMetrics
 }
 
 type relayConnection struct {
@@ -98,6 +100,7 @@ type StreamRelay struct {
 	cleanupInterval time.Duration
 	queueSize       int
 	maxBindings     int
+	metrics         *GatewayMetrics
 
 	mu                     sync.RWMutex
 	connections            map[ConnectionID]*relayConnection
@@ -145,6 +148,7 @@ func NewStreamRelay(options StreamRelayOptions) *StreamRelay {
 		cleanupInterval:    cleanupInterval,
 		queueSize:          queueSize,
 		maxBindings:        maxBindings,
+		metrics:            options.Metrics,
 		connections:        make(map[ConnectionID]*relayConnection),
 		connectionBindings: make(map[ConnectionID]map[bindingKey]*bindingState),
 		sessionIndex:       make(map[string]map[ConnectionID]struct{}),
@@ -259,10 +263,33 @@ func (r *StreamRelay) RegisterConnection(registration ConnectionRegistration) er
 		queue:   make(chan RelayMessage, r.queueSize),
 	}
 	r.connections[connectionID] = connection
+	r.updateActiveConnectionMetricsLocked()
 	r.mu.Unlock()
 
 	go r.runConnectionWriter(connection)
 	return nil
+}
+
+// SnapshotConnectionCounts 返回当前不同通道的活跃连接数量快照。
+func (r *StreamRelay) SnapshotConnectionCounts() map[StreamChannel]int {
+	if r == nil {
+		return map[StreamChannel]int{}
+	}
+	snapshot := map[StreamChannel]int{
+		StreamChannelIPC: 0,
+		StreamChannelWS:  0,
+		StreamChannelSSE: 0,
+	}
+
+	r.mu.RLock()
+	for _, connection := range r.connections {
+		if connection == nil {
+			continue
+		}
+		snapshot[connection.channel]++
+	}
+	r.mu.RUnlock()
+	return snapshot
 }
 
 // SendJSONRPCResponse 将 JSON-RPC 响应写入连接发送队列。
@@ -531,6 +558,9 @@ func (r *StreamRelay) runConnectionWriter(connection *relayConnection) {
 			}
 			if err := r.writeConnectionMessage(connection, message); err != nil {
 				r.logger.Printf("connection %s write failed: %v", connection.id, err)
+				if r.metrics != nil {
+					r.metrics.IncStreamDropped("write_failed")
+				}
 				r.dropConnection(connection.id)
 				return
 			}
@@ -568,6 +598,9 @@ func (r *StreamRelay) enqueueMessage(connectionID ConnectionID, message RelayMes
 		return true
 	default:
 		r.logger.Printf("connection %s queue is full, dropping slow connection", normalizedConnectionID)
+		if r.metrics != nil {
+			r.metrics.IncStreamDropped("queue_full")
+		}
 		r.dropConnection(normalizedConnectionID)
 		return false
 	}
@@ -643,6 +676,7 @@ func (r *StreamRelay) unregisterConnection(connectionID ConnectionID, shouldClos
 		}
 		r.removeConnectionFromIndexesLocked(normalizedConnectionID, state.sessionID, state.runID)
 	}
+	r.updateActiveConnectionMetricsLocked()
 	r.mu.Unlock()
 
 	if shouldClose {
@@ -650,6 +684,27 @@ func (r *StreamRelay) unregisterConnection(connectionID ConnectionID, shouldClos
 		connection.closeFn()
 	}
 	return connection
+}
+
+// updateActiveConnectionMetricsLocked 在持锁状态下刷新连接活跃数指标。
+func (r *StreamRelay) updateActiveConnectionMetricsLocked() {
+	if r.metrics == nil {
+		return
+	}
+	counts := map[StreamChannel]int{
+		StreamChannelIPC: 0,
+		StreamChannelWS:  0,
+		StreamChannelSSE: 0,
+	}
+	for _, connection := range r.connections {
+		if connection == nil {
+			continue
+		}
+		counts[connection.channel]++
+	}
+	r.metrics.SetConnectionsActive(string(StreamChannelIPC), counts[StreamChannelIPC])
+	r.metrics.SetConnectionsActive(string(StreamChannelWS), counts[StreamChannelWS])
+	r.metrics.SetConnectionsActive(string(StreamChannelSSE), counts[StreamChannelSSE])
 }
 
 // runCleanupLoop 周期性扫描并清理过期绑定，避免路由表长期膨胀。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -162,6 +163,13 @@ func TestSchedulerConfigNormalize(t *testing.T) {
 	if cfg.Clock == nil || cfg.RoleSelector == nil || cfg.BudgetSelector == nil || cfg.Backoff == nil || cfg.Observer == nil {
 		t.Fatalf("normalize() should set defaults")
 	}
+	if cfg.ContextBuilder == nil || cfg.ContextSkills == nil || cfg.ContextFiles == nil {
+		t.Fatalf("normalize() should set context defaults")
+	}
+	if cfg.ContextMaxChars <= 0 || cfg.ContextMaxTodoFragments <= 0 ||
+		cfg.ContextMaxDependencyArtifacts <= 0 || cfg.ContextMaxRelatedFiles <= 0 {
+		t.Fatalf("context budget defaults not normalized: %+v", cfg)
+	}
 
 	role := cfg.RoleSelector(agentsession.TodoItem{OwnerID: string(RoleReviewer)})
 	if role != cfg.DefaultRole {
@@ -176,6 +184,22 @@ func TestSchedulerConfigNormalize(t *testing.T) {
 	}
 	if got := cfg.BudgetSelector(agentsession.TodoItem{}, cfg.DefaultBudget); got != cfg.DefaultBudget {
 		t.Fatalf("BudgetSelector() = %+v, want %+v", got, cfg.DefaultBudget)
+	}
+	slice := cfg.ContextBuilder(TaskContextSliceInput{
+		Task: agentsession.TodoItem{ID: "t1", Content: "goal"},
+		Todos: map[string]agentsession.TodoItem{
+			"t1": {ID: "t1", Content: "goal"},
+		},
+		MaxChars: cfg.ContextMaxChars,
+	})
+	if slice.TaskID != "t1" {
+		t.Fatalf("ContextBuilder() task id = %q, want t1", slice.TaskID)
+	}
+	if skills := cfg.ContextSkills(agentsession.TodoItem{}, map[string]agentsession.TodoItem{}); skills != nil {
+		t.Fatalf("ContextSkills default should return nil, got %v", skills)
+	}
+	if files := cfg.ContextFiles(agentsession.TodoItem{}, map[string]agentsession.TodoItem{}); files != nil {
+		t.Fatalf("ContextFiles default should return nil, got %v", files)
 	}
 }
 
@@ -350,6 +374,126 @@ func TestSchedulerRunDependencyUnlock(t *testing.T) {
 	}
 	if !hasEvent(events, SchedulerEventCompleted, "a") || !hasEvent(events, SchedulerEventCompleted, "b") {
 		t.Fatalf("expected completed events for a/b, events=%+v", events)
+	}
+}
+
+func TestSchedulerBuildsTaskContextSlice(t *testing.T) {
+	t.Parallel()
+
+	store := newSchedulerStore(t, []agentsession.TodoItem{
+		{
+			ID:           "dep",
+			Content:      "完成依赖",
+			Status:       agentsession.TodoStatusCompleted,
+			Artifacts:    []string{"artifacts/dep-result.txt"},
+			Dependencies: nil,
+		},
+		{
+			ID:           "main",
+			Content:      "执行主任务",
+			Status:       agentsession.TodoStatusPending,
+			Dependencies: []string{"dep"},
+			Acceptance:   []string{"通过测试"},
+		},
+	})
+
+	inputCh := make(chan StepInput, 2)
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = attempt
+		select {
+		case inputCh <- input:
+		default:
+		}
+		return successStep(taskID), nil
+	})
+
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{
+		MaxConcurrency: 1,
+		PollInterval:   2 * time.Millisecond,
+		ContextSkills: func(todo agentsession.TodoItem, snapshot map[string]agentsession.TodoItem) []string {
+			_ = todo
+			_ = snapshot
+			return []string{"skill-a", "skill-b"}
+		},
+		ContextFiles: func(todo agentsession.TodoItem, snapshot map[string]agentsession.TodoItem) []TaskContextFileSummary {
+			_ = snapshot
+			return []TaskContextFileSummary{
+				{Path: "internal/subagent/scheduler.go", Summary: "调度器实现"},
+				{Path: "internal/subagent/scheduler_types.go", Summary: "配置定义"},
+			}
+		},
+		ContextMaxChars: 4000,
+	})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = scheduler.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var captured StepInput
+	select {
+	case captured = <-inputCh:
+	case <-time.After(time.Second):
+		t.Fatalf("timeout waiting captured step input")
+	}
+
+	if captured.Task.ID != "main" {
+		t.Fatalf("captured task id = %q, want main", captured.Task.ID)
+	}
+	if captured.Task.ContextSlice.TaskID != "main" {
+		t.Fatalf("context task id = %q, want main", captured.Task.ContextSlice.TaskID)
+	}
+	if len(captured.Task.ContextSlice.DependencyArtifacts) == 0 {
+		t.Fatalf("expected dependency artifacts in context slice")
+	}
+	if !slices.Equal(captured.Task.ContextSlice.ActivatedSkills, []string{"skill-a", "skill-b"}) {
+		t.Fatalf("ActivatedSkills = %v, want [skill-a skill-b]", captured.Task.ContextSlice.ActivatedSkills)
+	}
+	if len(captured.Task.ContextSlice.RelatedFiles) == 0 {
+		t.Fatalf("expected related files in context slice")
+	}
+}
+
+func TestSchedulerContextBuilderUsesReadOnlySnapshot(t *testing.T) {
+	t.Parallel()
+
+	store := newSchedulerStore(t, []agentsession.TodoItem{
+		{ID: "task", Content: "task"},
+	})
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = attempt
+		_ = input
+		return successStep(taskID), nil
+	})
+
+	var seenReadOnly bool
+	builder := func(input TaskContextSliceInput) TaskContextSlice {
+		seenReadOnly = input.ReadOnlyTodos
+		return BuildTaskContextSlice(input)
+	}
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{
+		MaxConcurrency: 1,
+		PollInterval:   2 * time.Millisecond,
+		ContextBuilder: builder,
+	})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := scheduler.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !seenReadOnly {
+		t.Fatalf("ContextBuilder input ReadOnlyTodos = false, want true")
 	}
 }
 

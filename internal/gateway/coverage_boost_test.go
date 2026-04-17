@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
@@ -477,11 +478,14 @@ func TestNetworkServerHelperBranches(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	writeJSONRPCHTTPResponse(recorder, protocol.NewJSONRPCErrorResponse(json.RawMessage(`"id-1"`), protocol.NewJSONRPCError(
+	writeJSONRPCHTTPResponse(recorder, http.StatusUnauthorized, protocol.NewJSONRPCErrorResponse(json.RawMessage(`"id-1"`), protocol.NewJSONRPCError(
 		protocol.JSONRPCCodeInternalError,
 		"boom",
 		protocol.GatewayCodeInternalError,
 	)))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
 	if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
 		t.Fatalf("content type = %q, want application/json", contentType)
 	}

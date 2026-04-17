@@ -103,31 +103,6 @@ func TestTransitionRunPhaseNoopBranches(t *testing.T) {
 	}
 }
 
-func TestEmitRunTerminationMaxLoopsBranch(t *testing.T) {
-	t.Parallel()
-
-	service := &Service{events: make(chan RuntimeEvent, 4)}
-	state := newRunState("run-max-loops", newRuntimeSession("session-max-loops"))
-	service.emitRunTermination(
-		context.Background(),
-		UserInput{RunID: "run-max-loops", SessionID: state.session.ID},
-		&state,
-		ErrMaxLoopReached,
-	)
-
-	events := collectRuntimeEvents(service.Events())
-	if len(events) != 1 || events[0].Type != EventStopReasonDecided {
-		t.Fatalf("expected one stop_reason_decided event, got %+v", events)
-	}
-	payload, ok := events[0].Payload.(StopReasonDecidedPayload)
-	if !ok {
-		t.Fatalf("expected StopReasonDecidedPayload, got %#v", events[0].Payload)
-	}
-	if payload.Reason != controlplane.StopReasonMaxLoops {
-		t.Fatalf("reason = %q, want %q", payload.Reason, controlplane.StopReasonMaxLoops)
-	}
-}
-
 func TestCloneMessagesReturnsNilForEmptyInput(t *testing.T) {
 	t.Parallel()
 

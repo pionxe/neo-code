@@ -18,6 +18,8 @@ const (
 type FrameAction string
 
 const (
+	// FrameActionAuthenticate 表示连接级认证动作。
+	FrameActionAuthenticate FrameAction = "authenticate"
 	// FrameActionPing 表示探活动作，用于验证网关可用性。
 	FrameActionPing FrameAction = "ping"
 	// FrameActionBindStream 表示声明流式事件订阅绑定。

@@ -278,6 +278,17 @@ func TestConfigMethodErrorPaths(t *testing.T) {
 	})
 }
 
+func TestConfigValidateGatewayError(t *testing.T) {
+	t.Parallel()
+
+	cfg := testDefaultConfig()
+	cfg.Workdir = t.TempDir()
+	cfg.Gateway.Security.ACLMode = "invalid-acl"
+	if err := cfg.ValidateSnapshot(); err == nil || !strings.Contains(err.Error(), "config: gateway:") {
+		t.Fatalf("expected gateway validation error, got %v", err)
+	}
+}
+
 func TestManagerConcurrentAccess(t *testing.T) {
 	tempDir := t.TempDir()
 	manager := NewManager(NewLoader(tempDir, testDefaultConfig()))

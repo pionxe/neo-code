@@ -10,7 +10,7 @@ const (
 	ErrorCodeInvalidFrame ErrorCode = "invalid_frame"
 	// ErrorCodeInvalidAction 表示动作值非法。
 	ErrorCodeInvalidAction ErrorCode = "invalid_action"
-	// ErrorCodeInvalidMultimodalPayload 表示多模态输入负载非法。
+	// ErrorCodeInvalidMultimodalPayload 表示多模态输入载荷非法。
 	ErrorCodeInvalidMultimodalPayload ErrorCode = "invalid_multimodal_payload"
 	// ErrorCodeMissingRequiredField 表示缺少必填字段。
 	ErrorCodeMissingRequiredField ErrorCode = "missing_required_field"
@@ -18,6 +18,10 @@ const (
 	ErrorCodeUnsupportedAction ErrorCode = "unsupported_action"
 	// ErrorCodeInternalError 表示网关内部错误。
 	ErrorCodeInternalError ErrorCode = "internal_error"
+	// ErrorCodeUnauthorized 表示请求未通过认证校验。
+	ErrorCodeUnauthorized ErrorCode = "unauthorized"
+	// ErrorCodeAccessDenied 表示请求已认证但未通过 ACL 校验。
+	ErrorCodeAccessDenied ErrorCode = "access_denied"
 )
 
 var stableErrorCodes = map[string]struct{}{
@@ -27,6 +31,8 @@ var stableErrorCodes = map[string]struct{}{
 	string(ErrorCodeMissingRequiredField):     {},
 	string(ErrorCodeUnsupportedAction):        {},
 	string(ErrorCodeInternalError):            {},
+	string(ErrorCodeUnauthorized):             {},
+	string(ErrorCodeAccessDenied):             {},
 }
 
 // String 返回错误码的字符串值。

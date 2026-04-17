@@ -72,3 +72,17 @@ func TestValidateOutputContractUnsupportedSection(t *testing.T) {
 		t.Fatalf("expected unsupported section error")
 	}
 }
+
+func TestValidateOutputContractOnlyRequiresConfiguredSections(t *testing.T) {
+	t.Parallel()
+
+	policy := RolePolicy{
+		Role:             RoleCoder,
+		SystemPrompt:     "prompt",
+		AllowedTools:     []string{"bash"},
+		RequiredSections: []string{"summary"},
+	}
+	if err := validateOutputContract(policy, Output{Summary: "ok"}); err != nil {
+		t.Fatalf("validateOutputContract() error = %v", err)
+	}
+}

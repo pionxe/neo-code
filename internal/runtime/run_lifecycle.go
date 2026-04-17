@@ -12,9 +12,6 @@ import (
 	"neo-code/internal/runtime/controlplane"
 )
 
-// ErrMaxLoopReached 表示达到配置的最大推理轮数，用于停止原因分类与测试断言。
-var ErrMaxLoopReached = errors.New("runtime: max loop reached")
-
 // ErrNoProgressStreakLimit 表示循环内连续多次未取得进展，触发死循环拦截。
 var ErrNoProgressStreakLimit = errors.New("runtime: no progress streak limit reached")
 
@@ -57,9 +54,6 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 		switch {
 		case errors.Is(err, context.Canceled):
 			in.ContextCanceled = true
-		case errors.Is(err, ErrMaxLoopReached):
-			in.MaxLoopsReached = true
-			in.RunError = err
 		default:
 			in.RunError = err
 		}

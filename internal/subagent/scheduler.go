@@ -99,7 +99,7 @@ func (s *Scheduler) Run(ctx context.Context) (ScheduleResult, error) {
 		s.pruneReadySince(state, ready)
 		s.sortReadyTasks(ready, state.readySince)
 
-		started, err := s.startReadyTasks(ctx, ready, state)
+		started, err := s.startReadyTasks(ctx, ready, snapshot, state)
 		if err != nil {
 			s.cancelRunningTodos(state, err)
 			return finalize(result), err
@@ -245,7 +245,12 @@ func (s *Scheduler) ensureReadyStatus(item agentsession.TodoItem) (agentsession.
 }
 
 // startReadyTasks 在并发上限内领取并启动可执行任务。
-func (s *Scheduler) startReadyTasks(ctx context.Context, ready []agentsession.TodoItem, state *schedulerState) (int, error) {
+func (s *Scheduler) startReadyTasks(
+	ctx context.Context,
+	ready []agentsession.TodoItem,
+	snapshot map[string]agentsession.TodoItem,
+	state *schedulerState,
+) (int, error) {
 	if len(ready) == 0 {
 		return 0, nil
 	}
@@ -269,10 +274,22 @@ func (s *Scheduler) startReadyTasks(ctx context.Context, ready []agentsession.To
 		role := s.cfg.RoleSelector(item)
 		budget := s.cfg.BudgetSelector(item, s.cfg.DefaultBudget).normalize(s.cfg.DefaultBudget)
 		capability := s.cfg.Capabilities(item).normalize()
+		contextSlice := s.cfg.ContextBuilder(TaskContextSliceInput{
+			Task:                   item,
+			Todos:                  snapshot,
+			ReadOnlyTodos:          true,
+			ActivatedSkills:        s.cfg.ContextSkills(item, snapshot),
+			RelatedFiles:           s.cfg.ContextFiles(item, snapshot),
+			MaxChars:               s.cfg.ContextMaxChars,
+			MaxTodoFragments:       s.cfg.ContextMaxTodoFragments,
+			MaxDependencyArtifacts: s.cfg.ContextMaxDependencyArtifacts,
+			MaxRelatedFiles:        s.cfg.ContextMaxRelatedFiles,
+		})
 		task := Task{
 			ID:             item.ID,
 			Goal:           strings.TrimSpace(item.Content),
 			ExpectedOutput: strings.Join(item.Acceptance, "\n"),
+			ContextSlice:   contextSlice,
 		}
 
 		state.running[item.ID] = runningTask{id: item.ID, attempt: attempt}

@@ -16,24 +16,15 @@ func TestDecideStopReasonPriority(t *testing.T) {
 		reason StopReason
 	}{
 		{
-			name: "canceled_wins_over_max_loops",
+			name: "canceled_wins_over_error",
 			in: StopInput{
 				ContextCanceled: true,
-				MaxLoopsReached: true,
 				RunError:        errSample,
 			},
 			reason: StopReasonCanceled,
 		},
 		{
-			name: "max_loops_wins_over_error",
-			in: StopInput{
-				MaxLoopsReached: true,
-				RunError:        errSample,
-			},
-			reason: StopReasonMaxLoops,
-		},
-		{
-			name: "error_when_no_max_loop_flag",
+			name: "error",
 			in: StopInput{
 				RunError: errSample,
 			},
@@ -70,15 +61,7 @@ func TestDecideStopReasonPriority(t *testing.T) {
 func TestDecideStopReasonDetails(t *testing.T) {
 	t.Parallel()
 
-	reason, detail := DecideStopReason(StopInput{MaxLoopsReached: true})
-	if reason != StopReasonMaxLoops {
-		t.Fatalf("reason = %q, want %q", reason, StopReasonMaxLoops)
-	}
-	if detail != "runtime: max loop reached" {
-		t.Fatalf("detail = %q, want default max-loop detail", detail)
-	}
-
-	reason, detail = DecideStopReason(StopInput{})
+	reason, detail := DecideStopReason(StopInput{})
 	if reason != StopReasonError {
 		t.Fatalf("reason = %q, want %q", reason, StopReasonError)
 	}

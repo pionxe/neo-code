@@ -47,20 +47,20 @@ type stubSandbox struct {
 	lastAction security.Action
 }
 
-type executorWithoutMicroCompactPolicy struct{}
+type executorWithoutOptionalCompactFeatures struct{}
 
-func (executorWithoutMicroCompactPolicy) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error) {
+func (executorWithoutOptionalCompactFeatures) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return nil, nil
 }
 
-func (executorWithoutMicroCompactPolicy) Execute(ctx context.Context, call ToolCallInput) (ToolResult, error) {
+func (executorWithoutOptionalCompactFeatures) Execute(ctx context.Context, call ToolCallInput) (ToolResult, error) {
 	return ToolResult{}, ctx.Err()
 }
 
-func (executorWithoutMicroCompactPolicy) Supports(name string) bool { return false }
+func (executorWithoutOptionalCompactFeatures) Supports(name string) bool { return false }
 
 func (s *stubSandbox) Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error) {
 	s.callCount++
@@ -71,12 +71,21 @@ func (s *stubSandbox) Check(ctx context.Context, action security.Action) (*secur
 	return s.plan, s.err
 }
 
+func mustAllowEngine(t *testing.T) security.PermissionEngine {
+	t.Helper()
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	return engine
+}
+
 func TestDefaultManagerListAvailableSpecs(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
 	registry.Register(&managerStubTool{name: "bash"})
-	manager, err := NewManager(registry, nil, nil)
+	manager, err := NewManager(registry, mustAllowEngine(t), nil)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -105,7 +114,7 @@ func TestDefaultManagerMicroCompactPolicy(t *testing.T) {
 	t.Run("executor without policy support defaults to compact", func(t *testing.T) {
 		t.Parallel()
 
-		manager, err := NewManager(executorWithoutMicroCompactPolicy{}, nil, nil)
+			manager, err := NewManager(executorWithoutOptionalCompactFeatures{}, mustAllowEngine(t), nil)
 		if err != nil {
 			t.Fatalf("new manager: %v", err)
 		}
@@ -120,12 +129,59 @@ func TestDefaultManagerMicroCompactPolicy(t *testing.T) {
 		registry := NewRegistry()
 		registry.Register(&managerStubTool{name: "preserve_tool", policy: MicroCompactPolicyPreserveHistory})
 
-		manager, err := NewManager(registry, nil, nil)
+		manager, err := NewManager(registry, mustAllowEngine(t), nil)
 		if err != nil {
 			t.Fatalf("new manager: %v", err)
 		}
 		if got := manager.MicroCompactPolicy("preserve_tool"); got != MicroCompactPolicyPreserveHistory {
 			t.Fatalf("expected preserve history, got %q", got)
+		}
+	})
+}
+
+func TestDefaultManagerMicroCompactSummarizer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil manager returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		var manager *DefaultManager
+		if got := manager.MicroCompactSummarizer("custom_tool"); got != nil {
+			t.Fatalf("expected nil summarizer, got non-nil")
+		}
+	})
+
+	t.Run("executor without summarizer support returns nil", func(t *testing.T) {
+		t.Parallel()
+
+			manager, err := NewManager(executorWithoutOptionalCompactFeatures{}, mustAllowEngine(t), nil)
+		if err != nil {
+			t.Fatalf("new manager: %v", err)
+		}
+		if got := manager.MicroCompactSummarizer("custom_tool"); got != nil {
+			t.Fatalf("expected nil summarizer, got non-nil")
+		}
+	})
+
+	t.Run("executor summarizer is forwarded", func(t *testing.T) {
+		t.Parallel()
+
+		registry := NewRegistry()
+		registry.RegisterSummarizer("custom_tool", func(content string, metadata map[string]string, isError bool) string {
+			return "summary:" + content
+		})
+
+			manager, err := NewManager(registry, mustAllowEngine(t), nil)
+		if err != nil {
+			t.Fatalf("new manager: %v", err)
+		}
+
+		summarizer := manager.MicroCompactSummarizer("CUSTOM_TOOL")
+		if summarizer == nil {
+			t.Fatal("expected non-nil summarizer")
+		}
+		if got := summarizer("content", nil, false); got != "summary:content" {
+			t.Fatalf("unexpected summary output: %q", got)
 		}
 	})
 }
@@ -150,7 +206,7 @@ func TestDefaultManagerListAvailableSpecsBoundaries(t *testing.T) {
 			manager: func() *DefaultManager {
 				registry := NewRegistry()
 				registry.Register(&managerStubTool{name: "bash"})
-				manager, _ := NewManager(registry, nil, nil)
+				manager, _ := NewManager(registry, mustAllowEngine(t), nil)
 				return manager
 			}(),
 			ctx: func() context.Context {
@@ -331,7 +387,7 @@ func TestDefaultManagerExecuteBoundaries(t *testing.T) {
 			manager: func() *DefaultManager {
 				registry := NewRegistry()
 				registry.Register(&managerStubTool{name: "custom_tool"})
-				manager, _ := NewManager(registry, nil, nil)
+				manager, _ := NewManager(registry, mustAllowEngine(t), nil)
 				return manager
 			}(),
 			input:     ToolCallInput{Name: "custom_tool"},
@@ -342,7 +398,7 @@ func TestDefaultManagerExecuteBoundaries(t *testing.T) {
 			manager: func() *DefaultManager {
 				registry := NewRegistry()
 				registry.Register(&managerStubTool{name: "bash"})
-				manager, _ := NewManager(registry, nil, nil)
+				manager, _ := NewManager(registry, mustAllowEngine(t), nil)
 				return manager
 			}(),
 			input:     ToolCallInput{Name: "bash", Arguments: []byte(`{"command":"echo hi"}`)},
@@ -534,6 +590,17 @@ func TestNewManagerRejectsNilExecutor(t *testing.T) {
 	manager, err := NewManager(nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "executor is nil") {
 		t.Fatalf("expected nil executor error, got manager=%v err=%v", manager, err)
+	}
+}
+
+func TestNewManagerRejectsNilPermissionEngine(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(&managerStubTool{name: "bash"})
+	manager, err := NewManager(registry, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "permission engine is nil") {
+		t.Fatalf("expected nil engine error, got manager=%v err=%v", manager, err)
 	}
 }
 
@@ -1832,7 +1899,7 @@ func TestDefaultManagerCapabilitySignerHelpers(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&managerStubTool{name: "filesystem_read_file", content: "ok"})
 
-	manager, err := NewManager(registry, nil, nil)
+	manager, err := NewManager(registry, mustAllowEngine(t), nil)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}

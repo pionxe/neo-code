@@ -3,6 +3,8 @@ package webfetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,10 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/tools"
 )
+
+func executionContextAllowLoopback() context.Context {
+	return context.WithValue(context.Background(), bypassTargetValidationKey, true)
+}
 
 func TestToolExecute(t *testing.T) {
 	t.Parallel()
@@ -281,7 +287,7 @@ func TestToolExecute(t *testing.T) {
 				raw = data
 			}
 
-			result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+			result, execErr := tool.Execute(executionContextAllowLoopback(), tools.ToolCallInput{
 				Name:      tool.Name(),
 				Arguments: raw,
 			})
@@ -334,7 +340,7 @@ func TestToolDefaultsAndContentTypeFallback(t *testing.T) {
 		t.Fatalf("marshal args: %v", err)
 	}
 
-	result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+	result, execErr := tool.Execute(executionContextAllowLoopback(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: args,
 	})
@@ -378,4 +384,165 @@ func TestHTMLHelpers(t *testing.T) {
 	if textContent(titleNode) != "Example " {
 		t.Fatalf("expected title text content, got %q", textContent(titleNode))
 	}
+}
+
+func TestToolExecuteBlocksLocalAndPrivateTargets(t *testing.T) {
+	t.Parallel()
+
+	tool := New(Config{
+		Timeout:               2 * time.Second,
+		MaxResponseBytes:      config.DefaultWebFetchMaxResponseBytes,
+		SupportedContentTypes: config.DefaultWebFetchSupportedContentTypes(),
+	})
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "localhost", url: "http://localhost/internal"},
+		{name: "localhost subdomain", url: "http://api.localhost/internal"},
+		{name: "loopback ipv4", url: "http://127.0.0.1/internal"},
+		{name: "link local metadata", url: "http://169.254.169.254/latest/meta-data"},
+		{name: "private network", url: "http://10.1.2.3/internal"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw, err := json.Marshal(map[string]string{"url": tc.url})
+			if err != nil {
+				t.Fatalf("marshal args: %v", err)
+			}
+
+			result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+				Name:      tool.Name(),
+				Arguments: raw,
+			})
+			if execErr == nil || !strings.Contains(execErr.Error(), "target host is blocked") {
+				t.Fatalf("expected blocked target error, got %v", execErr)
+			}
+			if !result.IsError {
+				t.Fatalf("expected error result for blocked target")
+			}
+			if !strings.Contains(result.Content, "reason: "+reasonInvalidURL) {
+				t.Fatalf("expected invalid url reason, got %q", result.Content)
+			}
+		})
+	}
+}
+
+func TestFetchBlocksLoopbackAtDial(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	tool := New(Config{
+		Timeout:               2 * time.Second,
+		MaxResponseBytes:      config.DefaultWebFetchMaxResponseBytes,
+		SupportedContentTypes: config.DefaultWebFetchSupportedContentTypes(),
+	})
+
+	_, err := tool.fetch(context.Background(), server.URL)
+	if err == nil || !strings.Contains(err.Error(), "target host is blocked") {
+		t.Fatalf("expected loopback dial to be blocked, got %v", err)
+	}
+}
+
+func TestResolveDialAddressesPrefersAllowedSet(t *testing.T) {
+	originalLookup := lookupIPAddr
+	t.Cleanup(func() {
+		lookupIPAddr = originalLookup
+	})
+	lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		return []net.IPAddr{
+			{IP: net.ParseIP("203.0.113.1")},
+			{IP: net.ParseIP("127.0.0.1")},
+			{IP: net.ParseIP("198.51.100.2")},
+		}, nil
+	}
+
+	addresses, err := resolveDialAddresses(context.Background(), "example.com:443")
+	if err != nil {
+		t.Fatalf("resolveDialAddresses() error = %v", err)
+	}
+	if len(addresses) != 2 {
+		t.Fatalf("expected 2 allowed addresses, got %v", addresses)
+	}
+	if addresses[0] != "203.0.113.1:443" || addresses[1] != "198.51.100.2:443" {
+		t.Fatalf("unexpected addresses order: %v", addresses)
+	}
+}
+
+func TestResolveDialAddressesBlockedOrEmpty(t *testing.T) {
+	t.Run("empty dns result", func(t *testing.T) {
+		originalLookup := lookupIPAddr
+		t.Cleanup(func() {
+			lookupIPAddr = originalLookup
+		})
+		lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+			return nil, nil
+		}
+
+		_, err := resolveDialAddresses(context.Background(), "example.com:80")
+		if err == nil || !strings.Contains(err.Error(), "empty result") {
+			t.Fatalf("expected empty result error, got %v", err)
+		}
+	})
+
+	t.Run("all blocked", func(t *testing.T) {
+		originalLookup := lookupIPAddr
+		t.Cleanup(func() {
+			lookupIPAddr = originalLookup
+		})
+		lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+		}
+
+		_, err := resolveDialAddresses(context.Background(), "example.com:80")
+		if err == nil || !strings.Contains(err.Error(), "target host is blocked") {
+			t.Fatalf("expected blocked target error, got %v", err)
+		}
+	})
+}
+
+func TestDialFirstReachable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fallback to later address", func(t *testing.T) {
+		var called []string
+		connA, connB := net.Pipe()
+		t.Cleanup(func() {
+			_ = connA.Close()
+			_ = connB.Close()
+		})
+
+		conn, err := dialFirstReachable(context.Background(), func(ctx context.Context, network, address string) (net.Conn, error) {
+			called = append(called, address)
+			if address != "198.51.100.2:443" {
+				return nil, errors.New("dial failed")
+			}
+			return connA, nil
+		}, "tcp", []string{"203.0.113.1:443", "192.0.2.1:443", "198.51.100.2:443"})
+		if err != nil {
+			t.Fatalf("dialFirstReachable() error = %v", err)
+		}
+		_ = conn.Close()
+		if strings.Join(called, ",") != "203.0.113.1:443,192.0.2.1:443,198.51.100.2:443" {
+			t.Fatalf("unexpected dial sequence: %v", called)
+		}
+	})
+
+	t.Run("return last error", func(t *testing.T) {
+		_, err := dialFirstReachable(context.Background(), func(ctx context.Context, network, address string) (net.Conn, error) {
+			return nil, errors.New("last dial error")
+		}, "tcp", []string{"198.51.100.2:443"})
+		if err == nil || !strings.Contains(err.Error(), "last dial error") {
+			t.Fatalf("expected last dial error, got %v", err)
+		}
+	})
 }

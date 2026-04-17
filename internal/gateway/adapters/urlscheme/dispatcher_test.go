@@ -785,6 +785,174 @@ func TestDispatcherDispatchAdditionalErrorBranches(t *testing.T) {
 	})
 }
 
+func TestDispatcherAuthenticateBranches(t *testing.T) {
+	t.Run("rpc returns error", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			requestIDFn: func() string { return "wake-auth-1" },
+		}
+		conn := &stubDispatchConn{
+			readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"wake-auth-1-auth","error":{"code":-32600,"message":"unauthorized","data":{"gateway_code":"unauthorized"}}}` + "\n"),
+		}
+		err := dispatcher.authenticate(context.Background(), conn, "token-1")
+		if err == nil {
+			t.Fatal("expected authenticate rpc error")
+		}
+	})
+
+	t.Run("missing auth result payload", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			requestIDFn: func() string { return "wake-auth-2" },
+		}
+		conn := &stubDispatchConn{
+			readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"wake-auth-2-auth"}` + "\n"),
+		}
+		err := dispatcher.authenticate(context.Background(), conn, "token-1")
+		if err == nil || !strings.Contains(err.Error(), "missing result payload") {
+			t.Fatalf("expected missing result payload error, got %v", err)
+		}
+	})
+
+	t.Run("unexpected auth frame", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			requestIDFn: func() string { return "wake-auth-3" },
+		}
+		conn := &stubDispatchConn{
+			readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"wake-auth-3-auth","result":{"type":"ack","action":"gateway.ping","request_id":"wake-auth-3-auth"}}` + "\n"),
+		}
+		err := dispatcher.authenticate(context.Background(), conn, "token-1")
+		if err == nil || !strings.Contains(err.Error(), "unexpected auth response frame") {
+			t.Fatalf("expected unexpected auth frame error, got %v", err)
+		}
+	})
+}
+
+func TestDispatcherDispatchWithAuthHandshake(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	dispatcher := &Dispatcher{
+		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
+		requestIDFn: func() string {
+			return "wake-auth"
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+
+		var authRequest protocol.JSONRPCRequest
+		if err := decoder.Decode(&authRequest); err != nil {
+			t.Errorf("decode auth request: %v", err)
+			return
+		}
+		if authRequest.Method != protocol.MethodGatewayAuthenticate {
+			t.Errorf("auth method = %q, want %q", authRequest.Method, protocol.MethodGatewayAuthenticate)
+			return
+		}
+		if err := encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      authRequest.ID,
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionAuthenticate,
+				RequestID: "wake-auth-auth",
+				Payload:   map[string]string{"message": "authenticated"},
+			}),
+		}); err != nil {
+			t.Errorf("encode auth response: %v", err)
+			return
+		}
+
+		var wakeRequest protocol.JSONRPCRequest
+		if err := decoder.Decode(&wakeRequest); err != nil {
+			t.Errorf("decode wake request: %v", err)
+			return
+		}
+		if wakeRequest.Method != protocol.MethodWakeOpenURL {
+			t.Errorf("wake method = %q, want %q", wakeRequest.Method, protocol.MethodWakeOpenURL)
+			return
+		}
+		if err := encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      wakeRequest.ID,
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-auth",
+				Payload:   map[string]string{"message": "wake intent accepted"},
+			}),
+		}); err != nil {
+			t.Errorf("encode wake response: %v", err)
+		}
+	}()
+
+	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		RawURL:    "neocode://review?path=README.md",
+		AuthToken: "token-1",
+	})
+	if err != nil {
+		t.Fatalf("dispatch with auth: %v", err)
+	}
+	if result.Response.Action != gateway.FrameActionWakeOpenURL {
+		t.Fatalf("action = %q, want %q", result.Response.Action, gateway.FrameActionWakeOpenURL)
+	}
+	<-done
+}
+
+func TestDispatcherDispatchWithAuthHandshakeError(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	dispatcher := &Dispatcher{
+		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
+		requestIDFn: func() string {
+			return "wake-auth-err"
+		},
+	}
+
+	go func() {
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+		var authRequest protocol.JSONRPCRequest
+		_ = decoder.Decode(&authRequest)
+		_ = encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      authRequest.ID,
+			Error: protocol.NewJSONRPCError(
+				protocol.JSONRPCCodeInvalidParams,
+				"invalid token",
+				protocol.GatewayCodeUnauthorized,
+			),
+		})
+	}()
+
+	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		RawURL:    "neocode://review?path=README.md",
+		AuthToken: "bad-token",
+	})
+	if err == nil {
+		t.Fatal("expected auth handshake error")
+	}
+	var dispatchErr *DispatchError
+	if !errors.As(err, &dispatchErr) {
+		t.Fatalf("error type = %T, want *DispatchError", err)
+	}
+	if dispatchErr.Code != protocol.GatewayCodeUnauthorized {
+		t.Fatalf("code = %q, want %q", dispatchErr.Code, protocol.GatewayCodeUnauthorized)
+	}
+}
+
 func TestDispatcherJSONRPCHelpers(t *testing.T) {
 	marshalErr := toDispatchErrorFromJSONRPC(&protocol.JSONRPCError{
 		Code:    protocol.JSONRPCCodeInternalError,

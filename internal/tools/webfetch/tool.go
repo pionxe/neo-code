@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -55,6 +56,14 @@ type responseData struct {
 	Truncated   bool
 }
 
+type validationContextKey string
+
+const bypassTargetValidationKey validationContextKey = "webfetch_bypass_target_validation"
+
+var lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
 // New creates a webfetch tool with bounded responses and content-type filtering.
 func New(cfg Config) *Tool {
 	normalized := normalizeConfig(cfg)
@@ -67,8 +76,19 @@ func New(cfg Config) *Tool {
 
 // newHTTPClient 创建禁止自动重定向的客户端，避免跨域重定向绕过上层网络权限校验。
 func newHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: timeout}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialAddresses, err := resolveDialAddresses(ctx, address)
+		if err != nil {
+			return nil, err
+		}
+		return dialFirstReachable(ctx, dialer.DialContext, network, dialAddresses)
+	}
+
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -112,6 +132,12 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 		result := t.newErrorResult(responseData{URL: strings.TrimSpace(in.URL)}, reasonInvalidURL, err.Error())
 		return result, fmt.Errorf("webfetch: validate url: %w", err)
 	}
+	if !bypassTargetValidation(ctx) {
+		if err := validateFetchTarget(ctx, targetURL); err != nil {
+			result := t.newErrorResult(responseData{URL: targetURL}, reasonInvalidURL, err.Error())
+			return result, fmt.Errorf("webfetch: validate target: %w", err)
+		}
+	}
 
 	resp, err := t.fetch(ctx, targetURL)
 	if err != nil {
@@ -148,6 +174,136 @@ func validateURL(raw string) (string, error) {
 		return "", fmt.Errorf("%s: url host is empty", toolName)
 	}
 	return parsed.String(), nil
+}
+
+// validateFetchTarget 校验目标主机是否命中本地或内网地址，防止 SSRF 访问敏感网络。
+func validateFetchTarget(ctx context.Context, target string) error {
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return err
+	}
+
+	hostname := strings.TrimSpace(parsed.Hostname())
+	if hostname == "" {
+		return fmt.Errorf("%s: url host is empty", toolName)
+	}
+	if isLocalHostName(hostname) {
+		return fmt.Errorf("%s: target host is blocked", toolName)
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("%s: target host is blocked", toolName)
+		}
+		return nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	records, err := lookupIPAddr(lookupCtx, hostname)
+	if err != nil {
+		return fmt.Errorf("%s: resolve host: %w", toolName, err)
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("%s: resolve host: empty result", toolName)
+	}
+	for _, record := range records {
+		if isBlockedIP(record.IP) {
+			return fmt.Errorf("%s: target host is blocked", toolName)
+		}
+	}
+	return nil
+}
+
+// resolveDialAddresses 在真实拨号前校验并收敛可用目标地址集合，避免 DNS 重绑定导致的 TOCTOU 绕过。
+func resolveDialAddresses(ctx context.Context, address string) ([]string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid dial address", toolName)
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return nil, fmt.Errorf("%s: url host is empty", toolName)
+	}
+	if bypassTargetValidation(ctx) {
+		return []string{address}, nil
+	}
+	if isLocalHostName(host) {
+		return nil, fmt.Errorf("%s: target host is blocked", toolName)
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedIP(ip) {
+			return nil, fmt.Errorf("%s: target host is blocked", toolName)
+		}
+		return []string{net.JoinHostPort(ip.String(), port)}, nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	records, err := lookupIPAddr(lookupCtx, host)
+	if err != nil {
+		return nil, fmt.Errorf("%s: resolve host: %w", toolName, err)
+	}
+	if len(records) == 0 {
+		return nil, fmt.Errorf("%s: resolve host: empty result", toolName)
+	}
+
+	allowed := make([]string, 0, len(records))
+	for _, record := range records {
+		if !isBlockedIP(record.IP) {
+			allowed = append(allowed, net.JoinHostPort(record.IP.String(), port))
+		}
+	}
+	if len(allowed) == 0 {
+		return nil, fmt.Errorf("%s: target host is blocked", toolName)
+	}
+	return allowed, nil
+}
+
+type dialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+// dialFirstReachable 依次尝试多个候选地址，命中首个可连通地址后立即返回，全部失败时返回最后一次错误。
+func dialFirstReachable(ctx context.Context, dialFn dialContextFunc, network string, addresses []string) (net.Conn, error) {
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("%s: invalid dial address", toolName)
+	}
+	var lastErr error
+	for _, address := range addresses {
+		conn, err := dialFn(ctx, network, address)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("%s: invalid dial address", toolName)
+}
+
+// bypassTargetValidation 判断当前上下文是否显式跳过目标地址安全校验，仅供包内测试使用。
+func bypassTargetValidation(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	enabled, ok := ctx.Value(bypassTargetValidationKey).(bool)
+	return ok && enabled
+}
+
+// isLocalHostName 判断主机名是否属于本地回环域名变体。
+func isLocalHostName(host string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(host))
+	return normalized == "localhost" || strings.HasSuffix(normalized, ".localhost")
+}
+
+// isBlockedIP 判断 IP 是否属于回环、链路本地、私网或其他不应被 webfetch 访问的网段。
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsPrivate() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified()
 }
 
 func (t *Tool) fetch(ctx context.Context, targetURL string) (*http.Response, error) {
