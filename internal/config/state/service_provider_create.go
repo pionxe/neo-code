@@ -7,14 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 )
 
-var providerCreateFlowMu sync.Mutex
 var persistUserEnvVarForCreate = config.PersistUserEnvVar
 var deleteUserEnvVarForCreate = config.DeleteUserEnvVar
 var lookupUserEnvVarForCreate = config.LookupUserEnvVar
@@ -63,8 +61,8 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		return Selection{}, err
 	}
 
-	providerCreateFlowMu.Lock()
-	defer providerCreateFlowMu.Unlock()
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
 
 	cfgSnapshot := s.manager.Get()
 	if err := validateCustomProviderCreateConflict(cfgSnapshot, normalized); err != nil {

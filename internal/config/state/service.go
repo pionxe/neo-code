@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
@@ -14,6 +15,7 @@ type Service struct {
 	manager    *config.Manager
 	supporters DriverSupporter
 	catalogs   ModelCatalog
+	createMu   sync.Mutex
 }
 
 // NewService 创建选择状态服务实例。
