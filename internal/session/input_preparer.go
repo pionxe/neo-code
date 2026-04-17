@@ -95,7 +95,7 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 	}
 
 	sessionTitle := buildSessionTitle(trimmedText, len(input.Images) > 0)
-	session, err := p.loadOrCreateSession(
+	session, sessionCreated, err := p.loadOrCreateSession(
 		ctx,
 		input.SessionID,
 		sessionTitle,
@@ -115,6 +115,7 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 	for index, image := range input.Images {
 		path := strings.TrimSpace(image.Path)
 		if path == "" {
+			p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 			return PreparedInput{}, &AssetSaveError{
 				Index: index,
 				Path:  path,
@@ -125,6 +126,7 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 
 		meta, err := p.saveImageAsset(ctx, session.ID, path, mimeType)
 		if err != nil {
+			p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 			return PreparedInput{}, &AssetSaveError{
 				Index: index,
 				Path:  path,
@@ -136,6 +138,7 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 	}
 
 	if err := providertypes.ValidateParts(parts); err != nil {
+		p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 		return PreparedInput{}, fmt.Errorf("session: normalize parts: %w", err)
 	}
 
@@ -211,41 +214,60 @@ func (p *InputPreparer) loadOrCreateSession(
 	title string,
 	defaultWorkdir string,
 	requestedWorkdir string,
-) (Session, error) {
+) (Session, bool, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		sessionWorkdir, err := resolveWorkdirForInput(defaultWorkdir, "", requestedWorkdir)
 		if err != nil {
-			return Session{}, err
+			return Session{}, false, err
 		}
 		session := NewWithWorkdir(title, sessionWorkdir)
 		if err := p.store.Save(ctx, &session); err != nil {
-			return Session{}, err
+			return Session{}, false, err
 		}
-		return session, nil
+		return session, true, nil
 	}
 
 	session, err := p.store.Load(ctx, sessionID)
 	if err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
 	if strings.TrimSpace(requestedWorkdir) == "" && strings.TrimSpace(session.Workdir) != "" {
-		return session, nil
+		return session, false, nil
 	}
 
 	resolved, err := resolveWorkdirForInput(defaultWorkdir, session.Workdir, requestedWorkdir)
 	if err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
 	if session.Workdir == resolved {
-		return session, nil
+		return session, false, nil
 	}
 
 	session.Workdir = resolved
 	session.UpdatedAt = time.Now()
 	if err := p.store.Save(ctx, &session); err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
-	return session, nil
+	return session, false, nil
+}
+
+// rollbackCreatedSession 在本次 Prepare 新建会话后发生错误时回滚会话目录，避免残留孤儿会话。
+func (p *InputPreparer) rollbackCreatedSession(ctx context.Context, sessionID string, created bool) {
+	if !created {
+		return
+	}
+	store, ok := p.store.(*JSONStore)
+	if !ok {
+		return
+	}
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	target := store.sessionDir(sessionID)
+	if err := ensurePathWithinBase(store.baseDir, target); err != nil {
+		return
+	}
+	_ = os.RemoveAll(target)
 }
 
 func resolveWorkdirForInput(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {

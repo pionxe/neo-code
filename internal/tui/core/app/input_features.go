@@ -217,20 +217,30 @@ func (a *App) applyImageReference(input string) error {
 	return a.addImageAttachment(path)
 }
 
-// absorbInlineImageReferences 会把输入文本中的 @<image-path> 令牌吸收到附件队列，并返回移除令牌后的文本。
-// 仅根据令牌语法与扩展名做轻量识别，避免把文件系统硬校验放到 TUI 层。
+// absorbInlineImageReferences 会把输入文本中的 @image:<path> 令牌吸收到附件队列，并返回移除令牌后的文本。
+// 该实现保留原始空白布局，仅移除命中的图片令牌，避免改变用户提示词语义。
 func (a *App) absorbInlineImageReferences(input string) (string, int, error) {
-	tokens := strings.Fields(input)
-	if len(tokens) == 0 {
+	if strings.TrimSpace(input) == "" {
 		return strings.TrimSpace(input), 0, nil
 	}
 
-	kept := make([]string, 0, len(tokens))
+	var builder strings.Builder
 	absorbed := 0
-	for _, token := range tokens {
+	for i := 0; i < len(input); {
+		if isInlineTokenSpace(input[i]) {
+			builder.WriteByte(input[i])
+			i++
+			continue
+		}
+
+		start := i
+		for i < len(input) && !isInlineTokenSpace(input[i]) {
+			i++
+		}
+		token := input[start:i]
 		imagePath, ok := a.parseInlineImagePathToken(token)
 		if !ok {
-			kept = append(kept, token)
+			builder.WriteString(token)
 			continue
 		}
 		if err := a.queueImageAttachmentForPrepare(imagePath); err != nil {
@@ -239,17 +249,27 @@ func (a *App) absorbInlineImageReferences(input string) (string, int, error) {
 		absorbed++
 	}
 
-	return strings.TrimSpace(strings.Join(kept, " ")), absorbed, nil
+	return strings.TrimSpace(builder.String()), absorbed, nil
 }
 
-// parseInlineImagePathToken 识别 @<path> 形式的图片路径令牌，并映射为待发送路径。
+// isInlineTokenSpace 判断字符是否属于输入令牌分隔空白字符。
+func isInlineTokenSpace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\r', '\n':
+		return true
+	default:
+		return false
+	}
+}
+
+// parseInlineImagePathToken 识别 @image:<path> 形式的图片路径令牌，并映射为待发送路径。
 func (a *App) parseInlineImagePathToken(token string) (string, bool) {
 	trimmed := strings.TrimSpace(token)
-	if !strings.HasPrefix(trimmed, fileReferencePrefix) || strings.HasPrefix(trimmed, imageReferencePrefix) {
+	if !strings.HasPrefix(trimmed, imageReferencePrefix) {
 		return "", false
 	}
 
-	path := strings.TrimPrefix(trimmed, fileReferencePrefix)
+	path := strings.TrimPrefix(trimmed, imageReferencePrefix)
 	path = strings.Trim(path, `"'`)
 	path = strings.TrimSpace(path)
 	if path == "" || !looksLikeImagePath(path) {

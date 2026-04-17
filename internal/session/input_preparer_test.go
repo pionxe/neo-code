@@ -193,6 +193,46 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 			t.Fatalf("expected save error index 0, got %d", saveErr.Index)
 		}
 	})
+
+	t.Run("new session is rolled back when asset save fails", func(t *testing.T) {
+		preparer := NewInputPreparer(store, store)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Images:         []PrepareImageInput{{Path: "not-found.png", MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected asset save error")
+		}
+
+		summaries, listErr := store.ListSummaries(context.Background())
+		if listErr != nil {
+			t.Fatalf("ListSummaries() error = %v", listErr)
+		}
+		if len(summaries) != 0 {
+			t.Fatalf("expected no persisted session after rollback, got %+v", summaries)
+		}
+	})
+
+	t.Run("existing session is kept when asset save fails", func(t *testing.T) {
+		existing := NewWithWorkdir("existing", workdir)
+		if err := store.Save(context.Background(), &existing); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+
+		preparer := NewInputPreparer(store, store)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			SessionID:      existing.ID,
+			Images:         []PrepareImageInput{{Path: "not-found.png", MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected asset save error")
+		}
+
+		if _, loadErr := store.Load(context.Background(), existing.ID); loadErr != nil {
+			t.Fatalf("expected existing session to remain, load error = %v", loadErr)
+		}
+	})
 }
 
 func TestInputPreparerPrepareUpdatesExistingSessionWorkdir(t *testing.T) {

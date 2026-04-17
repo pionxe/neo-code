@@ -106,6 +106,7 @@ type appRuntimeState struct {
 	runProgressValue        float64
 	runProgressKnown        bool
 	runProgressLabel        string
+	lastUserMessageRunID    string
 	pendingPermission       *permissionPromptState
 	pendingImageAttachments []pendingImageAttachment
 	providerAddForm         *providerAddFormState
