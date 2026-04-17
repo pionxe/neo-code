@@ -520,6 +520,171 @@ func TestNewManagerRejectsNilExecutor(t *testing.T) {
 	}
 }
 
+func TestManagerPermissionHelperBranches(t *testing.T) {
+	t.Parallel()
+
+	decision := security.CheckResult{
+		Decision: security.DecisionAsk,
+		Action: security.Action{
+			Type: security.ActionTypeRead,
+			Payload: security.ActionPayload{
+				ToolName:          "webfetch",
+				Resource:          "webfetch",
+				Operation:         "fetch",
+				TargetType:        security.TargetTypeURL,
+				Target:            "https://example.com",
+				SandboxTargetType: security.TargetTypePath,
+				SandboxTarget:     "/workspace/tmp.txt",
+				TaskID:            "task-1",
+				AgentID:           "agent-1",
+			},
+		},
+		Rule: &security.Rule{
+			ID: "session-memory:" + string(SessionPermissionScopeAlways),
+		},
+		Reason: "need approval",
+	}
+
+	if scope := extractRememberScope(security.CheckResult{}); scope != "" {
+		t.Fatalf("expected empty scope for nil rule, got %q", scope)
+	}
+	if scope := extractRememberScope(decision); scope != SessionPermissionScopeAlways {
+		t.Fatalf("expected always session scope, got %q", scope)
+	}
+	if scope := extractRememberScope(security.CheckResult{Rule: &security.Rule{ID: "session-memory:" + string(SessionPermissionScopeOnce)}}); scope != SessionPermissionScopeOnce {
+		t.Fatalf("expected once scope, got %q", scope)
+	}
+	if scope := extractRememberScope(security.CheckResult{Rule: &security.Rule{ID: "session-memory:" + string(SessionPermissionScopeReject)}}); scope != SessionPermissionScopeReject {
+		t.Fatalf("expected reject scope, got %q", scope)
+	}
+	if scope := extractRememberScope(security.CheckResult{Rule: &security.Rule{ID: "unknown"}}); scope != "" {
+		t.Fatalf("expected unknown scope to map empty, got %q", scope)
+	}
+
+	if got := sessionDecisionReason(""); got != "session permission remembered" {
+		t.Fatalf("unexpected default session decision reason: %q", got)
+	}
+	if got := sessionDecisionReason(SessionPermissionScopeOnce); !strings.Contains(got, "once") {
+		t.Fatalf("unexpected once reason: %q", got)
+	}
+	if got := sessionDecisionReason(SessionPermissionScopeAlways); !strings.Contains(got, "always") {
+		t.Fatalf("unexpected always reason: %q", got)
+	}
+	if got := sessionDecisionReason(SessionPermissionScopeReject); !strings.Contains(got, "reject") {
+		t.Fatalf("unexpected reject reason: %q", got)
+	}
+
+	metadata := permissionMetadata(decision)
+	for _, key := range []string{
+		"permission_decision",
+		"permission_rule_id",
+		"permission_action_type",
+		"permission_resource",
+		"permission_operation",
+		"permission_target_type",
+		"permission_target",
+		"permission_sandbox_target_type",
+		"permission_sandbox_target",
+		"permission_task_id",
+		"permission_agent_id",
+	} {
+		if _, ok := metadata[key]; !ok {
+			t.Fatalf("expected metadata key %q, got %+v", key, metadata)
+		}
+	}
+
+	withoutRule := permissionMetadata(security.CheckResult{
+		Decision: security.DecisionDeny,
+		Action: security.Action{
+			Type: security.ActionTypeRead,
+			Payload: security.ActionPayload{
+				ToolName: "filesystem_read_file",
+				Resource: "filesystem_read_file",
+			},
+		},
+	})
+	if _, ok := withoutRule["permission_rule_id"]; ok {
+		t.Fatalf("did not expect permission_rule_id for empty rule")
+	}
+	if _, ok := withoutRule["permission_target_type"]; ok {
+		t.Fatalf("did not expect target metadata when target is empty")
+	}
+	if _, ok := withoutRule["permission_task_id"]; ok {
+		t.Fatalf("did not expect task metadata when task id is empty")
+	}
+
+	details := permissionDetails(decision)
+	for _, fragment := range []string{"type: read", "resource: webfetch", "operation: fetch", "url: https://example.com", "policy: need approval"} {
+		if !strings.Contains(details, fragment) {
+			t.Fatalf("expected details containing %q, got %q", fragment, details)
+		}
+	}
+	minimalDetails := permissionDetails(security.CheckResult{
+		Action: security.Action{Type: security.ActionTypeBash},
+	})
+	if strings.TrimSpace(minimalDetails) != "type: bash" {
+		t.Fatalf("expected minimal details for bash, got %q", minimalDetails)
+	}
+}
+
+func TestManagerCapabilityDecisionHelpers(t *testing.T) {
+	t.Parallel()
+
+	action := security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName: "filesystem_read_file",
+			Resource: "filesystem_read_file",
+		},
+	}
+	deny := capabilityDenyDecision(action, "")
+	if deny.Decision != security.DecisionDeny {
+		t.Fatalf("expected deny decision, got %q", deny.Decision)
+	}
+	if deny.Rule == nil || deny.Rule.ID != security.CapabilityRuleID {
+		t.Fatalf("expected capability rule id, got %+v", deny.Rule)
+	}
+	if deny.Reason != "capability token denied" {
+		t.Fatalf("expected default deny reason, got %q", deny.Reason)
+	}
+
+	resultAsk := blockedToolResult(ToolCallInput{
+		ID:   "call-ask",
+		Name: "webfetch",
+	}, security.CheckResult{
+		Decision: security.DecisionAsk,
+		Action:   action,
+	})
+	if !strings.Contains(resultAsk.Content, "permission approval required") {
+		t.Fatalf("expected ask reason in blocked result, got %q", resultAsk.Content)
+	}
+
+	resultDeny := blockedToolResult(ToolCallInput{
+		ID:   "call-deny",
+		Name: "webfetch",
+	}, security.CheckResult{
+		Decision: security.DecisionDeny,
+		Action:   action,
+		Reason:   "explicit deny",
+	})
+	if !strings.Contains(resultDeny.Content, "explicit deny") {
+		t.Fatalf("expected explicit deny reason in blocked result, got %q", resultDeny.Content)
+	}
+
+	var nilManager *DefaultManager
+	if err := nilManager.RememberSessionDecision("session-1", action, SessionPermissionScopeAlways); err == nil || !strings.Contains(err.Error(), "manager is nil") {
+		t.Fatalf("expected nil manager remember error, got %v", err)
+	}
+
+	manager := &DefaultManager{}
+	if err := manager.RememberSessionDecision("session-2", action, SessionPermissionScopeAlways); err != nil {
+		t.Fatalf("expected remember session decision success, got %v", err)
+	}
+	if manager.sessionDecisions == nil {
+		t.Fatalf("expected session memory to be initialized")
+	}
+}
+
 func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
 	t.Parallel()
 
