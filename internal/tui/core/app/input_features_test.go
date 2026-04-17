@@ -12,18 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
-	configstate "neo-code/internal/config/state"
-	providertypes "neo-code/internal/provider/types"
 )
-
-type snapshotErrProviderService struct {
-	stubProviderService
-	err error
-}
-
-func (s snapshotErrProviderService) ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
-	return nil, s.err
-}
 
 func TestTokenAndReferenceParsing(t *testing.T) {
 	start, end, token, ok := tokenRange("  @file/path", tokenSelectorFirst)
@@ -165,41 +154,6 @@ func TestAddImageAttachmentLimit(t *testing.T) {
 	}
 }
 
-func TestCanSendImageInputCacheInvalidationOnModelChange(t *testing.T) {
-	app, _ := newTestApp(t)
-	providerID := app.state.CurrentProvider
-
-	app.providerSvc = stubProviderService{
-		providers: []configstate.ProviderOption{{ID: providerID, Name: providerID}},
-		models: []providertypes.ModelDescriptor{{
-			ID:   "model-a",
-			Name: "model-a",
-			CapabilityHints: providertypes.ModelCapabilityHints{
-				ImageInput: providertypes.ModelCapabilityStateSupported,
-			},
-		}},
-	}
-	app.state.CurrentModel = "model-a"
-	if !app.canSendImageInput() {
-		t.Fatalf("expected model-a to support images")
-	}
-
-	app.providerSvc = stubProviderService{
-		providers: []configstate.ProviderOption{{ID: providerID, Name: providerID}},
-		models: []providertypes.ModelDescriptor{{
-			ID:   "model-b",
-			Name: "model-b",
-			CapabilityHints: providertypes.ModelCapabilityHints{
-				ImageInput: providertypes.ModelCapabilityStateUnsupported,
-			},
-		}},
-	}
-	app.syncConfigState(config.Config{SelectedProvider: providerID, CurrentModel: "model-b", Workdir: app.state.CurrentWorkdir})
-	if app.canSendImageInput() {
-		t.Fatalf("expected model-b to be unsupported after cache invalidation")
-	}
-}
-
 func TestApplyImageReference(t *testing.T) {
 	app, _ := newTestApp(t)
 	root := t.TempDir()
@@ -215,6 +169,182 @@ func TestApplyImageReference(t *testing.T) {
 	}
 	if err := app.applyImageReference("not-an-image-reference"); err == nil {
 		t.Fatalf("expected invalid image reference error")
+	}
+}
+
+func TestAbsorbInlineImageReferences(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	imagePath := filepath.Join(root, "chart.png")
+	if err := os.WriteFile(imagePath, []byte("png"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	normalized, absorbed, err := app.absorbInlineImageReferences("请分析 @image:chart.png 趋势")
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 1 {
+		t.Fatalf("expected one absorbed image, got %d", absorbed)
+	}
+	if normalized != "请分析  趋势" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 1 {
+		t.Fatalf("expected one pending image attachment, got %d", app.getImageAttachmentCount())
+	}
+}
+
+func TestAbsorbInlineImageReferencesRequiresExplicitPrefix(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	normalized, absorbed, err := app.absorbInlineImageReferences("请分析 @chart.png 趋势")
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 0 {
+		t.Fatalf("expected absorbed image count to be 0, got %d", absorbed)
+	}
+	if normalized != "请分析 @chart.png 趋势" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 0 {
+		t.Fatalf("expected no pending image attachments")
+	}
+}
+
+func TestAbsorbInlineImageReferencesKeepsNonImageToken(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	normalized, absorbed, err := app.absorbInlineImageReferences("查看 @README.md 内容")
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 0 {
+		t.Fatalf("expected absorbed image count to be 0, got %d", absorbed)
+	}
+	if normalized != "查看 @README.md 内容" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 0 {
+		t.Fatalf("expected no pending image attachments")
+	}
+}
+
+func TestAbsorbInlineImageReferencesDoesNotRequireFileExistenceInTUI(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.CurrentWorkdir = t.TempDir()
+
+	normalized, absorbed, err := app.absorbInlineImageReferences("处理 @image:not-exist.png")
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 1 {
+		t.Fatalf("expected one absorbed image, got %d", absorbed)
+	}
+	if normalized != "处理" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 1 {
+		t.Fatalf("expected one pending attachment")
+	}
+	if app.getImageAttachments()[0].MimeType != "" {
+		t.Fatalf("expected mime type to stay empty before runtime/session validation")
+	}
+}
+
+func TestAbsorbInlineImageReferencesPreservesWhitespaceLayout(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.CurrentWorkdir = t.TempDir()
+
+	normalized, absorbed, err := app.absorbInlineImageReferences("A  @image:x.png\nB\t @image:y.jpg  C")
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 2 {
+		t.Fatalf("expected absorbed image count to be 2, got %d", absorbed)
+	}
+	if normalized != "A  \nB\t   C" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 2 {
+		t.Fatalf("expected two pending image attachments")
+	}
+}
+
+func TestAbsorbInlineImageReferencesSupportsQuotedPathWithSpaces(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	normalized, absorbed, err := app.absorbInlineImageReferences(`请分析 @image:"charts/sales q1.png" 趋势`)
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 1 {
+		t.Fatalf("expected absorbed image count to be 1, got %d", absorbed)
+	}
+	if normalized != "请分析  趋势" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 1 {
+		t.Fatalf("expected one pending image attachment")
+	}
+	if !strings.HasSuffix(app.getImageAttachments()[0].Path, filepath.FromSlash("charts/sales q1.png")) {
+		t.Fatalf("unexpected queued path: %q", app.getImageAttachments()[0].Path)
+	}
+}
+
+func TestParseInlineImagePathToken(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	relative, ok := app.parseInlineImagePathToken(`@image:"charts/sales q1.png"`)
+	if !ok {
+		t.Fatalf("expected quoted relative token to parse")
+	}
+	if relative != filepath.Join(root, filepath.FromSlash("charts/sales q1.png")) {
+		t.Fatalf("unexpected resolved path: %q", relative)
+	}
+
+	absolutePath := filepath.Join(root, "abs.png")
+	absolute, ok := app.parseInlineImagePathToken("@image:" + absolutePath)
+	if !ok || absolute != absolutePath {
+		t.Fatalf("expected absolute token to pass through, got %q ok=%v", absolute, ok)
+	}
+
+	if _, ok := app.parseInlineImagePathToken("@image:notes.txt"); ok {
+		t.Fatalf("expected non-image token to be rejected")
+	}
+	app.state.CurrentWorkdir = ""
+	if _, ok := app.parseInlineImagePathToken("@image:relative.png"); ok {
+		t.Fatalf("expected missing workdir to reject relative token")
+	}
+	if _, ok := app.parseInlineImagePathToken("not-image-token"); ok {
+		t.Fatalf("expected invalid token to be rejected")
+	}
+}
+
+func TestParseInlineImageReferenceAtBranches(t *testing.T) {
+	if _, _, ok := parseInlineImageReferenceAt("x@image:a.png", 1); ok {
+		t.Fatalf("expected token without boundary whitespace to be rejected")
+	}
+	path, end, ok := parseInlineImageReferenceAt(`@image:folder\ with\ space.png next`, 0)
+	if !ok {
+		t.Fatalf("expected escaped-space token to parse")
+	}
+	if path != "folder with space.png" || end <= 0 {
+		t.Fatalf("unexpected escaped path parse result path=%q end=%d", path, end)
+	}
+	if _, _, ok := parseInlineImageReferenceAt(`@image:""`, 0); ok {
+		t.Fatalf("expected empty quoted token to fail")
 	}
 }
 
@@ -250,7 +380,6 @@ func TestAddImageFromClipboardSuccess(t *testing.T) {
 	app, _ := newTestApp(t)
 	originalRead := readClipboardImage
 	originalSave := saveClipboardImageToTempFile
-	originalDetect := detectImageMimeType
 	readClipboardImage = func() ([]byte, error) {
 		return []byte("image-bytes"), nil
 	}
@@ -261,11 +390,9 @@ func TestAddImageFromClipboardSuccess(t *testing.T) {
 		}
 		return path, nil
 	}
-	detectImageMimeType = func(path string) string { return "image/png" }
 	defer func() {
 		readClipboardImage = originalRead
 		saveClipboardImageToTempFile = originalSave
-		detectImageMimeType = originalDetect
 	}()
 
 	if err := app.addImageFromClipboard(); err != nil {
@@ -280,30 +407,14 @@ func TestAddImageFromClipboardBranches(t *testing.T) {
 	app, _ := newTestApp(t)
 	originalRead := readClipboardImage
 	originalSave := saveClipboardImageToTempFile
-	originalDetect := detectImageMimeType
 	defer func() {
 		readClipboardImage = originalRead
 		saveClipboardImageToTempFile = originalSave
-		detectImageMimeType = originalDetect
 	}()
 
 	readClipboardImage = func() ([]byte, error) { return nil, nil }
 	if err := app.addImageFromClipboard(); err == nil {
 		t.Fatalf("expected no image in clipboard error")
-	}
-
-	readClipboardImage = func() ([]byte, error) { return make([]byte, imageMaxSizeBytes+1), nil }
-	if err := app.addImageFromClipboard(); err == nil {
-		t.Fatalf("expected image size limit error")
-	}
-
-	readClipboardImage = func() ([]byte, error) { return []byte("x"), nil }
-	saveClipboardImageToTempFile = func(data []byte, prefix string) (string, error) {
-		return filepath.Join(t.TempDir(), "clipboard.bin"), nil
-	}
-	detectImageMimeType = func(path string) string { return "" }
-	if err := app.addImageFromClipboard(); err == nil {
-		t.Fatalf("expected unsupported image format error")
 	}
 
 	readClipboardImage = func() ([]byte, error) { return []byte("x"), nil }
@@ -312,31 +423,6 @@ func TestAddImageFromClipboardBranches(t *testing.T) {
 	}
 	if err := app.addImageFromClipboard(); err == nil {
 		t.Fatalf("expected save failure error")
-	}
-}
-
-func TestCheckModelImageSupportErrorAndModelNotFound(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.providerSvc = snapshotErrProviderService{
-		stubProviderService: stubProviderService{},
-		err:                 errors.New("boom"),
-	}
-	if app.checkModelImageSupport() {
-		t.Fatalf("expected false when provider snapshot fails")
-	}
-	if !app.currentModelCapabilities.checked {
-		t.Fatalf("expected capability cache to be marked checked after failure")
-	}
-
-	app.currentModelCapabilities = modelCapabilityState{}
-	app.providerSvc = stubProviderService{
-		providers: []configstate.ProviderOption{{ID: app.state.CurrentProvider, Name: app.state.CurrentProvider}},
-		models: []providertypes.ModelDescriptor{{
-			ID: "other-model",
-		}},
-	}
-	if app.checkModelImageSupport() {
-		t.Fatalf("expected false when current model is missing from snapshot")
 	}
 }
 
@@ -393,7 +479,7 @@ func TestRunWorkspaceCommandCmd(t *testing.T) {
 	}
 }
 
-func TestUpdateSendWithImageAttachmentsBlocksUntilSessionAssets(t *testing.T) {
+func TestUpdateSendWithImageAttachmentsRunsThroughPreparePipeline(t *testing.T) {
 	app, runtime := newTestApp(t)
 	root := t.TempDir()
 	imagePath := filepath.Join(root, "queued.png")
@@ -403,17 +489,6 @@ func TestUpdateSendWithImageAttachmentsBlocksUntilSessionAssets(t *testing.T) {
 	if err := app.addImageAttachment(imagePath); err != nil {
 		t.Fatalf("addImageAttachment() error = %v", err)
 	}
-	app.providerSvc = stubProviderService{
-		providers: []configstate.ProviderOption{{ID: app.state.CurrentProvider, Name: app.state.CurrentProvider}},
-		models: []providertypes.ModelDescriptor{{
-			ID:   app.state.CurrentModel,
-			Name: app.state.CurrentModel,
-			CapabilityHints: providertypes.ModelCapabilityHints{
-				ImageInput: providertypes.ModelCapabilityStateSupported,
-			},
-		}},
-	}
-
 	app.input.SetValue("hello")
 	app.state.InputText = "hello"
 
@@ -423,18 +498,21 @@ func TestUpdateSendWithImageAttachmentsBlocksUntilSessionAssets(t *testing.T) {
 	}
 	app = model.(App)
 	if app.hasImageAttachments() {
-		t.Fatalf("expected attachments cleared after unsupported send path")
+		t.Fatalf("expected attachments cleared after send")
 	}
-	if app.state.IsAgentRunning {
-		t.Fatalf("expected image send to be blocked until session assets are available")
+	if !app.state.IsAgentRunning {
+		t.Fatalf("expected image send to enter running state")
 	}
-	if len(app.activeMessages) != 0 {
-		t.Fatalf("expected no text fallback message in transcript, got %+v", app.activeMessages)
-	}
-	if len(runtime.runInputs) != 0 {
-		t.Fatalf("expected no runtime input with image metadata fallback, got %+v", runtime.runInputs)
-	}
-	if app.state.StatusText != "Image attachments need session asset support" {
+	if app.state.StatusText != statusThinking {
 		t.Fatalf("unexpected status text: %q", app.state.StatusText)
+	}
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input, got %+v", runtime.prepareInputs)
+	}
+	if len(runtime.prepareInputs[0].Images) != 1 || runtime.prepareInputs[0].Images[0].MimeType != "" {
+		t.Fatalf("expected one queued image in prepare input, got %+v", runtime.prepareInputs[0].Images)
+	}
+	if len(runtime.runInputs) != 1 {
+		t.Fatalf("expected one runtime input after prepare, got %+v", runtime.runInputs)
 	}
 }

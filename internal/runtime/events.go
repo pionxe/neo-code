@@ -92,6 +92,28 @@ type TodoEventPayload struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// InputNormalizedPayload 描述输入归一化完成后的摘要信息。
+type InputNormalizedPayload struct {
+	TextLength int `json:"text_length"`
+	ImageCount int `json:"image_count"`
+}
+
+// AssetSavedPayload 描述单个附件成功保存后的结果。
+type AssetSavedPayload struct {
+	Index    int    `json:"index"`
+	Path     string `json:"path,omitempty"`
+	AssetID  string `json:"asset_id"`
+	MimeType string `json:"mime_type,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+}
+
+// AssetSaveFailedPayload 描述单个附件保存失败的结构化信息。
+type AssetSaveFailedPayload struct {
+	Index   int    `json:"index"`
+	Path    string `json:"path,omitempty"`
+	Message string `json:"message"`
+}
+
 const (
 	// EventUserMessage 表示用户消息已写入会话。
 	EventUserMessage EventType = "user_message"
@@ -143,6 +165,12 @@ const (
 	EventTodoConflict EventType = "todo_conflict"
 	// EventTodoSummaryInjected 表示本轮上下文注入了 Todo 摘要。
 	EventTodoSummaryInjected EventType = "todo_summary_injected"
+	// EventInputNormalized 表示用户输入已完成归一化。
+	EventInputNormalized EventType = "input_normalized"
+	// EventAssetSaved 表示本轮用户输入附件已完成持久化。
+	EventAssetSaved EventType = "asset_saved"
+	// EventAssetSaveFailed 表示本轮用户输入附件持久化失败。
+	EventAssetSaveFailed EventType = "asset_save_failed"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。

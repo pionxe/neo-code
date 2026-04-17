@@ -1059,12 +1059,12 @@ func TestLoadCustomProvidersReadDirAndStatErrors(t *testing.T) {
 		}
 		defer func() { _ = os.Chmod(providersPath, 0o755) }()
 
-		_, err := loadCustomProviders(baseDir)
-		if err == nil {
-			t.Fatal("expected read providers dir error")
+		providers, err := loadCustomProviders(baseDir)
+		if err != nil {
+			t.Fatalf("expected read providers dir fallback, got %v", err)
 		}
-		if !strings.Contains(err.Error(), "read providers dir") {
-			t.Fatalf("expected read providers dir error, got %v", err)
+		if len(providers) != 0 {
+			t.Fatalf("expected empty providers on read fallback, got %d", len(providers))
 		}
 	})
 

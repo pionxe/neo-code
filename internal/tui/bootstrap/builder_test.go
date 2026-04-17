@@ -15,6 +15,26 @@ import (
 
 type testRuntime struct{}
 
+func (r *testRuntime) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
+	return agentruntime.UserInput{
+		SessionID: input.SessionID,
+		RunID:     input.RunID,
+		Workdir:   input.Workdir,
+	}, nil
+}
+
+func (r *testRuntime) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	_, err := r.PrepareUserInput(ctx, input)
+	if err != nil {
+		return err
+	}
+	return r.Run(ctx, agentruntime.UserInput{
+		SessionID: input.SessionID,
+		RunID:     input.RunID,
+		Workdir:   input.Workdir,
+	})
+}
+
 func (r *testRuntime) Run(ctx context.Context, input agentruntime.UserInput) error {
 	return nil
 }
@@ -205,6 +225,26 @@ func (f errorFactory) BuildProvider(mode Mode, current ProviderService) (Provide
 }
 
 type noopRuntime struct{}
+
+func (r noopRuntime) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
+	return agentruntime.UserInput{
+		SessionID: input.SessionID,
+		RunID:     input.RunID,
+		Workdir:   input.Workdir,
+	}, nil
+}
+
+func (r noopRuntime) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	_, err := r.PrepareUserInput(ctx, input)
+	if err != nil {
+		return err
+	}
+	return r.Run(ctx, agentruntime.UserInput{
+		SessionID: input.SessionID,
+		RunID:     input.RunID,
+		Workdir:   input.Workdir,
+	})
+}
 
 func (r noopRuntime) Run(ctx context.Context, input agentruntime.UserInput) error {
 	return nil

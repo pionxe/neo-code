@@ -26,6 +26,16 @@ func (s *stubRunner) Run(ctx context.Context, input agentruntime.UserInput) erro
 	return s.err
 }
 
+type stubSubmitter struct {
+	lastInput agentruntime.PrepareInput
+	err       error
+}
+
+func (s *stubSubmitter) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	s.lastInput = input
+	return s.err
+}
+
 type stubCompactor struct {
 	lastInput agentruntime.CompactInput
 	err       error
@@ -102,6 +112,24 @@ func TestRunAgentCmd(t *testing.T) {
 	}
 	if err, ok := msg.(error); !ok || err == nil || err.Error() != "boom" {
 		t.Fatalf("expected forwarded error message, got %T %#v", msg, msg)
+	}
+}
+
+func TestRunSubmitCmd(t *testing.T) {
+	runner := &stubSubmitter{err: errors.New("run failed")}
+	prepareInput := agentruntime.PrepareInput{
+		SessionID: "s1",
+		RunID:     "run-1",
+		Workdir:   "D:/",
+		Text:      "hello",
+		Images:    []agentruntime.UserImageInput{{Path: "C:/a.png", MimeType: "image/png"}},
+	}
+	msg := RunSubmitCmd(runner, prepareInput, func(err error) tea.Msg { return err })()
+	if runner.lastInput.RunID != "run-1" || len(runner.lastInput.Images) != 1 {
+		t.Fatalf("unexpected submit input: %+v", runner.lastInput)
+	}
+	if err, ok := msg.(error); !ok || err == nil || err.Error() != "run failed" {
+		t.Fatalf("expected forwarded run error, got %T %#v", msg, msg)
 	}
 }
 

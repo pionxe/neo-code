@@ -16,6 +16,12 @@ type Runner interface {
 	Run(ctx context.Context, input agentruntime.UserInput) error
 }
 
+// PreparedRunner 定义“输入归一化 + run”链路所需最小能力。
+// Submitter 定义 runtime 单入口提交所需的最小能力。
+type Submitter interface {
+	Submit(ctx context.Context, input agentruntime.PrepareInput) error
+}
+
 // Compactor 定义执行 runtime compact 所需最小能力。
 type Compactor interface {
 	Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error)
@@ -49,6 +55,15 @@ func RunAgentCmd(
 ) tea.Cmd {
 	return func() tea.Msg {
 		err := runtime.Run(context.Background(), input)
+		return doneMsg(err)
+	}
+}
+
+// RunPreparedAgentCmd 先执行输入归一化，再执行 runtime run，并将结果映射为 UI 消息。
+// RunSubmitCmd 执行 runtime 单入口提交，并将结果映射为 UI 消息。
+func RunSubmitCmd(runtime Submitter, input agentruntime.PrepareInput, doneMsg func(error) tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		err := runtime.Submit(context.Background(), input)
 		return doneMsg(err)
 	}
 }

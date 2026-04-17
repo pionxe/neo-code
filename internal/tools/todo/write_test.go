@@ -202,6 +202,20 @@ func TestToolMetadataMethods(t *testing.T) {
 	if _, ok := properties["items"]; !ok {
 		t.Fatalf("Schema() should include items property")
 	}
+	artifacts, ok := properties["artifacts"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema() artifacts should be object, got %T", properties["artifacts"])
+	}
+	if artifacts["type"] != "array" {
+		t.Fatalf("Schema() artifacts.type = %+v, want array", artifacts["type"])
+	}
+	items, ok := artifacts["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema() artifacts.items should be object, got %T", artifacts["items"])
+	}
+	if items["type"] != "string" {
+		t.Fatalf("Schema() artifacts.items.type = %+v, want string", items["type"])
+	}
 }
 
 func TestToolExecuteActionSequence(t *testing.T) {

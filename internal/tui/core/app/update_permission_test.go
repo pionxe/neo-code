@@ -23,6 +23,20 @@ type permissionTestRuntime struct {
 	lastResolved agentruntime.PermissionResolutionInput
 }
 
+func (r *permissionTestRuntime) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
+	return agentruntime.UserInput{
+		SessionID: input.SessionID,
+		RunID:     input.RunID,
+		Parts:     nil,
+		Workdir:   input.Workdir,
+	}, nil
+}
+
+func (r *permissionTestRuntime) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	_, err := r.PrepareUserInput(ctx, input)
+	return err
+}
+
 func (r *permissionTestRuntime) Run(ctx context.Context, input agentruntime.UserInput) error {
 	return nil
 }

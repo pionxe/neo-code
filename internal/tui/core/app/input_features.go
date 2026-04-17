@@ -24,7 +24,6 @@ const (
 	maxWorkspaceFiles      = 4000
 	maxFileSuggestions     = 6
 	maxImageAttachments    = 3
-	imageMaxSizeBytes      = 5 * 1024 * 1024 // 5 MiB
 )
 
 type tokenSelector int
@@ -37,7 +36,6 @@ const (
 var workspaceCommandExecutor = defaultWorkspaceCommandExecutor
 var readClipboardImage = tuiinfra.ReadClipboardImage
 var saveClipboardImageToTempFile = tuiinfra.SaveImageToTempFile
-var detectImageMimeType = tuiinfra.DetectImageMimeType
 
 func isWorkspaceCommandInput(input string) bool {
 	return strings.HasPrefix(strings.TrimSpace(input), workspaceCommandPrefix)
@@ -219,6 +217,191 @@ func (a *App) applyImageReference(input string) error {
 	return a.addImageAttachment(path)
 }
 
+// absorbInlineImageReferences 会把输入文本中的 @image:<path> 令牌吸收到附件队列，并返回移除令牌后的文本。
+// 该实现保留原始空白布局，仅移除命中的图片令牌，避免改变用户提示词语义。
+func (a *App) absorbInlineImageReferences(input string) (string, int, error) {
+	if strings.TrimSpace(input) == "" {
+		return strings.TrimSpace(input), 0, nil
+	}
+
+	var builder strings.Builder
+	absorbed := 0
+	for i := 0; i < len(input); {
+		imagePath, end, ok := parseInlineImageReferenceAt(input, i)
+		if ok && looksLikeImagePath(imagePath) {
+			if err := a.queueImageAttachmentForPrepare(imagePath); err != nil {
+				return "", absorbed, err
+			}
+			absorbed++
+			i = end
+			continue
+		}
+		builder.WriteByte(input[i])
+		i++
+	}
+
+	return strings.TrimSpace(builder.String()), absorbed, nil
+}
+
+// isInlineTokenSpace 判断字符是否属于输入令牌分隔空白字符。
+func isInlineTokenSpace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\r', '\n':
+		return true
+	default:
+		return false
+	}
+}
+
+// parseInlineImagePathToken 识别 @image:<path> 形式的图片路径令牌，并映射为待发送路径。
+func (a *App) parseInlineImagePathToken(token string) (string, bool) {
+	path, _, ok := parseInlineImageReferenceAt(strings.TrimSpace(token), 0)
+	if !ok {
+		return "", false
+	}
+	path = strings.TrimSpace(path)
+	if path == "" || !looksLikeImagePath(path) {
+		return "", false
+	}
+
+	resolved := path
+	if !filepath.IsAbs(resolved) {
+		base := strings.TrimSpace(a.state.CurrentWorkdir)
+		if base == "" {
+			return "", false
+		}
+		resolved = filepath.Join(base, resolved)
+	}
+	return resolved, true
+}
+
+// parseInlineImageReferenceAt 从输入指定位置解析 @image:<path>，支持引号与空格路径。
+func parseInlineImageReferenceAt(input string, start int) (path string, end int, ok bool) {
+	if start < 0 || start >= len(input) {
+		return "", 0, false
+	}
+	if start > 0 && !isInlineTokenSpace(input[start-1]) {
+		return "", 0, false
+	}
+	if !strings.HasPrefix(input[start:], imageReferencePrefix) {
+		return "", 0, false
+	}
+
+	cursor := start + len(imageReferencePrefix)
+	if cursor >= len(input) {
+		return "", 0, false
+	}
+
+	quotedPath, quotedEnd, quoted := readQuotedInlinePath(input, cursor)
+	if quoted {
+		if strings.TrimSpace(quotedPath) == "" {
+			return "", 0, false
+		}
+		return strings.TrimSpace(quotedPath), quotedEnd, true
+	}
+
+	unquotedPath, unquotedEnd := readUnquotedInlinePath(input, cursor)
+	unquotedPath = strings.TrimSpace(unquotedPath)
+	if unquotedPath == "" {
+		return "", 0, false
+	}
+	return unquotedPath, unquotedEnd, true
+}
+
+// readQuotedInlinePath 读取带引号路径，支持 \" 和 \' 转义。
+func readQuotedInlinePath(input string, start int) (string, int, bool) {
+	if start >= len(input) {
+		return "", 0, false
+	}
+	quote := input[start]
+	if quote != '"' && quote != '\'' {
+		return "", 0, false
+	}
+	var builder strings.Builder
+	for i := start + 1; i < len(input); i++ {
+		ch := input[i]
+		if ch == '\\' && i+1 < len(input) {
+			next := input[i+1]
+			if next == quote || next == '\\' {
+				builder.WriteByte(next)
+				i++
+				continue
+			}
+		}
+		if ch == quote {
+			return builder.String(), i + 1, true
+		}
+		builder.WriteByte(ch)
+	}
+	return "", 0, false
+}
+
+// readUnquotedInlinePath 读取非引号路径，遇到空白或换行结束，支持反斜杠转义空白字符。
+func readUnquotedInlinePath(input string, start int) (string, int) {
+	var builder strings.Builder
+	end := start
+	for end < len(input) {
+		ch := input[end]
+		if isInlineTokenSpace(ch) {
+			break
+		}
+		if ch == '\\' && end+1 < len(input) {
+			next := input[end+1]
+			if isInlineTokenSpace(next) {
+				builder.WriteByte(next)
+				end += 2
+				continue
+			}
+		}
+		builder.WriteByte(ch)
+		end++
+	}
+	return builder.String(), end
+}
+
+// queueImageAttachmentForPrepare 将图片路径排队为待发送附件，不在 TUI 层做文件系统和 MIME 硬校验。
+// 真正的可用性校验与错误语义统一在 runtime/session 归一化阶段完成。
+func (a *App) queueImageAttachmentForPrepare(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("image path is empty")
+	}
+	if len(a.pendingImageAttachments) >= maxImageAttachments {
+		return fmt.Errorf("maximum %d image attachments allowed", maxImageAttachments)
+	}
+
+	resolved := path
+	if !filepath.IsAbs(resolved) {
+		base := strings.TrimSpace(a.state.CurrentWorkdir)
+		if base != "" {
+			resolved = filepath.Join(base, resolved)
+		}
+	}
+	absPath, err := filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("invalid image path: %w", err)
+	}
+
+	a.pendingImageAttachments = append(a.pendingImageAttachments, pendingImageAttachment{
+		Path:     absPath,
+		MimeType: "",
+		Size:     0,
+		Name:     filepath.Base(absPath),
+	})
+	a.refreshImageAttachmentDisplay()
+	return nil
+}
+
+// looksLikeImagePath 使用扩展名快速判断路径是否是常见图片文件。
+func looksLikeImagePath(path string) bool {
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(path))) {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *App) applyFileReference(path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -275,43 +458,12 @@ func extractImageReference(input string) string {
 }
 
 func (a *App) addImageAttachment(path string) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return fmt.Errorf("image path is empty")
+	if err := a.queueImageAttachmentForPrepare(path); err != nil {
+		return err
 	}
-
-	if len(a.pendingImageAttachments) >= maxImageAttachments {
-		return fmt.Errorf("maximum %d image attachments allowed", maxImageAttachments)
+	if count := len(a.pendingImageAttachments); count > 0 {
+		a.state.StatusText = fmt.Sprintf("[System] Added image: %s", a.pendingImageAttachments[count-1].Name)
 	}
-
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("invalid image path: %w", err)
-	}
-
-	info, err := tuiinfra.GetFileInfo(absPath)
-	if err != nil {
-		return fmt.Errorf("cannot read image file: %w", err)
-	}
-
-	if info.Size() > imageMaxSizeBytes {
-		return fmt.Errorf("image size exceeds %d MB limit", imageMaxSizeBytes/(1024*1024))
-	}
-
-	mimeType := detectImageMimeType(absPath)
-	if mimeType == "" {
-		return fmt.Errorf("unsupported image format")
-	}
-
-	a.pendingImageAttachments = append(a.pendingImageAttachments, pendingImageAttachment{
-		Path:     absPath,
-		MimeType: mimeType,
-		Size:     info.Size(),
-		Name:     filepath.Base(absPath),
-	})
-
-	a.refreshImageAttachmentDisplay()
-	a.state.StatusText = fmt.Sprintf("[System] Added image: %s", filepath.Base(absPath))
 	return nil
 }
 
@@ -370,62 +522,13 @@ func (a *App) addImageFromClipboard() error {
 		return fmt.Errorf("no image in clipboard")
 	}
 
-	if int64(len(data)) > imageMaxSizeBytes {
-		return fmt.Errorf("image size exceeds %d MB limit", imageMaxSizeBytes/(1024*1024))
-	}
-
 	tmpPath, err := saveClipboardImageToTempFile(data, "paste")
 	if err != nil {
 		return fmt.Errorf("failed to save clipboard image: %w", err)
 	}
-
-	mimeType := detectImageMimeType(tmpPath)
-	if mimeType == "" {
-		return fmt.Errorf("unsupported image format from clipboard")
+	if err := a.queueImageAttachmentForPrepare(tmpPath); err != nil {
+		return err
 	}
-
-	a.pendingImageAttachments = append(a.pendingImageAttachments, pendingImageAttachment{
-		Path:     tmpPath,
-		MimeType: mimeType,
-		Size:     int64(len(data)),
-		Name:     "clipboard_image.png",
-	})
-
-	a.refreshImageAttachmentDisplay()
 	a.state.StatusText = "[System] Added image from clipboard"
 	return nil
-}
-
-func (a *App) checkModelImageSupport() bool {
-	if a.currentModelCapabilities.checked {
-		return a.currentModelCapabilities.supportsImageInput
-	}
-
-	models, err := a.providerSvc.ListModelsSnapshot(context.Background())
-	if err != nil {
-		a.currentModelCapabilities.checked = true
-		a.currentModelCapabilities.supportsImageInput = false
-		return false
-	}
-
-	for _, m := range models {
-		if m.ID == a.state.CurrentModel {
-			a.currentModelCapabilities.checked = true
-			a.currentModelCapabilities.supportsImageInput = m.CapabilityHints.ImageInput == "supported"
-			return a.currentModelCapabilities.supportsImageInput
-		}
-	}
-
-	a.currentModelCapabilities.checked = true
-	a.currentModelCapabilities.supportsImageInput = false
-	return false
-}
-
-func (a *App) canSendImageInput() bool {
-	return a.checkModelImageSupport()
-}
-
-// invalidateModelCapabilityCache 在 provider 或 model 变化时清理图片能力缓存，避免复用旧结果。
-func (a *App) invalidateModelCapabilityCache() {
-	a.currentModelCapabilities = modelCapabilityState{}
 }

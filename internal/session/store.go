@@ -61,12 +61,41 @@ type Store interface {
 	Save(ctx context.Context, session *Session) error
 	Load(ctx context.Context, id string) (Session, error)
 	ListSummaries(ctx context.Context) ([]Summary, error)
+	DeleteSession(ctx context.Context, id string) error
 }
 
 // JSONStore 是基于 JSON 文件的会话存储实现。
 type JSONStore struct {
 	mu      sync.RWMutex
 	baseDir string
+}
+
+// contextReader 在读取前检查上下文取消状态，避免长时间 I/O 无法及时退出。
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if r == nil || r.reader == nil {
+		return 0, io.EOF
+	}
+	if r.ctx != nil {
+		if err := r.ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
+	return r.reader.Read(p)
+}
+
+func contextDone(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // NewJSONStore 创建 JSONStore，实际会话目录为 {baseDir}/sessions。
@@ -221,6 +250,28 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 	return summaries, nil
 }
 
+// DeleteSession 删除指定会话目录及其附件，供创建后失败回滚等场景复用。
+func (s *JSONStore) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateStorageID("session id", id); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target := s.sessionDir(id)
+	if err := ensurePathWithinBase(s.baseDir, target); err != nil {
+		return fmt.Errorf("session: resolve session dir path: %w", err)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("session: delete session dir: %w", err)
+	}
+	return nil
+}
+
 // filePath 生成会话 ID 对应的 JSON 文件路径。
 func (s *JSONStore) filePath(id string) string {
 	return filepath.Join(s.sessionDir(id), sessionFileName)
@@ -248,7 +299,7 @@ func (s *JSONStore) assetMetaPath(sessionID string, assetID string) string {
 
 // SaveAsset 将会话附件二进制内容写入当前工作区会话目录，并返回附件元数据。
 func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader, mimeType string) (AssetMeta, error) {
-	if err := ctx.Err(); err != nil {
+	if err := contextDone(ctx); err != nil {
 		return AssetMeta{}, err
 	}
 	if r == nil {
@@ -273,6 +324,9 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 	if err := os.MkdirAll(assetDir, 0o755); err != nil {
 		return AssetMeta{}, fmt.Errorf("session: create assets dir: %w", err)
 	}
+	if err := contextDone(ctx); err != nil {
+		return AssetMeta{}, err
+	}
 
 	target := s.assetPath(sessionID, meta.ID)
 	if err := ensurePathWithinBase(s.baseDir, target); err != nil {
@@ -283,9 +337,14 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 		return AssetMeta{}, err
 	}
 
-	written, copyErr := io.Copy(tempFile, io.LimitReader(r, providertypes.MaxSessionAssetBytes+1))
+	limitedReader := io.LimitReader(&contextReader{ctx: ctx, reader: r}, providertypes.MaxSessionAssetBytes+1)
+	written, copyErr := io.Copy(tempFile, limitedReader)
 	syncErr := tempFile.Sync()
 	closeErr := tempFile.Close()
+	if ctxErr := contextDone(ctx); ctxErr != nil {
+		_ = os.Remove(tempPath)
+		return AssetMeta{}, ctxErr
+	}
 	if copyErr != nil {
 		_ = os.Remove(tempPath)
 		return AssetMeta{}, fmt.Errorf("session: write temp asset: %w", copyErr)
@@ -308,6 +367,10 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 		_ = os.Remove(tempPath)
 		return AssetMeta{}, err
 	}
+	if err := contextDone(ctx); err != nil {
+		_ = os.Remove(target)
+		return AssetMeta{}, err
+	}
 
 	metaData, err := encodeStoredAssetMeta(meta)
 	if err != nil {
@@ -321,6 +384,11 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 	}
 	if err := writeFileAtomically(metaTarget, "asset-meta-*.tmp", metaData, 0o644); err != nil {
 		_ = os.Remove(target)
+		return AssetMeta{}, err
+	}
+	if err := contextDone(ctx); err != nil {
+		_ = os.Remove(target)
+		_ = os.Remove(metaTarget)
 		return AssetMeta{}, err
 	}
 
@@ -374,6 +442,39 @@ func (s *JSONStore) Stat(ctx context.Context, sessionID string, assetID string) 
 	defer s.mu.RUnlock()
 
 	return s.statUnlocked(sessionID, assetID)
+}
+
+// DeleteAsset 删除指定会话附件的二进制与元数据文件，用于输入归一化失败后的清理。
+func (s *JSONStore) DeleteAsset(ctx context.Context, sessionID string, assetID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	if err := validateStorageID("asset id", assetID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target := s.assetPath(sessionID, assetID)
+	if err := ensurePathWithinBase(s.baseDir, target); err != nil {
+		return fmt.Errorf("session: resolve asset file path: %w", err)
+	}
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("session: delete asset file: %w", err)
+	}
+
+	metaTarget := s.assetMetaPath(sessionID, assetID)
+	if err := ensurePathWithinBase(s.baseDir, metaTarget); err != nil {
+		return fmt.Errorf("session: resolve asset meta file path: %w", err)
+	}
+	if err := os.Remove(metaTarget); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("session: delete asset meta file: %w", err)
+	}
+	return nil
 }
 
 // statUnlocked 在调用方已持有读锁时读取附件元数据，避免重复加锁导致死锁风险。

@@ -118,6 +118,21 @@ func TestJSONStoreAssetStoreRespectsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestJSONStoreSaveAssetStopsWhenContextCanceledDuringCopy(t *testing.T) {
+	t.Parallel()
+
+	store := NewJSONStore(t.TempDir(), t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := &cancelAfterFirstReadReader{
+		cancel: cancel,
+		chunks: [][]byte{[]byte("chunk-1"), []byte("chunk-2")},
+	}
+
+	if _, err := store.SaveAsset(ctx, "session_ctx_cancel_during_copy", reader, "image/png"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled during copy, got %v", err)
+	}
+}
+
 func TestJSONStoreSaveAssetRejectsOversizedPayload(t *testing.T) {
 	t.Parallel()
 
@@ -224,8 +239,52 @@ func TestJSONStoreOpenAndStatMissingStoredFiles(t *testing.T) {
 	}
 }
 
+func TestJSONStoreDeleteAsset(t *testing.T) {
+	t.Parallel()
+
+	store := NewJSONStore(t.TempDir(), t.TempDir())
+	sessionID := "session-delete-asset"
+	meta, err := store.SaveAsset(context.Background(), sessionID, strings.NewReader("img"), "image/png")
+	if err != nil {
+		t.Fatalf("save seed asset: %v", err)
+	}
+
+	if err := store.DeleteAsset(context.Background(), sessionID, meta.ID); err != nil {
+		t.Fatalf("DeleteAsset() error = %v", err)
+	}
+	if _, statErr := os.Stat(store.assetPath(sessionID, meta.ID)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected removed asset file, got %v", statErr)
+	}
+	if _, statErr := os.Stat(store.assetMetaPath(sessionID, meta.ID)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected removed asset meta file, got %v", statErr)
+	}
+
+	if err := store.DeleteAsset(context.Background(), sessionID, meta.ID); err != nil {
+		t.Fatalf("DeleteAsset() should ignore already deleted files, got %v", err)
+	}
+}
+
 type failingReader struct{}
 
 func (failingReader) Read(_ []byte) (int, error) {
 	return 0, errors.New("read failure")
+}
+
+type cancelAfterFirstReadReader struct {
+	cancel context.CancelFunc
+	chunks [][]byte
+	index  int
+}
+
+func (r *cancelAfterFirstReadReader) Read(p []byte) (int, error) {
+	if r.index >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[r.index]
+	r.index++
+	n := copy(p, chunk)
+	if r.index == 1 && r.cancel != nil {
+		r.cancel()
+	}
+	return n, nil
 }

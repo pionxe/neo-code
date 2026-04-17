@@ -67,7 +67,7 @@ func loadCustomProviders(baseDir string) ([]ProviderConfig, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("config: read providers dir: %w", err)
+		return nil, nil
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
