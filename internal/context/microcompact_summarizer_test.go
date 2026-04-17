@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/context/internalcompact"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
 )
@@ -271,4 +272,30 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 			t.Fatalf("expected cleared for unknown tool call id, got %q", got)
 		}
 	})
+}
+
+// TestIsToolCallSpanBoundaries 验证 span 边界异常时返回 false。
+func TestIsToolCallSpanBoundaries(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleAssistant, ToolCalls: []providertypes.ToolCall{{ID: "c1", Name: "bash"}}},
+	}
+
+	if isToolCallSpan(messages, internalcompact.MessageSpan{Start: -1, End: 0}) {
+		t.Fatal("expected false for negative start")
+	}
+	if isToolCallSpan(messages, internalcompact.MessageSpan{Start: 2, End: 3}) {
+		t.Fatal("expected false for out-of-range start")
+	}
+}
+
+// TestCompactableToolCallIDsEmptyInput 验证空 tool call 输入时返回 nil。
+func TestCompactableToolCallIDsEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	ids, names := compactableToolCallIDs(nil, nil)
+	if ids != nil || names != nil {
+		t.Fatalf("expected nil maps for empty input, got ids=%v names=%v", ids, names)
+	}
 }

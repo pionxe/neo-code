@@ -217,6 +217,11 @@ func TestRegisterBuiltinSummarizers(t *testing.T) {
 	}
 }
 
+func TestRegisterBuiltinSummarizersNilRegistry(t *testing.T) {
+	t.Parallel()
+	RegisterBuiltinSummarizers(nil)
+}
+
 func TestRegisterSummarizer(t *testing.T) {
 	t.Parallel()
 
@@ -248,6 +253,34 @@ func TestRegisterSummarizer(t *testing.T) {
 	}
 }
 
+func TestRegisterSummarizerNormalizesName(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.RegisterSummarizer("  Mixed_Tool  ", func(content string, metadata map[string]string, isError bool) string {
+		return "ok"
+	})
+
+	if registry.MicroCompactSummarizer("mixed_tool") == nil {
+		t.Fatal("expected normalized summarizer lookup")
+	}
+	if registry.MicroCompactSummarizer("  MIXED_TOOL  ") == nil {
+		t.Fatal("expected case-insensitive summarizer lookup")
+	}
+}
+
+func TestRegisterSummarizerNilRegistry(t *testing.T) {
+	t.Parallel()
+
+	var nilRegistry *Registry
+	nilRegistry.RegisterSummarizer("tool", func(content string, metadata map[string]string, isError bool) string {
+		return "ok"
+	})
+	if nilRegistry.MicroCompactSummarizer("tool") != nil {
+		t.Fatal("expected nil summarizer on nil registry")
+	}
+}
+
 func TestTruncateRunes(t *testing.T) {
 	t.Parallel()
 
@@ -276,6 +309,36 @@ func TestTruncateRunes(t *testing.T) {
 		got := truncateRunes("你好世界测试", 3)
 		if got != "你好世..." {
 			t.Fatalf("expected '你好世...', got %q", got)
+		}
+	})
+
+	t.Run("zero_limit_keeps_original", func(t *testing.T) {
+		got := truncateRunes("hello", 0)
+		if got != "hello" {
+			t.Fatalf("expected unchanged with zero limit, got %q", got)
+		}
+	})
+
+	t.Run("empty_text", func(t *testing.T) {
+		got := truncateRunes("", 10)
+		if got != "" {
+			t.Fatalf("expected empty string, got %q", got)
+		}
+	})
+}
+
+func TestStableLineCount(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty", func(t *testing.T) {
+		if got := stableLineCount(""); got != 0 {
+			t.Fatalf("expected 0, got %d", got)
+		}
+	})
+
+	t.Run("non_empty", func(t *testing.T) {
+		if got := stableLineCount("a\nb"); got != 2 {
+			t.Fatalf("expected 2, got %d", got)
 		}
 	})
 }
