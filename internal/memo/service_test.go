@@ -188,12 +188,9 @@ func TestServiceRemoveRejectsInvalidScope(t *testing.T) {
 }
 
 func TestServiceMaxEntriesTrim(t *testing.T) {
-	svc := NewService(newMemoryTestStore(), config.MemoConfig{
-		MaxEntries:            2,
-		MaxIndexBytes:         16 * 1024,
-		ExtractTimeoutSec:     15,
-		ExtractRecentMessages: 10,
-	}, nil)
+	cfg := testMemoConfig()
+	cfg.MaxEntries = 2
+	svc := NewService(newMemoryTestStore(), cfg, nil)
 
 	for _, title := range []string{"A", "B", "C"} {
 		if err := svc.Add(context.Background(), Entry{
@@ -216,12 +213,10 @@ func TestServiceMaxEntriesTrim(t *testing.T) {
 }
 
 func TestServiceMaxIndexBytesTrim(t *testing.T) {
-	svc := NewService(newMemoryTestStore(), config.MemoConfig{
-		MaxEntries:            10,
-		MaxIndexBytes:         40,
-		ExtractTimeoutSec:     15,
-		ExtractRecentMessages: 10,
-	}, nil)
+	cfg := testMemoConfig()
+	cfg.MaxEntries = 10
+	cfg.MaxIndexBytes = 40
+	svc := NewService(newMemoryTestStore(), cfg, nil)
 
 	for _, title := range []string{"one", "two", "three"} {
 		if err := svc.Add(context.Background(), Entry{
@@ -303,6 +298,43 @@ func TestServiceAutoExtractDedupAcrossScopes(t *testing.T) {
 	}
 }
 
+func TestServiceAutoExtractTrimmedEntryDoesNotPolluteDedupIndex(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), config.MemoConfig{
+		MaxEntries:            10,
+		MaxIndexBytes:         1,
+		ExtractTimeoutSec:     15,
+		ExtractRecentMessages: 10,
+	}, nil)
+	entry := Entry{
+		Type:    TypeUser,
+		Title:   "reply in chinese",
+		Content: "reply in chinese",
+		Source:  SourceAutoExtract,
+	}
+
+	added, err := svc.addAutoExtractIfAbsent(context.Background(), entry)
+	if err != nil || !added {
+		t.Fatalf("first addAutoExtractIfAbsent() = (%v, %v), want (true, nil)", added, err)
+	}
+	added, err = svc.addAutoExtractIfAbsent(context.Background(), entry)
+	if err != nil || !added {
+		t.Fatalf("second addAutoExtractIfAbsent() = (%v, %v), want (true, nil)", added, err)
+	}
+
+	entries, err := svc.List(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(entries) = %d, want 0 after byte trim", len(entries))
+	}
+
+	key := autoExtractDedupKey(entry)
+	if refs := svc.autoExtractKeyRefs[key]; refs != 0 {
+		t.Fatalf("autoExtractKeyRefs[%q] = %d, want 0", key, refs)
+	}
+}
+
 func TestServiceEnsureAutoExtractIndexLoadsExistingEntries(t *testing.T) {
 	store := newMemoryTestStore()
 	store.indexes[ScopeUser] = &Index{Entries: []Entry{{Type: TypeUser, Title: "A", TopicFile: "a.md"}}}
@@ -340,5 +372,26 @@ func TestMatchesKeywordIncludesContent(t *testing.T) {
 	}
 	if matchesKeyword(entry, "missing") {
 		t.Fatal("unexpected match for missing keyword")
+	}
+}
+
+func TestTrimIndexEntriesByBytesRemovesMinimalPrefix(t *testing.T) {
+	index := &Index{
+		Entries: []Entry{
+			{Type: TypeUser, Title: "one", TopicFile: "one.md"},
+			{Type: TypeUser, Title: "two", TopicFile: "two.md"},
+			{Type: TypeUser, Title: "three", TopicFile: "three.md"},
+		},
+	}
+
+	target := &Index{Entries: append([]Entry(nil), index.Entries[1:]...)}
+	maxIndexBytes := len(RenderIndex(target))
+	removed := trimIndexEntries(index, 10, maxIndexBytes)
+
+	if len(removed) != 1 || removed[0].Title != "one" {
+		t.Fatalf("removed = %#v, want only first entry", removed)
+	}
+	if len(index.Entries) != 2 || index.Entries[0].Title != "two" || index.Entries[1].Title != "three" {
+		t.Fatalf("remaining entries = %#v", index.Entries)
 	}
 }

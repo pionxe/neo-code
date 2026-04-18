@@ -265,7 +265,9 @@ func (s *Service) saveEntryLocked(ctx context.Context, entry Entry) error {
 		for _, removed := range removedEntries {
 			s.removeAutoExtractTopicLocked(scope, removed.TopicFile)
 		}
-		s.trackAutoExtractEntryLocked(scope, entry)
+		if indexContainsEntryID(working, entry.ID) {
+			s.trackAutoExtractEntryLocked(scope, entry)
+		}
 	}
 
 	s.invalidateCache()
@@ -406,9 +408,7 @@ func (s *Service) listLocked(ctx context.Context, scope Scope) ([]Entry, error) 
 		}
 		results = append(results, index.Entries...)
 	}
-	cloned := make([]Entry, len(results))
-	copy(cloned, results)
-	return cloned, nil
+	return append([]Entry(nil), results...), nil
 }
 
 // invalidateCache 触发上下文源缓存失效回调。
@@ -488,11 +488,49 @@ func trimIndexEntries(index *Index, maxEntries int, maxIndexBytes int) []Entry {
 		removed = append(removed, index.Entries[0])
 		index.Entries = index.Entries[1:]
 	}
-	for maxIndexBytes > 0 && len(index.Entries) > 0 && len(RenderIndex(index)) > maxIndexBytes {
-		removed = append(removed, index.Entries[0])
-		index.Entries = index.Entries[1:]
+	if maxIndexBytes > 0 && len(index.Entries) > 0 {
+		removed = append(removed, trimIndexEntriesByBytes(index, maxIndexBytes)...)
 	}
 	return removed
+}
+
+// trimIndexEntriesByBytes 在索引超过字节阈值时，通过二分定位最小移除数量并返回被删除条目。
+func trimIndexEntriesByBytes(index *Index, maxIndexBytes int) []Entry {
+	if index == nil || len(index.Entries) == 0 || maxIndexBytes <= 0 {
+		return nil
+	}
+	if len(RenderIndex(index)) <= maxIndexBytes {
+		return nil
+	}
+
+	entries := index.Entries
+	lo, hi := 0, len(entries)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		candidate := &Index{Entries: entries[mid:], UpdatedAt: index.UpdatedAt}
+		if len(RenderIndex(candidate)) > maxIndexBytes {
+			lo = mid + 1
+			continue
+		}
+		hi = mid
+	}
+
+	removed := append([]Entry(nil), entries[:lo]...)
+	index.Entries = entries[lo:]
+	return removed
+}
+
+// indexContainsEntryID 判断索引中是否仍保留目标 ID，用于避免为已裁剪条目建立去重索引。
+func indexContainsEntryID(index *Index, entryID string) bool {
+	if index == nil || strings.TrimSpace(entryID) == "" {
+		return false
+	}
+	for _, item := range index.Entries {
+		if item.ID == entryID {
+			return true
+		}
+	}
+	return false
 }
 
 // scopesForQuery 将查询范围展开为实际存储分层列表。
