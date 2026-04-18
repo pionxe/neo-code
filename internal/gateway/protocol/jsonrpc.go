@@ -62,6 +62,8 @@ const (
 	GatewayCodeUnsupportedAction = "unsupported_action"
 	// GatewayCodeInternalError 表示网关内部错误。
 	GatewayCodeInternalError = "internal_error"
+	// GatewayCodeTimeout 表示网关处理请求时发生超时。
+	GatewayCodeTimeout = "timeout"
 	// GatewayCodeUnsafePath 表示路径存在安全风险。
 	GatewayCodeUnsafePath = "unsafe_path"
 	// GatewayCodeUnauthorized 表示请求未通过认证校验。
@@ -364,6 +366,8 @@ func MapGatewayCodeToJSONRPCCode(gatewayCode string) int {
 		GatewayCodeAccessDenied:
 		return JSONRPCCodeInvalidParams
 	case GatewayCodeInternalError:
+		return JSONRPCCodeInternalError
+	case GatewayCodeTimeout:
 		return JSONRPCCodeInternalError
 	default:
 		return JSONRPCCodeInternalError

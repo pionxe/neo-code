@@ -364,6 +364,9 @@ func TestJSONRPCHelpers(t *testing.T) {
 	if MapGatewayCodeToJSONRPCCode(GatewayCodeAccessDenied) != JSONRPCCodeInvalidParams {
 		t.Fatal("access_denied should map to invalid_params")
 	}
+	if MapGatewayCodeToJSONRPCCode(GatewayCodeTimeout) != JSONRPCCodeInternalError {
+		t.Fatal("timeout should map to internal_error")
+	}
 	if MapGatewayCodeToJSONRPCCode("unknown") != JSONRPCCodeInternalError {
 		t.Fatal("unknown code should map to internal_error")
 	}

@@ -3,11 +3,18 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"neo-code/internal/gateway/handlers"
 	"neo-code/internal/gateway/protocol"
+)
+
+const (
+	// defaultRuntimeOperationTimeout 定义网关调用 runtime 的硬超时时间，防止资源被无限占用。
+	defaultRuntimeOperationTimeout = 30 * time.Minute
 )
 
 type requestFrameHandler func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame
@@ -152,16 +159,20 @@ func handleRunFrame(ctx context.Context, frame MessageFrame, runtimePort Runtime
 		return runtimePortUnavailableFrame(frame)
 	}
 
+	effectiveRunID := normalizeRunID(strings.TrimSpace(frame.RunID), strings.TrimSpace(frame.RequestID))
 	input := RunInput{
 		RequestID:  frame.RequestID,
 		SessionID:  strings.TrimSpace(frame.SessionID),
-		RunID:      strings.TrimSpace(frame.RunID),
+		RunID:      effectiveRunID,
 		InputText:  strings.TrimSpace(frame.InputText),
 		InputParts: append([]InputPart(nil), frame.InputParts...),
 		Workdir:    strings.TrimSpace(frame.Workdir),
 	}
-	if err := runtimePort.Run(ctx, input); err != nil {
-		return runtimeCallFailedFrame(frame, err, "run")
+	frame.RunID = input.RunID
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if err := runtimePort.Run(callCtx, input); err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "run")
 	}
 
 	return MessageFrame{
@@ -182,13 +193,15 @@ func handleCompactFrame(ctx context.Context, frame MessageFrame, runtimePort Run
 		return runtimePortUnavailableFrame(frame)
 	}
 
-	result, err := runtimePort.Compact(ctx, CompactInput{
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, err := runtimePort.Compact(callCtx, CompactInput{
 		RequestID: frame.RequestID,
 		SessionID: strings.TrimSpace(frame.SessionID),
 		RunID:     strings.TrimSpace(frame.RunID),
 	})
 	if err != nil {
-		return runtimeCallFailedFrame(frame, err, "compact")
+		return runtimeCallFailedFrame(callCtx, frame, err, "compact")
 	}
 
 	return MessageFrame{
@@ -224,9 +237,11 @@ func handleListSessionsFrame(ctx context.Context, frame MessageFrame, runtimePor
 		return runtimePortUnavailableFrame(frame)
 	}
 
-	summaries, err := runtimePort.ListSessions(ctx)
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	summaries, err := runtimePort.ListSessions(callCtx)
 	if err != nil {
-		return runtimeCallFailedFrame(frame, err, "list_sessions")
+		return runtimeCallFailedFrame(callCtx, frame, err, "list_sessions")
 	}
 
 	return MessageFrame{
@@ -245,9 +260,12 @@ func handleLoadSessionFrame(ctx context.Context, frame MessageFrame, runtimePort
 		return runtimePortUnavailableFrame(frame)
 	}
 
-	session, err := runtimePort.LoadSession(ctx, strings.TrimSpace(frame.SessionID))
+	// TODO(Security): 当前为本地单用户场景，后续若演进为多租户，需在此处校验 Subject 对 session_id 的所有权，防止 IDOR 越权访问。
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	session, err := runtimePort.LoadSession(callCtx, strings.TrimSpace(frame.SessionID))
 	if err != nil {
-		return runtimeCallFailedFrame(frame, err, "load_session")
+		return runtimeCallFailedFrame(callCtx, frame, err, "load_session")
 	}
 
 	return MessageFrame{
@@ -277,8 +295,10 @@ func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runti
 		return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid resolve_permission decision"))
 	}
 
-	if err := runtimePort.ResolvePermission(ctx, input); err != nil {
-		return runtimeCallFailedFrame(frame, err, "resolve_permission")
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if err := runtimePort.ResolvePermission(callCtx, input); err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "resolve_permission")
 	}
 
 	return MessageFrame{
@@ -298,18 +318,57 @@ func runtimePortUnavailableFrame(frame MessageFrame) MessageFrame {
 	return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runtime port is unavailable"))
 }
 
-// runtimeCallFailedFrame 构造 runtime 调用失败时的统一错误响应。
-func runtimeCallFailedFrame(frame MessageFrame, err error, operation string) MessageFrame {
-	message := strings.TrimSpace(operation)
-	if message == "" {
-		message = "runtime operation"
+// withRuntimeOperationTimeout 为 runtime 调用附加硬超时，避免客户端异常导致资源被长期占用。
+func withRuntimeOperationTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if err != nil {
-		message = fmt.Sprintf("%s failed: %s", message, strings.TrimSpace(err.Error()))
-	} else {
-		message = fmt.Sprintf("%s failed", message)
+	return context.WithTimeout(ctx, defaultRuntimeOperationTimeout)
+}
+
+// normalizeRunID 返回最终生效的 run_id，优先保留显式 run_id，其次回退 request_id，最后生成网关侧默认值。
+func normalizeRunID(runID, requestID string) string {
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID != "" {
+		return normalizedRunID
 	}
-	return errorFrame(frame, NewFrameError(ErrorCodeInternalError, message))
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID != "" {
+		return normalizedRequestID
+	}
+	return fmt.Sprintf("run_%d", time.Now().UnixNano())
+}
+
+// runtimeCallFailedFrame 构造 runtime 调用失败时的统一错误响应，并将底层错误仅写入服务端日志。
+func runtimeCallFailedFrame(ctx context.Context, frame MessageFrame, err error, operation string) MessageFrame {
+	normalizedOperation := strings.TrimSpace(operation)
+	if normalizedOperation == "" {
+		normalizedOperation = "runtime operation"
+	}
+
+	errorCode := ErrorCodeInternalError
+	message := fmt.Sprintf("%s failed", normalizedOperation)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		errorCode = ErrorCodeTimeout
+		message = fmt.Sprintf("%s timed out", normalizedOperation)
+	case errors.Is(err, context.Canceled):
+		errorCode = ErrorCodeInvalidAction
+		message = fmt.Sprintf("%s canceled", normalizedOperation)
+	}
+
+	if logger, ok := GatewayLoggerFromContext(ctx); ok && logger != nil && err != nil {
+		logger.Printf(
+			"gateway runtime call failed: operation=%s request_id=%s session_id=%s run_id=%s error=%v",
+			normalizedOperation,
+			strings.TrimSpace(frame.RequestID),
+			strings.TrimSpace(frame.SessionID),
+			strings.TrimSpace(frame.RunID),
+			err,
+		)
+	}
+
+	return errorFrame(frame, NewFrameError(errorCode, message))
 }
 
 type bindStreamParams struct {
