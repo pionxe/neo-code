@@ -8,15 +8,40 @@ import (
 const (
 	defaultPolicyMaxSteps = 6
 	defaultPolicyTimeout  = 30
+	defaultToolCallsLimit = 6
 )
+
+// ToolUseMode 描述子代理在单步中是否允许模型发起工具调用。
+type ToolUseMode string
+
+const (
+	// ToolUseModeAuto 表示模型按需自行决定是否调用工具。
+	ToolUseModeAuto ToolUseMode = "auto"
+	// ToolUseModeRequired 表示模型必须至少调用一次工具再结束。
+	ToolUseModeRequired ToolUseMode = "required"
+	// ToolUseModeDisabled 表示禁止模型发起任何工具调用。
+	ToolUseModeDisabled ToolUseMode = "disabled"
+)
+
+// Valid 判断工具调用模式是否受支持。
+func (m ToolUseMode) Valid() bool {
+	switch m {
+	case ToolUseModeAuto, ToolUseModeRequired, ToolUseModeDisabled:
+		return true
+	default:
+		return false
+	}
+}
 
 // RolePolicy 定义不同角色的执行策略。
 type RolePolicy struct {
-	Role             Role
-	SystemPrompt     string
-	AllowedTools     []string
-	DefaultBudget    Budget
-	RequiredSections []string
+	Role                Role
+	SystemPrompt        string
+	AllowedTools        []string
+	ToolUseMode         ToolUseMode
+	MaxToolCallsPerStep int
+	DefaultBudget       Budget
+	RequiredSections    []string
 }
 
 // Validate 校验角色策略是否合法。
@@ -32,6 +57,15 @@ func (p RolePolicy) Validate() error {
 	}
 	if len(dedupeAndTrim(p.RequiredSections)) == 0 {
 		return errorsf("role policy required sections is empty")
+	}
+	if p.ToolUseMode == "" {
+		p.ToolUseMode = ToolUseModeAuto
+	}
+	if !p.ToolUseMode.Valid() {
+		return errorsf("role policy tool use mode %q is invalid", p.ToolUseMode)
+	}
+	if p.MaxToolCallsPerStep < 0 {
+		return errorsf("role policy max tool calls per step must not be negative")
 	}
 	if _, err := normalizeRequiredSections(p.RequiredSections); err != nil {
 		return err
@@ -51,6 +85,8 @@ func DefaultRolePolicy(role Role) (RolePolicy, error) {
 			MaxSteps: defaultPolicyMaxSteps,
 			Timeout:  defaultPolicyTimeout * time.Second,
 		},
+		ToolUseMode:         ToolUseModeAuto,
+		MaxToolCallsPerStep: defaultToolCallsLimit,
 		RequiredSections: []string{
 			"summary",
 			"findings",

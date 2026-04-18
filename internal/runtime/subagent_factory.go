@@ -66,8 +66,11 @@ func (r *subAgentFactoryRegistry) get(s *Service) (subagent.Factory, bool) {
 }
 
 // defaultSubAgentFactory 返回默认的子代理工厂实例。
-func defaultSubAgentFactory() subagent.Factory {
-	return subagent.NewWorkerFactory(nil)
+func defaultSubAgentFactory(service *Service) subagent.Factory {
+	return subagent.NewWorkerFactory(
+		newRuntimeSubAgentEngineBuilder(service),
+		subagent.WithToolExecutor(newSubAgentRuntimeToolExecutor(service)),
+	)
 }
 
 // SetSubAgentFactory 设置子代理运行时工厂；传入 nil 时回退到默认工厂。
@@ -76,7 +79,7 @@ func (s *Service) SetSubAgentFactory(factory subagent.Factory) {
 		return
 	}
 	if factory == nil {
-		globalSubAgentFactories.set(s, defaultSubAgentFactory())
+		globalSubAgentFactories.set(s, defaultSubAgentFactory(s))
 		return
 	}
 	globalSubAgentFactories.set(s, factory)
@@ -85,13 +88,13 @@ func (s *Service) SetSubAgentFactory(factory subagent.Factory) {
 // SubAgentFactory 返回当前 runtime 持有的子代理运行时工厂。
 func (s *Service) SubAgentFactory() subagent.Factory {
 	if s == nil {
-		return defaultSubAgentFactory()
+		return defaultSubAgentFactory(nil)
 	}
 	if factory, ok := globalSubAgentFactories.get(s); ok && factory != nil {
 		return factory
 	}
 
-	defaultFactory := defaultSubAgentFactory()
+	defaultFactory := defaultSubAgentFactory(s)
 	globalSubAgentFactories.set(s, defaultFactory)
 	return defaultFactory
 }

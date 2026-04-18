@@ -15,6 +15,7 @@ import (
 type SubAgentTaskInput struct {
 	RunID      string
 	SessionID  string
+	AgentID    string
 	Role       subagent.Role
 	Task       subagent.Task
 	Budget     subagent.Budget
@@ -35,6 +36,14 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 	if err := input.Task.Validate(); err != nil {
 		return subagent.Result{}, err
 	}
+	task := input.Task
+	task.RunID = strings.TrimSpace(input.RunID)
+	task.SessionID = strings.TrimSpace(input.SessionID)
+	task.AgentID = resolveSubAgentExecutionAgentID(input)
+	if strings.TrimSpace(task.Workspace) == "" && s != nil && s.configManager != nil {
+		cfg := s.configManager.Get()
+		task.Workspace = strings.TrimSpace(cfg.Workdir)
+	}
 
 	factory := s.SubAgentFactory()
 	worker, err := factory.Create(input.Role)
@@ -48,7 +57,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		return subagent.Result{}, err
 	}
 
-	if err := worker.Start(input.Task, input.Budget, input.Capability); err != nil {
+	if err := worker.Start(task, input.Budget, input.Capability); err != nil {
 		_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
 			Role:   input.Role,
 			TaskID: input.Task.ID,
@@ -60,7 +69,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 	_ = s.emit(ctx, EventSubAgentStarted, input.RunID, input.SessionID, SubAgentEventPayload{
 		Role:   input.Role,
-		TaskID: input.Task.ID,
+		TaskID: task.ID,
 		State:  worker.State(),
 	})
 
@@ -69,7 +78,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		if stepResult.State == "" {
 			stepResult.State = worker.State()
 		}
-		emitSubAgentProgress(s, input, stepResult, stepErr)
+		emitSubAgentProgress(s, input.RunID, input.SessionID, input.Role, task.ID, stepResult, stepErr)
 
 		if stepErr != nil {
 			if errors.Is(stepErr, context.DeadlineExceeded) {
@@ -78,7 +87,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 				if resultErr != nil {
 					result = subagent.Result{
 						Role:       input.Role,
-						TaskID:     input.Task.ID,
+						TaskID:     task.ID,
 						State:      subagent.StateFailed,
 						StopReason: subagent.StopReasonTimeout,
 						Error:      errorText(stepErr),
@@ -93,7 +102,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 				if resultErr != nil {
 					result = subagent.Result{
 						Role:       input.Role,
-						TaskID:     input.Task.ID,
+						TaskID:     task.ID,
 						State:      subagent.StateCanceled,
 						StopReason: subagent.StopReasonCanceled,
 						Error:      errorText(stepErr),
@@ -107,7 +116,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 			if resultErr != nil {
 				_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
 					Role:   input.Role,
-					TaskID: input.Task.ID,
+					TaskID: task.ID,
 					State:  subagent.StateFailed,
 					Error:  stepErr.Error(),
 				})
@@ -125,7 +134,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		if err != nil {
 			_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
 				Role:   input.Role,
-				TaskID: input.Task.ID,
+				TaskID: task.ID,
 				State:  subagent.StateFailed,
 				Error:  err.Error(),
 			})
@@ -140,10 +149,18 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 }
 
 // emitSubAgentProgress 非阻塞发射进度事件，避免慢消费者反压执行路径。
-func emitSubAgentProgress(s *Service, input SubAgentTaskInput, stepResult subagent.StepResult, stepErr error) {
+func emitSubAgentProgress(
+	s *Service,
+	runID string,
+	sessionID string,
+	role subagent.Role,
+	taskID string,
+	stepResult subagent.StepResult,
+	stepErr error,
+) {
 	payload := SubAgentEventPayload{
-		Role:   input.Role,
-		TaskID: input.Task.ID,
+		Role:   role,
+		TaskID: strings.TrimSpace(taskID),
 		State:  stepResult.State,
 		Step:   stepResult.Step,
 		Delta:  stepResult.Delta,
@@ -151,8 +168,8 @@ func emitSubAgentProgress(s *Service, input SubAgentTaskInput, stepResult subage
 	}
 	event := RuntimeEvent{
 		Type:           EventSubAgentProgress,
-		RunID:          input.RunID,
-		SessionID:      input.SessionID,
+		RunID:          strings.TrimSpace(runID),
+		SessionID:      strings.TrimSpace(sessionID),
 		Turn:           turnUnspecified,
 		Timestamp:      time.Now(),
 		PayloadVersion: controlplane.PayloadVersion,
@@ -199,4 +216,20 @@ func subAgentResultError(result subagent.Result) error {
 		return errors.New(text)
 	}
 	return fmt.Errorf("subagent ended with state=%s stop_reason=%s", result.State, result.StopReason)
+}
+
+// resolveSubAgentExecutionAgentID 生成子代理执行身份，供权限链路透传审计。
+func resolveSubAgentExecutionAgentID(input SubAgentTaskInput) string {
+	if agentID := strings.TrimSpace(input.AgentID); agentID != "" {
+		return agentID
+	}
+	role := strings.TrimSpace(string(input.Role))
+	taskID := strings.TrimSpace(input.Task.ID)
+	if role == "" {
+		role = "subagent"
+	}
+	if taskID == "" {
+		return role
+	}
+	return role + ":" + taskID
 }

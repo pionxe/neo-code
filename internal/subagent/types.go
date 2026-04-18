@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 // Role 表示子代理的执行角色。
@@ -73,6 +75,9 @@ type Task struct {
 	Goal           string
 	ExpectedOutput string
 	Workspace      string
+	RunID          string
+	SessionID      string
+	AgentID        string
 	ContextSlice   TaskContextSlice
 }
 
@@ -161,6 +166,11 @@ type StepInput struct {
 	Task       Task
 	Budget     Budget
 	Capability Capability
+	RunID      string
+	SessionID  string
+	AgentID    string
+	Workdir    string
+	Executor   ToolExecutor
 	StepIndex  int
 	Trace      []string
 }
@@ -193,6 +203,41 @@ type Result struct {
 	Capability Capability
 	Output     Output
 	Error      string
+}
+
+// ToolSpecListInput 描述列举子代理可见工具 schema 的输入上下文。
+type ToolSpecListInput struct {
+	SessionID    string
+	Role         Role
+	AllowedTools []string
+}
+
+// ToolExecutionInput 描述一次子代理工具执行请求。
+type ToolExecutionInput struct {
+	RunID     string
+	SessionID string
+	TaskID    string
+	Role      Role
+	AgentID   string
+	Workdir   string
+	Timeout   time.Duration
+	Call      providertypes.ToolCall
+}
+
+// ToolExecutionResult 描述子代理工具执行后的标准结果。
+type ToolExecutionResult struct {
+	ToolCallID string
+	Name       string
+	Content    string
+	IsError    bool
+	Decision   string
+	Metadata   map[string]any
+}
+
+// ToolExecutor 定义子代理访问 runtime 工具能力的最小桥接接口。
+type ToolExecutor interface {
+	ListToolSpecs(ctx context.Context, input ToolSpecListInput) ([]providertypes.ToolSpec, error)
+	ExecuteTool(ctx context.Context, input ToolExecutionInput) (ToolExecutionResult, error)
 }
 
 // Engine 定义 WorkerRuntime 的单步执行引擎。
