@@ -83,6 +83,18 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Operation = "todo_write"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "id")
+	case "memo_remember":
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "memo_remember"
+	case "memo_recall":
+		action.Type = security.ActionTypeRead
+		action.Payload.Operation = "memo_recall"
+	case "memo_list":
+		action.Type = security.ActionTypeRead
+		action.Payload.Operation = "memo_list"
+	case "memo_remove":
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "memo_remove"
 	default:
 		if strings.HasPrefix(strings.ToLower(toolName), "mcp.") {
 			toolIdentity := normalizeMCPToolIdentity(toolName)
