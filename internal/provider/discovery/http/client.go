@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -17,6 +18,13 @@ import (
 
 const maxDiscoveryResponseBodyBytes int64 = 2 * 1024 * 1024
 const maxHTTPErrorSummaryBytes int64 = 4 * 1024
+
+var (
+	bearerTokenPattern     = regexp.MustCompile(`(?i)\bbearer\s+([a-z0-9\-._~+/]+=*)`)
+	headerSecretPattern    = regexp.MustCompile(`(?i)\b(x-?api-?key|api[_-]?key|authorization)\b\s*[:=]\s*([^\s,;]+)`)
+	jsonSecretPattern      = regexp.MustCompile(`(?i)"(x-?api-?key|api[_-]?key|authorization)"\s*:\s*"[^"]*"`)
+	openAIKeyLikeIDPattern = regexp.MustCompile(`\bsk-[a-zA-Z0-9]{8,}\b`)
+)
 
 // RequestConfig 描述通用 HTTP discovery 请求的必要输入。
 type RequestConfig struct {
@@ -174,6 +182,7 @@ func readHTTPErrorSummary(body io.Reader, limit int64) string {
 	if summary == "" {
 		return ""
 	}
+	summary = redactSensitiveSummary(summary)
 	if truncated {
 		return summary + " ...(truncated)"
 	}
@@ -201,6 +210,28 @@ func sanitizePrintableText(payload []byte) string {
 		lastWasSpace = false
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// redactSensitiveSummary 对错误摘要中的密钥和令牌执行脱敏，降低日志与事件链路泄漏风险。
+func redactSensitiveSummary(summary string) string {
+	if strings.TrimSpace(summary) == "" {
+		return ""
+	}
+
+	redacted := bearerTokenPattern.ReplaceAllString(summary, "Bearer [REDACTED]")
+	redacted = headerSecretPattern.ReplaceAllString(redacted, "$1: [REDACTED]")
+	redacted = jsonSecretPattern.ReplaceAllStringFunc(redacted, redactJSONSecretField)
+	redacted = openAIKeyLikeIDPattern.ReplaceAllString(redacted, "sk-[REDACTED]")
+	return redacted
+}
+
+// redactJSONSecretField 保留 JSON 字段名并清空敏感字段值，避免破坏可读性。
+func redactJSONSecretField(matched string) string {
+	idx := strings.Index(matched, ":")
+	if idx < 0 {
+		return matched
+	}
+	return matched[:idx+1] + ` "[REDACTED]"`
 }
 
 // isTimeoutTransportError 判断网络错误是否由超时触发。

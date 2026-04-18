@@ -210,6 +210,47 @@ func TestDiscoverRawModelsIncludesSanitizedHTTPErrorBody(t *testing.T) {
 	}
 }
 
+func TestDiscoverRawModelsRedactsSensitiveHTTPErrorBody(t *testing.T) {
+	t.Parallel()
+
+	const (
+		bearerSecret = "sk-secret-value-123456"
+		apiKeySecret = "secret-api-key-value"
+		authSecret   = "raw-auth-header-value"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(
+			w,
+			`authorization: Bearer `+bearerSecret+
+				` x-api-key: `+apiKeySecret+
+				` {"api_key":"`+apiKeySecret+`","authorization":"`+authSecret+`"}`,
+		)
+	}))
+	defer server.Close()
+
+	_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
+		BaseURL: server.URL,
+	})
+	if err == nil {
+		t.Fatal("expected provider error")
+	}
+	var pErr *provider.ProviderError
+	if !errors.As(err, &pErr) {
+		t.Fatalf("expected provider error, got %T: %v", err, err)
+	}
+
+	for _, secret := range []string{bearerSecret, apiKeySecret, authSecret} {
+		if strings.Contains(pErr.Message, secret) {
+			t.Fatalf("expected secret %q to be redacted, got %q", secret, pErr.Message)
+		}
+	}
+	if !strings.Contains(pErr.Message, "[REDACTED]") {
+		t.Fatalf("expected redaction marker in message, got %q", pErr.Message)
+	}
+}
+
 func TestDiscoverRawModelsTruncatesHTTPErrorBodySummary(t *testing.T) {
 	t.Parallel()
 
