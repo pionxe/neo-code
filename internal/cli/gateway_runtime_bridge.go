@@ -13,7 +13,13 @@ import (
 	agentruntime "neo-code/internal/runtime"
 )
 
-// defaultBuildGatewayRuntimePort 构建网关运行期 RuntimePort 适配器，并返回对应资源清理函数。
+const bridgeLocalSubjectID = "local_admin"
+
+type runtimeRunCanceler interface {
+	CancelRun(runID string) bool
+}
+
+// defaultBuildGatewayRuntimePort 构建网关运行时 RuntimePort 适配器，并返回对应资源清理函数。
 func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gateway.RuntimePort, func() error, error) {
 	bundle, err := app.BuildRuntime(ctx, app.BootstrapOptions{Workdir: strings.TrimSpace(workdir)})
 	if err != nil {
@@ -51,7 +57,7 @@ type gatewayRuntimePortBridge struct {
 	stopCh   chan struct{}
 }
 
-// newGatewayRuntimePortBridge 创建一个 RuntimePort 桥接器，用于把 runtime 事件转换为 gateway 统一事件。
+// newGatewayRuntimePortBridge 创建 RuntimePort 桥接器，用于把 runtime 事件转换为 gateway 统一事件。
 func newGatewayRuntimePortBridge(ctx context.Context, runtimeSvc agentruntime.Runtime) (*gatewayRuntimePortBridge, error) {
 	if runtimeSvc == nil {
 		return nil, fmt.Errorf("gateway runtime bridge: runtime is nil")
@@ -69,10 +75,13 @@ func newGatewayRuntimePortBridge(ctx context.Context, runtimeSvc agentruntime.Ru
 	return bridge, nil
 }
 
-// Run 将 gateway.run 输入转换为 runtime Submit 输入，并沿运行时主链路执行。
+// Run 将 gateway.run 输入转换为 runtime Submit 输入。
 func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInput) error {
 	if b == nil || b.runtime == nil {
 		return fmt.Errorf("gateway runtime bridge: runtime is unavailable")
+	}
+	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+		return err
 	}
 	return b.runtime.Submit(ctx, convertGatewayRunInput(input))
 }
@@ -81,6 +90,9 @@ func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInp
 func (b *gatewayRuntimePortBridge) Compact(ctx context.Context, input gateway.CompactInput) (gateway.CompactResult, error) {
 	if b == nil || b.runtime == nil {
 		return gateway.CompactResult{}, fmt.Errorf("gateway runtime bridge: runtime is unavailable")
+	}
+	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+		return gateway.CompactResult{}, err
 	}
 
 	result, err := b.runtime.Compact(ctx, agentruntime.CompactInput{
@@ -107,18 +119,36 @@ func (b *gatewayRuntimePortBridge) ResolvePermission(ctx context.Context, input 
 	if b == nil || b.runtime == nil {
 		return fmt.Errorf("gateway runtime bridge: runtime is unavailable")
 	}
+	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+		return err
+	}
 	return b.runtime.ResolvePermission(ctx, agentruntime.PermissionResolutionInput{
 		RequestID: strings.TrimSpace(input.RequestID),
 		Decision:  agentruntime.PermissionResolutionDecision(strings.TrimSpace(string(input.Decision))),
 	})
 }
 
-// CancelActiveRun 转发网关取消请求到 runtime 最近一次活动运行。
-func (b *gatewayRuntimePortBridge) CancelActiveRun() bool {
+// CancelRun 转发 gateway.cancel 请求到 runtime 的 run_id 精确取消能力。
+func (b *gatewayRuntimePortBridge) CancelRun(_ context.Context, input gateway.CancelInput) (bool, error) {
 	if b == nil || b.runtime == nil {
-		return false
+		return false, fmt.Errorf("gateway runtime bridge: runtime is unavailable")
 	}
-	return b.runtime.CancelActiveRun()
+	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+		return false, err
+	}
+
+	runID := strings.TrimSpace(input.RunID)
+	if runID == "" {
+		return false, gateway.ErrRuntimeResourceNotFound
+	}
+	canceler, ok := b.runtime.(runtimeRunCanceler)
+	if !ok {
+		return false, fmt.Errorf("gateway runtime bridge: runtime does not support cancel by run_id")
+	}
+	if !canceler.CancelRun(runID) {
+		return false, gateway.ErrRuntimeResourceNotFound
+	}
+	return true, nil
 }
 
 // Events 返回桥接后的 gateway 统一事件流。
@@ -156,13 +186,20 @@ func (b *gatewayRuntimePortBridge) ListSessions(ctx context.Context) ([]gateway.
 }
 
 // LoadSession 加载单个会话详情，并做跨层消息结构映射。
-func (b *gatewayRuntimePortBridge) LoadSession(ctx context.Context, id string) (gateway.Session, error) {
+func (b *gatewayRuntimePortBridge) LoadSession(ctx context.Context, input gateway.LoadSessionInput) (gateway.Session, error) {
 	if b == nil || b.runtime == nil {
 		return gateway.Session{}, fmt.Errorf("gateway runtime bridge: runtime is unavailable")
 	}
+	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+		return gateway.Session{}, err
+	}
 
-	session, err := b.runtime.LoadSession(ctx, strings.TrimSpace(id))
+	sessionID := strings.TrimSpace(input.SessionID)
+	session, err := b.runtime.LoadSession(ctx, sessionID)
 	if err != nil {
+		if isRuntimeNotFoundError(err) {
+			return gateway.Session{}, gateway.ErrRuntimeResourceNotFound
+		}
 		return gateway.Session{}, err
 	}
 
@@ -221,7 +258,7 @@ func (b *gatewayRuntimePortBridge) runEventBridge(ctx context.Context) {
 	}
 }
 
-// convertGatewayRunInput 将 gateway.run 输入转换为 runtime PrepareInput，保持网关仅做协议适配。
+// convertGatewayRunInput 将 gateway.run 输入转换为 runtime PrepareInput。
 func convertGatewayRunInput(input gateway.RunInput) agentruntime.PrepareInput {
 	textParts := make([]string, 0, 1)
 	if baseText := strings.TrimSpace(input.InputText); baseText != "" {
@@ -264,7 +301,7 @@ func convertGatewayRunInput(input gateway.RunInput) agentruntime.PrepareInput {
 	}
 }
 
-// convertRuntimeEvent 将 runtime 事件映射为 gateway 事件，确保 stream relay 只关心统一契约。
+// convertRuntimeEvent 将 runtime 事件映射为 gateway 事件，保证 stream relay 只关心统一契约。
 func convertRuntimeEvent(event agentruntime.RuntimeEvent) gateway.RuntimeEvent {
 	payload := map[string]any{
 		"runtime_event_type": string(event.Type),
@@ -343,4 +380,22 @@ func renderSessionMessageContent(parts []providertypes.ContentPart) string {
 	return strings.Join(segments, "\n")
 }
 
+// ensureBridgeSubjectAllowed 在本地单用户 MVP 中执行最小主体校验。
+func ensureBridgeSubjectAllowed(subjectID string) error {
+	normalizedSubjectID := strings.TrimSpace(subjectID)
+	if normalizedSubjectID == "" || normalizedSubjectID != bridgeLocalSubjectID {
+		return gateway.ErrRuntimeAccessDenied
+	}
+	return nil
+}
+
+// isRuntimeNotFoundError 判断运行时错误是否属于目标不存在场景。
+func isRuntimeNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
 var _ gateway.RuntimePort = (*gatewayRuntimePortBridge)(nil)
+

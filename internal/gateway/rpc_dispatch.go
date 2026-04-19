@@ -190,7 +190,7 @@ func authorizeRPCRequest(ctx context.Context, method, action string) *protocol.J
 // isRequestAuthenticated 判断请求是否处于已认证状态。
 func isRequestAuthenticated(ctx context.Context) bool {
 	authState, stateExists := ConnectionAuthStateFromContext(ctx)
-	if stateExists && authState.IsAuthenticated() {
+	if stateExists && authState.IsAuthenticated() && strings.TrimSpace(authState.SubjectID()) != "" {
 		return true
 	}
 
@@ -202,7 +202,15 @@ func isRequestAuthenticated(ctx context.Context) bool {
 	if requestToken == "" {
 		return false
 	}
-	return authenticator.ValidateToken(requestToken)
+
+	subjectID, valid := authenticator.ResolveSubjectID(requestToken)
+	if !valid || strings.TrimSpace(subjectID) == "" {
+		return false
+	}
+	if stateExists {
+		authState.MarkAuthenticated(subjectID)
+	}
+	return true
 }
 
 // isMethodAllowedByACL 按 source + method 判定 ACL 放行结果。

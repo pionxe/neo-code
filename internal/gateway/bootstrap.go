@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	// defaultRuntimeOperationTimeout 定义网关调用 runtime 的硬超时时间，防止资源被无限占用。
+	// defaultRuntimeOperationTimeout 定义网关调用 runtime 的硬超时，避免资源长期占用。
 	defaultRuntimeOperationTimeout = 30 * time.Minute
+	defaultLocalSubjectID          = "local_admin"
 )
 
 type requestFrameHandler func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame
@@ -42,7 +43,7 @@ var requestFrameHandlers = map[FrameAction]requestFrameHandler{
 	FrameActionResolvePermission: handleResolvePermissionFrame,
 }
 
-// dispatchRequestFrame 统一分发 request 帧到对应动作处理器。
+// dispatchRequestFrame 统一分发 request 帧到对应处理器。
 func dispatchRequestFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	handler, ok := requestFrameHandlers[frame.Action]
 	if !ok {
@@ -51,7 +52,7 @@ func dispatchRequestFrame(ctx context.Context, frame MessageFrame, runtimePort R
 	return handler(ctx, frame, runtimePort)
 }
 
-// handlePingFrame 处理 ping 探活请求并返回 pong 响应。
+// handlePingFrame 处理 gateway.ping 探活请求。
 func handlePingFrame(_ context.Context, frame MessageFrame) MessageFrame {
 	return MessageFrame{
 		Type:      FrameTypeAck,
@@ -64,7 +65,7 @@ func handlePingFrame(_ context.Context, frame MessageFrame) MessageFrame {
 	}
 }
 
-// handleAuthenticateFrame 处理 gateway.authenticate 请求并更新连接级认证状态。
+// handleAuthenticateFrame 处理 gateway.authenticate，并写入连接级认证状态。
 func handleAuthenticateFrame(ctx context.Context, frame MessageFrame) MessageFrame {
 	params, err := decodeAuthenticatePayload(frame.Payload)
 	if err != nil {
@@ -75,12 +76,13 @@ func handleAuthenticateFrame(ctx context.Context, frame MessageFrame) MessageFra
 	if !hasAuthenticator {
 		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "token authenticator is unavailable"))
 	}
-	if !authenticator.ValidateToken(params.Token) {
+	subjectID, valid := authenticator.ResolveSubjectID(params.Token)
+	if !valid || strings.TrimSpace(subjectID) == "" {
 		return errorFrame(frame, NewFrameError(ErrorCodeUnauthorized, "invalid auth token"))
 	}
 
 	if authState, ok := ConnectionAuthStateFromContext(ctx); ok {
-		authState.MarkAuthenticated()
+		authState.MarkAuthenticated(subjectID)
 	}
 
 	return MessageFrame{
@@ -88,12 +90,13 @@ func handleAuthenticateFrame(ctx context.Context, frame MessageFrame) MessageFra
 		Action:    FrameActionAuthenticate,
 		RequestID: frame.RequestID,
 		Payload: map[string]string{
-			"message": "authenticated",
+			"message":    "authenticated",
+			"subject_id": subjectID,
 		},
 	}
 }
 
-// handleBindStreamFrame 处理 gateway.bindStream 请求并登记连接到会话路由表。
+// handleBindStreamFrame 处理 gateway.bindStream 并注册连接订阅关系。
 func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame {
 	params, err := decodeBindStreamParams(frame.Payload)
 	if err != nil {
@@ -128,7 +131,7 @@ func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame
 	}
 }
 
-// handleWakeOpenURLFrame 解析并处理 wake.openUrl 请求。
+// handleWakeOpenURLFrame 处理 wake.openUrl 请求。
 func handleWakeOpenURLFrame(_ context.Context, frame MessageFrame) MessageFrame {
 	intent, err := decodeWakeIntent(frame.Payload)
 	if err != nil {
@@ -153,15 +156,20 @@ func handleWakeOpenURLFrame(_ context.Context, frame MessageFrame) MessageFrame 
 	}
 }
 
-// handleRunFrame 执行 gateway.run 动作，将请求转发到 RuntimePort。
+// handleRunFrame 处理 gateway.run，采用“受理即返回”的异步执行模型。
 func handleRunFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
 		return runtimePortUnavailableFrame(frame)
 	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
 
 	effectiveRunID := normalizeRunID(strings.TrimSpace(frame.RunID), strings.TrimSpace(frame.RequestID))
 	input := RunInput{
-		RequestID:  frame.RequestID,
+		SubjectID:  subjectID,
+		RequestID:  strings.TrimSpace(frame.RequestID),
 		SessionID:  strings.TrimSpace(frame.SessionID),
 		RunID:      effectiveRunID,
 		InputText:  strings.TrimSpace(frame.InputText),
@@ -169,11 +177,27 @@ func handleRunFrame(ctx context.Context, frame MessageFrame, runtimePort Runtime
 		Workdir:    strings.TrimSpace(frame.Workdir),
 	}
 	frame.RunID = input.RunID
-	callCtx, cancel := withRuntimeOperationTimeout(ctx)
-	defer cancel()
-	if err := runtimePort.Run(callCtx, input); err != nil {
-		return runtimeCallFailedFrame(callCtx, frame, err, "run")
-	}
+
+	runExecutionContext := deriveRuntimeExecutionContext(ctx)
+	callCtx, cancel := withRuntimeOperationTimeout(runExecutionContext)
+	frameSnapshot := frame
+	inputSnapshot := input
+	go func() {
+		defer cancel()
+		if err := runtimePort.Run(callCtx, inputSnapshot); err != nil {
+			failedFrame := runtimeCallFailedFrame(callCtx, frameSnapshot, err, "run")
+			if logger, ok := GatewayLoggerFromContext(callCtx); ok && logger != nil && failedFrame.Error != nil {
+				logger.Printf(
+					"gateway run async failed: request_id=%s session_id=%s run_id=%s code=%s message=%s",
+					strings.TrimSpace(frameSnapshot.RequestID),
+					strings.TrimSpace(frameSnapshot.SessionID),
+					strings.TrimSpace(frameSnapshot.RunID),
+					strings.TrimSpace(failedFrame.Error.Code),
+					strings.TrimSpace(failedFrame.Error.Message),
+				)
+			}
+		}
+	}()
 
 	return MessageFrame{
 		Type:      FrameTypeAck,
@@ -187,16 +211,21 @@ func handleRunFrame(ctx context.Context, frame MessageFrame, runtimePort Runtime
 	}
 }
 
-// handleCompactFrame 执行 gateway.compact 动作，并返回 runtime 压缩结果。
+// handleCompactFrame 处理 gateway.compact 请求。
 func handleCompactFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
 		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
 	}
 
 	callCtx, cancel := withRuntimeOperationTimeout(ctx)
 	defer cancel()
 	result, err := runtimePort.Compact(callCtx, CompactInput{
-		RequestID: frame.RequestID,
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
 		SessionID: strings.TrimSpace(frame.SessionID),
 		RunID:     strings.TrimSpace(frame.RunID),
 	})
@@ -214,24 +243,45 @@ func handleCompactFrame(ctx context.Context, frame MessageFrame, runtimePort Run
 	}
 }
 
-// handleCancelFrame 执行 gateway.cancel 动作，返回当前运行取消状态。
-func handleCancelFrame(_ context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+// handleCancelFrame 处理 gateway.cancel 请求，按 run_id 精确取消任务。
+func handleCancelFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
 		return runtimePortUnavailableFrame(frame)
 	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
 
-	canceled := runtimePort.CancelActiveRun()
+	cancelInput, parseErr := decodeCancelInput(frame)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	canceled, err := runtimePort.CancelRun(callCtx, CancelInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: cancelInput.SessionID,
+		RunID:     cancelInput.RunID,
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "cancel")
+	}
+
 	return MessageFrame{
 		Type:      FrameTypeAck,
 		Action:    FrameActionCancel,
 		RequestID: frame.RequestID,
 		Payload: map[string]any{
 			"canceled": canceled,
+			"run_id":   cancelInput.RunID,
 		},
 	}
 }
 
-// handleListSessionsFrame 执行 gateway.listSessions 动作，返回会话摘要列表。
+// handleListSessionsFrame 处理 gateway.listSessions 请求。
 func handleListSessionsFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
 		return runtimePortUnavailableFrame(frame)
@@ -254,16 +304,23 @@ func handleListSessionsFrame(ctx context.Context, frame MessageFrame, runtimePor
 	}
 }
 
-// handleLoadSessionFrame 执行 gateway.loadSession 动作，返回单个会话详情。
+// handleLoadSessionFrame 处理 gateway.loadSession 请求。
 func handleLoadSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
 		return runtimePortUnavailableFrame(frame)
 	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
 
-	// TODO(Security): 当前为本地单用户场景，后续若演进为多租户，需在此处校验 Subject 对 session_id 的所有权，防止 IDOR 越权访问。
+	// TODO(Security): 当前为本地单用户场景，后续若演进为多租户，需校验 Subject 对 session_id 的所有权，防止 IDOR 越权访问。
 	callCtx, cancel := withRuntimeOperationTimeout(ctx)
 	defer cancel()
-	session, err := runtimePort.LoadSession(callCtx, strings.TrimSpace(frame.SessionID))
+	session, err := runtimePort.LoadSession(callCtx, LoadSessionInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+	})
 	if err != nil {
 		return runtimeCallFailedFrame(callCtx, frame, err, "load_session")
 	}
@@ -277,16 +334,21 @@ func handleLoadSessionFrame(ctx context.Context, frame MessageFrame, runtimePort
 	}
 }
 
-// handleResolvePermissionFrame 执行 gateway.resolvePermission 动作，将审批决策写入 runtime。
+// handleResolvePermissionFrame 处理 gateway.resolvePermission 请求。
 func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
 		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
 	}
 
 	input, err := decodePermissionResolutionInput(frame.Payload)
 	if err != nil {
 		return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid resolve_permission payload"))
 	}
+	input.SubjectID = subjectID
 	input.RequestID = strings.TrimSpace(input.RequestID)
 	if input.RequestID == "" {
 		return errorFrame(frame, NewMissingRequiredFieldError("payload.request_id"))
@@ -313,12 +375,12 @@ func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runti
 	}
 }
 
-// runtimePortUnavailableFrame 构造一个 runtime 未注入时的统一错误响应。
+// runtimePortUnavailableFrame 在 runtime 未注入时返回统一错误。
 func runtimePortUnavailableFrame(frame MessageFrame) MessageFrame {
 	return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runtime port is unavailable"))
 }
 
-// withRuntimeOperationTimeout 为 runtime 调用附加硬超时，避免客户端异常导致资源被长期占用。
+// withRuntimeOperationTimeout 为 runtime 调用附加硬超时。
 func withRuntimeOperationTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -326,7 +388,46 @@ func withRuntimeOperationTimeout(ctx context.Context) (context.Context, context.
 	return context.WithTimeout(ctx, defaultRuntimeOperationTimeout)
 }
 
-// normalizeRunID 返回最终生效的 run_id，优先保留显式 run_id，其次回退 request_id，最后生成网关侧默认值。
+// deriveRuntimeExecutionContext 为异步 run 选择合适的执行上下文。
+func deriveRuntimeExecutionContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	if RequestSourceFromContext(ctx) == RequestSourceHTTP {
+		return context.WithoutCancel(ctx)
+	}
+	return ctx
+}
+
+// requireAuthenticatedSubjectID 从上下文中提取已认证主体。
+func requireAuthenticatedSubjectID(ctx context.Context) (string, *FrameError) {
+	if subjectID := strings.TrimSpace(AuthenticatedSubjectIDFromContext(ctx)); subjectID != "" {
+		if authState, ok := ConnectionAuthStateFromContext(ctx); ok && !authState.IsAuthenticated() {
+			authState.MarkAuthenticated(subjectID)
+		}
+		return subjectID, nil
+	}
+
+	authenticator, hasAuthenticator := TokenAuthenticatorFromContext(ctx)
+	if !hasAuthenticator {
+		return defaultLocalSubjectID, nil
+	}
+
+	requestToken := RequestTokenFromContext(ctx)
+	if requestToken == "" {
+		return "", NewFrameError(ErrorCodeUnauthorized, "missing authenticated subject")
+	}
+	subjectID, valid := authenticator.ResolveSubjectID(requestToken)
+	if !valid || strings.TrimSpace(subjectID) == "" {
+		return "", NewFrameError(ErrorCodeUnauthorized, "missing authenticated subject")
+	}
+	if authState, ok := ConnectionAuthStateFromContext(ctx); ok {
+		authState.MarkAuthenticated(subjectID)
+	}
+	return strings.TrimSpace(subjectID), nil
+}
+
+// normalizeRunID 归一化 run_id，优先保留显式值，其次回退 request_id。
 func normalizeRunID(runID, requestID string) string {
 	normalizedRunID := strings.TrimSpace(runID)
 	if normalizedRunID != "" {
@@ -339,7 +440,7 @@ func normalizeRunID(runID, requestID string) string {
 	return fmt.Sprintf("run_%d", time.Now().UnixNano())
 }
 
-// runtimeCallFailedFrame 构造 runtime 调用失败时的统一错误响应，并将底层错误仅写入服务端日志。
+// runtimeCallFailedFrame 将 runtime 错误映射为对外稳定错误码，并避免泄露底层细节。
 func runtimeCallFailedFrame(ctx context.Context, frame MessageFrame, err error, operation string) MessageFrame {
 	normalizedOperation := strings.TrimSpace(operation)
 	if normalizedOperation == "" {
@@ -349,6 +450,12 @@ func runtimeCallFailedFrame(ctx context.Context, frame MessageFrame, err error, 
 	errorCode := ErrorCodeInternalError
 	message := fmt.Sprintf("%s failed", normalizedOperation)
 	switch {
+	case errors.Is(err, ErrRuntimeAccessDenied):
+		errorCode = ErrorCodeAccessDenied
+		message = fmt.Sprintf("%s access denied", normalizedOperation)
+	case errors.Is(err, ErrRuntimeResourceNotFound):
+		errorCode = ErrorCodeResourceNotFound
+		message = fmt.Sprintf("%s target not found", normalizedOperation)
 	case errors.Is(err, context.DeadlineExceeded):
 		errorCode = ErrorCodeTimeout
 		message = fmt.Sprintf("%s timed out", normalizedOperation)
@@ -381,7 +488,12 @@ type authenticateParams struct {
 	Token string
 }
 
-// decodeBindStreamParams 将 payload 解析为 bind_stream 所需参数。
+type cancelParams struct {
+	SessionID string
+	RunID     string
+}
+
+// decodeBindStreamParams 解析 bind_stream 的负载参数。
 func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 	switch typed := payload.(type) {
 	case protocol.BindStreamParams:
@@ -410,19 +522,24 @@ func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 	}
 }
 
-// decodeAuthenticatePayload 将 payload 解析为 authenticate 所需参数。
+// decodeAuthenticatePayload 解析 authenticate 的负载参数。
 func decodeAuthenticatePayload(payload any) (authenticateParams, *FrameError) {
 	switch typed := payload.(type) {
 	case protocol.AuthenticateParams:
-		if strings.TrimSpace(typed.Token) == "" {
+		token := strings.TrimSpace(typed.Token)
+		if token == "" {
 			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
 		}
-		return authenticateParams{Token: strings.TrimSpace(typed.Token)}, nil
+		return authenticateParams{Token: token}, nil
 	case *protocol.AuthenticateParams:
-		if typed == nil || strings.TrimSpace(typed.Token) == "" {
+		if typed == nil {
 			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
 		}
-		return authenticateParams{Token: strings.TrimSpace(typed.Token)}, nil
+		token := strings.TrimSpace(typed.Token)
+		if token == "" {
+			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
+		}
+		return authenticateParams{Token: token}, nil
 	case map[string]any:
 		token := readStringValue(typed, "token")
 		if token == "" {
@@ -446,7 +563,63 @@ func decodeAuthenticatePayload(payload any) (authenticateParams, *FrameError) {
 	}
 }
 
-// normalizeBindStreamParams 对 bind_stream 参数执行归一化与有效性校验。
+// decodeCancelInput 解析 cancel 参数并强制要求 run_id。
+func decodeCancelInput(frame MessageFrame) (cancelParams, *FrameError) {
+	params := cancelParams{
+		SessionID: strings.TrimSpace(frame.SessionID),
+		RunID:     strings.TrimSpace(frame.RunID),
+	}
+
+	switch typed := frame.Payload.(type) {
+	case protocol.CancelParams:
+		if params.SessionID == "" {
+			params.SessionID = strings.TrimSpace(typed.SessionID)
+		}
+		if params.RunID == "" {
+			params.RunID = strings.TrimSpace(typed.RunID)
+		}
+	case *protocol.CancelParams:
+		if typed != nil {
+			if params.SessionID == "" {
+				params.SessionID = strings.TrimSpace(typed.SessionID)
+			}
+			if params.RunID == "" {
+				params.RunID = strings.TrimSpace(typed.RunID)
+			}
+		}
+	case map[string]any:
+		if params.SessionID == "" {
+			params.SessionID = readStringValue(typed, "session_id")
+		}
+		if params.RunID == "" {
+			params.RunID = readStringValue(typed, "run_id")
+		}
+	case nil:
+		// no-op
+	default:
+		raw, marshalErr := json.Marshal(typed)
+		if marshalErr != nil {
+			return cancelParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid cancel payload")
+		}
+		var decoded protocol.CancelParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return cancelParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid cancel payload")
+		}
+		if params.SessionID == "" {
+			params.SessionID = strings.TrimSpace(decoded.SessionID)
+		}
+		if params.RunID == "" {
+			params.RunID = strings.TrimSpace(decoded.RunID)
+		}
+	}
+
+	if params.RunID == "" {
+		return cancelParams{}, NewMissingRequiredFieldError("payload.run_id")
+	}
+	return params, nil
+}
+
+// normalizeBindStreamParams 校验并归一化 bind_stream 请求参数。
 func normalizeBindStreamParams(params protocol.BindStreamParams) (bindStreamParams, *FrameError) {
 	sessionID := strings.TrimSpace(params.SessionID)
 	if sessionID == "" {
@@ -470,7 +643,7 @@ func normalizeBindStreamParams(params protocol.BindStreamParams) (bindStreamPara
 	}, nil
 }
 
-// readStringValue 从 map 负载中读取并归一化字符串字段。
+// readStringValue 读取 map 负载中的字符串字段并去空白。
 func readStringValue(payload map[string]any, key string) string {
 	rawValue, exists := payload[key]
 	if !exists {
@@ -483,7 +656,7 @@ func readStringValue(payload map[string]any, key string) string {
 	return strings.TrimSpace(stringValue)
 }
 
-// decodeWakeIntent 将任意 payload 解码为 WakeIntent 结构。
+// decodeWakeIntent 将任意 payload 解码为 WakeIntent。
 func decodeWakeIntent(payload any) (protocol.WakeIntent, error) {
 	if payload == nil {
 		return protocol.WakeIntent{}, fmt.Errorf("payload is nil")
@@ -511,7 +684,7 @@ func decodeWakeIntent(payload any) (protocol.WakeIntent, error) {
 	return normalizeWakeIntent(decoded), nil
 }
 
-// normalizeWakeIntent 对 WakeIntent 中关键字段执行归一化，保证后续处理一致。
+// normalizeWakeIntent 归一化 WakeIntent 的关键字段。
 func normalizeWakeIntent(intent protocol.WakeIntent) protocol.WakeIntent {
 	intent.Action = strings.ToLower(strings.TrimSpace(intent.Action))
 	intent.SessionID = strings.TrimSpace(intent.SessionID)
@@ -522,7 +695,7 @@ func normalizeWakeIntent(intent protocol.WakeIntent) protocol.WakeIntent {
 	return intent
 }
 
-// toFrameError 将 wake handler 错误映射为网关稳定错误帧。
+// toFrameError 将 wake handler 错误映射为网关稳定错误码。
 func toFrameError(err *handlers.WakeError) *FrameError {
 	if err == nil {
 		return NewFrameError(ErrorCodeInternalError, "unknown wake handler error")

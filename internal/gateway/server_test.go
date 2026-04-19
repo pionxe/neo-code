@@ -381,8 +381,8 @@ func (s *runtimePortEventStub) ResolvePermission(_ context.Context, _ Permission
 	return nil
 }
 
-func (s *runtimePortEventStub) CancelActiveRun() bool {
-	return false
+func (s *runtimePortEventStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
+	return false, nil
 }
 
 func (s *runtimePortEventStub) Events() <-chan RuntimeEvent {
@@ -393,7 +393,7 @@ func (s *runtimePortEventStub) ListSessions(_ context.Context) ([]SessionSummary
 	return nil, nil
 }
 
-func (s *runtimePortEventStub) LoadSession(_ context.Context, _ string) (Session, error) {
+func (s *runtimePortEventStub) LoadSession(_ context.Context, _ LoadSessionInput) (Session, error) {
 	return Session{}, nil
 }
 

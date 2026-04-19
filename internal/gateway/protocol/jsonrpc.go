@@ -3,6 +3,8 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 )
 
@@ -69,7 +71,8 @@ const (
 	// GatewayCodeUnauthorized 表示请求未通过认证校验。
 	GatewayCodeUnauthorized = "unauthorized"
 	// GatewayCodeAccessDenied 表示请求已认证但未通过 ACL 校验。
-	GatewayCodeAccessDenied = "access_denied"
+	GatewayCodeAccessDenied   = "access_denied"
+	GatewayCodeResourceNotFound = "resource_not_found"
 )
 
 // JSONRPCRequest 表示控制面接收到的 JSON-RPC 请求。
@@ -363,7 +366,8 @@ func MapGatewayCodeToJSONRPCCode(gatewayCode string) int {
 		GatewayCodeMissingRequiredField,
 		GatewayCodeUnsafePath,
 		GatewayCodeUnauthorized,
-		GatewayCodeAccessDenied:
+		GatewayCodeAccessDenied,
+		GatewayCodeResourceNotFound:
 		return JSONRPCCodeInvalidParams
 	case GatewayCodeInternalError:
 		return JSONRPCCodeInternalError
@@ -424,6 +428,20 @@ func normalizeJSONRPCID(id json.RawMessage) (string, *JSONRPCError) {
 	}
 }
 
+// decodeStrictJSON 使用 DisallowUnknownFields 对 params 做严格反序列化。
+func decodeStrictJSON(raw json.RawMessage, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("trailing json values")
+	}
+	return nil
+}
+
 // decodeAuthenticateParams 对 gateway.authenticate 的 params 执行反序列化与最小校验。
 func decodeAuthenticateParams(raw json.RawMessage) (AuthenticateParams, *JSONRPCError) {
 	trimmed := bytes.TrimSpace(raw)
@@ -436,7 +454,7 @@ func decodeAuthenticateParams(raw json.RawMessage) (AuthenticateParams, *JSONRPC
 	}
 
 	var params AuthenticateParams
-	if err := json.Unmarshal(trimmed, &params); err != nil {
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
 		return AuthenticateParams{}, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"invalid params for gateway.authenticate",
@@ -466,7 +484,7 @@ func decodeWakeIntentParams(raw json.RawMessage) (WakeIntent, *JSONRPCError) {
 	}
 
 	var intent WakeIntent
-	if err := json.Unmarshal(trimmed, &intent); err != nil {
+	if err := decodeStrictJSON(trimmed, &intent); err != nil {
 		return WakeIntent{}, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"invalid params for wake.openUrl",
@@ -494,7 +512,7 @@ func decodeBindStreamParams(raw json.RawMessage) (BindStreamParams, *JSONRPCErro
 	}
 
 	var params BindStreamParams
-	if err := json.Unmarshal(trimmed, &params); err != nil {
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
 		return BindStreamParams{}, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"invalid params for gateway.bindStream",
@@ -542,7 +560,7 @@ func decodeRunParams(raw json.RawMessage) (RunParams, *JSONRPCError) {
 	}
 
 	var params RunParams
-	if err := json.Unmarshal(trimmed, &params); err != nil {
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
 		return RunParams{}, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"invalid params for gateway.run",
@@ -574,11 +592,15 @@ func decodeRunParams(raw json.RawMessage) (RunParams, *JSONRPCError) {
 func decodeCancelParams(raw json.RawMessage) (CancelParams, *JSONRPCError) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return CancelParams{}, nil
+		return CancelParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
 	}
 
 	var params CancelParams
-	if err := json.Unmarshal(trimmed, &params); err != nil {
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
 		return CancelParams{}, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"invalid params for gateway.cancel",
@@ -587,6 +609,13 @@ func decodeCancelParams(raw json.RawMessage) (CancelParams, *JSONRPCError) {
 	}
 	params.SessionID = strings.TrimSpace(params.SessionID)
 	params.RunID = strings.TrimSpace(params.RunID)
+	if params.RunID == "" {
+		return CancelParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.run_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
 	return params, nil
 }
 
@@ -602,7 +631,7 @@ func decodeCompactParams(raw json.RawMessage) (CompactParams, *JSONRPCError) {
 	}
 
 	var params CompactParams
-	if err := json.Unmarshal(trimmed, &params); err != nil {
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
 		return CompactParams{}, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"invalid params for gateway.compact",
@@ -633,7 +662,7 @@ func decodeLoadSessionParams(raw json.RawMessage) (LoadSessionParams, *JSONRPCEr
 	}
 
 	var params LoadSessionParams
-	if err := json.Unmarshal(trimmed, &params); err != nil {
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
 		return LoadSessionParams{}, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"invalid params for gateway.loadSession",
@@ -663,7 +692,7 @@ func decodeResolvePermissionParams(raw json.RawMessage) (ResolvePermissionParams
 	}
 
 	var params ResolvePermissionParams
-	if err := json.Unmarshal(trimmed, &params); err != nil {
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
 		return ResolvePermissionParams{}, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"invalid params for gateway.resolvePermission",

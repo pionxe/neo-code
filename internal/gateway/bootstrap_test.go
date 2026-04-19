@@ -17,10 +17,10 @@ type bootstrapRuntimeStub struct {
 	runFn               func(ctx context.Context, input RunInput) error
 	compactFn           func(ctx context.Context, input CompactInput) (CompactResult, error)
 	resolvePermissionFn func(ctx context.Context, input PermissionResolutionInput) error
-	cancelActiveRunFn   func() bool
+	cancelRunFn         func(ctx context.Context, input CancelInput) (bool, error)
 	events              <-chan RuntimeEvent
 	listSessionsFn      func(ctx context.Context) ([]SessionSummary, error)
-	loadSessionFn       func(ctx context.Context, id string) (Session, error)
+	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
 }
 
 func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
@@ -44,11 +44,11 @@ func (s *bootstrapRuntimeStub) ResolvePermission(ctx context.Context, input Perm
 	return nil
 }
 
-func (s *bootstrapRuntimeStub) CancelActiveRun() bool {
-	if s != nil && s.cancelActiveRunFn != nil {
-		return s.cancelActiveRunFn()
+func (s *bootstrapRuntimeStub) CancelRun(ctx context.Context, input CancelInput) (bool, error) {
+	if s != nil && s.cancelRunFn != nil {
+		return s.cancelRunFn(ctx, input)
 	}
-	return false
+	return false, nil
 }
 
 func (s *bootstrapRuntimeStub) Events() <-chan RuntimeEvent {
@@ -65,9 +65,9 @@ func (s *bootstrapRuntimeStub) ListSessions(ctx context.Context) ([]SessionSumma
 	return nil, nil
 }
 
-func (s *bootstrapRuntimeStub) LoadSession(ctx context.Context, id string) (Session, error) {
+func (s *bootstrapRuntimeStub) LoadSession(ctx context.Context, input LoadSessionInput) (Session, error) {
 	if s != nil && s.loadSessionFn != nil {
-		return s.loadSessionFn(ctx, id)
+		return s.loadSessionFn(ctx, input)
 	}
 	return Session{}, nil
 }
@@ -456,11 +456,8 @@ func TestHandleRunFrameBranches(t *testing.T) {
 			RequestID: "req-run-canceled",
 			InputText: "hello",
 		}, stub)
-		if response.Type != FrameTypeError {
-			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
-		}
-		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
-			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
 		}
 	})
 }
@@ -617,11 +614,21 @@ func TestHandleCancelListLoadResolveBranches(t *testing.T) {
 	})
 
 	t.Run("cancel success", func(t *testing.T) {
-		stub := &bootstrapRuntimeStub{cancelActiveRunFn: func() bool { return true }}
+		stub := &bootstrapRuntimeStub{
+			cancelRunFn: func(_ context.Context, input CancelInput) (bool, error) {
+				if input.RunID != "run-cancel-1" {
+					t.Fatalf("cancel run_id = %q, want %q", input.RunID, "run-cancel-1")
+				}
+				return true, nil
+			},
+		}
 		response := handleCancelFrame(context.Background(), MessageFrame{
 			Type:      FrameTypeRequest,
 			Action:    FrameActionCancel,
 			RequestID: "cancel-1",
+			Payload: protocol.CancelParams{
+				RunID: "run-cancel-1",
+			},
 		}, stub)
 		if response.Type != FrameTypeAck {
 			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
@@ -707,14 +714,14 @@ func TestHandleCancelListLoadResolveBranches(t *testing.T) {
 
 	t.Run("load session success", func(t *testing.T) {
 		stub := &bootstrapRuntimeStub{
-			loadSessionFn: func(ctx context.Context, id string) (Session, error) {
+			loadSessionFn: func(ctx context.Context, input LoadSessionInput) (Session, error) {
 				if _, ok := ctx.Deadline(); !ok {
 					t.Fatal("load session should use timeout context")
 				}
-				if id != "session-load" {
-					t.Fatalf("load session id = %q, want %q", id, "session-load")
+				if input.SessionID != "session-load" {
+					t.Fatalf("load session id = %q, want %q", input.SessionID, "session-load")
 				}
-				return Session{ID: id}, nil
+				return Session{ID: input.SessionID}, nil
 			},
 		}
 		response := handleLoadSessionFrame(context.Background(), MessageFrame{
@@ -730,7 +737,7 @@ func TestHandleCancelListLoadResolveBranches(t *testing.T) {
 
 	t.Run("load session runtime error", func(t *testing.T) {
 		stub := &bootstrapRuntimeStub{
-			loadSessionFn: func(_ context.Context, _ string) (Session, error) {
+			loadSessionFn: func(_ context.Context, _ LoadSessionInput) (Session, error) {
 				return Session{}, errors.New("load failed internals")
 			},
 		}
@@ -865,5 +872,450 @@ func TestRuntimeCallFailedFrameNilErrorFallback(t *testing.T) {
 	}
 	if response.Error.Message != "runtime operation failed" {
 		t.Fatalf("response message = %q, want %q", response.Error.Message, "runtime operation failed")
+	}
+}
+
+func TestHandleCompactFrame_DenyCrossSubjectSession(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject_intruder")
+
+	ctx := WithConnectionAuthState(context.Background(), authState)
+	stub := &bootstrapRuntimeStub{
+		compactFn: func(_ context.Context, input CompactInput) (CompactResult, error) {
+			if input.SubjectID != "subject_owner" {
+				return CompactResult{}, ErrRuntimeAccessDenied
+			}
+			return CompactResult{Applied: true}, nil
+		},
+	}
+
+	response := handleCompactFrame(ctx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionCompact,
+		RequestID: "compact-deny-1",
+		SessionID: "session-1",
+	}, stub)
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeAccessDenied.String() {
+		t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeAccessDenied.String())
+	}
+}
+
+func TestHandleResolvePermissionFrame_DenyCrossSubjectRequestID(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject_intruder")
+
+	ctx := WithConnectionAuthState(context.Background(), authState)
+	stub := &bootstrapRuntimeStub{
+		resolvePermissionFn: func(_ context.Context, input PermissionResolutionInput) error {
+			if input.SubjectID != "subject_owner" {
+				return ErrRuntimeAccessDenied
+			}
+			return nil
+		},
+	}
+
+	response := handleResolvePermissionFrame(ctx, MessageFrame{
+		Type:   FrameTypeRequest,
+		Action: FrameActionResolvePermission,
+		Payload: map[string]any{
+			"request_id": "perm-1",
+			"decision":   string(PermissionResolutionReject),
+		},
+	}, stub)
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeAccessDenied.String() {
+		t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeAccessDenied.String())
+	}
+}
+
+func TestHandleCancelFrame_CancelByRunIDOnly(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("local_admin")
+
+	ctx := WithConnectionAuthState(context.Background(), authState)
+	stub := &bootstrapRuntimeStub{
+		cancelRunFn: func(_ context.Context, input CancelInput) (bool, error) {
+			if input.RunID != "run-target-1" {
+				t.Fatalf("cancel run_id = %q, want %q", input.RunID, "run-target-1")
+			}
+			if input.SessionID != "session-ignore" {
+				t.Fatalf("cancel session_id = %q, want %q", input.SessionID, "session-ignore")
+			}
+			return true, nil
+		},
+	}
+
+	response := handleCancelFrame(ctx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionCancel,
+		RequestID: "cancel-precision-1",
+		SessionID: "session-ignore",
+		Payload: protocol.CancelParams{
+			RunID: "run-target-1",
+		},
+	}, stub)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	payload, ok := response.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", response.Payload)
+	}
+	if runID, _ := payload["run_id"].(string); runID != "run-target-1" {
+		t.Fatalf("payload run_id = %q, want %q", runID, "run-target-1")
+	}
+
+	missingRunID := handleCancelFrame(ctx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionCancel,
+		RequestID: "cancel-missing-run",
+		SessionID: "session-ignore",
+	}, stub)
+	if missingRunID.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", missingRunID.Type, FrameTypeError)
+	}
+	if missingRunID.Error == nil || missingRunID.Error.Code != ErrorCodeMissingRequiredField.String() {
+		t.Fatalf("response error = %#v, want %q", missingRunID.Error, ErrorCodeMissingRequiredField.String())
+	}
+}
+
+func TestGatewayRun_ClientDisconnectCancelsRuntime(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("local_admin")
+
+	runStarted := make(chan struct{}, 1)
+	runCanceled := make(chan error, 1)
+	stub := &bootstrapRuntimeStub{
+		runFn: func(ctx context.Context, _ RunInput) error {
+			select {
+			case runStarted <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			select {
+			case runCanceled <- ctx.Err():
+			default:
+			}
+			return ctx.Err()
+		},
+	}
+
+	connectionCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	connectionCtx = WithConnectionAuthState(connectionCtx, authState)
+
+	response := handleRunFrame(connectionCtx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionRun,
+		RequestID: "run-disconnect-1",
+		SessionID: "session-disconnect-1",
+		InputText: "hello",
+	}, stub)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+
+	select {
+	case <-runStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime run did not start")
+	}
+
+	cancel()
+
+	select {
+	case err := <-runCanceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("run cancellation err = %v, want context canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime run was not canceled on disconnect")
+	}
+}
+
+type invalidJSONMarshaler struct{}
+
+func (invalidJSONMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte("{"), nil
+}
+
+func TestRequireAuthenticatedSubjectIDBranches(t *testing.T) {
+	t.Run("subject from auth state", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-from-state")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		subjectID, frameErr := requireAuthenticatedSubjectID(ctx)
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if subjectID != "subject-from-state" {
+			t.Fatalf("subject_id = %q, want %q", subjectID, "subject-from-state")
+		}
+	})
+
+	t.Run("no authenticator fallback local subject", func(t *testing.T) {
+		subjectID, frameErr := requireAuthenticatedSubjectID(context.Background())
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if subjectID != defaultLocalSubjectID {
+			t.Fatalf("subject_id = %q, want %q", subjectID, defaultLocalSubjectID)
+		}
+	})
+
+	t.Run("missing request token", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		_, frameErr := requireAuthenticatedSubjectID(ctx)
+		if frameErr == nil || frameErr.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("frame error = %#v, want %q", frameErr, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid request token", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		ctx = WithRequestToken(ctx, "bad-token")
+		_, frameErr := requireAuthenticatedSubjectID(ctx)
+		if frameErr == nil || frameErr.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("frame error = %#v, want %q", frameErr, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("valid token marks auth state", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		ctx = WithRequestToken(ctx, "token-1")
+		ctx = WithConnectionAuthState(ctx, authState)
+
+		subjectID, frameErr := requireAuthenticatedSubjectID(ctx)
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if subjectID != "local_admin" {
+			t.Fatalf("subject_id = %q, want %q", subjectID, "local_admin")
+		}
+		if !authState.IsAuthenticated() || authState.SubjectID() != "local_admin" {
+			t.Fatalf("auth state = authenticated:%v subject:%q", authState.IsAuthenticated(), authState.SubjectID())
+		}
+	})
+}
+
+func TestDeriveRuntimeExecutionContextBranches(t *testing.T) {
+	if got := deriveRuntimeExecutionContext(nil); got == nil {
+		t.Fatal("nil input should return non-nil context")
+	}
+
+	httpCtx, cancelHTTP := context.WithCancel(WithRequestSource(context.Background(), RequestSourceHTTP))
+	derivedHTTP := deriveRuntimeExecutionContext(httpCtx)
+	cancelHTTP()
+	if derivedHTTP.Err() != nil {
+		t.Fatalf("http derived context should not be canceled with parent, got %v", derivedHTTP.Err())
+	}
+
+	otherCtx := WithRequestSource(context.Background(), RequestSourceIPC)
+	if got := deriveRuntimeExecutionContext(otherCtx); got != otherCtx {
+		t.Fatal("non-http context should be returned as-is")
+	}
+}
+
+func TestDecodeCancelInputBranches(t *testing.T) {
+	t.Run("frame run id fallback", func(t *testing.T) {
+		params, frameErr := decodeCancelInput(MessageFrame{RunID: "run-1"})
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if params.RunID != "run-1" {
+			t.Fatalf("run_id = %q, want %q", params.RunID, "run-1")
+		}
+	})
+
+	t.Run("struct payload", func(t *testing.T) {
+		params, frameErr := decodeCancelInput(MessageFrame{
+			Payload: protocol.CancelParams{SessionID: "s-1", RunID: "r-1"},
+		})
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if params.SessionID != "s-1" || params.RunID != "r-1" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("pointer payload", func(t *testing.T) {
+		params, frameErr := decodeCancelInput(MessageFrame{
+			Payload: &protocol.CancelParams{SessionID: "s-2", RunID: "r-2"},
+		})
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if params.SessionID != "s-2" || params.RunID != "r-2" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("map payload", func(t *testing.T) {
+		params, frameErr := decodeCancelInput(MessageFrame{
+			Payload: map[string]any{"session_id": "s-3", "run_id": "r-3"},
+		})
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if params.SessionID != "s-3" || params.RunID != "r-3" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("marshal error", func(t *testing.T) {
+		_, frameErr := decodeCancelInput(MessageFrame{
+			Payload: struct {
+				Bad chan int `json:"bad"`
+			}{Bad: make(chan int)},
+		})
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeInvalidAction.String())
+		}
+	})
+
+	t.Run("unmarshal error from invalid json marshaler", func(t *testing.T) {
+		_, frameErr := decodeCancelInput(MessageFrame{Payload: invalidJSONMarshaler{}})
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeInvalidAction.String())
+		}
+	})
+}
+
+func TestDecodeAuthenticatePayloadAdditionalBranches(t *testing.T) {
+	t.Run("struct missing token", func(t *testing.T) {
+		_, frameErr := decodeAuthenticatePayload(protocol.AuthenticateParams{Token: " "})
+		if frameErr == nil || frameErr.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeMissingRequiredField.String())
+		}
+	})
+
+	t.Run("nil pointer", func(t *testing.T) {
+		_, frameErr := decodeAuthenticatePayload((*protocol.AuthenticateParams)(nil))
+		if frameErr == nil || frameErr.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeMissingRequiredField.String())
+		}
+	})
+
+	t.Run("map success", func(t *testing.T) {
+		params, frameErr := decodeAuthenticatePayload(map[string]any{"token": " token-ok "})
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if params.Token != "token-ok" {
+			t.Fatalf("token = %q, want %q", params.Token, "token-ok")
+		}
+	})
+
+	t.Run("invalid marshaled json", func(t *testing.T) {
+		_, frameErr := decodeAuthenticatePayload(invalidJSONMarshaler{})
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("default branch missing token", func(t *testing.T) {
+		_, frameErr := decodeAuthenticatePayload(map[string]int{"token": 1})
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeInvalidFrame.String())
+		}
+	})
+}
+
+func TestDecodeBindStreamAndWakeBranches(t *testing.T) {
+	t.Run("bind stream struct success", func(t *testing.T) {
+		params, frameErr := decodeBindStreamParams(protocol.BindStreamParams{
+			SessionID: "session-1",
+			RunID:     "run-1",
+			Channel:   "ipc",
+		})
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if params.SessionID != "session-1" || params.RunID != "run-1" || params.Channel != StreamChannelIPC {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("bind stream pointer success", func(t *testing.T) {
+		params, frameErr := decodeBindStreamParams(&protocol.BindStreamParams{
+			SessionID: "session-2",
+			Channel:   "ws",
+		})
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if params.SessionID != "session-2" || params.Channel != StreamChannelWS {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("bind stream pointer nil", func(t *testing.T) {
+		_, frameErr := decodeBindStreamParams((*protocol.BindStreamParams)(nil))
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("bind stream invalid marshaled json", func(t *testing.T) {
+		_, frameErr := decodeBindStreamParams(invalidJSONMarshaler{})
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("bind stream missing session", func(t *testing.T) {
+		_, frameErr := decodeBindStreamParams(map[string]any{"channel": "all"})
+		if frameErr == nil || frameErr.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeMissingRequiredField.String())
+		}
+	})
+
+	t.Run("bind stream invalid channel", func(t *testing.T) {
+		_, frameErr := decodeBindStreamParams(map[string]any{"session_id": "s", "channel": "tcp"})
+		if frameErr == nil || frameErr.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeInvalidAction.String())
+		}
+	})
+
+	t.Run("wake nil pointer", func(t *testing.T) {
+		_, err := decodeWakeIntent((*protocol.WakeIntent)(nil))
+		if err == nil {
+			t.Fatal("expected wake intent decode error")
+		}
+	})
+
+	t.Run("wake direct struct", func(t *testing.T) {
+		intent, err := decodeWakeIntent(protocol.WakeIntent{
+			Action:    "REVIEW",
+			SessionID: " session-1 ",
+		})
+		if err != nil {
+			t.Fatalf("unexpected decode error: %v", err)
+		}
+		if intent.Action != "review" || intent.SessionID != "session-1" {
+			t.Fatalf("intent = %#v", intent)
+		}
+	})
+
+	t.Run("wake invalid marshaled json", func(t *testing.T) {
+		_, err := decodeWakeIntent(invalidJSONMarshaler{})
+		if err == nil {
+			t.Fatal("expected wake intent decode error")
+		}
+	})
+}
+
+func TestToFrameErrorNilBranch(t *testing.T) {
+	frameErr := toFrameError(nil)
+	if frameErr.Code != ErrorCodeInternalError.String() {
+		t.Fatalf("frame error code = %q, want %q", frameErr.Code, ErrorCodeInternalError.String())
 	}
 }

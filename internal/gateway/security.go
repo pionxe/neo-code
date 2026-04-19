@@ -31,6 +31,7 @@ const (
 // TokenAuthenticator 定义 Token 校验能力。
 type TokenAuthenticator interface {
 	ValidateToken(token string) bool
+	ResolveSubjectID(token string) (string, bool)
 }
 
 // ControlPlaneACL 表示网关控制面方法级授权策略。

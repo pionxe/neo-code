@@ -11,11 +11,16 @@ import (
 )
 
 type rpcRunCaptureRuntimeStub struct {
-	runInput RunInput
+	runInput      RunInput
+	runCh         chan RunInput
+	loadSessionFn func(ctx context.Context, input LoadSessionInput) (Session, error)
 }
 
 func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error {
 	s.runInput = input
+	if s.runCh != nil {
+		s.runCh <- input
+	}
 	return nil
 }
 
@@ -27,8 +32,8 @@ func (s *rpcRunCaptureRuntimeStub) ResolvePermission(_ context.Context, _ Permis
 	return nil
 }
 
-func (s *rpcRunCaptureRuntimeStub) CancelActiveRun() bool {
-	return false
+func (s *rpcRunCaptureRuntimeStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
+	return false, nil
 }
 
 func (s *rpcRunCaptureRuntimeStub) Events() <-chan RuntimeEvent {
@@ -39,7 +44,10 @@ func (s *rpcRunCaptureRuntimeStub) ListSessions(_ context.Context) ([]SessionSum
 	return nil, nil
 }
 
-func (s *rpcRunCaptureRuntimeStub) LoadSession(_ context.Context, _ string) (Session, error) {
+func (s *rpcRunCaptureRuntimeStub) LoadSession(ctx context.Context, input LoadSessionInput) (Session, error) {
+	if s.loadSessionFn != nil {
+		return s.loadSessionFn(ctx, input)
+	}
 	return Session{}, nil
 }
 
@@ -214,7 +222,7 @@ func TestDispatchRPCRequestUnauthorizedAndAccessDenied(t *testing.T) {
 	deniedContext := WithRequestACL(baseContext, deniedACL)
 	deniedContext = WithRequestToken(deniedContext, "t-1")
 	deniedContext = WithConnectionAuthState(deniedContext, authState)
-	authState.MarkAuthenticated()
+	authState.MarkAuthenticated("local_admin")
 
 	deniedResponse := dispatchRPCRequest(deniedContext, protocol.JSONRPCRequest{
 		JSONRPC: protocol.JSONRPCVersion,
@@ -328,7 +336,7 @@ func TestDispatchRPCRequestResolvePermissionDoesNotRequireSession(t *testing.T) 
 func TestDispatchRPCRequestRunHydratesInputPartsAndFallbackRunID(t *testing.T) {
 	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
 	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
-	runtimeStub := &rpcRunCaptureRuntimeStub{}
+	runtimeStub := &rpcRunCaptureRuntimeStub{runCh: make(chan RunInput, 1)}
 
 	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
 		JSONRPC: protocol.JSONRPCVersion,
@@ -346,23 +354,64 @@ func TestDispatchRPCRequestRunHydratesInputPartsAndFallbackRunID(t *testing.T) {
 		t.Fatalf("run response error: %+v", response.Error)
 	}
 
-	if runtimeStub.runInput.SessionID != "session-run-1" {
-		t.Fatalf("runtime run session_id = %q, want %q", runtimeStub.runInput.SessionID, "session-run-1")
+	var captured RunInput
+	select {
+	case captured = <-runtimeStub.runCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime run input was not captured")
 	}
-	if runtimeStub.runInput.RunID != "req-run-hydrate" {
-		t.Fatalf("runtime run run_id = %q, want %q", runtimeStub.runInput.RunID, "req-run-hydrate")
+
+	if captured.SessionID != "session-run-1" {
+		t.Fatalf("runtime run session_id = %q, want %q", captured.SessionID, "session-run-1")
 	}
-	if len(runtimeStub.runInput.InputParts) != 2 {
-		t.Fatalf("runtime run input_parts len = %d, want %d", len(runtimeStub.runInput.InputParts), 2)
+	if captured.RunID != "req-run-hydrate" {
+		t.Fatalf("runtime run run_id = %q, want %q", captured.RunID, "req-run-hydrate")
 	}
-	if runtimeStub.runInput.InputParts[0].Type != InputPartTypeText {
-		t.Fatalf("runtime text part type = %q, want %q", runtimeStub.runInput.InputParts[0].Type, InputPartTypeText)
+	if len(captured.InputParts) != 2 {
+		t.Fatalf("runtime run input_parts len = %d, want %d", len(captured.InputParts), 2)
 	}
-	if runtimeStub.runInput.InputParts[1].Type != InputPartTypeImage {
-		t.Fatalf("runtime image part type = %q, want %q", runtimeStub.runInput.InputParts[1].Type, InputPartTypeImage)
+	if captured.InputParts[0].Type != InputPartTypeText {
+		t.Fatalf("runtime text part type = %q, want %q", captured.InputParts[0].Type, InputPartTypeText)
 	}
-	if runtimeStub.runInput.InputParts[1].Media == nil || runtimeStub.runInput.InputParts[1].Media.URI != "C:/tmp/pic.png" {
-		t.Fatalf("runtime image media = %#v, want uri %q", runtimeStub.runInput.InputParts[1].Media, "C:/tmp/pic.png")
+	if captured.InputParts[1].Type != InputPartTypeImage {
+		t.Fatalf("runtime image part type = %q, want %q", captured.InputParts[1].Type, InputPartTypeImage)
+	}
+	if captured.InputParts[1].Media == nil || captured.InputParts[1].Media.URI != "C:/tmp/pic.png" {
+		t.Fatalf("runtime image media = %#v, want uri %q", captured.InputParts[1].Media, "C:/tmp/pic.png")
+	}
+}
+
+func TestDispatchRPCRequest_DenyCrossSubjectLoadSession(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject_intruder")
+
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	runtimeStub := &rpcRunCaptureRuntimeStub{
+		loadSessionFn: func(_ context.Context, input LoadSessionInput) (Session, error) {
+			if input.SubjectID != "subject_owner" {
+				return Session{}, ErrRuntimeAccessDenied
+			}
+			return Session{ID: input.SessionID}, nil
+		},
+	}
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-load-deny"`),
+		Method:  protocol.MethodGatewayLoadSession,
+		Params:  json.RawMessage(`{"session_id":"session-1"}`),
+	}, runtimeStub)
+	if response.Error == nil {
+		t.Fatal("expected access denied error")
+	}
+	if response.Error.Code != protocol.JSONRPCCodeInvalidParams {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInvalidParams)
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeAccessDenied.String() {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeAccessDenied.String())
 	}
 }
 

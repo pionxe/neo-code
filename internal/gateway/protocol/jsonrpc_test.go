@@ -576,6 +576,51 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 	}
 }
 
+func TestJSONRPCDecode_RejectUnknownFields(t *testing.T) {
+	testCases := []struct {
+		name   string
+		method string
+		params string
+	}{
+		{
+			name:   "run params contain unknown field",
+			method: MethodGatewayRun,
+			params: `{"session_id":"s-1","input_text":"hello","unknown":"x"}`,
+		},
+		{
+			name:   "cancel params contain unknown field",
+			method: MethodGatewayCancel,
+			params: `{"run_id":"r-1","typo_field":"x"}`,
+		},
+		{
+			name:   "loadSession params contain unknown field",
+			method: MethodGatewayLoadSession,
+			params: `{"session_id":"s-1","extra":1}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"strict-unknown"`),
+				Method:  tc.method,
+				Params:  json.RawMessage(tc.params),
+			})
+			if rpcErr == nil {
+				t.Fatal("expected rpc error for unknown field")
+			}
+			if rpcErr.Code != JSONRPCCodeInvalidParams {
+				t.Fatalf("rpc code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
+			}
+			if gatewayCode := GatewayCodeFromJSONRPCError(rpcErr); gatewayCode != GatewayCodeInvalidFrame {
+				t.Fatalf("gateway_code = %q, want %q", gatewayCode, GatewayCodeInvalidFrame)
+			}
+		})
+	}
+}
+
 func TestNormalizeJSONRPCRequestInvalidIDReturnsNullResponseID(t *testing.T) {
 	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
