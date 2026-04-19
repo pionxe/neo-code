@@ -14,6 +14,7 @@ import (
 )
 
 const bridgeLocalSubjectID = "local_admin"
+const bridgeRuntimeUnavailableErrMsg = "gateway runtime bridge: runtime is unavailable"
 
 type runtimeRunCanceler interface {
 	CancelRun(runID string) bool
@@ -77,10 +78,7 @@ func newGatewayRuntimePortBridge(ctx context.Context, runtimeSvc agentruntime.Ru
 
 // Run 将 gateway.run 输入转换为 runtime Submit 输入。
 func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInput) error {
-	if b == nil || b.runtime == nil {
-		return fmt.Errorf("gateway runtime bridge: runtime is unavailable")
-	}
-	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return err
 	}
 	return b.runtime.Submit(ctx, convertGatewayRunInput(input))
@@ -88,10 +86,7 @@ func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInp
 
 // Compact 将 gateway.compact 请求映射到 runtime 紧凑化能力并回填统一结果。
 func (b *gatewayRuntimePortBridge) Compact(ctx context.Context, input gateway.CompactInput) (gateway.CompactResult, error) {
-	if b == nil || b.runtime == nil {
-		return gateway.CompactResult{}, fmt.Errorf("gateway runtime bridge: runtime is unavailable")
-	}
-	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return gateway.CompactResult{}, err
 	}
 
@@ -116,10 +111,7 @@ func (b *gatewayRuntimePortBridge) Compact(ctx context.Context, input gateway.Co
 
 // ResolvePermission 将网关审批决策转换为 runtime 审批输入并提交。
 func (b *gatewayRuntimePortBridge) ResolvePermission(ctx context.Context, input gateway.PermissionResolutionInput) error {
-	if b == nil || b.runtime == nil {
-		return fmt.Errorf("gateway runtime bridge: runtime is unavailable")
-	}
-	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return err
 	}
 	return b.runtime.ResolvePermission(ctx, agentruntime.PermissionResolutionInput{
@@ -130,10 +122,7 @@ func (b *gatewayRuntimePortBridge) ResolvePermission(ctx context.Context, input 
 
 // CancelRun 转发 gateway.cancel 请求到 runtime 的 run_id 精确取消能力。
 func (b *gatewayRuntimePortBridge) CancelRun(_ context.Context, input gateway.CancelInput) (bool, error) {
-	if b == nil || b.runtime == nil {
-		return false, fmt.Errorf("gateway runtime bridge: runtime is unavailable")
-	}
-	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return false, err
 	}
 
@@ -187,10 +176,7 @@ func (b *gatewayRuntimePortBridge) ListSessions(ctx context.Context) ([]gateway.
 
 // LoadSession 加载单个会话详情，并做跨层消息结构映射。
 func (b *gatewayRuntimePortBridge) LoadSession(ctx context.Context, input gateway.LoadSessionInput) (gateway.Session, error) {
-	if b == nil || b.runtime == nil {
-		return gateway.Session{}, fmt.Errorf("gateway runtime bridge: runtime is unavailable")
-	}
-	if err := ensureBridgeSubjectAllowed(input.SubjectID); err != nil {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return gateway.Session{}, err
 	}
 
@@ -382,11 +368,26 @@ func renderSessionMessageContent(parts []providertypes.ContentPart) string {
 
 // ensureBridgeSubjectAllowed 在本地单用户 MVP 中执行最小主体校验。
 func ensureBridgeSubjectAllowed(subjectID string) error {
-	normalizedSubjectID := strings.TrimSpace(subjectID)
-	if normalizedSubjectID == "" || normalizedSubjectID != bridgeLocalSubjectID {
+	if strings.TrimSpace(subjectID) != bridgeLocalSubjectID {
 		return gateway.ErrRuntimeAccessDenied
 	}
 	return nil
+}
+
+// ensureRuntimeAvailable 校验桥接器内部 runtime 是否可用。
+func (b *gatewayRuntimePortBridge) ensureRuntimeAvailable() error {
+	if b == nil || b.runtime == nil {
+		return fmt.Errorf(bridgeRuntimeUnavailableErrMsg)
+	}
+	return nil
+}
+
+// ensureRuntimeAccess 组合校验 runtime 可用性与请求主体权限。
+func (b *gatewayRuntimePortBridge) ensureRuntimeAccess(subjectID string) error {
+	if err := b.ensureRuntimeAvailable(); err != nil {
+		return err
+	}
+	return ensureBridgeSubjectAllowed(subjectID)
 }
 
 // isRuntimeNotFoundError 判断运行时错误是否属于目标不存在场景。
@@ -398,4 +399,3 @@ func isRuntimeNotFoundError(err error) bool {
 }
 
 var _ gateway.RuntimePort = (*gatewayRuntimePortBridge)(nil)
-

@@ -30,6 +30,8 @@ type runtimeStub struct {
 	loadErr         error
 }
 
+const testBridgeSubjectID = bridgeLocalSubjectID
+
 func (s *runtimeStub) Submit(_ context.Context, input agentruntime.PrepareInput) error {
 	s.submitInput = input
 	return s.submitErr
@@ -58,6 +60,10 @@ func (s *runtimeStub) ResolvePermission(_ context.Context, input agentruntime.Pe
 }
 
 func (s *runtimeStub) CancelActiveRun() bool {
+	return s.cancelReturn
+}
+
+func (s *runtimeStub) CancelRun(string) bool {
 	return s.cancelReturn
 }
 
@@ -105,8 +111,8 @@ func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
 	if err := nilBridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{}); err == nil {
 		t.Fatal("expected resolve_permission error for nil bridge")
 	}
-	if nilBridge.CancelActiveRun() {
-		t.Fatal("cancel_active_run should be false for nil bridge")
+	if _, err := nilBridge.CancelRun(context.Background(), gateway.CancelInput{SubjectID: testBridgeSubjectID, RunID: "run-1"}); err == nil {
+		t.Fatal("expected cancel_run error for nil bridge")
 	}
 	if nilBridge.Events() != nil {
 		t.Fatal("events channel should be nil for nil bridge")
@@ -114,7 +120,10 @@ func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
 	if _, err := nilBridge.ListSessions(context.Background()); err == nil {
 		t.Fatal("expected list_sessions error for nil bridge")
 	}
-	if _, err := nilBridge.LoadSession(context.Background(), "s-1"); err == nil {
+	if _, err := nilBridge.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	}); err == nil {
 		t.Fatal("expected load_session error for nil bridge")
 	}
 	if err := nilBridge.Close(); err != nil {
@@ -177,6 +186,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	}()
 
 	runInput := gateway.RunInput{
+		SubjectID: testBridgeSubjectID,
 		RequestID: " request-1 ",
 		SessionID: " session-1 ",
 		RunID:     " run-1 ",
@@ -207,6 +217,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	}
 
 	compactResult, err := bridge.Compact(context.Background(), gateway.CompactInput{
+		SubjectID: testBridgeSubjectID,
 		SessionID: " session-1 ",
 		RunID:     " run-1 ",
 	})
@@ -221,6 +232,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	}
 
 	if err := bridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{
+		SubjectID: testBridgeSubjectID,
 		RequestID: " request-1 ",
 		Decision:  gateway.PermissionResolutionAllowSession,
 	}); err != nil {
@@ -230,8 +242,15 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 		t.Fatalf("permission input = %#v, want trimmed request id and allow_session", stub.permissionInput)
 	}
 
-	if !bridge.CancelActiveRun() {
-		t.Fatal("cancel_active_run should return stub value true")
+	canceled, err := bridge.CancelRun(context.Background(), gateway.CancelInput{
+		SubjectID: testBridgeSubjectID,
+		RunID:     " run-1 ",
+	})
+	if err != nil {
+		t.Fatalf("cancel_run: %v", err)
+	}
+	if !canceled {
+		t.Fatal("cancel_run should return stub value true")
 	}
 
 	sessions, err := bridge.ListSessions(context.Background())
@@ -251,7 +270,10 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 		t.Fatalf("empty session list = %#v, want nil", emptySessions)
 	}
 
-	session, err := bridge.LoadSession(context.Background(), " session-1 ")
+	session, err := bridge.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+	})
 	if err != nil {
 		t.Fatalf("load_session: %v", err)
 	}
@@ -286,19 +308,24 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 	}
 	defer bridge.Close()
 
-	if err := bridge.Run(context.Background(), gateway.RunInput{}); err == nil {
+	if err := bridge.Run(context.Background(), gateway.RunInput{SubjectID: testBridgeSubjectID}); err == nil {
 		t.Fatal("expected run error from runtime")
 	}
-	if _, err := bridge.Compact(context.Background(), gateway.CompactInput{}); err == nil {
+	if _, err := bridge.Compact(context.Background(), gateway.CompactInput{SubjectID: testBridgeSubjectID}); err == nil {
 		t.Fatal("expected compact error from runtime")
 	}
-	if err := bridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{}); err == nil {
+	if err := bridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{
+		SubjectID: testBridgeSubjectID,
+	}); err == nil {
 		t.Fatal("expected resolve_permission error from runtime")
 	}
 	if _, err := bridge.ListSessions(context.Background()); err == nil {
 		t.Fatal("expected list_sessions error from runtime")
 	}
-	if _, err := bridge.LoadSession(context.Background(), "s-1"); err == nil {
+	if _, err := bridge.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	}); err == nil {
 		t.Fatal("expected load_session error from runtime")
 	}
 }
