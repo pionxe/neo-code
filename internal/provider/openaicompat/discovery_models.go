@@ -3,8 +3,12 @@ package openaicompat
 import (
 	"fmt"
 	"strings"
+)
 
-	"neo-code/internal/provider"
+const (
+	discoveryResponseProfileOpenAI  = "openai"
+	discoveryResponseProfileGemini  = "gemini"
+	discoveryResponseProfileGeneric = "generic"
 )
 
 // ExtractRawModels 兼容不同供应商的模型列表响应结构，统一提取为模型对象切片。
@@ -33,8 +37,8 @@ func ExtractRawModels(payload any, profile string) ([]map[string]any, error) {
 	}
 
 	// 严格 profile 未命中时，回退到 generic 键集合，降低第三方 OpenAI-compatible 变体接入成本。
-	if normalizedProfile != provider.DiscoveryResponseProfileGeneric {
-		fallbackKeys := modelListKeys(provider.DiscoveryResponseProfileGeneric)
+	if normalizedProfile != discoveryResponseProfileGeneric {
+		fallbackKeys := modelListKeys(discoveryResponseProfileGeneric)
 		models, found, err = extractRawModelsFromObject(objectPayload, fallbackKeys)
 		if err != nil {
 			return nil, err
@@ -156,9 +160,9 @@ func decodeModelEntries(raw any) ([]map[string]any, error) {
 // modelListKeys 根据 profile 返回优先尝试的模型列表字段顺序。
 func modelListKeys(profile string) []string {
 	switch normalizeResponseProfile(profile) {
-	case provider.DiscoveryResponseProfileGemini:
+	case discoveryResponseProfileGemini:
 		return []string{"models", "data"}
-	case provider.DiscoveryResponseProfileGeneric:
+	case discoveryResponseProfileGeneric:
 		return []string{"data", "models", "items", "results", "model_list", "modelList", "list"}
 	default:
 		return []string{"data", "models"}
@@ -260,12 +264,12 @@ func isLikelyModelListKey(key string) bool {
 // normalizeResponseProfile 统一 profile 写法并为未知值回退到 openai 解析序。
 func normalizeResponseProfile(profile string) string {
 	switch strings.ToLower(strings.TrimSpace(profile)) {
-	case provider.DiscoveryResponseProfileGemini:
-		return provider.DiscoveryResponseProfileGemini
-	case provider.DiscoveryResponseProfileGeneric:
-		return provider.DiscoveryResponseProfileGeneric
+	case discoveryResponseProfileGemini:
+		return discoveryResponseProfileGemini
+	case discoveryResponseProfileGeneric:
+		return discoveryResponseProfileGeneric
 	default:
-		return provider.DiscoveryResponseProfileGeneric
+		return discoveryResponseProfileGeneric
 	}
 }
 

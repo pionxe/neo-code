@@ -85,7 +85,7 @@ func TestCreateCustomProviderManualSourceRequiresModelJSON(t *testing.T) {
 		BaseURL:     "https://llm.example.com/v1",
 		APIKeyEnv:   "MANUAL_SOURCE_NO_MODELS_API_KEY",
 		APIKey:      "test-key",
-		ModelSource: provider.ModelSourceManual,
+		ModelSource: configpkg.ModelSourceManual,
 	})
 	if err == nil || !strings.Contains(err.Error(), "manual model json is empty") {
 		t.Fatalf("expected missing manual model json error, got %v", err)
@@ -110,7 +110,7 @@ func TestCreateCustomProviderManualSourcePersistsModels(t *testing.T) {
 		BaseURL:               "https://llm.example.com/v1",
 		APIKeyEnv:             "MANUAL_SOURCE_PROVIDER_API_KEY",
 		APIKey:                "test-key",
-		ModelSource:           provider.ModelSourceManual,
+		ModelSource:           configpkg.ModelSourceManual,
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		ManualModelsJSON: `[
 			{
@@ -149,7 +149,7 @@ func TestCreateCustomProviderManualSourcePersistsModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected provider %q in config, got %v", input.Name, err)
 	}
-	if provider.NormalizeModelSource(providerCfg.ModelSource) != provider.ModelSourceManual {
+	if configpkg.NormalizeModelSource(providerCfg.ModelSource) != configpkg.ModelSourceManual {
 		t.Fatalf("expected provider model source manual, got %q", providerCfg.ModelSource)
 	}
 	if len(providerCfg.Models) != 2 {
@@ -208,7 +208,7 @@ func TestNormalizeCreateCustomProviderInputManualSkipsDiscoveryFieldValidation(t
 		BaseURL:          "https://llm.example.com/v1",
 		APIKeyEnv:        "MANUAL_NO_DISCOVERY_VALIDATION_API_KEY",
 		APIKey:           "test-key",
-		ModelSource:      provider.ModelSourceManual,
+		ModelSource:      configpkg.ModelSourceManual,
 		ManualModelsJSON: `[{"id":"manual-model","name":"Manual Model"}]`,
 	})
 	if err != nil {

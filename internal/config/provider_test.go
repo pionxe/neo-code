@@ -134,9 +134,6 @@ func TestProviderConfigIdentity(t *testing.T) {
 	if identity.DiscoveryEndpointPath != "/models" {
 		t.Fatalf("expected discovery endpoint /models, got %q", identity.DiscoveryEndpointPath)
 	}
-	if identity.ResponseProfile != "" {
-		t.Fatalf("expected openaicompat identity to omit response profile, got %q", identity.ResponseProfile)
-	}
 }
 
 func TestProviderConfigValidateAllowsEmptyBaseURLForSDKDrivers(t *testing.T) {
@@ -197,7 +194,7 @@ func TestProviderIdentityFromConfigUsesDefaultBaseURLWhenEmptyForSDKDrivers(t *t
 			if identity.BaseURL != tt.expectedURL {
 				t.Fatalf("expected identity base URL %q, got %q", tt.expectedURL, identity.BaseURL)
 			}
-			if identity.ChatEndpointPath != "" || identity.ResponseProfile != "" {
+			if identity.ChatEndpointPath != "" {
 				t.Fatalf("expected sdk identity to omit protocol matrix fields, got %+v", identity)
 			}
 		})
@@ -233,9 +230,6 @@ func TestProviderIdentityFromConfigDefaultsPathsForOpenAICompat(t *testing.T) {
 	}
 	if identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf("expected default discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, identity.DiscoveryEndpointPath)
-	}
-	if identity.ResponseProfile != "" {
-		t.Fatalf("expected openaicompat identity to omit response profile, got %q", identity.ResponseProfile)
 	}
 }
 

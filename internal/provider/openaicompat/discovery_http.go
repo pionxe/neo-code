@@ -42,11 +42,7 @@ func RequestConfigFromRuntime(cfg provider.RuntimeConfig) (RequestConfig, error)
 		return RequestConfig{}, provider.NewDiscoveryConfigError(err.Error())
 	}
 
-	discoveryEndpointPath, responseProfile, err := provider.NormalizeProviderDiscoverySettings(
-		cfg.Driver,
-		normalizedEndpointPath,
-		"",
-	)
+	discoveryEndpointPath, err := provider.NormalizeProviderDiscoverySettings(cfg.Driver, normalizedEndpointPath)
 	if err != nil {
 		return RequestConfig{}, provider.NewDiscoveryConfigError(err.Error())
 	}
@@ -55,7 +51,7 @@ func RequestConfigFromRuntime(cfg provider.RuntimeConfig) (RequestConfig, error)
 		Driver:          cfg.Driver,
 		BaseURL:         cfg.BaseURL,
 		EndpointPath:    discoveryEndpointPath,
-		ResponseProfile: responseProfile,
+		ResponseProfile: discoveryResponseProfileOpenAI,
 		APIKey:          cfg.APIKey,
 	}, nil
 }
@@ -156,14 +152,16 @@ func DiscoverModelDescriptors(
 
 // resolveResponseProfile 根据 driver 与显式配置确定响应提取策略。
 func resolveResponseProfile(profile string) (string, error) {
-	normalizedProfile, err := provider.NormalizeProviderDiscoveryResponseProfile(profile)
-	if err != nil {
-		return "", err
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "", discoveryResponseProfileOpenAI:
+		return discoveryResponseProfileOpenAI, nil
+	case discoveryResponseProfileGemini:
+		return discoveryResponseProfileGemini, nil
+	case discoveryResponseProfileGeneric:
+		return discoveryResponseProfileGeneric, nil
+	default:
+		return "", fmt.Errorf("provider discovery response profile %q is unsupported", profile)
 	}
-	if normalizedProfile != "" {
-		return normalizedProfile, nil
-	}
-	return provider.DiscoveryResponseProfileOpenAI, nil
 }
 
 // parseHTTPError 将 discovery HTTP 错误映射为可分类 ProviderError。

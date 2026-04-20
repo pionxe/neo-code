@@ -168,12 +168,12 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 // normalizeCreateCustomProviderInput 统一裁剪新增 Provider 输入并执行基础字段校验。
 func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (createCustomProviderNormalizedInput, error) {
 	rawModelSource := strings.TrimSpace(input.ModelSource)
-	normalizedModelSource := provider.NormalizeModelSource(rawModelSource)
+	normalizedModelSource := config.NormalizeModelSource(rawModelSource)
 	if rawModelSource != "" && normalizedModelSource == "" {
 		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: unsupported model source %q", input.ModelSource)
 	}
 	if normalizedModelSource == "" {
-		normalizedModelSource = provider.ModelSourceDiscover
+		normalizedModelSource = config.ModelSourceDiscover
 	}
 
 	normalized := createCustomProviderNormalizedInput{
@@ -203,13 +203,13 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: env key %q is protected", normalized.APIKeyEnv)
 	}
 	switch normalized.ModelSource {
-	case provider.ModelSourceManual:
+	case config.ModelSourceManual:
 		manualModels, parseErr := parseManualModelsJSON(input.ManualModelsJSON)
 		if parseErr != nil {
 			return createCustomProviderNormalizedInput{}, parseErr
 		}
 		normalized.ManualModels = manualModels
-	case provider.ModelSourceDiscover:
+	case config.ModelSourceDiscover:
 		normalized.ManualModels = nil
 	}
 

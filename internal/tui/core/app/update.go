@@ -973,7 +973,7 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 	}
 }
 
-// runtimeSessionContextSource 缂備焦鎷濋梽鍕焽椤愶箑鐭楁い鏍亹閸嬫挻寰勭仦鍓ф殸婵炴潙鍚嬫穱娲儊閼恒儳鈻斿┑鐘辫兌閻熸捇鏌￠崒姘闁绘搫绱曢幏鐘诲閿濆懎骞嬮梺鍛婃⒐缁嬪繘鍩€
+// runtimeSessionContextSource 定义会话上下文快照读取接口，供恢复运行态显示使用。
 type runtimeSessionContextSource interface {
 	GetSessionContext(ctx context.Context, sessionID string) (any, error)
 }
@@ -1027,7 +1027,7 @@ func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bo
 	return false
 }
 
-// runtimeEventStopReasonDecidedHandler 婵犮垼娉涚€氼噣骞冩繝鍥ц埞妞ゆ牗鐟ч杈╃磽娴ｅ摜澧涙い鎺撶⊕缁傚秶鈧綆浜為弶钘壝瑰鍐惧剮婵炲棎鍨芥俊
+// runtimeEventStopReasonDecidedHandler 处理运行结束原因并统一更新状态与活动日志。
 func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.StopReasonDecidedPayload)
 	if !ok {
@@ -1304,7 +1304,7 @@ func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	return false
 }
 
-// runtimeEventToolCallThinkingHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃堟偡濞嗗繐顏╅柛銊︾箞濮婂ジ鎳滃▓鍨杸婵炲瓨绮岄鍕枎閵忋倕违
+// runtimeEventToolCallThinkingHandler 同步工具规划阶段的状态与活动面板提示。
 func runtimeEventToolCallThinkingHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.CurrentTool = payload
@@ -1371,7 +1371,7 @@ func runtimeEventToolChunkHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventAgentDoneHandler 婵犮垼娉涚€氼噣骞冩繝鍐╀氦闁归偊鍨奸弨浠嬫倵閻熺増婀伴柛銊︾缁傚秶鈧絺鏅滈浠嬫煏
+// runtimeEventAgentDoneHandler 处理代理结束事件并回灌最终助手消息。
 func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
@@ -1490,7 +1490,7 @@ func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEve
 	return false
 }
 
-// refreshPermissionPromptLayout 闂侀潻璐熼崝宀€绮╂搴濇勃闁逞屽墮椤斿繘骞撻幒鎴犱淮婵犳鍠栭鍛偓鍨叀瀵喚鎹勯崫鍕幈闂佸搫鍊绘晶妤€顭囬崼銉︹挃闁规壆澧楀銊╂煛婢跺孩纭舵繛鏉戭樀瀹曟鎼归銏㈢懇闂佺粯顨呴悧鍕焵
+// refreshPermissionPromptLayout 重新计算权限提示区域布局，确保窗口变化后展示正确。
 func (a *App) refreshPermissionPromptLayout() {
 	if a.width <= 0 || a.height <= 0 {
 		return
@@ -2458,7 +2458,7 @@ func providerAddVisibleFields(driver string, modelSource string) []providerAddFi
 		providerAddFieldChatEndpointPath,
 	}
 
-	if provider.NormalizeModelSource(strings.TrimSpace(modelSource)) == provider.ModelSourceDiscover {
+	if config.NormalizeModelSource(strings.TrimSpace(modelSource)) == config.ModelSourceDiscover {
 		fields = append(fields, providerAddFieldDiscoveryEndpointPath)
 	}
 	fields = append(fields, providerAddFieldAPIKeyEnv, providerAddFieldAPIKey)
@@ -2510,7 +2510,7 @@ func (a *App) startProviderAddForm() {
 		Step:                  0,
 		Name:                  "",
 		Driver:                provider.DriverOpenAICompat,
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           config.ModelSourceDiscover,
 		BaseURL:               "",
 		ChatEndpointPath:      providerAddDefaultChatEndpointPath(provider.DriverOpenAICompat),
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -2520,7 +2520,7 @@ func (a *App) startProviderAddForm() {
 		Error:                 "",
 		ErrorIsHard:           false,
 		Drivers:               []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
-		ModelSources:          []string{provider.ModelSourceDiscover, provider.ModelSourceManual},
+		ModelSources:          []string{config.ModelSourceDiscover, config.ModelSourceManual},
 	}
 	a.state.ActivePicker = pickerProviderAdd
 	a.state.StatusText = "Add new provider"
@@ -2689,7 +2689,7 @@ func (a *App) submitProviderAddForm() tea.Cmd {
 
 	formForValidation := *a.providerAddForm
 	if formForValidation.Stage == providerAddFormStageFields &&
-		provider.NormalizeModelSource(normalizeProviderAddFieldValue(formForValidation.ModelSource)) == provider.ModelSourceManual &&
+		config.NormalizeModelSource(normalizeProviderAddFieldValue(formForValidation.ModelSource)) == config.ModelSourceManual &&
 		strings.TrimSpace(formForValidation.ManualModelsJSON) == "" {
 		formForValidation.ManualModelsJSON = providerAddManualModelsJSONTemplate
 	}
@@ -2700,14 +2700,14 @@ func (a *App) submitProviderAddForm() tea.Cmd {
 		a.providerAddForm.ErrorIsHard = false
 		return nil
 	}
-	if request.ModelSource == provider.ModelSourceManual && a.providerAddForm.Stage == providerAddFormStageFields {
+	if request.ModelSource == config.ModelSourceManual && a.providerAddForm.Stage == providerAddFormStageFields {
 		a.providerAddForm.Stage = providerAddFormStageManualModels
 		a.providerAddForm.Error = ""
 		a.providerAddForm.ErrorIsHard = false
 		a.state.StatusText = "Fill manual model JSON"
 		return nil
 	}
-	if request.ModelSource == provider.ModelSourceManual && strings.TrimSpace(request.ManualModelsJSON) == "" {
+	if request.ModelSource == config.ModelSourceManual && strings.TrimSpace(request.ManualModelsJSON) == "" {
 		a.providerAddForm.Error = "Please update the form: Model JSON is required for manual model source"
 		a.providerAddForm.ErrorIsHard = false
 		return nil
@@ -2791,7 +2791,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	request := providerAddRequest{
 		Name:                  normalizeProviderAddFieldValue(form.Name),
 		Driver:                provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
-		ModelSource:           provider.NormalizeModelSource(normalizeProviderAddFieldValue(form.ModelSource)),
+		ModelSource:           config.NormalizeModelSource(normalizeProviderAddFieldValue(form.ModelSource)),
 		BaseURL:               normalizeProviderAddFieldValue(form.BaseURL),
 		ChatEndpointPath:      normalizeProviderAddFieldValue(form.ChatEndpointPath),
 		ManualModelsJSON:      strings.TrimSpace(form.ManualModelsJSON),
@@ -2845,7 +2845,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	}
 
 	var manualModels []providertypes.ModelDescriptor
-	if request.ModelSource == provider.ModelSourceManual {
+	if request.ModelSource == config.ModelSourceManual {
 		if strings.TrimSpace(request.ManualModelsJSON) == "" {
 			return providerAddRequest{}, "Model JSON is required for manual model source"
 		}
@@ -2877,7 +2877,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	request.APIKeyEnv = normalizedInput.APIKeyEnv
 	request.ModelSource = normalizedInput.ModelSource
 	request.DiscoveryEndpointPath = normalizedInput.DiscoveryEndpointPath
-	if request.ModelSource != provider.ModelSourceManual {
+	if request.ModelSource != config.ModelSourceManual {
 		request.ManualModelsJSON = ""
 	}
 

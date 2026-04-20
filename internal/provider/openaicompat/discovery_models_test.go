@@ -2,8 +2,6 @@ package openaicompat
 
 import (
 	"testing"
-
-	"neo-code/internal/provider"
 )
 
 func TestExtractRawModels(t *testing.T) {
@@ -23,7 +21,7 @@ func TestExtractRawModels(t *testing.T) {
 					map[string]any{"id": "gpt-4.1"},
 				},
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantLen: 1,
 		},
 		{
@@ -35,7 +33,7 @@ func TestExtractRawModels(t *testing.T) {
 					},
 				},
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantLen: 1,
 		},
 		{
@@ -45,7 +43,7 @@ func TestExtractRawModels(t *testing.T) {
 					map[string]any{"id": "qwen-max"},
 				},
 			},
-			profile: provider.DiscoveryResponseProfileGeneric,
+			profile: discoveryResponseProfileGeneric,
 			wantLen: 1,
 		},
 		{
@@ -55,7 +53,7 @@ func TestExtractRawModels(t *testing.T) {
 					map[string]any{"name": "models/gemini-2.5-flash"},
 				},
 			},
-			profile: provider.DiscoveryResponseProfileGemini,
+			profile: discoveryResponseProfileGemini,
 			wantLen: 1,
 		},
 		{
@@ -65,7 +63,7 @@ func TestExtractRawModels(t *testing.T) {
 					map[string]any{"id": "custom-model"},
 				},
 			},
-			profile: provider.DiscoveryResponseProfileGeneric,
+			profile: discoveryResponseProfileGeneric,
 			wantLen: 1,
 		},
 		{
@@ -74,7 +72,7 @@ func TestExtractRawModels(t *testing.T) {
 				map[string]any{"id": "m1"},
 				map[string]any{"id": "m2"},
 			},
-			profile: provider.DiscoveryResponseProfileGeneric,
+			profile: discoveryResponseProfileGeneric,
 			wantLen: 2,
 		},
 		{
@@ -83,7 +81,7 @@ func TestExtractRawModels(t *testing.T) {
 				"id":   "m1",
 				"name": "Model 1",
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantLen: 1,
 		},
 		{
@@ -91,7 +89,7 @@ func TestExtractRawModels(t *testing.T) {
 			payload: map[string]any{
 				"name": "not-a-model",
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantErr: true,
 		},
 		{
@@ -99,7 +97,7 @@ func TestExtractRawModels(t *testing.T) {
 			payload: map[string]any{
 				"data": "unexpected",
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantErr: true,
 		},
 		{
@@ -107,7 +105,7 @@ func TestExtractRawModels(t *testing.T) {
 			payload: map[string]any{
 				"object": "list",
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantErr: true,
 		},
 		{
@@ -117,7 +115,7 @@ func TestExtractRawModels(t *testing.T) {
 					map[string]any{"id": "m1"},
 				},
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantLen: 1,
 		},
 		{
@@ -127,7 +125,7 @@ func TestExtractRawModels(t *testing.T) {
 					map[string]any{"id": "m1"},
 				},
 			},
-			profile: provider.DiscoveryResponseProfileGeneric,
+			profile: discoveryResponseProfileGeneric,
 			wantLen: 1,
 		},
 		{
@@ -145,7 +143,7 @@ func TestExtractRawModels(t *testing.T) {
 			payload: map[string]any{
 				"models": []any{"model-a", "model-b"},
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantLen: 2,
 		},
 		{
@@ -159,7 +157,7 @@ func TestExtractRawModels(t *testing.T) {
 					},
 				},
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantLen: 1,
 		},
 		{
@@ -167,7 +165,7 @@ func TestExtractRawModels(t *testing.T) {
 			payload: map[string]any{
 				"errors": []any{"bad request", "permission denied"},
 			},
-			profile: provider.DiscoveryResponseProfileOpenAI,
+			profile: discoveryResponseProfileOpenAI,
 			wantErr: true,
 		},
 	}

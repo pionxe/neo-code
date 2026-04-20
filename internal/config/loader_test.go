@@ -45,7 +45,7 @@ func saveCustomProviderWithModelsForTest(
 		ChatEndpointPath:      chatEndpointPath,
 		APIKeyEnv:             apiKeyEnv,
 		DiscoveryEndpointPath: discoveryEndpointPath,
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           ModelSourceDiscover,
 	})
 }
 
@@ -442,7 +442,7 @@ discovery_endpoint_path: /models
 	if err != nil {
 		t.Fatalf("ProviderByName(company-gateway) error = %v", err)
 	}
-	if loadedProvider.ModelSource != provider.ModelSourceManual {
+	if loadedProvider.ModelSource != ModelSourceManual {
 		t.Fatalf("expected model_source manual, got %q", loadedProvider.ModelSource)
 	}
 	if loadedProvider.DiscoveryEndpointPath != "" {
@@ -1029,7 +1029,7 @@ func TestSaveCustomProviderRejectsManualSourceWithoutModels(t *testing.T) {
 		Driver:      provider.DriverOpenAICompat,
 		BaseURL:     "https://llm.example.com/v1",
 		APIKeyEnv:   "MANUAL_EMPTY_MODELS_API_KEY",
-		ModelSource: provider.ModelSourceManual,
+		ModelSource: ModelSourceManual,
 		Models:      nil,
 	})
 	if err == nil || !strings.Contains(err.Error(), "manual model source requires non-empty models") {
@@ -1045,7 +1045,7 @@ func TestSaveCustomProviderRejectsModelWithoutName(t *testing.T) {
 		Driver:      provider.DriverOpenAICompat,
 		BaseURL:     "https://llm.example.com/v1",
 		APIKeyEnv:   "MANUAL_MISSING_MODEL_NAME_API_KEY",
-		ModelSource: provider.ModelSourceManual,
+		ModelSource: ModelSourceManual,
 		Models: []providertypes.ModelDescriptor{
 			{ID: "manual-model-1"},
 		},
@@ -1089,10 +1089,10 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 				Driver:                provider.DriverOpenAICompat,
 				BaseURL:               "https://llm.example.com/v1",
 				APIKeyEnv:             "ROUNDTRIP_DISCOVER_API_KEY",
-				ModelSource:           provider.ModelSourceDiscover,
+				ModelSource:           ModelSourceDiscover,
 				DiscoveryEndpointPath: "/models",
 			},
-			wantModelSource:      provider.ModelSourceDiscover,
+			wantModelSource:      ModelSourceDiscover,
 			wantChatPath:         "",
 			wantDiscoveryPath:    "/models",
 			wantModelDescriptors: 0,
@@ -1104,7 +1104,7 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 				Driver:                provider.DriverOpenAICompat,
 				BaseURL:               "https://llm.example.com/v1",
 				APIKeyEnv:             "ROUNDTRIP_MANUAL_API_KEY",
-				ModelSource:           provider.ModelSourceManual,
+				ModelSource:           ModelSourceManual,
 				DiscoveryEndpointPath: "/should-be-cleared",
 				Models: []providertypes.ModelDescriptor{
 					{
@@ -1115,7 +1115,7 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 					},
 				},
 			},
-			wantModelSource:      provider.ModelSourceManual,
+			wantModelSource:      ModelSourceManual,
 			wantChatPath:         "",
 			wantDiscoveryPath:    "",
 			wantModelDescriptors: 1,
@@ -1174,7 +1174,7 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 		Driver:      provider.DriverOpenAICompat,
 		BaseURL:     "https://llm.example.com/v1",
 		APIKeyEnv:   "MANUAL_MODELS_PROVIDER_API_KEY",
-		ModelSource: provider.ModelSourceManual,
+		ModelSource: ModelSourceManual,
 		Models: []providertypes.ModelDescriptor{
 			{
 				ID:   "manual-model-1",
@@ -1196,7 +1196,7 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCustomProvider() error = %v", err)
 	}
-	if cfg.ModelSource != provider.ModelSourceManual {
+	if cfg.ModelSource != ModelSourceManual {
 		t.Fatalf("expected model source manual, got %q", cfg.ModelSource)
 	}
 	if cfg.DiscoveryEndpointPath != "" {

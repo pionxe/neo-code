@@ -27,7 +27,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	}
 
 	rawModelSource := strings.TrimSpace(input.ModelSource)
-	normalized.ModelSource = provider.NormalizeModelSource(rawModelSource)
+	normalized.ModelSource = NormalizeModelSource(rawModelSource)
 	if rawModelSource != "" && normalized.ModelSource == "" {
 		return SaveCustomProviderInput{}, fmt.Errorf(
 			"config: provider %q unsupported model_source %q",
@@ -36,7 +36,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		)
 	}
 	if normalized.ModelSource == "" {
-		normalized.ModelSource = provider.ModelSourceDiscover
+		normalized.ModelSource = ModelSourceDiscover
 	}
 
 	models, err := NormalizeCustomProviderModels(input.Models)
@@ -46,7 +46,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	normalized.Models = models
 
 	normalizedDiscoveryEndpointPath := normalized.DiscoveryEndpointPath
-	if normalized.ModelSource == provider.ModelSourceManual {
+	if normalized.ModelSource == ModelSourceManual {
 		normalizedDiscoveryEndpointPath = ""
 	} else if requiresDiscoveryEndpointPath(normalized.Driver) && strings.TrimSpace(normalizedDiscoveryEndpointPath) == "" {
 		return SaveCustomProviderInput{}, fmt.Errorf(
@@ -61,12 +61,11 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider chat endpoint path: %w", err)
 	}
 	discoveryEndpointPath := ""
-	if normalized.ModelSource != provider.ModelSourceManual && strings.TrimSpace(normalizedDiscoveryEndpointPath) != "" {
+	if normalized.ModelSource != ModelSourceManual && strings.TrimSpace(normalizedDiscoveryEndpointPath) != "" {
 		var err error
-		discoveryEndpointPath, _, err = provider.NormalizeProviderDiscoverySettings(
+		discoveryEndpointPath, err = provider.NormalizeProviderDiscoverySettings(
 			normalized.Driver,
 			normalizedDiscoveryEndpointPath,
-			"",
 		)
 		if err != nil {
 			return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider discovery settings: %w", err)
@@ -78,7 +77,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	} else {
 		normalized.ChatEndpointPath = ""
 	}
-	if normalized.ModelSource == provider.ModelSourceManual {
+	if normalized.ModelSource == ModelSourceManual {
 		if len(normalized.Models) == 0 {
 			return SaveCustomProviderInput{}, fmt.Errorf(
 				"config: provider %q manual model source requires non-empty models",

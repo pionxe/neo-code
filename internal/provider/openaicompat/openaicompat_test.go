@@ -855,7 +855,7 @@ func TestFlushDataLines_ProcessChunkError(t *testing.T) {
 	}
 }
 
-// --- DiscoverModels 闂佹寧鐟ㄩ銈夊捶閻戞ɑ鐝繛鏉戭儓閻?---
+// --- DiscoverModels tests ---
 
 func TestDiscoverModels_HTTPError(t *testing.T) {
 	t.Parallel()
@@ -1060,7 +1060,7 @@ func TestDiscoverModelsSkipsInvalidEntriesAndDedupes(t *testing.T) {
 	}
 }
 
-// --- mergeToolCallDelta 閺夊牆婀遍弲顐⒚圭€ｎ厾妲?---
+// --- mergeToolCallDelta tests ---
 
 func TestMergeToolCallDelta_MultipleIndices(t *testing.T) {
 	t.Parallel()
@@ -1128,7 +1128,7 @@ func TestMergeToolCallDelta_IDUpdateOnly(t *testing.T) {
 	}
 }
 
-// --- Generate 闂傚棗妫欓崹姘圭€ｎ厾妲?---
+// --- Generate tests ---
 
 func TestGenerate_BaseURLTrailingSlashHandled(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
@@ -1298,7 +1298,7 @@ data: [DONE]
 	}
 }
 
-// --- parseError 閺夊牆婀遍弲顐⒚圭€ｎ厾妲?---
+// --- parseError tests ---
 
 func TestParseError_ReadBodyFailure(t *testing.T) {
 	t.Parallel()
@@ -1345,7 +1345,7 @@ func TestParseError_ClassifiesContextTooLong(t *testing.T) {
 	}
 }
 
-// --- 闁告鍠愬﹢浣圭┍濠靛牊娈岄柣銊ュ濞夛箓骞嬮幇顓犮偞閻犲洦娲╃槐娆愮┍濠靛洤鐦柛蹇曞帶椤旀劙鏁?---
+// --- Provider.Generate end-to-end tests ---
 
 func TestProviderGenerateConsumesSSEAndMergesToolCalls(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
@@ -1602,7 +1602,7 @@ func TestProviderConsumeStreamRejectsDirtyJSON(t *testing.T) {
 	}
 }
 
-// --- 閺夊牆鎳庢慨顏堝礄閼恒儲娈?---
+// --- test helpers ---
 
 func resolvedConfig(baseURL string, model string) provider.RuntimeConfig {
 	if strings.TrimSpace(baseURL) == "" {
@@ -1709,7 +1709,7 @@ func discoverRawModels(ctx context.Context, p *Provider) ([]map[string]any, erro
 	return DiscoverRawModels(ctx, p.client, requestCfg)
 }
 
-// --- 闂佹寧鐟ㄩ銈夊礌閸涢偊妫呮繛鏉戭儓閻?---
+// --- ConsumeStream interruption tests ---
 
 func TestConsumeStream_WrapsNonEOFAsInterrupted(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
@@ -1801,7 +1801,7 @@ type failingReadCloser struct{ err error }
 func (f *failingReadCloser) Read(_ []byte) (int, error) { return 0, f.err }
 func (f *failingReadCloser) Close() error               { return f.err }
 
-// --- emitToolCallStart 闁?mergeToolCallDelta 濞ｅ洦绻勯弳鈧繛鏉戭儓閻?---
+// --- emitToolCallStart and mergeToolCallDelta guards ---
 
 func TestEmitToolCallStartGuards(t *testing.T) {
 	t.Parallel()

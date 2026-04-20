@@ -98,7 +98,7 @@ func catalogInputFromProvider(cfg config.ProviderConfig) (provider.CatalogInput,
 		Identity:         identity,
 		ConfiguredModels: providertypes.CloneModelDescriptors(cloned.Models),
 		DisableDiscovery: cloned.Source == config.ProviderSourceCustom &&
-			provider.NormalizeModelSource(cloned.ModelSource) == provider.ModelSourceManual,
+			config.NormalizeModelSource(cloned.ModelSource) == config.ModelSourceManual,
 		ResolveDiscoveryConfig: func() (provider.RuntimeConfig, error) {
 			resolved, err := cloned.Resolve()
 			if err != nil {

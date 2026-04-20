@@ -437,7 +437,7 @@ func TestSubmitProviderAddFormTransitionsToManualStageWhenModelSourceManual(t *t
 
 	app.providerAddForm.Name = "manual-stage-gateway"
 	app.providerAddForm.Driver = provider.DriverOpenAICompat
-	app.providerAddForm.ModelSource = provider.ModelSourceManual
+	app.providerAddForm.ModelSource = config.ModelSourceManual
 	app.providerAddForm.APIKeyEnv = "MANUAL_STAGE_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = "sk-manual-stage"
 
@@ -2436,14 +2436,14 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "demo",
 			Driver:      provider.DriverGemini,
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: config.ModelSourceManual,
 		}); !strings.Contains(err, "API Key is required") {
 			t.Fatalf("expected missing key error, got %q", err)
 		}
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "demo",
 			Driver:      provider.DriverGemini,
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: config.ModelSourceManual,
 			APIKey:      "k",
 			APIKeyEnv:   "",
 		}); !strings.Contains(err, "API Key Env is required") {
@@ -2455,7 +2455,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		_, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "openai-compat",
 			Driver:      provider.DriverOpenAICompat,
-			ModelSource: provider.ModelSourceDiscover,
+			ModelSource: config.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "OPENAI_COMPAT_API_KEY",
 		})
@@ -2468,7 +2468,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat-discover",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceDiscover,
+			ModelSource:           config.ModelSourceDiscover,
 			ChatEndpointPath:      "/chat/completions",
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_DISCOVER_API_KEY",
@@ -2477,7 +2477,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
 		}
-		if req.ModelSource != provider.ModelSourceDiscover {
+		if req.ModelSource != config.ModelSourceDiscover {
 			t.Fatalf("expected discover model source, got %q", req.ModelSource)
 		}
 		if req.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
@@ -2492,7 +2492,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceDiscover,
+			ModelSource:           config.ModelSourceDiscover,
 			APIKey:                "k",
 			APIKeyEnv:             "\x00OPENAI_COMPAT_API_KEY",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -2509,7 +2509,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceDiscover,
+			ModelSource:           config.ModelSourceDiscover,
 			APIKey:                "k",
 			APIKeyEnv:             "PATH",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -2522,7 +2522,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "gemini",
 			Driver:                provider.DriverGemini,
-			ModelSource:           provider.ModelSourceDiscover,
+			ModelSource:           config.ModelSourceDiscover,
 			APIKey:                "k",
 			APIKeyEnv:             "GEMINI_GATEWAY_API_KEY",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -2539,7 +2539,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceDiscover,
+			ModelSource:           config.ModelSourceDiscover,
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_API_KEY",
 			DiscoveryEndpointPath: "https://api.example.com/models",
@@ -2552,7 +2552,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceDiscover,
+			ModelSource:           config.ModelSourceDiscover,
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_API_KEY",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -2566,7 +2566,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "custom",
 			Driver:      "custom-driver",
-			ModelSource: provider.ModelSourceDiscover,
+			ModelSource: config.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "CUSTOM_DRIVER_API_KEY",
 			BaseURL:     "",
@@ -2579,7 +2579,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "manual",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceManual,
+			ModelSource:           config.ModelSourceManual,
 			APIKey:                "k",
 			APIKeyEnv:             "MANUAL_GATEWAY_API_KEY",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -3311,7 +3311,7 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 		t.Fatalf("expected /clear branch to update status")
 	}
 
-	fields := providerAddVisibleFields(provider.DriverOpenAICompat, provider.ModelSourceDiscover)
+	fields := providerAddVisibleFields(provider.DriverOpenAICompat, config.ModelSourceDiscover)
 	if len(fields) == 0 || fields[0] != providerAddFieldName {
 		t.Fatalf("expected provider add visible fields to start from name field")
 	}
@@ -3320,7 +3320,7 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 		t.Fatalf("expected discover source to include discovery fields")
 	}
 
-	manualFields := providerAddVisibleFields(provider.DriverOpenAICompat, provider.ModelSourceManual)
+	manualFields := providerAddVisibleFields(provider.DriverOpenAICompat, config.ModelSourceManual)
 	if slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) ||
 		slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) {
 		t.Fatalf("expected manual source to exclude discovery fields")
@@ -3330,7 +3330,7 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 	if _, err := buildProviderAddRequest(providerAddFormState{
 		Name:                  "custom-provider",
 		Driver:                "custom-driver",
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           config.ModelSourceDiscover,
 		BaseURL:               "https://example.com",
 		DiscoveryEndpointPath: "/models",
 		APIKeyEnv:             "CUSTOM_PROVIDER_API_KEY",

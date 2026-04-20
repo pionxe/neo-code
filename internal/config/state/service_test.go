@@ -1319,7 +1319,7 @@ func mustCatalogIdentity(t *testing.T, cfg configpkg.ProviderConfig) provider.Pr
 	return identity
 }
 
-// defaultModelsForInput 娑撹櫣绮扮€?catalog 鏉堟挸鍙嗘潻鏂挎礀姒涙顓诲Ο鈥崇€烽崣濠傚従閸欐ü缍嬮敍灞肩┒娴滃酣鈧瀚ㄩ柅鏄忕帆濞村鐦径宥囨暏.
+// defaultModelsForInput 基于 catalog 输入构造稳定的默认模型集合。
 func defaultModelsForInput(input provider.CatalogInput) []providertypes.ModelDescriptor {
 	defaults := providertypes.MergeModelDescriptors(input.DefaultModels)
 	if len(defaults) == 0 {

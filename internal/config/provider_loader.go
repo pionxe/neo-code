@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 
 	"gopkg.in/yaml.v3"
@@ -209,7 +208,7 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 	cfg.BaseURL = normalizedInput.BaseURL
 	cfg.ChatEndpointPath = normalizedInput.ChatEndpointPath
 	cfg.DiscoveryEndpointPath = normalizedInput.DiscoveryEndpointPath
-	if normalizedInput.ModelSource == provider.ModelSourceManual {
+	if normalizedInput.ModelSource == ModelSourceManual {
 		cfg.Models = toCustomProviderModelFiles(normalizedInput.Models)
 	}
 

@@ -12,7 +12,6 @@ type ProviderIdentity struct {
 	Driver                string `json:"driver"`
 	BaseURL               string `json:"base_url"`
 	ChatEndpointPath      string `json:"chat_endpoint_path,omitempty"`
-	ResponseProfile       string `json:"response_profile,omitempty"`
 	DiscoveryEndpointPath string `json:"discovery_endpoint_path,omitempty"`
 }
 
@@ -21,9 +20,6 @@ func (i ProviderIdentity) Key() string {
 	parts := []string{i.Driver, i.BaseURL}
 	if strings.TrimSpace(i.ChatEndpointPath) != "" {
 		parts = append(parts, i.ChatEndpointPath)
-	}
-	if strings.TrimSpace(i.ResponseProfile) != "" {
-		parts = append(parts, i.ResponseProfile)
 	}
 	if strings.TrimSpace(i.DiscoveryEndpointPath) != "" {
 		parts = append(parts, i.DiscoveryEndpointPath)
@@ -91,53 +87,20 @@ func NormalizeProviderDiscoveryEndpointPath(endpointPath string) (string, error)
 	return cleaned, nil
 }
 
-// NormalizeProviderDiscoveryResponseProfile 规范化模型发现响应解析策略，仅允许受支持的 profile。
-func NormalizeProviderDiscoveryResponseProfile(profile string) (string, error) {
-	normalized := NormalizeKey(profile)
-	if normalized == "" {
-		return "", nil
-	}
-
-	switch normalized {
-	case DiscoveryResponseProfileOpenAI, DiscoveryResponseProfileGemini, DiscoveryResponseProfileGeneric:
-		return normalized, nil
-	default:
-		return "", fmt.Errorf("provider discovery response profile %q is unsupported", profile)
-	}
-}
-
 // NormalizeProviderDiscoverySettings 根据 driver 规范化 discovery 设置，并在受支持场景补齐默认值。
-func NormalizeProviderDiscoverySettings(driver string, endpointPath string, responseProfile string) (string, string, error) {
+func NormalizeProviderDiscoverySettings(driver string, endpointPath string) (string, error) {
 	candidateEndpointPath := strings.TrimSpace(endpointPath)
-	candidateResponseProfile := strings.TrimSpace(responseProfile)
 
 	if candidateEndpointPath == "" {
 		candidateEndpointPath = DiscoveryEndpointPathModels
 	}
-	if candidateResponseProfile == "" {
-		candidateResponseProfile = defaultDiscoveryResponseProfile(driver)
-	}
+	_ = NormalizeProviderDriver(driver)
 
 	normalizedEndpointPath, err := NormalizeProviderDiscoveryEndpointPath(candidateEndpointPath)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	normalizedResponseProfile, err := NormalizeProviderDiscoveryResponseProfile(candidateResponseProfile)
-	if err != nil {
-		return "", "", err
-	}
-	return normalizedEndpointPath, normalizedResponseProfile, nil
-}
-
-func defaultDiscoveryResponseProfile(driver string) string {
-	switch NormalizeProviderDriver(driver) {
-	case DriverOpenAICompat:
-		return DiscoveryResponseProfileOpenAI
-	case DriverGemini:
-		return DiscoveryResponseProfileGemini
-	default:
-		return DiscoveryResponseProfileGeneric
-	}
+	return normalizedEndpointPath, nil
 }
 
 // NormalizeProviderBaseURL 将 provider 接入地址规范为可比较的稳定形式。
@@ -208,7 +171,7 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 		if err != nil {
 			return ProviderIdentity{}, err
 		}
-		discoveryEndpointPath, _, err := NormalizeProviderDiscoverySettings(identity.Driver, identity.DiscoveryEndpointPath, "")
+		discoveryEndpointPath, err := NormalizeProviderDiscoverySettings(identity.Driver, identity.DiscoveryEndpointPath)
 		if err != nil {
 			return ProviderIdentity{}, err
 		}
@@ -227,11 +190,7 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 			BaseURL: normalizedBaseURL,
 		}, nil
 	default:
-		discoveryEndpointPath, responseProfile, err := NormalizeProviderDiscoverySettings(
-			identity.Driver,
-			identity.DiscoveryEndpointPath,
-			identity.ResponseProfile,
-		)
+		discoveryEndpointPath, err := NormalizeProviderDiscoverySettings(identity.Driver, identity.DiscoveryEndpointPath)
 		if err != nil {
 			return ProviderIdentity{}, err
 		}
@@ -239,7 +198,6 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 			Driver:                normalizedDriver,
 			BaseURL:               normalizedBaseURL,
 			DiscoveryEndpointPath: discoveryEndpointPath,
-			ResponseProfile:       responseProfile,
 		}, nil
 	}
 }

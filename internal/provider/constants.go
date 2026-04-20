@@ -7,11 +7,4 @@ const (
 	DriverAnthropic    = "anthropic"
 
 	DiscoveryEndpointPathModels = "/models"
-
-	DiscoveryResponseProfileOpenAI  = "openai"
-	DiscoveryResponseProfileGemini  = "gemini"
-	DiscoveryResponseProfileGeneric = "generic"
-
-	ModelSourceDiscover = "discover"
-	ModelSourceManual   = "manual"
 )

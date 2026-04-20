@@ -41,9 +41,6 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	if input.Identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf("expected default discovery endpoint, got %+v", input.Identity)
 	}
-	if input.Identity.ResponseProfile != "" {
-		t.Fatalf("expected openaicompat identity to omit response profile, got %+v", input.Identity)
-	}
 	if len(input.DefaultModels) != 1 || input.DefaultModels[0].ID != "server-default" {
 		t.Fatalf("expected builtin default model, got %+v", input.DefaultModels)
 	}
@@ -89,9 +86,6 @@ func TestCatalogInputFromProviderDefaultsOpenAICompatibleIdentityPaths(t *testin
 			providerpkg.DiscoveryEndpointPathModels,
 			input.Identity,
 		)
-	}
-	if input.Identity.ResponseProfile != "" {
-		t.Fatalf("expected openaicompat identity to omit response profile, got %+v", input.Identity)
 	}
 }
 

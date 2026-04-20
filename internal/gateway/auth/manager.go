@@ -90,7 +90,7 @@ func (m *Manager) ValidateToken(token string) bool {
 	return strings.TrimSpace(token) != "" && strings.TrimSpace(token) == strings.TrimSpace(m.credentials.Token)
 }
 
-// ResolveSubjectID 鍦?token 閫氳繃鏍￠獙鏃惰繑鍥炵ǔ瀹氱殑 subject_id銆?
+// ResolveSubjectID 在 token 校验通过时返回稳定的 subject_id。
 func (m *Manager) ResolveSubjectID(token string) (string, bool) {
 	if !m.ValidateToken(token) {
 		return "", false

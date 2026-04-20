@@ -77,14 +77,14 @@ func (p ProviderConfig) Validate() error {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
 
-	normalizedModelSource := provider.NormalizeModelSource(p.ModelSource)
+	normalizedModelSource := NormalizeModelSource(p.ModelSource)
 	if normalizedModelSource == "" {
-		normalizedModelSource = provider.ModelSourceDiscover
+		normalizedModelSource = ModelSourceDiscover
 	}
-	if normalizedModelSource == provider.ModelSourceManual && len(p.Models) == 0 {
+	if normalizedModelSource == ModelSourceManual && len(p.Models) == 0 {
 		return fmt.Errorf("provider %q manual model source requires non-empty models", p.Name)
 	}
-	if p.Source == ProviderSourceCustom && normalizedModelSource == provider.ModelSourceDiscover &&
+	if p.Source == ProviderSourceCustom && normalizedModelSource == ModelSourceDiscover &&
 		requiresDiscoveryEndpointPath(p.Driver) &&
 		strings.TrimSpace(p.DiscoveryEndpointPath) == "" {
 		return fmt.Errorf(
@@ -206,7 +206,7 @@ func providerIdentityFromConfig(cfg ProviderConfig) (provider.ProviderIdentity, 
 		if err != nil {
 			return provider.ProviderIdentity{}, err
 		}
-		discoveryEndpointPath, _, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
+		discoveryEndpointPath, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
 		if err != nil {
 			return provider.ProviderIdentity{}, err
 		}
@@ -220,12 +220,11 @@ func providerIdentityFromConfig(cfg ProviderConfig) (provider.ProviderIdentity, 
 		return provider.NormalizeProviderIdentity(identity)
 	}
 
-	discoveryEndpointPath, responseProfile, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
+	discoveryEndpointPath, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
 	if err != nil {
 		return provider.ProviderIdentity{}, err
 	}
 	identity.DiscoveryEndpointPath = discoveryEndpointPath
-	identity.ResponseProfile = responseProfile
 	return provider.NormalizeProviderIdentity(identity)
 }
 
@@ -249,9 +248,9 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 	}, nil
 }
 
-// normalizeProviderDiscoverySettingsFromConfig 归一化 discovery 所需的最小路径与响应解析设置。
-func normalizeProviderDiscoverySettingsFromConfig(cfg ProviderConfig) (string, string, error) {
-	return provider.NormalizeProviderDiscoverySettings(cfg.Driver, cfg.DiscoveryEndpointPath, "")
+// normalizeProviderDiscoverySettingsFromConfig 归一化 discovery 所需的最小路径配置。
+func normalizeProviderDiscoverySettingsFromConfig(cfg ProviderConfig) (string, error) {
+	return provider.NormalizeProviderDiscoverySettings(cfg.Driver, cfg.DiscoveryEndpointPath)
 }
 
 // normalizeProviderRuntimePathsFromConfig 归一化运行时真正消费的端点路径。
@@ -262,7 +261,7 @@ func normalizeProviderRuntimePathsFromConfig(cfg ProviderConfig) (string, string
 	}
 	discoveryEndpointPath := ""
 	if requiresDiscoveryEndpointPath(cfg.Driver) || strings.TrimSpace(cfg.DiscoveryEndpointPath) != "" {
-		discoveryEndpointPath, _, err = normalizeProviderDiscoverySettingsFromConfig(cfg)
+		discoveryEndpointPath, err = normalizeProviderDiscoverySettingsFromConfig(cfg)
 		if err != nil {
 			return "", "", err
 		}
@@ -352,7 +351,7 @@ func OpenAIProvider() ProviderConfig {
 		BaseURL:               OpenAIDefaultBaseURL,
 		Model:                 OpenAIDefaultModel,
 		APIKeyEnv:             OpenAIDefaultAPIKeyEnv,
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           ModelSourceDiscover,
 		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
@@ -367,7 +366,7 @@ func GeminiProvider() ProviderConfig {
 		BaseURL:               GeminiDefaultBaseURL,
 		Model:                 GeminiDefaultModel,
 		APIKeyEnv:             GeminiDefaultAPIKeyEnv,
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           ModelSourceDiscover,
 		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
@@ -382,7 +381,7 @@ func OpenLLProvider() ProviderConfig {
 		BaseURL:               OpenLLDefaultBaseURL,
 		Model:                 OpenLLDefaultModel,
 		APIKeyEnv:             OpenLLDefaultAPIKeyEnv,
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           ModelSourceDiscover,
 		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
@@ -397,7 +396,7 @@ func QiniuProvider() ProviderConfig {
 		BaseURL:               QiniuDefaultBaseURL,
 		Model:                 QiniuDefaultModel,
 		APIKeyEnv:             QiniuDefaultAPIKeyEnv,
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           ModelSourceDiscover,
 		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
