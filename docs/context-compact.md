@@ -14,6 +14,7 @@
 - `internal/context/compact` 支持 `manual`、`auto` 与 `reactive` 三种 mode。
 - 用户通过 `/compact` 对当前会话执行一次上下文压缩。
 - compact 前会先写入完整 transcript，随后生成并校验新的 durable `TaskState` 与 display summary，再回写会话消息。
+- compact 的 system prompt 静态说明模板由 `internal/promptasset` 通过 `go:embed` 提供，但 compact user prompt 的元数据块、消息边界和 transcript 渲染仍由代码拼装。
 
 ## 配置
 
@@ -111,6 +112,8 @@ compact generator 必须只返回一个 JSON 对象，顶层固定包含：
 - `task_state` 表示 compact 之后的完整 durable task state，而不是增量 patch。
 - `task_state` 只允许包含固定字段，不允许混入模型自定义键。
 - `display_summary` 仍然必须使用 `[compact_summary]` 协议，供人类阅读和后续轮次参考。
+
+上述 JSON 契约与 `[compact_summary]` 格式模板仍由代码注入到 compact system prompt 中，避免在模板文件里复制一份会随实现演进的协议定义。
 
 `display_summary` 必须以如下结构返回：
 

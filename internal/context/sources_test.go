@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"neo-code/internal/promptasset"
 )
 
 func TestCorePromptSourceSectionsReturnsClone(t *testing.T) {
@@ -26,7 +28,7 @@ func TestCorePromptSourceSectionsReturnsClone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sections() second call error = %v", err)
 	}
-	if second[0].Title != defaultPromptSections[0].Title {
+	if second[0].Title != promptasset.CoreSections()[0].Title {
 		t.Fatalf("expected cloned sections, got %+v", second)
 	}
 }

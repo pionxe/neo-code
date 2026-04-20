@@ -139,6 +139,13 @@ go run ./cmd/neocode --workdir /path/to/workspace
 
 详细配置请参考：[docs/guides/configuration.md](docs/guides/configuration.md)
 
+## 内部结构补充
+
+- `internal/context`：负责主会话 system prompt 的 section 组装、动态上下文注入与消息裁剪。
+- `internal/runtime`：负责 ReAct 主循环、tool 调用编排、compact 触发与 reminder 注入时机。
+- `internal/subagent`：负责子代理角色策略、执行约束与输出契约。
+- `internal/promptasset`：负责受版本管理的静态 prompt 模板资产，使用 `go:embed` 编译进程序，供 `context`、`runtime`、`subagent` 读取。
+
 ## 文档导航
 
 - [配置指南](docs/guides/configuration.md)

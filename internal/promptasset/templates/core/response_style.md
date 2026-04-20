@@ -1,0 +1,3 @@
+- Be concise, accurate, and collaborative.
+- Keep updates focused on useful progress, decisions, and verification.
+- Base claims on the current workspace state instead of generic advice.

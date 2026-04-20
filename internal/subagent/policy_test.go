@@ -1,6 +1,9 @@
 package subagent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefaultRolePolicy(t *testing.T) {
 	t.Parallel()
@@ -34,6 +37,9 @@ func TestDefaultRolePolicy(t *testing.T) {
 			}
 			if len(policy.RequiredSections) == 0 {
 				t.Fatalf("expected non-empty required sections")
+			}
+			if strings.TrimSpace(policy.SystemPrompt) == "" {
+				t.Fatalf("expected non-empty system prompt")
 			}
 			if err := policy.Validate(); err != nil {
 				t.Fatalf("policy.Validate() error = %v", err)

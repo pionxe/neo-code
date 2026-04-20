@@ -3,20 +3,25 @@ package context
 import (
 	"strings"
 	"testing"
+
+	"neo-code/internal/promptasset"
 )
 
 func TestDefaultSystemPromptSectionsReturnsCachedSections(t *testing.T) {
 	t.Parallel()
 
 	sections := defaultSystemPromptSections()
-	if len(sections) != len(defaultPromptSections) {
-		t.Fatalf("expected %d default sections, got %d", len(defaultPromptSections), len(sections))
+	if len(sections) != len(promptasset.CoreSections()) {
+		t.Fatalf("expected %d default sections, got %d", len(promptasset.CoreSections()), len(sections))
 	}
 	if len(sections) == 0 {
 		t.Fatalf("expected non-empty default sections")
 	}
 	if sections[0].Title != "Agent Identity" {
 		t.Fatalf("expected first default section title, got %q", sections[0].Title)
+	}
+	if sections[0].Content != promptasset.CoreSections()[0].Content {
+		t.Fatalf("expected core section content to come from prompt assets")
 	}
 }
 

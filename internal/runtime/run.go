@@ -13,6 +13,7 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
+	"neo-code/internal/promptasset"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
@@ -21,8 +22,9 @@ import (
 	"neo-code/internal/tools"
 )
 
-const selfHealingReminder = "System Reminder: You have made multiple consecutive attempts without making substantial progress. Please stop your current repetitive or ineffective strategy. Carefully review the previous errors, change your approach, or ask the user directly for help."
-const selfHealingRepeatReminder = "System Reminder: You are repeatedly calling the same tool with the exact same arguments. This is an infinite loop. Please change your parameters, try a different tool, or ask the user for help."
+var selfHealingReminder = promptasset.NoProgressReminder()
+
+var selfHealingRepeatReminder = promptasset.RepeatCycleReminder()
 
 // computeToolSignature 计算单轮执行的工具签名，用于循环检测。
 func computeToolSignature(calls []providertypes.ToolCall) string {

@@ -72,13 +72,24 @@
   - 会话累计输出 token 数（`SessionOutputTokens`）
   - 自动压缩阈值（`AutoCompactThreshold`）
 - `context.Builder` 负责统一组装：
-  - 固定核心 system prompt sections
+  - 固定核心 system prompt sections（静态模板由 `internal/promptasset` 通过 `go:embed` 提供）
   - 从 `workdir` 向上发现的 `AGENTS.md`
+  - `Task State`
+  - `Todo State`
+  - `Skills`
+  - 可选 `Memo`
   - 系统状态摘要（`workdir` / `shell` / `provider` / `model` / git branch / git dirty）
   - 裁剪后的历史消息
   - 自动压缩决策（`BuildResult.AutoCompactSuggested`）
 - `runtime` 不直接读取规则文件，也不直接查询 git 状态。
 - `provider` 只消费最终生成的 `SystemPrompt`、消息列表和工具 schema，不感知上下文来源。
+
+### 静态模板与动态拼装边界
+
+- `internal/promptasset` 负责承载受版本管理的静态 prompt 模板资产，并通过 `go:embed` 编译进程序。
+- `context` 继续负责主会话 system prompt 的 section 顺序、动态 section 注入与最终渲染。
+- `runtime` 继续负责在特定条件下注入 reminder，但静态 reminder 文案本身来自模板资产。
+- `subagent` 继续负责角色策略、工具约束与输出契约，只有角色基础 prompt 抽离为模板资产。
 
 ### System Prompt 注入顺序
 
@@ -86,7 +97,11 @@
 
 1. 固定核心 sections
 2. `Project Rules` section
-3. `System State` section
+3. `Task State` section
+4. `Todo State` section
+5. `Skills` section
+6. 可选 `Memo` section
+7. `System State` section
 
 其中：
 

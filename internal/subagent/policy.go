@@ -3,6 +3,8 @@ package subagent
 import (
 	"strings"
 	"time"
+
+	"neo-code/internal/promptasset"
 )
 
 const (
@@ -99,10 +101,10 @@ func DefaultRolePolicy(role Role) (RolePolicy, error) {
 
 	switch role {
 	case RoleResearcher:
-		policy.SystemPrompt = "你是研究型子代理，负责检索证据并形成结论。"
+		policy.SystemPrompt = promptasset.ResearcherRolePrompt()
 		policy.AllowedTools = []string{"filesystem_read_file", "filesystem_glob", "filesystem_grep", "webfetch"}
 	case RoleCoder:
-		policy.SystemPrompt = "你是实现型子代理，负责修改代码并给出验证结果。"
+		policy.SystemPrompt = promptasset.CoderRolePrompt()
 		policy.AllowedTools = []string{
 			"filesystem_read_file",
 			"filesystem_write_file",
@@ -112,7 +114,7 @@ func DefaultRolePolicy(role Role) (RolePolicy, error) {
 			"bash",
 		}
 	case RoleReviewer:
-		policy.SystemPrompt = "你是审查型子代理，负责识别缺陷、风险与测试缺口。"
+		policy.SystemPrompt = promptasset.ReviewerRolePrompt()
 		policy.AllowedTools = []string{"filesystem_read_file", "filesystem_glob", "filesystem_grep"}
 	}
 
