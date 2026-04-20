@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -17,8 +18,10 @@ import (
 )
 
 const (
-	defaultGatewayRPCRequestTimeout = 8 * time.Second
-	defaultGatewayRPCRetryCount     = 1
+	defaultGatewayRPCRequestTimeout  = 8 * time.Second
+	defaultGatewayRPCRetryCount      = 1
+	defaultGatewayNotificationBuffer = 64
+	defaultGatewayNotificationQueue  = 256
 )
 
 // GatewayRPCClientOptions 描述网关 JSON-RPC 客户端的初始化参数。
@@ -105,8 +108,11 @@ type GatewayRPCClient struct {
 	conn    net.Conn
 	pending map[string]chan gatewayRPCResponse
 
-	notifications chan gatewayRPCNotification
-	sequence      uint64
+	notifications     chan gatewayRPCNotification
+	notificationQueue chan gatewayRPCNotification
+	notificationWG    sync.WaitGroup
+	notificationStart sync.Once
+	sequence          uint64
 }
 
 // NewGatewayRPCClient 创建网关 RPC 客户端，并在启动时静默读取认证 Token。
@@ -141,14 +147,15 @@ func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, er
 	}
 
 	return &GatewayRPCClient{
-		listenAddress:  listenAddress,
-		token:          token,
-		requestTimeout: requestTimeout,
-		retryCount:     retryCount,
-		dialFn:         dialFn,
-		closed:         make(chan struct{}),
-		pending:        make(map[string]chan gatewayRPCResponse),
-		notifications:  make(chan gatewayRPCNotification, 64),
+		listenAddress:     listenAddress,
+		token:             token,
+		requestTimeout:    requestTimeout,
+		retryCount:        retryCount,
+		dialFn:            dialFn,
+		closed:            make(chan struct{}),
+		pending:           make(map[string]chan gatewayRPCResponse),
+		notifications:     make(chan gatewayRPCNotification, defaultGatewayNotificationBuffer),
+		notificationQueue: make(chan gatewayRPCNotification, defaultGatewayNotificationQueue),
 	}, nil
 }
 
@@ -226,6 +233,8 @@ func (c *GatewayRPCClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
 		firstErr = c.forceCloseWithError(errors.New("gateway rpc client closed"))
+		close(c.notificationQueue)
+		c.notificationWG.Wait()
 		close(c.notifications)
 	})
 	return firstErr
@@ -339,6 +348,7 @@ func (c *GatewayRPCClient) ensureConnected() (net.Conn, error) {
 		return nil, fmt.Errorf("dial gateway %s: %w", c.listenAddress, err)
 	}
 	c.conn = conn
+	c.startNotificationDispatcher()
 	go c.readLoop(conn)
 	return conn, nil
 }
@@ -363,11 +373,7 @@ func (c *GatewayRPCClient) readLoop(conn net.Conn) {
 			if paramsRaw, hasParams := envelope["params"]; hasParams {
 				notification.Params = cloneJSONRawMessage(paramsRaw)
 			}
-			select {
-			case <-c.closed:
-				return
-			case c.notifications <- notification:
-			}
+			c.enqueueNotification(notification)
 			continue
 		}
 
@@ -379,6 +385,42 @@ func (c *GatewayRPCClient) readLoop(conn net.Conn) {
 			response.ID = normalizeJSONRPCResponseID(idRaw)
 			c.dispatchResponse(response)
 		}
+	}
+}
+
+// startNotificationDispatcher 启动通知转发协程，确保 readLoop 不会被 UI 消费速度阻塞。
+func (c *GatewayRPCClient) startNotificationDispatcher() {
+	c.notificationStart.Do(func() {
+		c.notificationWG.Add(1)
+		go func() {
+			defer c.notificationWG.Done()
+			for {
+				select {
+				case <-c.closed:
+					return
+				case notification, ok := <-c.notificationQueue:
+					if !ok {
+						return
+					}
+					select {
+					case <-c.closed:
+						return
+					case c.notifications <- notification:
+					}
+				}
+			}
+		}()
+	})
+}
+
+// enqueueNotification 以无阻塞方式投递通知；队列满时丢弃并记录告警，避免反压读循环。
+func (c *GatewayRPCClient) enqueueNotification(notification gatewayRPCNotification) {
+	select {
+	case <-c.closed:
+		return
+	case c.notificationQueue <- notification:
+	default:
+		log.Printf("gateway rpc client: drop notification method=%q reason=queue_full", notification.Method)
 	}
 }
 

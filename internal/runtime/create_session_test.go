@@ -2,7 +2,7 @@ package runtime
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"testing"
 
 	agentsession "neo-code/internal/session"
@@ -31,7 +31,7 @@ func TestServiceCreateSessionUpsertWhenMissing(t *testing.T) {
 
 	store := &createSessionUpsertStore{
 		memoryStore: newMemoryStore(),
-		missingErr:  errors.New("file does not exist"),
+		missingErr:  fmt.Errorf("load session row: %w", agentsession.ErrSessionNotFound),
 	}
 	service := &Service{
 		configManager: newRuntimeConfigManager(t),
@@ -59,5 +59,29 @@ func TestServiceCreateSessionUpsertWhenMissing(t *testing.T) {
 	}
 	if store.memoryStore.saves != savesAfterCreate {
 		t.Fatalf("unexpected additional create, saves=%d want %d", store.memoryStore.saves, savesAfterCreate)
+	}
+}
+
+func TestServiceCreateSessionReturnsOriginalErrorWhenMissingErrorIsNotSentinel(t *testing.T) {
+	t.Parallel()
+
+	store := &createSessionUpsertStore{
+		memoryStore: newMemoryStore(),
+		missingErr:  fmt.Errorf("dependency not found"),
+	}
+	service := &Service{
+		configManager: newRuntimeConfigManager(t),
+		sessionStore:  store,
+	}
+
+	_, err := service.CreateSession(context.Background(), "session-upsert")
+	if err == nil {
+		t.Fatalf("CreateSession() expected error when missing error is not sentinel")
+	}
+	if err.Error() != "dependency not found" {
+		t.Fatalf("CreateSession() error = %v, want dependency not found", err)
+	}
+	if store.memoryStore.saves != 0 {
+		t.Fatalf("CreateSession() should not create on non-sentinel error, saves=%d", store.memoryStore.saves)
 	}
 }

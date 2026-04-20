@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -17,6 +18,9 @@ const (
 )
 
 var storageIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
+
+// ErrSessionNotFound 表示会话在存储层不存在，用于 runtime 做精确错误分流。
+var ErrSessionNotFound = errors.New("session: session not found")
 
 // Session 表示单个会话的运行态与持久化聚合模型。
 type Session struct {

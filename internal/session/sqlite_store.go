@@ -930,7 +930,7 @@ WHERE id = ?
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return sqliteSessionRow{}, os.ErrNotExist
+			return sqliteSessionRow{}, wrapSessionNotFound(sql.ErrNoRows)
 		}
 		return sqliteSessionRow{}, fmt.Errorf("session: query session %s: %w", sessionID, err)
 	}
@@ -1058,7 +1058,7 @@ func currentLastSeq(ctx context.Context, tx *sql.Tx, sessionID string) (int, err
 	err := tx.QueryRowContext(ctx, `SELECT last_seq FROM sessions WHERE id = ?`, sessionID).Scan(&lastSeq)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, os.ErrNotExist
+			return 0, wrapSessionNotFound(sql.ErrNoRows)
 		}
 		return 0, fmt.Errorf("session: query last_seq for %s: %w", sessionID, err)
 	}
@@ -1102,9 +1102,17 @@ func expectRowsAffected(result sql.Result, sessionID string) error {
 		return fmt.Errorf("session: inspect rows affected for %s: %w", sessionID, err)
 	}
 	if rowsAffected == 0 {
-		return os.ErrNotExist
+		return wrapSessionNotFound(os.ErrNotExist)
 	}
 	return nil
+}
+
+// wrapSessionNotFound 统一包装会话缺失错误，确保上层可通过 ErrSessionNotFound 做精确判断。
+func wrapSessionNotFound(cause error) error {
+	if cause == nil {
+		cause = os.ErrNotExist
+	}
+	return fmt.Errorf("%w: %w", ErrSessionNotFound, fmt.Errorf("%w: %w", os.ErrNotExist, cause))
 }
 
 // cloneMessage 深拷贝消息，避免共享底层切片和映射。

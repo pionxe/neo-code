@@ -219,6 +219,56 @@ func TestGatewayRPCClientCallWithEmptyMethodReturnsError(t *testing.T) {
 	}
 }
 
+func TestGatewayRPCClientReadLoopDoesNotBlockOnNotifications(t *testing.T) {
+	tokenFile, _ := createTestAuthTokenFile(t)
+
+	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+		ListenAddress: "test://gateway",
+		TokenFile:     tokenFile,
+		Dial: func(_ string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go func() {
+				defer serverConn.Close()
+				decoder := json.NewDecoder(serverConn)
+				encoder := json.NewEncoder(serverConn)
+
+				request := readRPCRequestOrFail(t, decoder)
+				for idx := 0; idx < defaultGatewayNotificationQueue+defaultGatewayNotificationBuffer+128; idx++ {
+					writeRPCNotificationOrFail(t, encoder, protocol.MethodGatewayEvent, gateway.MessageFrame{
+						Type:      gateway.FrameTypeEvent,
+						Action:    gateway.FrameActionRun,
+						SessionID: "session-1",
+						RunID:     "run-1",
+						Payload: map[string]any{
+							"index": idx,
+						},
+					})
+				}
+				writeRPCResultOrFail(t, encoder, request.ID, gateway.MessageFrame{
+					Type:   gateway.FrameTypeAck,
+					Action: gateway.FrameActionPing,
+				})
+			}()
+			return clientConn, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	callErr := client.CallWithOptions(
+		context.Background(),
+		protocol.MethodGatewayPing,
+		map[string]any{},
+		&gateway.MessageFrame{},
+		GatewayRPCCallOptions{Timeout: 2 * time.Second},
+	)
+	if callErr != nil {
+		t.Fatalf("CallWithOptions() should succeed when notifications are back-pressured, got %v", callErr)
+	}
+}
+
 func createTestAuthTokenFile(t *testing.T) (string, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "auth.json")

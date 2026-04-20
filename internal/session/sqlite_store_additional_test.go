@@ -158,6 +158,8 @@ func TestExpectRowsAffectedBranches(t *testing.T) {
 	}
 	if err := expectRowsAffected(fakeResult{rows: 0}, "s1"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected os.ErrNotExist when rows=0, got %v", err)
+	} else if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected ErrSessionNotFound when rows=0, got %v", err)
 	}
 	if err := expectRowsAffected(fakeResult{rows: 1}, "s1"); err != nil {
 		t.Fatalf("expected rows=1 to pass, got %v", err)

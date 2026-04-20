@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -303,13 +302,7 @@ func isRuntimeSessionNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, os.ErrNotExist) {
-		return true
-	}
-	normalized := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(normalized, "not found") ||
-		strings.Contains(normalized, "does not exist") ||
-		strings.Contains(normalized, "no such file")
+	return errors.Is(err, agentsession.ErrSessionNotFound)
 }
 
 // isRuntimeSessionAlreadyExistsError 判断错误是否代表会话已被并发创建。
