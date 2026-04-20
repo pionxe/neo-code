@@ -263,6 +263,212 @@ func TestAutoExtractorLoadsDedupIndexOutsideCurrentProcessState(t *testing.T) {
 	}
 }
 
+func TestAutoExtractorFailedRunDoesNotAdvanceFingerprint(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	var attemptMu sync.Mutex
+	attempt := 0
+	extractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			attemptMu.Lock()
+			defer attemptMu.Unlock()
+			attempt++
+			if attempt == 1 {
+				return nil, errors.New("boom")
+			}
+			return []Entry{{Type: TypeProject, Title: "retry", Content: "retry", Source: SourceAutoExtract}}, nil
+		},
+	}
+	auto := NewAutoExtractor(extractor, svc, time.Second)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+	registerAutoExtractorCleanup(t, auto)
+
+	messages := []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("same payload")}}}
+	auto.Schedule("session-1", messages)
+	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
+
+	auto.Schedule("session-1", messages)
+	waitFor(t, time.Second, func() bool { return extractor.Calls() == 2 })
+	waitFor(t, time.Second, func() bool {
+		entries, err := svc.List(context.Background(), ScopeProject)
+		return err == nil && len(entries) == 1
+	})
+}
+
+func TestAutoExtractorHandleDebounceSkipsDuplicateFingerprint(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	extractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			t.Fatal("duplicate fingerprint should skip extractor invocation")
+			return nil, nil
+		},
+	}
+	auto := NewAutoExtractor(extractor, svc, time.Second)
+	auto.logf = func(string, ...any) {}
+	registerAutoExtractorCleanup(t, auto)
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("same payload")}},
+	}
+	state := auto.ensureState("session-1")
+	state.mu.Lock()
+	state.pending = &autoExtractRequest{
+		messages:  cloneProviderMessages(messages),
+		dueAt:     time.Now().Add(-time.Millisecond),
+		extractor: extractor,
+	}
+	state.scheduleSeq = 1
+	state.lastFingerprint = computeMessageFingerprint(messages)
+	state.mu.Unlock()
+
+	auto.handleDebounce("session-1", state, 1)
+
+	waitFor(t, time.Second, func() bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return !state.running && state.pending == nil && state.idleTimer != nil
+	})
+	if extractor.Calls() != 0 {
+		t.Fatalf("extractor call count = %d, want 0", extractor.Calls())
+	}
+}
+
+func TestAutoExtractorScheduleWithExtractorUsesCallScopedExtractorAndSkipsSuccessfulDuplicates(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	defaultExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			t.Fatal("default extractor should not be used for call-scoped scheduling")
+			return nil, nil
+		},
+	}
+	firstExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{{Type: TypeProject, Title: "deduped", Content: "deduped", Source: SourceAutoExtract}}, nil
+		},
+	}
+	secondExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			t.Fatal("duplicate fingerprint should short-circuit before second extractor runs")
+			return nil, nil
+		},
+	}
+
+	auto := NewAutoExtractor(defaultExtractor, svc, time.Second)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+	registerAutoExtractorCleanup(t, auto)
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("same payload")}},
+	}
+	fingerprint := computeMessageFingerprint(messages)
+
+	auto.ScheduleWithExtractor("session-1", messages, firstExtractor)
+	waitFor(t, time.Second, func() bool { return firstExtractor.Calls() == 1 })
+	waitFor(t, time.Second, func() bool {
+		auto.mu.Lock()
+		state := auto.states["session-1"]
+		auto.mu.Unlock()
+		if state == nil {
+			return false
+		}
+
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return !state.running && state.pending == nil && state.lastFingerprint == fingerprint
+	})
+
+	auto.ScheduleWithExtractor("session-1", messages, secondExtractor)
+	waitFor(t, time.Second, func() bool {
+		auto.mu.Lock()
+		state := auto.states["session-1"]
+		auto.mu.Unlock()
+		if state == nil {
+			return false
+		}
+
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return !state.running && state.pending == nil && state.lastFingerprint == fingerprint && state.idleTimer != nil
+	})
+
+	if defaultExtractor.Calls() != 0 {
+		t.Fatalf("default extractor call count = %d, want 0", defaultExtractor.Calls())
+	}
+	if secondExtractor.Calls() != 0 {
+		t.Fatalf("second extractor call count = %d, want 0", secondExtractor.Calls())
+	}
+
+	entries, err := svc.List(context.Background(), ScopeProject)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+}
+
+func TestAutoExtractorFingerprintIncludesNonTextParts(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	firstExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{{Type: TypeProject, Title: "first-image", Content: "first-image", Source: SourceAutoExtract}}, nil
+		},
+	}
+	secondExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{{Type: TypeProject, Title: "second-image", Content: "second-image", Source: SourceAutoExtract}}, nil
+		},
+	}
+
+	auto := NewAutoExtractor(nil, svc, time.Second)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+	registerAutoExtractorCleanup(t, auto)
+
+	firstMessages := []providertypes.Message{{
+		Role: providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart("same text"),
+			providertypes.NewRemoteImagePart("https://example.com/first.png"),
+		},
+	}}
+	secondMessages := []providertypes.Message{{
+		Role: providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart("same text"),
+			providertypes.NewRemoteImagePart("https://example.com/second.png"),
+		},
+	}}
+
+	auto.ScheduleWithExtractor("session-1", firstMessages, firstExtractor)
+	waitFor(t, time.Second, func() bool { return firstExtractor.Calls() == 1 })
+
+	auto.ScheduleWithExtractor("session-1", secondMessages, secondExtractor)
+	waitFor(t, time.Second, func() bool { return secondExtractor.Calls() == 1 })
+
+	entries, err := svc.List(context.Background(), ScopeProject)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
+	}
+}
+
+func TestStopTimerDrainsExpiredTimer(t *testing.T) {
+	timer := time.NewTimer(5 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+
+	stopTimer(timer)
+
+	select {
+	case <-timer.C:
+		t.Fatal("expected stopTimer to drain expired timer channel")
+	default:
+	}
+}
+
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

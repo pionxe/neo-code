@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -121,6 +122,9 @@ type stubRuntime struct {
 	listSessionsErr error
 	loadSessions    map[string]agentsession.Session
 	loadSessionErr  error
+	logEntriesBySID map[string][]agentruntime.SessionLogEntry
+	loadLogErr      error
+	saveLogErr      error
 }
 
 type snapshotRuntime struct {
@@ -131,7 +135,10 @@ type snapshotRuntime struct {
 }
 
 func newStubRuntime() *stubRuntime {
-	return &stubRuntime{events: make(chan agentruntime.RuntimeEvent)}
+	return &stubRuntime{
+		events:          make(chan agentruntime.RuntimeEvent),
+		logEntriesBySID: make(map[string][]agentruntime.SessionLogEntry),
+	}
 }
 
 func (s *stubRuntime) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
@@ -226,6 +233,26 @@ func (s *stubRuntime) DeactivateSessionSkill(ctx context.Context, sessionID stri
 
 func (s *stubRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
 	return nil, nil
+}
+
+func (s *stubRuntime) LoadSessionLogEntries(ctx context.Context, sessionID string) ([]agentruntime.SessionLogEntry, error) {
+	if s.loadLogErr != nil {
+		return nil, s.loadLogErr
+	}
+	entries := s.logEntriesBySID[strings.TrimSpace(sessionID)]
+	return append([]agentruntime.SessionLogEntry(nil), entries...), nil
+}
+
+func (s *stubRuntime) SaveSessionLogEntries(
+	ctx context.Context,
+	sessionID string,
+	entries []agentruntime.SessionLogEntry,
+) error {
+	if s.saveLogErr != nil {
+		return s.saveLogErr
+	}
+	s.logEntriesBySID[strings.TrimSpace(sessionID)] = append([]agentruntime.SessionLogEntry(nil), entries...)
+	return nil
 }
 
 func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
@@ -2197,8 +2224,8 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 	app.width = 120
 	app.height = 40
 	app.activities = []tuistate.ActivityEntry{{Kind: "test", Title: "activity"}}
-	app.transcript.SetContent(strings.Repeat("line\n", 100))
 	app.applyComponentLayout(true)
+	app.setTranscriptContent(strings.Repeat("line\n", 160))
 
 	tx, ty, _, _ := app.transcriptBounds()
 	if !app.isMouseWithinTranscript(tea.MouseMsg{X: tx, Y: ty}) {
@@ -2220,6 +2247,38 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 	}) {
 		t.Fatalf("expected transcript wheel down to be handled")
 	}
+	sx, sy, sw, sh := app.transcriptScrollbarBounds()
+	if sw != transcriptScrollbarWidth {
+		t.Fatalf("expected transcript scrollbar width %d, got %d", transcriptScrollbarWidth, sw)
+	}
+	if app.isMouseWithinTranscript(tea.MouseMsg{X: sx, Y: sy}) {
+		t.Fatalf("expected scrollbar column not to be counted as transcript content")
+	}
+	offsetBeforeDrag := app.transcript.YOffset
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X: sx + 1, Y: sy + max(1, sh/2), Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected transcript scrollbar press to be handled")
+	}
+	if !app.transcriptScrollbarDrag {
+		t.Fatalf("expected scrollbar drag mode to start after press")
+	}
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X: sx + 1, Y: sy + sh - 1, Action: tea.MouseActionMotion,
+	}) {
+		t.Fatalf("expected transcript scrollbar drag motion to be handled")
+	}
+	if app.transcript.YOffset <= offsetBeforeDrag {
+		t.Fatalf("expected drag motion to move transcript offset, got %d <= %d", app.transcript.YOffset, offsetBeforeDrag)
+	}
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X: sx + 1, Y: sy + sh - 1, Action: tea.MouseActionRelease,
+	}) {
+		t.Fatalf("expected transcript scrollbar release to be handled")
+	}
+	if app.transcriptScrollbarDrag {
+		t.Fatalf("expected scrollbar drag mode to stop after release")
+	}
 
 	ix, iy, _, _ := app.inputBounds()
 	if !app.isMouseWithinInput(tea.MouseMsg{X: ix, Y: iy}) {
@@ -2236,17 +2295,17 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 	}
 
 	ax, ay, _, _ := app.activityBounds()
-	if !app.isMouseWithinActivity(tea.MouseMsg{X: ax, Y: ay}) {
-		t.Fatalf("expected activity bounds hit")
+	if app.isMouseWithinActivity(tea.MouseMsg{X: ax, Y: ay}) {
+		t.Fatalf("expected activity bounds miss when activity panel is disabled")
 	}
 	app.focus = panelTranscript
-	if !app.handleActivityMouse(tea.MouseMsg{
+	if app.handleActivityMouse(tea.MouseMsg{
 		X: ax, Y: ay, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress,
 	}) {
-		t.Fatalf("expected activity wheel to be handled")
+		t.Fatalf("expected activity wheel to be ignored when activity panel is disabled")
 	}
-	if app.focus != panelActivity {
-		t.Fatalf("expected activity panel to gain focus")
+	if app.focus != panelTranscript {
+		t.Fatalf("expected focus to stay on transcript when activity panel is disabled")
 	}
 }
 
@@ -3380,4 +3439,602 @@ func TestRunProviderAddFlowDeadlineExceededBranch(t *testing.T) {
 	if !strings.Contains(strings.ToLower(result.Error), "timed out") {
 		t.Fatalf("expected timeout error message, got %q", result.Error)
 	}
+}
+
+func TestUpdateLogViewerModalKeyboardAndMouse(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 14
+	app.applyComponentLayout(true)
+	for i := 0; i < 24; i++ {
+		app.logEntries = append(app.logEntries, logEntry{
+			Timestamp: time.Unix(int64(i), 0),
+			Level:     "info",
+			Source:    "test",
+			Message:   "entry-" + string(rune('A'+i)),
+		})
+	}
+
+	app.logViewerOffset = 3
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	app = model.(App)
+	if !app.logViewerVisible {
+		t.Fatalf("expected ctrl+l to open log viewer")
+	}
+	if app.logViewerOffset != 0 {
+		t.Fatalf("expected opening log viewer to reset offset, got %d", app.logViewerOffset)
+	}
+
+	app.setTranscriptContent(strings.Repeat("line\n", 80))
+	app.transcript.SetYOffset(7)
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyDown})
+	app = model.(App)
+	if app.logViewerOffset != 1 {
+		t.Fatalf("expected log viewer down key to scroll entries, got offset %d", app.logViewerOffset)
+	}
+	if app.transcript.YOffset != 7 {
+		t.Fatalf("expected transcript offset unchanged while log viewer visible, got %d", app.transcript.YOffset)
+	}
+
+	x, y, _, _ := app.logViewerBounds()
+	model, _ = app.Update(tea.MouseMsg{
+		X:      x + 1,
+		Y:      y + 1,
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	})
+	app = model.(App)
+	if app.logViewerOffset != 2 {
+		t.Fatalf("expected log viewer mouse wheel to scroll entries, got offset %d", app.logViewerOffset)
+	}
+	if app.transcript.YOffset != 7 {
+		t.Fatalf("expected transcript y-offset to stay unchanged after log viewer wheel, got %d", app.transcript.YOffset)
+	}
+
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	app = model.(App)
+	if app.logViewerVisible {
+		t.Fatalf("expected esc to close log viewer")
+	}
+}
+
+func TestSetTranscriptContentNormalizesTabStops(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 40
+	app.applyComponentLayout(true)
+	app.setTranscriptContent("a\tb")
+	if app.transcriptContent != "a    b" {
+		t.Fatalf("expected tabs normalized in transcript content, got %q", app.transcriptContent)
+	}
+	if got := app.transcript.View(); !strings.Contains(got, "a    b") {
+		t.Fatalf("expected normalized tabs in viewport content, got %q", got)
+	}
+}
+
+func TestTranscriptManualScrollPersistsWhileBusy(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = make([]providertypes.Message, 0, 120)
+	for i := 0; i < 120; i++ {
+		app.activeMessages = append(app.activeMessages, providertypes.Message{
+			Role:  roleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("assistant-line-%03d", i))},
+		})
+	}
+	app.rebuildTranscript()
+	if app.transcriptMaxOffset() <= 6 {
+		t.Fatalf("expected transcript to be scrollable, max offset=%d", app.transcriptMaxOffset())
+	}
+	app.transcript.SetYOffset(6)
+	app.state.IsAgentRunning = true
+
+	app.rebuildTranscript()
+	if app.transcript.YOffset != 6 {
+		t.Fatalf("expected rebuildTranscript to keep manual offset while busy, got %d", app.transcript.YOffset)
+	}
+
+	app.layoutCached = false
+	app.applyComponentLayout(false)
+	if app.transcript.YOffset != 6 {
+		t.Fatalf("expected applyComponentLayout to keep manual offset while busy, got %d", app.transcript.YOffset)
+	}
+}
+
+func TestSessionLogViewerPersistenceAndCap(t *testing.T) {
+	app, runtime := newTestApp(t)
+
+	app.setActiveSessionID("session-one")
+	for i := 0; i < 520; i++ {
+		app.addLogEntry("test", fmt.Sprintf("entry-%03d", i), "")
+	}
+	if len(app.logEntries) != logViewerEntryLimit {
+		t.Fatalf("expected %d capped entries, got %d", logViewerEntryLimit, len(app.logEntries))
+	}
+	if !strings.Contains(app.logEntries[0].Message, "entry-020") {
+		t.Fatalf("expected oldest in-memory entry to be entry-020, got %q", app.logEntries[0].Message)
+	}
+	if app.deferredLogPersistCmd == nil {
+		t.Fatalf("expected deferred log persistence command to be queued")
+	}
+	model, _ := app.Update(logPersistFlushMsg{Version: app.logPersistVersion})
+	app = model.(App)
+	if got := runtime.logEntriesBySID["session-one"]; len(got) != logViewerEntryLimit {
+		t.Fatalf("expected runtime persisted %d entries, got %d", logViewerEntryLimit, len(got))
+	}
+
+	app.setActiveSessionID("session-two")
+	app.addLogEntry("tool", "other", "detail")
+	if len(app.logEntries) != 1 {
+		t.Fatalf("expected session-two to start with its own log list, got %d entries", len(app.logEntries))
+	}
+
+	app.setActiveSessionID("session-one")
+	if len(app.logEntries) != logViewerEntryLimit {
+		t.Fatalf("expected loading session-one logs to restore %d entries, got %d", logViewerEntryLimit, len(app.logEntries))
+	}
+	if !strings.Contains(app.logEntries[0].Message, "entry-020") {
+		t.Fatalf("expected restored oldest entry entry-020, got %q", app.logEntries[0].Message)
+	}
+	if !strings.Contains(app.logEntries[len(app.logEntries)-1].Message, "entry-519") {
+		t.Fatalf("expected restored newest entry entry-519, got %q", app.logEntries[len(app.logEntries)-1].Message)
+	}
+}
+
+func TestSanitizeProviderAddJSONInputRunes(t *testing.T) {
+	input := []rune{'a', '\u200b', '\n', '\t', '\r', 0x01, 'b'}
+	got := sanitizeProviderAddJSONInputRunes(input)
+	if got != "a\n\tb" {
+		t.Fatalf("sanitizeProviderAddJSONInputRunes() = %q, want %q", got, "a\n\tb")
+	}
+}
+
+func TestFooterErrorToastSyncBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	base := time.Unix(1_700_000_100, 0)
+	app.nowFn = func() time.Time { return base }
+
+	app.showFooterError(" permission denied ")
+	if app.footerErrorText != "Error: permission denied" {
+		t.Fatalf("expected error prefix applied, got %q", app.footerErrorText)
+	}
+	if !app.footerErrorUntil.Equal(base.Add(footerErrorFlashDuration)) {
+		t.Fatalf("unexpected footer toast expiration: %v", app.footerErrorUntil)
+	}
+
+	app.state.ExecutionError = "Runtime failed"
+	app.syncFooterErrorToast()
+	firstUntil := app.footerErrorUntil
+	if app.footerErrorLast != "Runtime failed" {
+		t.Fatalf("expected footerErrorLast to track latest execution error, got %q", app.footerErrorLast)
+	}
+
+	app.nowFn = func() time.Time { return base.Add(5 * time.Second) }
+	app.state.ExecutionError = "runtime FAILED"
+	app.syncFooterErrorToast()
+	if !app.footerErrorUntil.Equal(firstUntil) {
+		t.Fatalf("expected equal-fold duplicate error to avoid refreshing toast timeout")
+	}
+
+	app.state.ExecutionError = ""
+	app.syncFooterErrorToast()
+	if app.footerErrorLast != "" {
+		t.Fatalf("expected empty execution error to clear footerErrorLast")
+	}
+}
+
+func TestHandleLogViewerKeyAndScrollBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.logViewerVisible = true
+	for i := 0; i < 30; i++ {
+		app.logEntries = append(app.logEntries, logEntry{Timestamp: time.Unix(int64(i), 0), Level: "info", Source: "test", Message: "m"})
+	}
+
+	_, _, _, height := app.logViewerBounds()
+	app.logViewerOffset = app.logViewerMaxOffset(height)
+	app.handleLogViewerKey(tea.KeyMsg{Type: tea.KeyHome})
+	if app.logViewerOffset != 0 {
+		t.Fatalf("expected Home to jump to newest offset 0, got %d", app.logViewerOffset)
+	}
+
+	app.handleLogViewerKey(tea.KeyMsg{Type: tea.KeyEnd})
+	if app.logViewerOffset != app.logViewerMaxOffset(height) {
+		t.Fatalf("expected End to jump to oldest offset, got %d", app.logViewerOffset)
+	}
+
+	app.handleLogViewerKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	if app.logViewerOffset > app.logViewerMaxOffset(height) {
+		t.Fatalf("expected PgUp offset to stay clamped, got %d", app.logViewerOffset)
+	}
+	app.handleLogViewerKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	app.handleLogViewerKey(tea.KeyMsg{Type: tea.KeyUp})
+	app.handleLogViewerKey(tea.KeyMsg{Type: tea.KeyDown})
+
+	app.handleLogViewerKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if app.logViewerVisible {
+		t.Fatalf("expected Esc to close log viewer")
+	}
+	if app.state.StatusText != statusReady {
+		t.Fatalf("expected status reset when closing log viewer, got %q", app.state.StatusText)
+	}
+}
+
+func TestRestoreStatusAfterLogViewerUsesRuntimeState(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	app.logViewerPrevStatus = "Manual status"
+	app.state.ExecutionError = "runtime failed"
+	app.restoreStatusAfterLogViewer()
+	if app.state.StatusText != "runtime failed" {
+		t.Fatalf("expected execution error to win, got %q", app.state.StatusText)
+	}
+
+	app.logViewerPrevStatus = "Manual status"
+	app.state.ExecutionError = ""
+	app.state.IsCompacting = true
+	app.restoreStatusAfterLogViewer()
+	if app.state.StatusText != statusCompacting {
+		t.Fatalf("expected compacting status, got %q", app.state.StatusText)
+	}
+
+	app.logViewerPrevStatus = "Manual status"
+	app.state.IsCompacting = false
+	app.state.IsAgentRunning = true
+	app.state.CurrentTool = "bash"
+	app.restoreStatusAfterLogViewer()
+	if app.state.StatusText != statusRunningTool {
+		t.Fatalf("expected running tool status, got %q", app.state.StatusText)
+	}
+}
+
+func TestHandleLogViewerMouseAndClampOffset(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.logViewerVisible = true
+	for i := 0; i < 60; i++ {
+		app.logEntries = append(app.logEntries, logEntry{Timestamp: time.Unix(int64(i), 0), Level: "info", Source: "test", Message: "m"})
+	}
+
+	if !app.handleLogViewerMouse(tea.MouseMsg{X: 0, Y: 0, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}) {
+		t.Fatalf("expected outside click to be treated as handled while log viewer is visible")
+	}
+
+	x, y, w, h := app.logViewerBounds()
+	if w <= 2 || h <= 2 {
+		t.Fatalf("expected log viewer bounds to be drawable, got w=%d h=%d", w, h)
+	}
+	app.handleLogViewerMouse(tea.MouseMsg{
+		X:      x + w/2,
+		Y:      y + h/2,
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	})
+	if app.logViewerOffset != 1 {
+		t.Fatalf("expected wheel down to increase offset, got %d", app.logViewerOffset)
+	}
+
+	app.logViewerOffset = 999
+	app.clampLogViewerOffset()
+	_, _, _, height := app.logViewerBounds()
+	if app.logViewerOffset != app.logViewerMaxOffset(height) {
+		t.Fatalf("expected clampLogViewerOffset to constrain offset, got %d", app.logViewerOffset)
+	}
+}
+
+func TestSetTranscriptOffsetFromScrollbarY(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 28
+	app.applyComponentLayout(true)
+	app.setTranscriptContent(strings.Repeat("line\n", 200))
+	app.transcript.SetYOffset(0)
+
+	_, y, _, h := app.transcriptScrollbarBounds()
+	app.setTranscriptOffsetFromScrollbarY(y - 5)
+	if app.transcript.YOffset != 0 {
+		t.Fatalf("expected dragging above track to clamp to top, got %d", app.transcript.YOffset)
+	}
+
+	app.setTranscriptOffsetFromScrollbarY(y + h + 10)
+	if app.transcript.YOffset != app.transcriptMaxOffset() {
+		t.Fatalf("expected dragging below track to clamp to bottom, got %d want %d", app.transcript.YOffset, app.transcriptMaxOffset())
+	}
+}
+
+func TestHandleTranscriptMouseDragSupportsMotionType(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 28
+	app.applyComponentLayout(true)
+	app.setTranscriptContent(strings.Repeat("line\n", 200))
+
+	_, y, _, h := app.transcriptScrollbarBounds()
+	app.transcriptScrollbarDrag = true
+	before := app.transcript.YOffset
+	handled := app.handleTranscriptMouse(tea.MouseMsg{Y: y + h - 1, Type: tea.MouseMotion})
+	if !handled {
+		t.Fatal("expected mouse motion type during drag to be handled")
+	}
+	if app.transcript.YOffset == before {
+		t.Fatalf("expected drag motion to update offset, still %d", app.transcript.YOffset)
+	}
+}
+
+func TestSessionLogHelpersAndSwitchBootstrap(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	now := time.Unix(1_700_001_000, 0)
+	app.logEntries = []logEntry{{Timestamp: now, Level: "info", Source: "bootstrap", Message: "in-memory"}}
+	runtime := app.runtime.(*stubRuntime)
+	runtime.logEntriesBySID["session-A"] = []agentruntime.SessionLogEntry{
+		{Timestamp: now, Level: "info", Source: "file", Message: "persisted"},
+	}
+
+	app.setActiveSessionID("session-A")
+	if len(app.logEntries) != 2 {
+		t.Fatalf("expected bootstrap switch to merge file + in-memory entries, got %d", len(app.logEntries))
+	}
+
+	app.setActiveSessionID("")
+	if len(app.logEntries) != 0 || app.logViewerOffset != 0 {
+		t.Fatalf("expected clearing active session to reset log state")
+	}
+
+	runtime.loadLogErr = errors.New("decode failed")
+	if got := app.readLogEntriesForSession("session-invalid"); got != nil {
+		t.Fatalf("expected load error branch to return nil entries, got %+v", got)
+	}
+}
+
+func TestAppendActivityCapsAndFooterError(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+
+	for i := 0; i < maxActivityEntries+3; i++ {
+		app.appendActivity("tool", fmt.Sprintf("warn-%03d", i), "detail", false)
+	}
+	if len(app.activities) != maxActivityEntries {
+		t.Fatalf("expected activities capped at %d, got %d", maxActivityEntries, len(app.activities))
+	}
+
+	app.showFooterError("  ")
+	before := app.footerErrorText
+	app.appendActivity("tool", "failed-run", "", true)
+	if app.footerErrorText == before || !strings.Contains(app.footerErrorText, "Error:") {
+		t.Fatalf("expected error activity to refresh footer toast, got %q", app.footerErrorText)
+	}
+}
+
+func TestAddLogEntryWarnAndOffsetClamp(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.logViewerOffset = 999
+
+	app.addLogEntry("tool", "Warn threshold", "almost full")
+	if len(app.logEntries) == 0 || app.logEntries[len(app.logEntries)-1].Level != "warn" {
+		t.Fatalf("expected warn title to map to warn log level")
+	}
+	if app.logViewerOffset > app.logViewerMaxOffset(app.logViewerRows(app.height)) {
+		t.Fatalf("expected log viewer offset to be clamped, got %d", app.logViewerOffset)
+	}
+}
+
+func TestHandleLogViewerMouseWheelUpAndScrollClamp(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.logViewerVisible = true
+	for i := 0; i < 60; i++ {
+		app.logEntries = append(app.logEntries, logEntry{Timestamp: time.Unix(int64(i), 0), Level: "info", Source: "test", Message: "m"})
+	}
+	_, _, _, h := app.logViewerBounds()
+	app.logViewerOffset = 5
+
+	x, y, w, height := app.logViewerBounds()
+	app.handleLogViewerMouse(tea.MouseMsg{
+		X:      x + w/2,
+		Y:      y + height/2,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})
+	if app.logViewerOffset != 4 {
+		t.Fatalf("expected wheel up to decrease offset, got %d", app.logViewerOffset)
+	}
+
+	app.scrollLogViewer(0, h)
+	if app.logViewerOffset != 4 {
+		t.Fatalf("expected zero-delta scroll to keep offset unchanged, got %d", app.logViewerOffset)
+	}
+	app.scrollLogViewer(-1000, h)
+	if app.logViewerOffset != 0 {
+		t.Fatalf("expected large negative scroll to clamp to 0, got %d", app.logViewerOffset)
+	}
+	app.scrollLogViewer(1000, h)
+	if app.logViewerOffset != app.logViewerMaxOffset(h) {
+		t.Fatalf("expected large positive scroll to clamp to max offset, got %d", app.logViewerOffset)
+	}
+}
+
+func TestMouseHitHelpersGuardWhenBoundsZero(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 0
+	app.height = 0
+	app.transcript.Width = 0
+	app.transcript.Height = 0
+
+	msg := tea.MouseMsg{X: 0, Y: 0}
+	if app.isMouseWithinTranscriptScrollbar(msg) {
+		t.Fatalf("expected transcript scrollbar hit test to fail when bounds are zero")
+	}
+	if app.isMouseWithinLogViewer(msg) {
+		t.Fatalf("expected log viewer hit test to fail when bounds are zero")
+	}
+}
+
+func TestReadAndPersistLogEntriesGuardBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	if got := app.readLogEntriesForSession("   "); got != nil {
+		t.Fatalf("expected blank session id to return nil log entries, got %+v", got)
+	}
+
+	app.state.ActiveSessionID = ""
+	app.persistLogEntriesForActiveSession()
+}
+
+func TestPersistLogEntriesRetryOnSaveFailure(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-save-error"
+	app.logEntries = []logEntry{{Timestamp: time.Now(), Level: "info", Source: "test", Message: "m"}}
+	app.logPersistDirty = true
+	app.logPersistVersion = 1
+	runtime.saveLogErr = errors.New("disk full")
+
+	app.persistLogEntriesForActiveSession()
+	if !app.logPersistDirty {
+		t.Fatal("expected dirty flag to remain true after save failure")
+	}
+	if app.deferredLogPersistCmd == nil {
+		t.Fatal("expected deferred persist command to be rescheduled on save failure")
+	}
+}
+
+func TestUpdateFocusInputNewSessionAndTodoScroll(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+
+	app.focus = panelTranscript
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	app = model.(App)
+	if app.focus != panelInput {
+		t.Fatalf("expected Esc to focus input panel")
+	}
+
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	app = model.(App)
+	if len(runtime.listSessions) != 0 && strings.TrimSpace(app.state.ActiveSessionID) == "" {
+		t.Fatalf("expected Ctrl+N to create or activate draft session")
+	}
+
+	app.focus = panelTodo
+	app.todoItems = []todoViewItem{
+		{ID: "1", Title: "a", Status: "pending"},
+		{ID: "2", Title: "b", Status: "pending"},
+	}
+	app.todoSelectedIndex = 1
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyUp})
+	app = model.(App)
+	if app.todoSelectedIndex != 0 {
+		t.Fatalf("expected todo selection to move up, got %d", app.todoSelectedIndex)
+	}
+}
+
+func TestActivateSessionByIDAndCompactDoneInvalidPayload(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.Sessions = []agentsession.Summary{{ID: "s1", Title: "Session 1"}}
+	if err := app.activateSessionByID("s1"); err != nil {
+		t.Fatalf("activateSessionByID() error = %v", err)
+	}
+
+	if handled := runtimeEventCompactDoneHandler(&app, agentruntime.RuntimeEvent{Payload: "invalid"}); handled {
+		t.Fatalf("expected compact done handler to ignore invalid payload")
+	}
+}
+
+func TestHandleTranscriptMouseWheelAndClickFallback(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.setTranscriptContent(strings.Repeat("line\n", 120))
+	app.transcript.SetYOffset(20)
+
+	x, y, w, h := app.transcriptBounds()
+	if w <= 2 || h <= 2 {
+		t.Fatalf("expected transcript bounds to be drawable, got w=%d h=%d", w, h)
+	}
+
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + w/2,
+		Y:      y + h/2,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected transcript wheel up to be handled")
+	}
+
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + w/2,
+		Y:      y + h/2,
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected transcript wheel down to be handled")
+	}
+
+	app.pendingCopyID = 9
+	if app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 1,
+		Y:      y + 1,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected plain left click without copy button hit to return false")
+	}
+	if app.pendingCopyID != 0 {
+		t.Fatalf("expected pendingCopyID reset when click does not hit copy button, got %d", app.pendingCopyID)
+	}
+}
+
+func TestInputBoundsAndTranscriptOffsetGuardBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 0
+	app.height = 0
+	if app.isMouseWithinInput(tea.MouseMsg{X: 0, Y: 0}) {
+		t.Fatalf("expected input hit test to fail when layout is zero-sized")
+	}
+
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.transcript.Height = 0
+	app.setTranscriptOffsetFromScrollbarY(10)
+
+	app.transcript.Height = 8
+	app.setTranscriptContent("short\n")
+	app.transcript.SetYOffset(5)
+	_, y, _, _ := app.transcriptScrollbarBounds()
+	app.setTranscriptOffsetFromScrollbarY(y + 1)
+	if app.transcript.YOffset != 0 {
+		t.Fatalf("expected maxOffset<=0 branch to reset transcript y-offset, got %d", app.transcript.YOffset)
+	}
+}
+
+func TestRebuildActivityWithHeightAndPersistPathGuard(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.activity.Width = 30
+	app.activity.Height = 5
+	app.activities = []tuistate.ActivityEntry{
+		{Kind: "tool", Title: "run", Detail: "ok"},
+	}
+	app.rebuildActivity()
+	if strings.TrimSpace(app.activity.View()) == "" {
+		t.Fatalf("expected rebuildActivity to render entries when viewport height is available")
+	}
+
+	app.state.ActiveSessionID = "___"
+	app.persistLogEntriesForActiveSession()
 }

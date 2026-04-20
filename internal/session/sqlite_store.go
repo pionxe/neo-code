@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,8 @@ type sqliteMessageRow struct {
 	IsError          bool
 	ToolMetadataJSON string
 }
+
+const maxSessionDeleteBatchSize = 900
 
 // SQLiteStore 使用单个工作区级 SQLite 数据库持久化会话。
 type SQLiteStore struct {
@@ -81,6 +84,52 @@ func (s *SQLiteStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// CleanupExpiredSessions 删除超过指定时长未更新的会话及其附件，返回删除数量。
+func (s *SQLiteStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if maxAge <= 0 {
+		return 0, nil
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	cutoffMS := toUnixMillis(time.Now().Add(-maxAge))
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("session: begin cleanup tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	expiredIDs, err := listExpiredSessionIDs(ctx, tx, cutoffMS)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(expiredIDs) == 0 {
+		return 0, nil
+	}
+
+	// 在同一事务内按固定 ID 集合删除记录，避免查询结果与实际删除集合不一致。
+	affected, err := deleteSessionsByIDSet(ctx, tx, expiredIDs)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("session: commit cleanup tx: %w", err)
+	}
+
+	// 清理附件目录
+	if err := s.cleanupExpiredSessionAssets(ctx, expiredIDs); err != nil {
+		return int(affected), err
+	}
+
+	return int(affected), nil
 }
 
 // CreateSession 创建并持久化一个新的空会话头。
@@ -232,6 +281,7 @@ func (s *SQLiteStore) AppendMessages(ctx context.Context, input AppendMessagesIn
 	if err != nil {
 		return err
 	}
+	normalizedMessages = trimMessagesToSessionLimit(normalizedMessages)
 	updatedAt := resolveUpdatedAt(input.UpdatedAt)
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -243,6 +293,11 @@ func (s *SQLiteStore) AppendMessages(ctx context.Context, input AppendMessagesIn
 	lastSeq, err := currentLastSeq(ctx, tx, input.SessionID)
 	if err != nil {
 		return err
+	}
+
+	// 自动裁剪超限的旧消息，保持会话消息数不超过 MaxSessionMessages。
+	if err := trimOverflowMessages(ctx, tx, input.SessionID, len(normalizedMessages)); err != nil {
+		return fmt.Errorf("session: trim overflow messages %s: %w", input.SessionID, err)
 	}
 
 	for _, message := range normalizedMessages {
@@ -613,14 +668,7 @@ func (s *SQLiteStore) DeleteSession(ctx context.Context, sessionID string) error
 		return fmt.Errorf("session: delete session %s: %w", sessionID, err)
 	}
 
-	assetDir := filepath.Join(s.assetsDir, sessionID)
-	if err := ensurePathWithinBase(s.projectDir, assetDir); err != nil {
-		return fmt.Errorf("session: resolve assets dir path: %w", err)
-	}
-	if err := os.RemoveAll(assetDir); err != nil {
-		return fmt.Errorf("session: delete assets dir %s: %w", sessionID, err)
-	}
-	return nil
+	return s.removeSessionAssetsDir(sessionID)
 }
 
 // ensureDB 懒加载数据库并执行 schema 初始化。
@@ -638,9 +686,14 @@ func (s *SQLiteStore) ensureDB(ctx context.Context) (*sql.DB, error) {
 
 // initialize 打开数据库、设置 PRAGMA 并初始化 schema。
 func (s *SQLiteStore) initialize(ctx context.Context) error {
-	if err := s.ensureStorageDirs(); err != nil {
-		return err
+	if err := os.MkdirAll(s.projectDir, 0o700); err != nil {
+		return fmt.Errorf("session: create project dir: %w", err)
 	}
+	_ = os.Chmod(s.projectDir, 0o700)
+	if err := os.MkdirAll(s.assetsDir, 0o700); err != nil {
+		return fmt.Errorf("session: create assets dir: %w", err)
+	}
+	_ = os.Chmod(s.assetsDir, 0o700)
 
 	db, err := sql.Open("sqlite", s.dbPath)
 	if err != nil {
@@ -657,6 +710,9 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 		_ = db.Close()
 		return err
 	}
+
+	// 收紧数据库文件权限，仅 owner 可读写
+	_ = os.Chmod(s.dbPath, 0o600)
 
 	s.db = db
 	return nil
@@ -1063,6 +1119,141 @@ func currentLastSeq(ctx context.Context, tx *sql.Tx, sessionID string) (int, err
 		return 0, fmt.Errorf("session: query last_seq for %s: %w", sessionID, err)
 	}
 	return lastSeq, nil
+}
+
+// trimOverflowMessages 在事务内裁剪超限的旧消息，确保追加新消息后会话消息数不超过 MaxSessionMessages。
+func trimOverflowMessages(ctx context.Context, tx *sql.Tx, sessionID string, newCount int) error {
+	if MaxSessionMessages <= 0 || newCount <= 0 {
+		return nil
+	}
+	var currentCount int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM messages WHERE session_id = ?`, sessionID,
+	).Scan(&currentCount); err != nil {
+		return fmt.Errorf("session: query message rows: %w", err)
+	}
+	overflow := (currentCount + newCount) - MaxSessionMessages
+	if overflow <= 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM messages WHERE session_id = ? AND seq IN (SELECT seq FROM messages WHERE session_id = ? ORDER BY seq ASC LIMIT ?)`,
+		sessionID, sessionID, overflow,
+	); err != nil {
+		return fmt.Errorf("session: delete overflow messages: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions SET message_count = message_count - ? WHERE id = ?`,
+		overflow, sessionID,
+	); err != nil {
+		return fmt.Errorf("session: update message_count after trim: %w", err)
+	}
+	return nil
+}
+
+// trimMessagesToSessionLimit 保留最新一批消息，使单次追加的消息数不会超过会话上限。
+func trimMessagesToSessionLimit(messages []providertypes.Message) []providertypes.Message {
+	if MaxSessionMessages <= 0 || len(messages) <= MaxSessionMessages {
+		return messages
+	}
+	start := len(messages) - MaxSessionMessages
+	return append([]providertypes.Message(nil), messages[start:]...)
+}
+
+// listExpiredSessionIDs 在事务内查询过期会话 ID，供后续按固定集合删除。
+func listExpiredSessionIDs(ctx context.Context, tx *sql.Tx, cutoffMS int64) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE updated_at_ms < ?`, cutoffMS)
+	if err != nil {
+		return nil, fmt.Errorf("session: query expired sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var expiredIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("session: scan expired session id: %w", err)
+		}
+		expiredIDs = append(expiredIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("session: iterate expired sessions: %w", err)
+	}
+	return expiredIDs, nil
+}
+
+// deleteSessionsByIDSet 在事务内按固定 ID 集合删除会话，避免删除范围漂移。
+func deleteSessionsByIDSet(ctx context.Context, tx *sql.Tx, sessionIDs []string) (int, error) {
+	return deleteSessionsByIDSetWithBatchSize(ctx, tx, sessionIDs, maxSessionDeleteBatchSize)
+}
+
+// deleteSessionsByIDSetWithBatchSize 按批次删除固定 ID 集，避免 SQL 参数数量超过 SQLite 限制。
+func deleteSessionsByIDSetWithBatchSize(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionIDs []string,
+	batchSize int,
+) (int, error) {
+	if len(sessionIDs) == 0 {
+		return 0, nil
+	}
+	if batchSize <= 0 {
+		batchSize = maxSessionDeleteBatchSize
+	}
+
+	totalAffected := 0
+	for start := 0; start < len(sessionIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(sessionIDs) {
+			end = len(sessionIDs)
+		}
+		batch := sessionIDs[start:end]
+		args := make([]any, 0, len(batch))
+		placeholders := make([]string, 0, len(batch))
+		for _, id := range batch {
+			args = append(args, id)
+			placeholders = append(placeholders, "?")
+		}
+		query := fmt.Sprintf(`DELETE FROM sessions WHERE id IN (%s)`, strings.Join(placeholders, ", "))
+		result, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, fmt.Errorf("session: cleanup expired sessions: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("session: inspect expired cleanup rows: %w", err)
+		}
+		totalAffected += int(affected)
+	}
+	return totalAffected, nil
+}
+
+// removeSessionAssetsDir 删除单个会话的附件目录，并校验目标路径始终位于 assets 根目录内。
+func (s *SQLiteStore) removeSessionAssetsDir(sessionID string) error {
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	assetDir := filepath.Join(s.assetsDir, sessionID)
+	if err := ensurePathWithinBase(s.assetsDir, assetDir); err != nil {
+		return fmt.Errorf("session: resolve assets dir path: %w", err)
+	}
+	if err := os.RemoveAll(assetDir); err != nil {
+		return fmt.Errorf("session: delete assets dir %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+// cleanupExpiredSessionAssets 清理过期会话的附件目录；若上下文已取消则尽快中止，其余路径错误仅记录告警并继续。
+func (s *SQLiteStore) cleanupExpiredSessionAssets(ctx context.Context, sessionIDs []string) error {
+	for _, id := range sessionIDs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.removeSessionAssetsDir(id); err != nil {
+			log.Printf("session cleanup warning: skip asset cleanup for %q: %v", id, err)
+		}
+	}
+	return nil
 }
 
 // insertMessage 在事务内插入单条消息记录。

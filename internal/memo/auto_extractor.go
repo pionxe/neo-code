@@ -2,6 +2,8 @@ package memo
 
 import (
 	"context"
+	"encoding/json"
+	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -29,13 +31,14 @@ type AutoExtractor struct {
 }
 
 type autoExtractState struct {
-	mu          sync.Mutex
-	pending     *autoExtractRequest
-	running     bool
-	timer       *time.Timer
-	idleTimer   *time.Timer
-	scheduleSeq uint64
-	idleSeq     uint64
+	mu              sync.Mutex
+	pending         *autoExtractRequest
+	running         bool
+	timer           *time.Timer
+	idleTimer       *time.Timer
+	scheduleSeq     uint64
+	idleSeq         uint64
+	lastFingerprint uint64
 }
 
 type autoExtractRequest struct {
@@ -62,16 +65,11 @@ func NewAutoExtractor(extractor Extractor, svc *Service, extractTimeout time.Dur
 
 // Schedule 按会话维度安排一次后台自动提取。
 func (a *AutoExtractor) Schedule(sessionID string, messages []providertypes.Message) {
-	a.schedule(sessionID, messages, a.extractor)
+	a.ScheduleWithExtractor(sessionID, messages, a.extractor)
 }
 
 // ScheduleWithExtractor 允许调用方在调度时绑定本次请求专用的提取器快照。
 func (a *AutoExtractor) ScheduleWithExtractor(sessionID string, messages []providertypes.Message, extractor Extractor) {
-	a.schedule(sessionID, messages, extractor)
-}
-
-// schedule 统一处理会话级别的自动提取调度。
-func (a *AutoExtractor) schedule(sessionID string, messages []providertypes.Message, extractor Extractor) {
 	if a == nil || extractor == nil || a.svc == nil {
 		return
 	}
@@ -134,7 +132,7 @@ func (a *AutoExtractor) armDebounceTimerLocked(
 	})
 }
 
-// handleDebounce 在防抖窗口结束后启动一次后台提取。
+// handleDebounce 在防抖窗口结束后启动一次后台提取，若消息未变化则跳过以避免重复 LLM 调用。
 func (a *AutoExtractor) handleDebounce(sessionID string, state *autoExtractState, seq uint64) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -149,11 +147,23 @@ func (a *AutoExtractor) handleDebounce(sessionID string, state *autoExtractState
 
 	req := *state.pending
 	state.pending = nil
+
+	// 增量检测：消息未变化时跳过提取
+	fp := computeMessageFingerprint(req.messages)
+	if fp == state.lastFingerprint {
+		a.armIdleTimerLocked(sessionID, state)
+		return
+	}
+
 	state.running = true
 	state.timer = nil
 
 	go func() {
-		a.extractAndStore(req.extractor, req.messages)
+		if a.extractAndStore(req.extractor, req.messages) {
+			state.mu.Lock()
+			state.lastFingerprint = fp
+			state.mu.Unlock()
+		}
 		a.handleRunDone(sessionID, state)
 	}()
 }
@@ -209,20 +219,22 @@ func isIdleStateLocked(state *autoExtractState, seq uint64) bool {
 }
 
 // extractAndStore 执行提取，并在写入前做本地批次去重和持久化级别的原子去重。
-func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []providertypes.Message) {
+// 返回值表示本次提取和写入流程是否成功完成，可用于更新增量指纹。
+func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []providertypes.Message) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), a.extractTimeout)
 	defer cancel()
 
 	entries, err := extractor.Extract(ctx, messages)
 	if err != nil {
 		a.logError("memo: auto extract failed: %v", err)
-		return
+		return false
 	}
 	if len(entries) == 0 {
-		return
+		return true
 	}
 
 	seen := make(map[string]struct{}, len(entries))
+	succeeded := true
 	for _, entry := range entries {
 		entry.Source = SourceAutoExtract
 		key := autoExtractDedupKey(entry)
@@ -236,6 +248,7 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 		added, err := a.svc.addAutoExtractIfAbsent(ctx, entry)
 		if err != nil {
 			a.logError("memo: auto extract add failed: %v", err)
+			succeeded = false
 			continue
 		}
 
@@ -244,6 +257,7 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 			continue
 		}
 	}
+	return succeeded
 }
 
 // autoExtractDedupKey 生成自动提取条目的精确去重键。
@@ -306,4 +320,27 @@ func (a *AutoExtractor) logError(format string, args ...any) {
 	if a != nil && a.logf != nil {
 		a.logf(format, args...)
 	}
+}
+
+// computeMessageFingerprint 使用 FNV-1a 64bit 哈希计算消息窗口的内容指纹，用于增量提取检测。
+func computeMessageFingerprint(messages []providertypes.Message) uint64 {
+	h := fnv.New64a()
+	payload, err := json.Marshal(messages)
+	if err == nil {
+		_, _ = h.Write(payload)
+		return h.Sum64()
+	}
+
+	// 回退路径仅在意外序列化失败时使用，至少保留文本消息的增量检测能力。
+	for _, msg := range messages {
+		_, _ = h.Write([]byte(msg.Role))
+		_, _ = h.Write([]byte{0})
+		for _, part := range msg.Parts {
+			_, _ = h.Write([]byte(part.Kind))
+			_, _ = h.Write([]byte{0})
+			_, _ = h.Write([]byte(part.Text))
+			_, _ = h.Write([]byte{0})
+		}
+	}
+	return h.Sum64()
 }

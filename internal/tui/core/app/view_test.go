@@ -142,7 +142,7 @@ func TestApplyComponentLayoutKeepsTranscriptHeightInSyncWithWaterfall(t *testing
 	app.applyComponentLayout(false)
 
 	lay := app.computeLayout()
-	wantTranscriptHeight, activityHeight, menuHeight, _ := app.waterfallMetrics(app.transcript.Width, lay.contentHeight)
+	wantTranscriptHeight, activityHeight, menuHeight, todoHeight := app.waterfallMetrics(lay.contentWidth, lay.contentHeight)
 	if app.transcript.Height != wantTranscriptHeight {
 		t.Fatalf("expected transcript height %d, got %d", wantTranscriptHeight, app.transcript.Height)
 	}
@@ -161,6 +161,10 @@ func TestApplyComponentLayoutKeepsTranscriptHeightInSyncWithWaterfall(t *testing
 	}
 	if inputY != transcriptY+wantTranscriptHeight+activityHeight+menuHeight {
 		t.Fatalf("expected input Y %d, got %d", transcriptY+wantTranscriptHeight+activityHeight+menuHeight, inputY)
+	}
+	promptHeight := lipgloss.Height(app.renderPrompt(lay.contentWidth))
+	if usedHeight := wantTranscriptHeight + activityHeight + todoHeight + menuHeight + promptHeight; usedHeight > lay.contentHeight {
+		t.Fatalf("expected waterfall stack to fit content area, used %d > %d", usedHeight, lay.contentHeight)
 	}
 }
 
@@ -341,6 +345,7 @@ func TestViewNormalIncludesHeaderAndBody(t *testing.T) {
 	app.width = 100
 	app.height = 30
 	app.state.CurrentModel = "test-model"
+	app.state.CurrentWorkdir = "/tmp/workdir"
 	app.state.StatusText = "running"
 	app.state.IsAgentRunning = true
 	app.runProgressKnown = true
@@ -359,6 +364,9 @@ func TestViewNormalIncludesHeaderAndBody(t *testing.T) {
 	if !strings.Contains(view, "42% loading") {
 		t.Fatalf("expected progress header, got %q", view)
 	}
+	if !strings.Contains(view, "cwd: /tmp/workdir") {
+		t.Fatalf("expected current workdir in header, got %q", view)
+	}
 }
 
 func TestViewAddsSpacerWhenDocIsTallerThanContent(t *testing.T) {
@@ -376,6 +384,7 @@ func TestRenderHeaderFallbackAndTrim(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.IsAgentRunning = true
 	app.state.StatusText = "custom-running-status"
+	app.state.CurrentWorkdir = "/tmp/workdir"
 	header := app.renderHeader(20)
 	if strings.TrimSpace(header) == "" {
 		t.Fatalf("expected non-empty header")
@@ -385,6 +394,18 @@ func TestRenderHeaderFallbackAndTrim(t *testing.T) {
 	header = app.renderHeader(16)
 	if strings.TrimSpace(header) == "" {
 		t.Fatalf("expected trimmed header output")
+	}
+}
+
+func TestRenderHeaderIncludesWorkdirFallback(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.CurrentModel = "test-model"
+	app.state.StatusText = statusReady
+	app.state.CurrentWorkdir = ""
+
+	header := app.renderHeader(120)
+	if !strings.Contains(header, "cwd: -") {
+		t.Fatalf("expected workdir fallback in header, got %q", header)
 	}
 }
 
@@ -400,8 +421,8 @@ func TestRenderPanelAndActivityPreview(t *testing.T) {
 	}
 	app.activities = []tuistate.ActivityEntry{{Kind: "tool", Title: "Run", Detail: "Detail"}}
 	withActivity := app.renderActivityPreview(60)
-	if !strings.Contains(withActivity, activityTitle) {
-		t.Fatalf("expected activity panel title, got %q", withActivity)
+	if withActivity != "" {
+		t.Fatalf("expected activity preview disabled even with entries, got %q", withActivity)
 	}
 
 	app.commandMenu.SetItems([]list.Item{
@@ -409,8 +430,44 @@ func TestRenderPanelAndActivityPreview(t *testing.T) {
 	})
 	app.commandMenuMeta = tuistate.CommandMenuMeta{Title: commandMenuTitle}
 	withMenu := app.renderWaterfall(80, 24)
+	if strings.Contains(withMenu, activityTitle) {
+		t.Fatalf("expected waterfall to exclude activity panel, got %q", withMenu)
+	}
 	if !strings.Contains(withMenu, commandMenuTitle) {
 		t.Fatalf("expected command menu to be rendered")
+	}
+}
+
+func TestRenderHelpShowsCtrlLAndError(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.StatusText = statusReady
+	rendered := app.renderHelp(80)
+	if !strings.Contains(rendered, "Ctrl+L Log viewer") {
+		t.Fatalf("expected footer help to include log viewer shortcut, got %q", rendered)
+	}
+
+	app.showFooterError("permission denied")
+	rendered = app.renderHelp(80)
+	if !strings.Contains(rendered, "Error: permission denied") {
+		t.Fatalf("expected footer to surface execution error, got %q", rendered)
+	}
+}
+
+func TestRenderHelpErrorToastExpires(t *testing.T) {
+	app, _ := newTestApp(t)
+	base := time.Unix(1_700_000_000, 0)
+	app.nowFn = func() time.Time { return base }
+
+	app.showFooterError("permission denied")
+	rendered := app.renderHelp(80)
+	if !strings.Contains(rendered, "Error: permission denied") {
+		t.Fatalf("expected footer toast to show immediately, got %q", rendered)
+	}
+
+	app.nowFn = func() time.Time { return base.Add(footerErrorFlashDuration + 50*time.Millisecond) }
+	rendered = app.renderHelp(80)
+	if strings.Contains(rendered, "Error: permission denied") {
+		t.Fatalf("expected footer toast to auto-hide after flash duration, got %q", rendered)
 	}
 }
 
@@ -541,5 +598,109 @@ func TestNormalizeAndTrimHelpers(t *testing.T) {
 	lines := strings.Split(normalized, "\n")
 	if len(lines) != 2 {
 		t.Fatalf("expected two lines, got %q", normalized)
+	}
+}
+
+func TestRenderLogViewerHonorsOffset(t *testing.T) {
+	app, _ := newTestApp(t)
+	for i := 0; i < 6; i++ {
+		app.logEntries = append(app.logEntries, logEntry{
+			Timestamp: time.Unix(int64(i), 0),
+			Level:     "info",
+			Source:    "test",
+			Message:   "msg-" + string(rune('A'+i)),
+		})
+	}
+
+	app.logViewerOffset = 0
+	view := app.renderLogViewer(80, 6)
+	if !strings.Contains(view, "msg-F") {
+		t.Fatalf("expected newest log message at offset 0, got %q", view)
+	}
+
+	app.logViewerOffset = 2
+	view = app.renderLogViewer(80, 6)
+	if !strings.Contains(view, "msg-D") {
+		t.Fatalf("expected older log message at offset 2, got %q", view)
+	}
+}
+
+func TestRenderActivityLineAndScrollbarHelpers(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	line := app.renderActivityLine(tuistate.ActivityEntry{
+		Time:    time.Unix(1_700_000_000, 0),
+		Kind:    "tool",
+		Title:   "Run",
+		Detail:  "details",
+		IsError: false,
+	}, 72)
+	if strings.TrimSpace(line) == "" {
+		t.Fatalf("expected renderActivityLine to return non-empty text")
+	}
+
+	if got := app.transcriptScrollbarWidth(3); got != 0 {
+		t.Fatalf("expected narrow transcript width to disable scrollbar, got %d", got)
+	}
+	if got := app.transcriptScrollbarWidth(20); got != transcriptScrollbarWidth {
+		t.Fatalf("expected transcript scrollbar width %d, got %d", transcriptScrollbarWidth, got)
+	}
+
+	if got := app.renderTranscriptScrollbar(0, 10); got != "" {
+		t.Fatalf("expected empty scrollbar when width is zero, got %q", got)
+	}
+	if got := app.renderTranscriptScrollbar(2, 0); got != "" {
+		t.Fatalf("expected empty scrollbar when height is zero, got %q", got)
+	}
+
+	app.transcript.Width = 20
+	app.transcript.Height = 5
+	app.transcript.SetContent(strings.Repeat("line\n", 30))
+	app.transcript.SetYOffset(3)
+	if got := app.renderTranscriptScrollbar(2, 5); got == "" {
+		t.Fatalf("expected non-empty scrollbar when transcript is scrollable")
+	}
+}
+
+func TestRenderLogViewerEmptyAndNarrowWidthBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	empty := app.renderLogViewer(60, 8)
+	if !strings.Contains(empty, "No log entries") {
+		t.Fatalf("expected empty log viewer hint, got %q", empty)
+	}
+
+	app.logEntries = []logEntry{
+		{
+			Timestamp: time.Unix(1_700_000_100, 0),
+			Level:     "warning",
+			Source:    "source-with-long-name",
+			Message:   "long message that should be truncated or hidden in narrow layouts",
+		},
+	}
+	narrow := app.renderLogViewer(45, 8)
+	if strings.Contains(narrow, "long message") {
+		t.Fatalf("expected message text hidden when message width is zero, got %q", narrow)
+	}
+
+	wide := app.renderLogViewer(70, 8)
+	if !strings.Contains(wide, "Use Up/Down/PgUp/PgDn to scroll") {
+		t.Fatalf("expected scroll hint in log viewer footer, got %q", wide)
+	}
+}
+
+func TestRenderWaterfallAndTranscriptWithoutScrollbar(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActivePicker = pickerNone
+	app.logViewerVisible = true
+	logView := app.renderWaterfall(80, 20)
+	if !strings.Contains(logView, "Log Viewer") {
+		t.Fatalf("expected log viewer branch in waterfall, got %q", logView)
+	}
+
+	app.logViewerVisible = false
+	plain := app.renderTranscriptWithScrollbar(2, "hello")
+	if strings.TrimSpace(plain) == "" {
+		t.Fatalf("expected transcript to render without scrollbar in very narrow width")
 	}
 }

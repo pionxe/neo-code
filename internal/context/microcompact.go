@@ -23,56 +23,84 @@ func microCompactMessages(messages []providertypes.Message) []providertypes.Mess
 }
 
 // microCompactMessagesWithPolicies 按工具策略对裁剪后的消息做只读投影式微压缩。
+// 仅对需要压缩的工具消息做深拷贝，其余消息共享原始引用以减少内存分配。
 func microCompactMessagesWithPolicies(messages []providertypes.Message, policies MicroCompactPolicySource, retainedToolSpans int, summarizers MicroCompactSummarizerSource) []providertypes.Message {
 	if retainedToolSpans <= 0 {
 		retainedToolSpans = defaultMicroCompactRetainedToolSpans
 	}
 
-	cloned := cloneContextMessages(messages)
-	if len(cloned) == 0 {
-		return cloned
+	if len(messages) == 0 {
+		return nil
 	}
 
-	spans := internalcompact.BuildMessageSpans(cloned)
+	spans := internalcompact.BuildMessageSpans(messages)
 	protectedStart, hasProtectedTail := internalcompact.ProtectedTailStart(spans)
 	retainedCompactableSpans := 0
+
+	modifiedIndices := make(map[int]struct{})
+	var pendingCompactions []compactionPending
 
 	for spanIndex := len(spans) - 1; spanIndex >= 0; spanIndex-- {
 		span := spans[spanIndex]
 		if hasProtectedTail && span.Start >= protectedStart {
 			continue
 		}
-		if !isToolCallSpan(cloned, span) {
+		if !isToolCallSpan(messages, span) {
 			continue
 		}
 
-		compactableIDs, toolNames := compactableToolCallIDs(cloned[span.Start].ToolCalls, policies)
+		compactableIDs, toolNames := compactableToolCallIDs(messages[span.Start].ToolCalls, policies)
 		if len(compactableIDs) == 0 {
 			continue
 		}
 		if retainedCompactableSpans < retainedToolSpans {
-			if hasCompactableToolMessage(cloned, span, compactableIDs) {
+			if hasCompactableToolMessage(messages, span, compactableIDs) {
 				retainedCompactableSpans++
 			}
 			continue
 		}
 
-		compactableContents := compactableToolMessageContents(cloned, span, compactableIDs)
+		compactableContents := compactableToolMessageContents(messages, span, compactableIDs)
 		if len(compactableContents) == 0 {
 			continue
 		}
 
-		for messageIndex := span.Start + 1; messageIndex < span.End; messageIndex++ {
-			content, ok := compactableContents[messageIndex]
-			if !ok {
-				continue
-			}
-			summary := summarizeOrClear(cloned[messageIndex], content, toolNames, summarizers)
-			cloned[messageIndex].Parts = []providertypes.ContentPart{providertypes.NewTextPart(summary)}
+		for messageIndex, content := range compactableContents {
+			modifiedIndices[messageIndex] = struct{}{}
+			pendingCompactions = append(pendingCompactions, compactionPending{
+				index:     messageIndex,
+				content:   content,
+				toolNames: toolNames,
+			})
 		}
 	}
 
+	if len(modifiedIndices) == 0 {
+		return append([]providertypes.Message(nil), messages...)
+	}
+
+	cloned := make([]providertypes.Message, len(messages))
+	for i, msg := range messages {
+		if _, needsClone := modifiedIndices[i]; needsClone {
+			cloned[i] = cloneSingleMessage(msg)
+		} else {
+			cloned[i] = msg
+		}
+	}
+
+	for _, pending := range pendingCompactions {
+		summary := summarizeOrClear(cloned[pending.index], pending.content, pending.toolNames, summarizers)
+		cloned[pending.index].Parts = []providertypes.ContentPart{providertypes.NewTextPart(summary)}
+	}
+
 	return cloned
+}
+
+// compactionPending 记录待压缩的消息索引和所需上下文。
+type compactionPending struct {
+	index     int
+	content   string
+	toolNames map[string]string
 }
 
 // cloneContextMessages 深拷贝消息切片，避免读时投影污染 runtime 持有的原始会话消息。
@@ -83,17 +111,22 @@ func cloneContextMessages(messages []providertypes.Message) []providertypes.Mess
 
 	cloned := make([]providertypes.Message, 0, len(messages))
 	for _, message := range messages {
-		next := message
-		next.ToolCalls = append([]providertypes.ToolCall(nil), message.ToolCalls...)
-		if len(message.ToolMetadata) > 0 {
-			next.ToolMetadata = make(map[string]string, len(message.ToolMetadata))
-			for key, value := range message.ToolMetadata {
-				next.ToolMetadata[key] = value
-			}
-		}
-		cloned = append(cloned, next)
+		cloned = append(cloned, cloneSingleMessage(message))
 	}
 	return cloned
+}
+
+// cloneSingleMessage 深拷贝单条消息，隔离 ToolCalls 和 ToolMetadata 的底层引用。
+func cloneSingleMessage(msg providertypes.Message) providertypes.Message {
+	next := msg
+	next.ToolCalls = append([]providertypes.ToolCall(nil), msg.ToolCalls...)
+	if len(msg.ToolMetadata) > 0 {
+		next.ToolMetadata = make(map[string]string, len(msg.ToolMetadata))
+		for key, value := range msg.ToolMetadata {
+			next.ToolMetadata[key] = value
+		}
+	}
+	return next
 }
 
 // isToolCallSpan 判断当前 span 是否是由 assistant tool call 起始的原子工具块。

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	agentsession "neo-code/internal/session"
 )
@@ -129,6 +130,10 @@ func (s *mutatorStore) ReplaceTranscript(ctx context.Context, input agentsession
 	s.last.TokenInputTotal = input.TokenInputTotal
 	s.last.TokenOutputTotal = input.TokenOutputTotal
 	return nil
+}
+
+func (s *mutatorStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	return 0, nil
 }
 
 func TestRuntimeSessionMutatorMutateAndSave(t *testing.T) {

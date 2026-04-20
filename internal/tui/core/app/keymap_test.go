@@ -14,3 +14,19 @@ func TestFullHelpIncludesPasteImage(t *testing.T) {
 	}
 	t.Fatalf("expected full help to include paste image binding")
 }
+
+func TestFullHelpIncludesLogViewer(t *testing.T) {
+	keys := newKeyMap()
+	help := keys.FullHelp()
+	foundLogViewer := false
+	for _, row := range help {
+		for _, binding := range row {
+			if binding.Help().Key == keys.LogViewer.Help().Key {
+				foundLogViewer = true
+			}
+		}
+	}
+	if !foundLogViewer {
+		t.Fatalf("expected full help to include log viewer binding")
+	}
+}

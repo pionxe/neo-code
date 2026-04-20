@@ -152,6 +152,10 @@ func (s *postSaveHookStore) ReplaceTranscript(ctx context.Context, input agentse
 	return s.afterSave(s.base.ReplaceTranscript(ctx, input))
 }
 
+func (s *postSaveHookStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	return 0, nil
+}
+
 func TestResolveCompactProviderSelectionResolveErrorBranch(t *testing.T) {
 	t.Parallel()
 

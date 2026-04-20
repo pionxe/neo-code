@@ -42,12 +42,12 @@ func (s *Service) ExecuteSystemTool(ctx context.Context, input SystemToolInput) 
 		loaded agentsession.Session
 	)
 	if sessionID != "" {
-		sessionMu, releaseLockRef := s.acquireSessionLock(sessionID)
-		sessionMu.Lock()
+		sessionMu, releaseLockRef := s.acquireSessionRLock(sessionID)
+		sessionMu.RLock()
 
 		session, err := s.sessionStore.LoadSession(ctx, sessionID)
 		if err != nil {
-			sessionMu.Unlock()
+			sessionMu.RUnlock()
 			releaseLockRef()
 			return tools.ToolResult{}, err
 		}
@@ -57,7 +57,7 @@ func (s *Service) ExecuteSystemTool(ctx context.Context, input SystemToolInput) 
 		}
 		runStateValue := newRunState(runID, session)
 		state = &runStateValue
-		sessionMu.Unlock()
+		sessionMu.RUnlock()
 		releaseLockRef()
 	}
 

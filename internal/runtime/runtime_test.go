@@ -239,6 +239,10 @@ func (s *memoryStore) ReplaceTranscript(ctx context.Context, input agentsession.
 	return nil
 }
 
+func (s *memoryStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	return 0, nil
+}
+
 // CreateSession 转发到底层 Store，并按旧 save 计数规则注入失败。
 func (s *failingStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
 	if err := s.nextSaveError(ctx); err != nil {
@@ -496,6 +500,10 @@ func (s *blockingLoadStore) ListSummaries(ctx context.Context) ([]agentsession.S
 		})
 	}
 	return summaries, nil
+}
+
+func (s *blockingLoadStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	return 0, nil
 }
 
 type scriptedProvider struct {

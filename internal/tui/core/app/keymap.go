@@ -19,6 +19,7 @@ type keyMap struct {
 	Top         key.Binding
 	Bottom      key.Binding
 	PasteImage  key.Binding
+	LogViewer   key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -87,11 +88,15 @@ func newKeyMap() keyMap {
 			key.WithKeys("ctrl+v"),
 			key.WithHelp("Ctrl+V", "Paste image"),
 		),
+		LogViewer: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("Ctrl+L", "Log viewer"),
+		),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.Newline, k.CancelAgent, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Send, k.Newline, k.CancelAgent, k.LogViewer, k.ToggleHelp, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -100,5 +105,6 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.FocusInput, k.NextPanel, k.PrevPanel},
 		{k.ToggleHelp, k.Quit, k.PasteImage, k.ScrollUp},
 		{k.PageUp, k.PageDown, k.Top, k.Bottom},
+		{k.LogViewer},
 	}
 }

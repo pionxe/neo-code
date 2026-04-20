@@ -44,6 +44,26 @@ type Entry struct {
 	UpdatedAt time.Time
 }
 
+// evictionPriority 返回条目在裁剪时的优先级权重，值越大越不容易被裁剪。
+// user > feedback > project > reference，且手动创建优先于自动提取。
+func (e Entry) evictionPriority() int {
+	base := 0
+	switch e.Type {
+	case TypeUser:
+		base = 40
+	case TypeFeedback:
+		base = 30
+	case TypeProject:
+		base = 20
+	case TypeReference:
+		base = 10
+	}
+	if e.Source == SourceUserManual || e.Source == SourceToolInitiated {
+		base += 50
+	}
+	return base
+}
+
 // Scope 表示 memo 的逻辑分层范围。
 type Scope string
 

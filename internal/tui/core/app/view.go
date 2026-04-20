@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -19,6 +20,7 @@ type layout struct {
 }
 
 const headerBarHeight = 2
+const transcriptScrollbarWidth = 3
 
 const (
 	pickerPanelHorizontalInset = 8
@@ -75,7 +77,8 @@ func (a App) renderHeader(width int) string {
 	status = tuiutils.Fallback(status, statusReady)
 
 	model := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentModel), "unknown-model")
-	headerText := fmt.Sprintf("NeoCode | %s | %s", model, status)
+	workdir := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentWorkdir), "-")
+	headerText := fmt.Sprintf("NeoCode | %s | %s | cwd: %s", model, status, workdir)
 	if lipgloss.Width(headerText) > width {
 		headerText = tuiutils.TrimMiddle(headerText, max(8, width))
 	}
@@ -88,10 +91,11 @@ func (a App) renderBody(lay layout) string {
 
 // waterfallMetrics 统一计算瀑布区各组件高度，确保渲染、布局与命中区域使用同一组尺寸。
 func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
-	activityHeight := a.activityPreviewHeight()
+	activityHeight := 0
 	todoHeight := a.todoPreviewHeight()
 	menuHeight := a.commandMenuHeight(width)
-	transcriptHeight := max(6, height-activityHeight-todoHeight-menuHeight)
+	promptHeight := lipgloss.Height(a.renderPrompt(width))
+	transcriptHeight := max(6, height-activityHeight-todoHeight-menuHeight-promptHeight)
 	return transcriptHeight, activityHeight, menuHeight, todoHeight
 }
 
@@ -107,9 +111,12 @@ func (a App) renderWaterfall(width int, height int) string {
 		)
 	}
 
-	transcriptHeight, _, _, _ := a.waterfallMetrics(width, height)
+	if a.logViewerVisible {
+		return a.renderLogViewer(width, height)
+	}
 
-	transcript := a.styles.streamContent.Width(width).Height(transcriptHeight).Render(a.transcript.View())
+	transcriptContent := a.transcript.View()
+	transcript := a.renderTranscriptWithScrollbar(width, transcriptContent)
 
 	parts := []string{transcript}
 	if a.state.IsAgentRunning && a.state.StatusText == statusThinking {
@@ -117,9 +124,6 @@ func (a App) renderWaterfall(width int, height int) string {
 			Foreground(lipgloss.Color(oliveGray)).
 			Italic(true)
 		parts = append(parts, thinkingStyle.Render("Thinking..."))
-	}
-	if activity := a.renderActivityPreview(width); activity != "" {
-		parts = append(parts, activity)
 	}
 	if todo := a.renderTodoPreview(width); todo != "" {
 		parts = append(parts, todo)
@@ -131,6 +135,59 @@ func (a App) renderWaterfall(width int, height int) string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
+}
+
+func (a App) renderTranscriptWithScrollbar(totalWidth int, content string) string {
+	scrollbarWidth := a.transcriptScrollbarWidth(totalWidth)
+	if scrollbarWidth <= 0 {
+		return a.styles.streamContent.Render(content)
+	}
+
+	contentWidth := max(1, totalWidth-scrollbarWidth)
+	contentView := a.styles.streamContent.Width(contentWidth).Render(content)
+	scrollbar := a.renderTranscriptScrollbar(scrollbarWidth, max(1, a.transcript.Height))
+	return lipgloss.JoinHorizontal(lipgloss.Top, contentView, scrollbar)
+}
+
+func (a App) transcriptScrollbarWidth(totalWidth int) int {
+	if totalWidth <= transcriptScrollbarWidth {
+		return 0
+	}
+	return transcriptScrollbarWidth
+}
+
+func (a App) renderTranscriptScrollbar(width int, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+
+	track := strings.Repeat(" ", width)
+	trackStyle := lipgloss.NewStyle().Background(lipgloss.Color(purpleBg2))
+	thumbStyle := lipgloss.NewStyle().Background(lipgloss.Color(purpleAccent))
+
+	maxOffset := a.transcriptMaxOffset()
+	thumbHeight := height
+	thumbTop := 0
+
+	if maxOffset > 0 {
+		totalLines := max(1, a.transcript.TotalLineCount())
+		visibleLines := max(1, a.transcript.VisibleLineCount())
+		thumbHeight = max(1, min(height, (visibleLines*height+totalLines-1)/totalLines))
+		if height > thumbHeight {
+			thumbTop = (a.transcript.YOffset*(height-thumbHeight) + maxOffset/2) / maxOffset
+			thumbTop = max(0, min(thumbTop, height-thumbHeight))
+		}
+	}
+
+	lines := make([]string, 0, height)
+	for row := 0; row < height; row++ {
+		if row >= thumbTop && row < thumbTop+thumbHeight {
+			lines = append(lines, thumbStyle.Render(track))
+			continue
+		}
+		lines = append(lines, trackStyle.Render(track))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func (a App) buildPickerLayout(contentWidth int, contentHeight int) pickerLayoutSpec {
@@ -453,8 +510,33 @@ func (a App) commandMenuHeight(width int) int {
 func (a App) renderHelp(width int) string {
 	a.help.ShowAll = a.state.ShowHelp
 	helpContent := a.help.View(a.keys)
+	lines := []string{}
+	if errLine := a.footerErrorLine(width); errLine != "" {
+		lines = append(lines, errLine)
+	}
+	lines = append(lines, helpContent)
+	footerContent := strings.Join(lines, "\n")
 	// Keep help content stretched to full width to avoid clipping at borders.
-	return a.styles.footer.Width(width).Render(helpContent)
+	return a.styles.footer.Width(width).Render(footerContent)
+}
+
+func (a App) footerErrorLine(width int) string {
+	if width <= 0 {
+		return ""
+	}
+
+	message := strings.TrimSpace(a.footerErrorText)
+	if message == "" {
+		return ""
+	}
+	if !a.footerErrorUntil.IsZero() && a.now().After(a.footerErrorUntil) {
+		return ""
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(errorRed)).
+		Width(width).
+		Render(compactStatusText(message, max(8, width)))
 }
 
 func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle lipgloss.Style, startCopyID int) (string, []copyCodeButtonBinding) {
@@ -555,23 +637,15 @@ func (a App) focusLabel() string {
 }
 
 func (a App) activityPreviewHeight() int {
-	return tuicomponents.ActivityPreviewHeight(len(a.activities))
+	return 0
 }
 
 func (a App) renderActivityPreview(width int) string {
-	if len(a.activities) == 0 {
-		return ""
-	}
-	content := a.activity.View()
-
-	return a.renderPanel(
-		activityTitle,
-		activitySubtitle,
-		content,
-		width,
-		a.activityPreviewHeight(),
-		a.focus == panelActivity,
-	)
+	_ = a
+	_ = width
+	_ = activityTitle
+	_ = activitySubtitle
+	return ""
 }
 
 func (a App) renderActivityLine(entry tuistate.ActivityEntry, width int) string {
@@ -588,6 +662,77 @@ func (a App) computeLayout() layout {
 
 // helpHeight 仅计算帮助区高度，避免在 layout 计算阶段触发完整渲染。
 func (a App) helpHeight(width int) int {
-	a.help.ShowAll = a.state.ShowHelp
-	return lipgloss.Height(a.styles.footer.Width(width).Render(a.help.View(a.keys)))
+	return lipgloss.Height(a.renderHelp(width))
+}
+
+func (a App) renderLogViewer(width int, height int) string {
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(purpleAccent)).
+		Bold(true).
+		Width(max(1, width-4))
+
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(oliveGray)).
+		Width(max(1, width-4))
+
+	timeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(oliveGray)).
+		Width(20)
+
+	levelStyle := lipgloss.NewStyle().
+		Width(8)
+
+	sourceStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(lightText)).
+		Width(15)
+
+	msgStyle := lipgloss.NewStyle()
+
+	lines := []string{
+		titleStyle.Render("  Log Viewer  "),
+		headerStyle.Render("  Time                 Level     Source          Message"),
+		"",
+	}
+
+	maxOffset := a.logViewerMaxOffset(height)
+	offset := max(0, min(a.logViewerOffset, maxOffset))
+	rows := a.logViewerRows(height)
+
+	if len(a.logEntries) == 0 {
+		lines = append(lines, headerStyle.Render("  No log entries"))
+	} else {
+		for row := 0; row < rows; row++ {
+			i := len(a.logEntries) - 1 - (offset + row)
+			if i < 0 {
+				break
+			}
+			entry := a.logEntries[i]
+			ts := entry.Timestamp.Format("15:04:05")
+			level := ansi.Cut(entry.Level, 0, 8)
+			source := ansi.Cut(entry.Source, 0, 15)
+			msg := entry.Message
+			msgWidth := max(0, width-50)
+			if msgWidth > 0 && ansi.StringWidth(msg) > msgWidth {
+				msg = ansi.Cut(msg, 0, msgWidth)
+			}
+			if msgWidth == 0 {
+				msg = ""
+			}
+			lines = append(lines, timeStyle.Render(ts)+" "+levelStyle.Render(level)+" "+sourceStyle.Render(source)+" "+msgStyle.Render(msg))
+		}
+	}
+
+	positionCurrent := 0
+	positionTotal := 0
+	if len(a.logEntries) > 0 {
+		positionCurrent = offset + 1
+		positionTotal = maxOffset + 1
+	}
+	lines = append(lines, "")
+	lines = append(lines, headerStyle.Render(fmt.Sprintf("  Use Up/Down/PgUp/PgDn to scroll (%d/%d) · Ctrl+L or Esc to close", positionCurrent, positionTotal)))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	panelStyle := a.styles.panelFocused.Width(width).Height(height)
+	return panelStyle.Render(content)
 }
