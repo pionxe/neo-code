@@ -293,6 +293,7 @@ func TestNetworkServerSSELimitAndWriteErrorBranches(t *testing.T) {
 		t.Fatalf("dial first ws: %v", err)
 	}
 	defer func() { _ = firstConn.Close() }()
+	waitForWebSocketConnectionCount(t, server, 1, 2*time.Second)
 
 	sseResponse, err := http.Get("http://" + listenAddress + "/sse?method=gateway.ping&id=sse-limit")
 	if err != nil {
