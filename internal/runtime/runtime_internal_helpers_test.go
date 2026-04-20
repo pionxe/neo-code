@@ -57,6 +57,10 @@ func (s *lockProbeStore) ReplaceTranscript(ctx context.Context, input agentsessi
 	return errors.New("not implemented")
 }
 
+func (s *lockProbeStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	return 0, nil
+}
+
 func (s *stubMemoExtractor) Schedule(_ string, messages []providertypes.Message) {
 	s.mu.Lock()
 	s.calls++

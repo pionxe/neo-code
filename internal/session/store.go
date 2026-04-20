@@ -14,6 +14,12 @@ const (
 	sessionDatabaseFileName = "session.db"
 	assetsDirName           = "assets"
 	sqliteSchemaVersion     = 1
+
+	// MaxSessionMessages 定义单个会话允许持久化的最大消息数，超出时自动裁剪最旧消息。
+	MaxSessionMessages = 8192
+
+	// DefaultSessionMaxAge 定义默认的会话过期时间，30 天未更新的会话将被自动清理。
+	DefaultSessionMaxAge = 30 * 24 * time.Hour
 )
 
 var storageIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
@@ -118,6 +124,8 @@ type Store interface {
 	UpdateSessionWorkdir(ctx context.Context, input UpdateSessionWorkdirInput) error
 	UpdateSessionState(ctx context.Context, input UpdateSessionStateInput) error
 	ReplaceTranscript(ctx context.Context, input ReplaceTranscriptInput) error
+	// CleanupExpiredSessions 删除超过指定时长未更新的会话及其关联数据，返回删除数量。
+	CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error)
 }
 
 // NewSQLiteStore 创建基于 SQLite 的会话存储实现。

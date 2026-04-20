@@ -474,19 +474,31 @@ func cloneIndex(index *Index) *Index {
 		Entries:   make([]Entry, len(index.Entries)),
 		UpdatedAt: index.UpdatedAt,
 	}
-	copy(cloned.Entries, index.Entries)
+	for i, entry := range index.Entries {
+		cloned.Entries[i] = cloneEntry(entry)
+	}
 	return cloned
 }
 
-// trimIndexEntries 先按条目数、再按索引字节数裁剪最旧条目，并返回被删除的记录。
+// cloneEntry 深拷贝单条记忆条目，避免 Keywords 等切片字段共享底层数组。
+func cloneEntry(entry Entry) Entry {
+	cloned := entry
+	if len(entry.Keywords) > 0 {
+		cloned.Keywords = append([]string(nil), entry.Keywords...)
+	}
+	return cloned
+}
+
+// trimIndexEntries 按优先级和条目数裁剪索引，优先移除低优先级条目，并返回被删除的记录。
 func trimIndexEntries(index *Index, maxEntries int, maxIndexBytes int) []Entry {
 	if index == nil {
 		return nil
 	}
 	removed := make([]Entry, 0)
 	for maxEntries > 0 && len(index.Entries) > maxEntries {
-		removed = append(removed, index.Entries[0])
-		index.Entries = index.Entries[1:]
+		victimIdx := findEvictionVictim(index.Entries)
+		removed = append(removed, index.Entries[victimIdx])
+		index.Entries = append(index.Entries[:victimIdx], index.Entries[victimIdx+1:]...)
 	}
 	if maxIndexBytes > 0 && len(index.Entries) > 0 {
 		removed = append(removed, trimIndexEntriesByBytes(index, maxIndexBytes)...)
@@ -494,7 +506,24 @@ func trimIndexEntries(index *Index, maxEntries int, maxIndexBytes int) []Entry {
 	return removed
 }
 
-// trimIndexEntriesByBytes 在索引超过字节阈值时，通过二分定位最小移除数量并返回被删除条目。
+// findEvictionVictim 找到优先级最低的条目索引；同优先级时优先移除最旧（靠前）的条目。
+func findEvictionVictim(entries []Entry) int {
+	if len(entries) == 0 {
+		return -1
+	}
+	minPriority := entries[0].evictionPriority()
+	victimIdx := 0
+	for i, entry := range entries {
+		p := entry.evictionPriority()
+		if p < minPriority {
+			minPriority = p
+			victimIdx = i
+		}
+	}
+	return victimIdx
+}
+
+// trimIndexEntriesByBytes 在索引超过字节阈值时，按统一淘汰优先级循环移除条目直到回到字节阈值内。
 func trimIndexEntriesByBytes(index *Index, maxIndexBytes int) []Entry {
 	if index == nil || len(index.Entries) == 0 || maxIndexBytes <= 0 {
 		return nil
@@ -503,20 +532,15 @@ func trimIndexEntriesByBytes(index *Index, maxIndexBytes int) []Entry {
 		return nil
 	}
 
-	entries := index.Entries
-	lo, hi := 0, len(entries)
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		candidate := &Index{Entries: entries[mid:], UpdatedAt: index.UpdatedAt}
-		if len(RenderIndex(candidate)) > maxIndexBytes {
-			lo = mid + 1
-			continue
+	removed := make([]Entry, 0)
+	for len(index.Entries) > 0 && len(RenderIndex(index)) > maxIndexBytes {
+		victimIdx := findEvictionVictim(index.Entries)
+		if victimIdx < 0 {
+			break
 		}
-		hi = mid
+		removed = append(removed, index.Entries[victimIdx])
+		index.Entries = append(index.Entries[:victimIdx], index.Entries[victimIdx+1:]...)
 	}
-
-	removed := append([]Entry(nil), entries[:lo]...)
-	index.Entries = entries[lo:]
 	return removed
 }
 

@@ -136,9 +136,9 @@ type Service struct {
 	permissionAskLocks map[string]*permissionAskLockEntry
 }
 
-// sessionLockEntry 维护单个会话锁及其当前引用计数，用于在无引用时回收 map 项。
+// sessionLockEntry 维护单个会话读写锁及其当前引用计数，用于在无引用时回收 map 项。
 type sessionLockEntry struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	refs int
 }
 

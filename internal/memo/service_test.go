@@ -395,3 +395,68 @@ func TestTrimIndexEntriesByBytesRemovesMinimalPrefix(t *testing.T) {
 		t.Fatalf("remaining entries = %#v", index.Entries)
 	}
 }
+
+func TestTrimIndexEntriesPrefersLowestPriorityEntries(t *testing.T) {
+	index := &Index{
+		Entries: []Entry{
+			{Type: TypeUser, Title: "user", Source: SourceAutoExtract},
+			{Type: TypeReference, Title: "reference", Source: SourceAutoExtract},
+			{Type: TypeProject, Title: "project", Source: SourceUserManual},
+		},
+	}
+
+	removed := trimIndexEntries(index, 2, 0)
+	if len(removed) != 1 || removed[0].Title != "reference" {
+		t.Fatalf("removed = %#v, want reference entry", removed)
+	}
+	if len(index.Entries) != 2 {
+		t.Fatalf("len(index.Entries) = %d, want 2", len(index.Entries))
+	}
+}
+
+func TestTrimIndexEntriesByBytesPrefersLowestPriorityEntries(t *testing.T) {
+	index := &Index{
+		Entries: []Entry{
+			{Type: TypeUser, Title: "keep-user", Content: "u", Source: SourceUserManual},
+			{Type: TypeReference, Title: strings.Repeat("ref", 32), Content: strings.Repeat("payload", 64), Source: SourceAutoExtract},
+			{Type: TypeProject, Title: "keep-project", Content: "p", Source: SourceAutoExtract},
+		},
+	}
+
+	target := &Index{
+		Entries: []Entry{
+			index.Entries[0],
+			index.Entries[2],
+		},
+	}
+	maxIndexBytes := len(RenderIndex(target))
+	removed := trimIndexEntries(index, 10, maxIndexBytes)
+
+	if len(removed) != 1 || removed[0].Type != TypeReference {
+		t.Fatalf("removed = %#v, want only low-priority reference entry", removed)
+	}
+	if len(index.Entries) != 2 {
+		t.Fatalf("len(index.Entries) = %d, want 2", len(index.Entries))
+	}
+	if index.Entries[0].Title != "keep-user" || index.Entries[1].Title != "keep-project" {
+		t.Fatalf("remaining entries = %#v, want keep-user and keep-project", index.Entries)
+	}
+	if got := len(RenderIndex(index)); got > maxIndexBytes {
+		t.Fatalf("rendered index bytes = %d, want <= %d", got, maxIndexBytes)
+	}
+}
+
+func TestFindEvictionVictimBranches(t *testing.T) {
+	if got := findEvictionVictim(nil); got != -1 {
+		t.Fatalf("findEvictionVictim(nil) = %d, want -1", got)
+	}
+
+	entries := []Entry{
+		{Type: TypeReference, Title: "first", Source: SourceAutoExtract},
+		{Type: TypeReference, Title: "second", Source: SourceAutoExtract},
+		{Type: TypeProject, Title: "third", Source: SourceAutoExtract},
+	}
+	if got := findEvictionVictim(entries); got != 0 {
+		t.Fatalf("findEvictionVictim() = %d, want 0 for first lowest-priority entry", got)
+	}
+}

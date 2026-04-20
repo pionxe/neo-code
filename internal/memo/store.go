@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	agentsession "neo-code/internal/session"
 )
@@ -18,11 +19,20 @@ const (
 	memoFileName  = "MEMO.md"
 )
 
+// cachedIndex 缓存已解析的索引及其文件修改时间，用于减少高频读取时的磁盘 I/O。
+type cachedIndex struct {
+	content *Index
+	modTime time.Time
+}
+
 // FileStore 基于文件系统实现 Store 接口，采用工作区隔离的双层目录布局。
 type FileStore struct {
 	mu            sync.RWMutex
 	baseDir       string
 	workspaceRoot string
+
+	cacheMu    sync.RWMutex
+	indexCache map[Scope]*cachedIndex
 }
 
 // NewFileStore 创建 FileStore 实例，目录基于 baseDir 和 workspaceRoot 计算工作区隔离路径。
@@ -30,16 +40,30 @@ func NewFileStore(baseDir string, workspaceRoot string) *FileStore {
 	return &FileStore{
 		baseDir:       baseDir,
 		workspaceRoot: workspaceRoot,
+		indexCache:    make(map[Scope]*cachedIndex),
 	}
 }
 
-// LoadIndex 加载指定分层下的 MEMO.md 索引文件并解析为 Index 结构。
+// LoadIndex 加载指定分层下的 MEMO.md 索引文件并解析为 Index 结构，优先复用内存缓存。
 func (s *FileStore) LoadIndex(ctx context.Context, scope Scope) (*Index, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := validateStorageScope(scope); err != nil {
 		return nil, err
+	}
+
+	indexPath := filepath.Join(s.scopeDir(scope), memoFileName)
+	var cachedModTime time.Time
+	if info, statErr := os.Stat(indexPath); statErr == nil {
+		cachedModTime = info.ModTime()
+		s.cacheMu.RLock()
+		if cached, ok := s.indexCache[scope]; ok && cachedModTime.Equal(cached.modTime) {
+			result := cloneIndex(cached.content)
+			s.cacheMu.RUnlock()
+			return result, nil
+		}
+		s.cacheMu.RUnlock()
 	}
 
 	s.mu.RLock()
@@ -52,7 +76,29 @@ func (s *FileStore) LoadIndex(ctx context.Context, scope Scope) (*Index, error) 
 	if err != nil {
 		return nil, fmt.Errorf("memo: read index: %w", err)
 	}
-	return ParseIndex(string(data))
+	index, err := ParseIndex(string(data))
+	if err != nil {
+		return nil, err
+	}
+	cachedContent := cloneIndex(index)
+
+	if !cachedModTime.IsZero() {
+		s.cacheMu.Lock()
+		s.indexCache[scope] = &cachedIndex{
+			content: cachedContent,
+			modTime: cachedModTime,
+		}
+		s.cacheMu.Unlock()
+	} else if info, statErr := os.Stat(indexPath); statErr == nil {
+		s.cacheMu.Lock()
+		s.indexCache[scope] = &cachedIndex{
+			content: cachedContent,
+			modTime: info.ModTime(),
+		}
+		s.cacheMu.Unlock()
+	}
+
+	return cloneIndex(cachedContent), nil
 }
 
 // SaveIndex 将索引写入指定分层下的 MEMO.md 文件，采用临时文件 + 原子替换策略。
@@ -92,7 +138,23 @@ func (s *FileStore) SaveIndex(ctx context.Context, scope Scope, index *Index) er
 	if err := os.Rename(temp, target); err != nil {
 		return fmt.Errorf("memo: commit index: %w", err)
 	}
+
+	s.cacheMu.Lock()
+	s.indexCache[scope] = &cachedIndex{
+		content: cloneIndex(index),
+		modTime: cacheModTimeAfterSave(target),
+	}
+	s.cacheMu.Unlock()
+
 	return nil
+}
+
+// cacheModTimeAfterSave 在原子写入后读取文件的真实 mtime，确保缓存与后续 LoadIndex 的 stat 比较一致。
+func cacheModTimeAfterSave(target string) time.Time {
+	if info, err := os.Stat(target); err == nil {
+		return info.ModTime()
+	}
+	return time.Now()
 }
 
 // LoadTopic 读取指定分层下的 topic 文件完整内容。

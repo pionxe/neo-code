@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// gitCommandTimeout 定义 git 命令的最大等待时间，避免网络挂载或损坏仓库阻塞上下文构建。
+const gitCommandTimeout = 5 * time.Second
 
 type gitCommandRunner func(ctx context.Context, workdir string, args ...string) (string, error)
 
@@ -104,8 +108,11 @@ func renderSystemStateSection(state SystemState) promptSection {
 	}
 }
 
+// runGitCommand 执行 git 命令并在超时后自动取消，避免阻塞上下文构建主链路。
 func runGitCommand(ctx context.Context, workdir string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, "git", append([]string{"-C", workdir}, args...)...)
+	timeoutCtx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
+	defer cancel()
+	command := exec.CommandContext(timeoutCtx, "git", append([]string{"-C", workdir}, args...)...)
 	output, err := command.Output()
 	if err != nil {
 		return "", err

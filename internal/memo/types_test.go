@@ -93,3 +93,52 @@ func TestEntryFields(t *testing.T) {
 		t.Errorf("len(Entry.Keywords) = %d, want 2", len(e.Keywords))
 	}
 }
+
+func TestEntryEvictionPriority(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry Entry
+		want  int
+	}{
+		{
+			name:  "reference auto extract",
+			entry: Entry{Type: TypeReference, Source: SourceAutoExtract},
+			want:  10,
+		},
+		{
+			name:  "project auto extract",
+			entry: Entry{Type: TypeProject, Source: SourceAutoExtract},
+			want:  20,
+		},
+		{
+			name:  "feedback auto extract",
+			entry: Entry{Type: TypeFeedback, Source: SourceAutoExtract},
+			want:  30,
+		},
+		{
+			name:  "user auto extract",
+			entry: Entry{Type: TypeUser, Source: SourceAutoExtract},
+			want:  40,
+		},
+		{
+			name:  "manual reference",
+			entry: Entry{Type: TypeReference, Source: SourceUserManual},
+			want:  60,
+		},
+		{
+			name:  "tool initiated feedback",
+			entry: Entry{Type: TypeFeedback, Source: SourceToolInitiated},
+			want:  80,
+		},
+		{
+			name:  "unknown type",
+			entry: Entry{Type: Type("unknown"), Source: SourceAutoExtract},
+			want:  0,
+		},
+	}
+	for _, tt := range tests {
+		if got := tt.entry.evictionPriority(); got != tt.want {
+			t.Fatalf("%s: evictionPriority() = %d, want %d", tt.name, got, tt.want)
+		}
+	}
+}
