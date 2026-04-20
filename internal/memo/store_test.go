@@ -106,6 +106,41 @@ func TestFileStoreSaveIndexCachesCloneOfInput(t *testing.T) {
 	}
 }
 
+func TestFileStoreLoadIndexRefreshesCacheWhenMemoFileMtimeChanges(t *testing.T) {
+	store := NewFileStore(t.TempDir(), "/workspace/project")
+	if err := store.SaveIndex(context.Background(), ScopeUser, &Index{
+		Entries: []Entry{{Type: TypeUser, Title: "first", Content: "body"}},
+	}); err != nil {
+		t.Fatalf("SaveIndex() error = %v", err)
+	}
+
+	first, err := store.LoadIndex(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("LoadIndex(first) error = %v", err)
+	}
+	if len(first.Entries) != 1 || first.Entries[0].Title != "first" {
+		t.Fatalf("first load entries = %#v", first.Entries)
+	}
+
+	indexPath := filepath.Join(store.scopeDir(ScopeUser), memoFileName)
+	updated := &Index{Entries: []Entry{{Type: TypeUser, Title: "second", Content: "updated"}}}
+	if err := os.WriteFile(indexPath, []byte(RenderIndex(updated)), 0o644); err != nil {
+		t.Fatalf("WriteFile(updated index) error = %v", err)
+	}
+	newModTime := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(indexPath, newModTime, newModTime); err != nil {
+		t.Fatalf("Chtimes() error = %v", err)
+	}
+
+	second, err := store.LoadIndex(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("LoadIndex(second) error = %v", err)
+	}
+	if len(second.Entries) != 1 || second.Entries[0].Title != "second" {
+		t.Fatalf("second load entries = %#v, want refreshed disk content", second.Entries)
+	}
+}
+
 func TestFileStoreSaveAndLoadTopicByScope(t *testing.T) {
 	store := NewFileStore(t.TempDir(), "/workspace/project")
 	content := "---\ntype: user\n---\n\nbody\n"

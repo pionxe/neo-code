@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -989,6 +990,43 @@ func TestBuildRuntimeCleansResourcesWhenToolManagerBuildFails(t *testing.T) {
 	}
 	if !closed {
 		t.Fatalf("expected MCP resources to be closed on BuildRuntime failure")
+	}
+}
+
+func TestBuildRuntimeLogsSessionCleanupWarningAndContinues(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	originalCleanupExpiredSessions := cleanupExpiredSessions
+	t.Cleanup(func() { cleanupExpiredSessions = originalCleanupExpiredSessions })
+	cleanupExpiredSessions = func(
+		ctx context.Context,
+		store *agentsession.SQLiteStore,
+		maxAge time.Duration,
+	) (int, error) {
+		return 0, errors.New("cleanup failed")
+	}
+
+	var logBuffer bytes.Buffer
+	originalLogWriter := log.Writer()
+	log.SetOutput(&logBuffer)
+	t.Cleanup(func() { log.SetOutput(originalLogWriter) })
+
+	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildRuntime() error = %v", err)
+	}
+	if bundle.Close != nil {
+		defer bundle.Close()
+	}
+	if bundle.Runtime == nil {
+		t.Fatalf("expected runtime bundle to be created")
+	}
+	if !strings.Contains(logBuffer.String(), "session cleanup warning: cleanup failed") {
+		t.Fatalf("expected cleanup warning in logs, got %q", logBuffer.String())
 	}
 }
 

@@ -38,6 +38,13 @@ var (
 	setConsoleInputCodePage  = platformSetConsoleInputCodePage
 	buildToolManagerFunc     = buildToolManager
 	newTUIWithMemo           = tui.NewWithMemo
+	cleanupExpiredSessions   = func(
+		ctx context.Context,
+		store *agentsession.SQLiteStore,
+		maxAge time.Duration,
+	) (int, error) {
+		return store.CleanupExpiredSessions(ctx, maxAge)
+	}
 )
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
@@ -151,7 +158,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	sessionStore := agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
 
 	// 启动时自动清理过期会话，避免数据库无限膨胀。
-	if _, err := sessionStore.CleanupExpiredSessions(ctx, agentsession.DefaultSessionMaxAge); err != nil {
+	if _, err := cleanupExpiredSessions(ctx, sessionStore, agentsession.DefaultSessionMaxAge); err != nil {
 		log.Printf("session cleanup warning: %v", err)
 	}
 

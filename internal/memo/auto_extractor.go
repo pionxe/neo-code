@@ -64,16 +64,11 @@ func NewAutoExtractor(extractor Extractor, svc *Service, extractTimeout time.Dur
 
 // Schedule 按会话维度安排一次后台自动提取。
 func (a *AutoExtractor) Schedule(sessionID string, messages []providertypes.Message) {
-	a.schedule(sessionID, messages, a.extractor)
+	a.ScheduleWithExtractor(sessionID, messages, a.extractor)
 }
 
 // ScheduleWithExtractor 允许调用方在调度时绑定本次请求专用的提取器快照。
 func (a *AutoExtractor) ScheduleWithExtractor(sessionID string, messages []providertypes.Message, extractor Extractor) {
-	a.schedule(sessionID, messages, extractor)
-}
-
-// schedule 统一处理会话级别的自动提取调度。
-func (a *AutoExtractor) schedule(sessionID string, messages []providertypes.Message, extractor Extractor) {
 	if a == nil || extractor == nil || a.svc == nil {
 		return
 	}
