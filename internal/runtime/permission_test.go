@@ -1245,8 +1245,8 @@ func TestResolveToolExecutionTimeoutForSpawnSubagent(t *testing.T) {
 		Name:      tools.ToolNameSpawnSubAgent,
 		Arguments: `{"mode":"todo","items":[{"id":"t1","content":"x"}]}`,
 	}, base)
-	if got != base {
-		t.Fatalf("expected todo mode to keep base timeout %v, got %v", base, got)
+	if got < defaultInlineSubAgentToolTimeout {
+		t.Fatalf("expected unsupported mode payload to fall back to inline timeout >= %v, got %v", defaultInlineSubAgentToolTimeout, got)
 	}
 
 	got = resolveToolExecutionTimeout(providertypes.ToolCall{

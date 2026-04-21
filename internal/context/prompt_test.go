@@ -128,11 +128,8 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	if !strings.Contains(toolUsage, "Execute Todos sequentially in the main loop") {
 		t.Fatalf("expected Tool Usage to enforce sequential todo execution, got %q", toolUsage)
 	}
-	if !strings.Contains(toolUsage, "`mode=inline` is an immediate execution tool call") {
+	if !strings.Contains(toolUsage, "`spawn_subagent` only supports `mode=inline`") {
 		t.Fatalf("expected Tool Usage to describe immediate spawn_subagent semantics, got %q", toolUsage)
-	}
-	if !strings.Contains(toolUsage, "`mode=todo` only creates `executor=subagent` todo items") {
-		t.Fatalf("expected Tool Usage to describe mode=todo ownership, got %q", toolUsage)
 	}
 	if !strings.Contains(toolUsage, "set minimal `allowed_tools` and `allowed_paths`") {
 		t.Fatalf("expected Tool Usage to describe explicit capability bounds, got %q", toolUsage)

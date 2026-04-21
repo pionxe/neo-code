@@ -58,15 +58,22 @@ func (b Budget) normalize(defaults Budget) Budget {
 
 // Capability 描述子代理运行时可用能力边界。
 type Capability struct {
-	AllowedTools []string
-	AllowedPaths []string
+	AllowedTools    []string
+	AllowedPaths    []string
+	CapabilityToken *security.CapabilityToken
 }
 
 // normalize 归一化能力列表并去重。
 func (c Capability) normalize() Capability {
+	var token *security.CapabilityToken
+	if c.CapabilityToken != nil {
+		normalized := c.CapabilityToken.Normalize()
+		token = &normalized
+	}
 	return Capability{
-		AllowedTools: dedupeAndTrim(c.AllowedTools),
-		AllowedPaths: dedupeAndTrim(c.AllowedPaths),
+		AllowedTools:    dedupeAndTrim(c.AllowedTools),
+		AllowedPaths:    dedupeAndTrim(c.AllowedPaths),
+		CapabilityToken: token,
 	}
 }
 

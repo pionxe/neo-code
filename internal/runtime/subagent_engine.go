@@ -265,7 +265,7 @@ func executeSubAgentToolCallBatch(
 			Workdir:         stepInput.Workdir,
 			Timeout:         toolTimeout,
 			Call:            normalizedCall,
-			CapabilityToken: nil,
+			CapabilityToken: stepInput.Capability.CapabilityToken,
 			Capability:      stepInput.Capability,
 		})
 		message := subAgentToolResultToMessage(normalizedCall, execResult)
@@ -333,7 +333,7 @@ func buildSubAgentSystemPrompt(policy subagent.RolePolicy, allowedTools []string
 		"当需要外部事实、文件状态或命令执行结果时必须调用工具；纯推理可直接完成。",
 		"工具能力边界由 runtime 安全层强制执行，越权调用会收到 denied/tool error 结果，不允许绕过。",
 		"如需文件访问，只能访问 allowed_paths 范围内路径；如需工具调用，只能使用 allowed_tools 列表。",
-		"若父代理通过 spawn_subagent(mode=todo) 创建任务，你只处理当前 task，不直接驱动 todo 状态机。",
+		"你只处理当前 task，不直接驱动 todo 状态机。",
 		"工具失败后优先换参数或换工具，若仍失败则在输出中明确风险与后续动作。",
 		"最终输出必须是 JSON 对象，且必须包含键：summary, findings, patches, risks, next_actions, artifacts。",
 		"字段类型约束：summary(string)、findings/patches/risks/next_actions/artifacts(string数组)。",

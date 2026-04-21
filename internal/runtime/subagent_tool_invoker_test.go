@@ -111,8 +111,9 @@ func TestRuntimeSubAgentInvokerRunInheritsParentCapabilityByDefault(t *testing.T
 
 	invoker := newRuntimeSubAgentInvoker(service, "run-inline", "session-inline", "agent-main", t.TempDir())
 	parent := &security.CapabilityToken{
-		AllowedTools: []string{"filesystem_read_file", "bash"},
-		AllowedPaths: []string{"/workspace"},
+		AllowedTools:  []string{"filesystem_read_file", "bash"},
+		AllowedPaths:  []string{"/workspace"},
+		NetworkPolicy: security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
 	}
 	_, err := invoker.Run(context.Background(), tools.SubAgentRunInput{
 		Role:                  subagent.RoleCoder,
@@ -131,6 +132,12 @@ func TestRuntimeSubAgentInvokerRunInheritsParentCapabilityByDefault(t *testing.T
 	}
 	if !slices.Equal(captured.AllowedPaths, []string{"/workspace"}) {
 		t.Fatalf("allowed paths = %v, want parent capability", captured.AllowedPaths)
+	}
+	if captured.CapabilityToken == nil {
+		t.Fatalf("expected parent capability token to be propagated")
+	}
+	if captured.CapabilityToken.NetworkPolicy.Mode != security.NetworkPermissionDenyAll {
+		t.Fatalf("network policy mode = %q, want deny_all", captured.CapabilityToken.NetworkPolicy.Mode)
 	}
 }
 
@@ -240,6 +247,9 @@ func TestResolveInlineSubAgentCapabilityWithoutParent(t *testing.T) {
 	}
 	if !slices.Equal(got.AllowedPaths, []string{"/a"}) {
 		t.Fatalf("allowed paths = %v, want [/a]", got.AllowedPaths)
+	}
+	if got.CapabilityToken != nil {
+		t.Fatalf("expected nil capability token without parent, got %+v", got.CapabilityToken)
 	}
 }
 

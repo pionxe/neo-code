@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -295,14 +296,30 @@ func TestSubAgentRuntimeToolExecutorExecuteToolEvents(t *testing.T) {
 		workdir := t.TempDir()
 		allowed := filepath.Join(workdir, "safe")
 		denied := filepath.Join(workdir, "unsafe", "note.txt")
+		parent := security.CapabilityToken{
+			ID:              "parent-path-deny",
+			TaskID:          "task-parent-path-deny",
+			AgentID:         "agent-parent-path-deny",
+			IssuedAt:        time.Now().UTC().Add(-time.Minute),
+			ExpiresAt:       time.Now().UTC().Add(10 * time.Minute),
+			AllowedTools:    []string{tools.ToolNameFilesystemReadFile},
+			AllowedPaths:    []string{allowed},
+			NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+			WritePermission: security.WritePermissionNone,
+		}
+		signedParent, err := manager.CapabilitySigner().Sign(parent)
+		if err != nil {
+			t.Fatalf("sign parent token: %v", err)
+		}
 		result, execErr := executor.ExecuteTool(context.Background(), subagent.ToolExecutionInput{
-			RunID:     "run-subagent-cap-path-deny",
-			SessionID: "session-subagent-cap-path-deny",
-			TaskID:    "task-subagent-cap-path-deny",
-			Role:      subagent.RoleCoder,
-			AgentID:   "subagent:cap-path-deny",
-			Workdir:   workdir,
-			Timeout:   2 * time.Second,
+			RunID:           "run-subagent-cap-path-deny",
+			SessionID:       "session-subagent-cap-path-deny",
+			TaskID:          "task-subagent-cap-path-deny",
+			Role:            subagent.RoleCoder,
+			AgentID:         "subagent:cap-path-deny",
+			Workdir:         workdir,
+			Timeout:         2 * time.Second,
+			CapabilityToken: &signedParent,
 			Capability: subagent.Capability{
 				AllowedTools: []string{tools.ToolNameFilesystemReadFile},
 				AllowedPaths: []string{allowed},
@@ -335,6 +352,145 @@ func TestSubAgentRuntimeToolExecutorExecuteToolEvents(t *testing.T) {
 		)
 	})
 
+	t.Run("parent deny_all network should deny inline webfetch", func(t *testing.T) {
+		t.Parallel()
+
+		registry := tools.NewRegistry()
+		registry.Register(&stubTool{name: tools.ToolNameWebFetch, content: "ok"})
+		gateway, err := security.NewStaticGateway(security.DecisionAllow, nil)
+		if err != nil {
+			t.Fatalf("NewStaticGateway() error = %v", err)
+		}
+		manager, err := tools.NewManager(registry, gateway, nil)
+		if err != nil {
+			t.Fatalf("NewManager() error = %v", err)
+		}
+		parent := security.CapabilityToken{
+			ID:              "parent-deny-network",
+			TaskID:          "task-parent",
+			AgentID:         "agent-parent",
+			IssuedAt:        time.Now().UTC().Add(-time.Minute),
+			ExpiresAt:       time.Now().UTC().Add(10 * time.Minute),
+			AllowedTools:    []string{tools.ToolNameWebFetch},
+			AllowedPaths:    []string{t.TempDir()},
+			NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+			WritePermission: security.WritePermissionNone,
+		}
+		signedParent, err := manager.CapabilitySigner().Sign(parent)
+		if err != nil {
+			t.Fatalf("sign parent token: %v", err)
+		}
+
+		service := NewWithFactory(
+			newRuntimeConfigManager(t),
+			manager,
+			newMemoryStore(),
+			&scriptedProviderFactory{provider: &scriptedProvider{}},
+			nil,
+		)
+		executor := newSubAgentRuntimeToolExecutor(service)
+
+		result, execErr := executor.ExecuteTool(context.Background(), subagent.ToolExecutionInput{
+			RunID:           "run-subagent-cap-network-deny",
+			SessionID:       "session-subagent-cap-network-deny",
+			TaskID:          "task-subagent-cap-network-deny",
+			Role:            subagent.RoleCoder,
+			AgentID:         "subagent:cap-network-deny",
+			Workdir:         t.TempDir(),
+			Timeout:         2 * time.Second,
+			CapabilityToken: &signedParent,
+			Capability: subagent.Capability{
+				AllowedTools: []string{tools.ToolNameWebFetch},
+			},
+			Call: providertypes.ToolCall{
+				ID:        "call-cap-network-deny",
+				Name:      tools.ToolNameWebFetch,
+				Arguments: `{"url":"https://example.com"}`,
+			},
+		})
+		if execErr == nil {
+			t.Fatalf("expected network capability deny error")
+		}
+		if !errors.Is(execErr, tools.ErrCapabilityDenied) {
+			t.Fatalf("expected ErrCapabilityDenied, got %v", execErr)
+		}
+		if result.Decision != permissionDecisionDeny {
+			t.Fatalf("decision = %q, want %q", result.Decision, permissionDecisionDeny)
+		}
+
+		events := collectRuntimeEvents(service.Events())
+		assertEventSequence(t, events, []EventType{EventSubAgentToolCallStarted, EventSubAgentToolCallDenied})
+		assertSubAgentToolEventPayload(
+			t,
+			events,
+			EventSubAgentToolCallDenied,
+			tools.ToolNameWebFetch,
+			permissionDecisionDeny,
+			false,
+		)
+	})
+
+	t.Run("without parent capability token should still go through permission decision chain", func(t *testing.T) {
+		t.Parallel()
+
+		registry := tools.NewRegistry()
+		registry.Register(&stubTool{name: tools.ToolNameWebFetch, content: "ok"})
+		gateway, err := security.NewStaticGateway(security.DecisionDeny, nil)
+		if err != nil {
+			t.Fatalf("NewStaticGateway() error = %v", err)
+		}
+		manager, err := tools.NewManager(registry, gateway, nil)
+		if err != nil {
+			t.Fatalf("NewManager() error = %v", err)
+		}
+		service := NewWithFactory(
+			newRuntimeConfigManager(t),
+			manager,
+			newMemoryStore(),
+			&scriptedProviderFactory{provider: &scriptedProvider{}},
+			nil,
+		)
+		executor := newSubAgentRuntimeToolExecutor(service)
+
+		result, execErr := executor.ExecuteTool(context.Background(), subagent.ToolExecutionInput{
+			RunID:     "run-subagent-no-parent-capability",
+			SessionID: "session-subagent-no-parent-capability",
+			TaskID:    "task-subagent-no-parent-capability",
+			Role:      subagent.RoleCoder,
+			AgentID:   "subagent:no-parent-capability",
+			Workdir:   t.TempDir(),
+			Timeout:   2 * time.Second,
+			Capability: subagent.Capability{
+				AllowedTools: []string{tools.ToolNameWebFetch},
+			},
+			Call: providertypes.ToolCall{
+				ID:        "call-no-parent-capability",
+				Name:      tools.ToolNameWebFetch,
+				Arguments: `{"url":"https://example.com"}`,
+			},
+		})
+		if execErr == nil {
+			t.Fatalf("expected permission deny error")
+		}
+		if !errors.Is(execErr, tools.ErrPermissionDenied) {
+			t.Fatalf("expected ErrPermissionDenied, got %v", execErr)
+		}
+		if result.Decision != string(security.DecisionDeny) {
+			t.Fatalf("decision = %q, want deny", result.Decision)
+		}
+
+		events := collectRuntimeEvents(service.Events())
+		assertEventSequence(t, events, []EventType{EventSubAgentToolCallStarted, EventSubAgentToolCallDenied})
+		assertSubAgentToolEventPayload(
+			t,
+			events,
+			EventSubAgentToolCallDenied,
+			tools.ToolNameWebFetch,
+			string(security.DecisionDeny),
+			false,
+		)
+	})
+
 	t.Run("capability allowed_paths should allow in-scope filesystem access", func(t *testing.T) {
 		t.Parallel()
 
@@ -361,14 +517,30 @@ func TestSubAgentRuntimeToolExecutorExecuteToolEvents(t *testing.T) {
 		workdir := t.TempDir()
 		allowed := filepath.Join(workdir, "safe")
 		allowedFile := filepath.Join(allowed, "note.txt")
+		parent := security.CapabilityToken{
+			ID:              "parent-path-allow",
+			TaskID:          "task-parent-path-allow",
+			AgentID:         "agent-parent-path-allow",
+			IssuedAt:        time.Now().UTC().Add(-time.Minute),
+			ExpiresAt:       time.Now().UTC().Add(10 * time.Minute),
+			AllowedTools:    []string{tools.ToolNameFilesystemReadFile},
+			AllowedPaths:    []string{allowed},
+			NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+			WritePermission: security.WritePermissionNone,
+		}
+		signedParent, err := manager.CapabilitySigner().Sign(parent)
+		if err != nil {
+			t.Fatalf("sign parent token: %v", err)
+		}
 		result, execErr := executor.ExecuteTool(context.Background(), subagent.ToolExecutionInput{
-			RunID:     "run-subagent-cap-path-allow",
-			SessionID: "session-subagent-cap-path-allow",
-			TaskID:    "task-subagent-cap-path-allow",
-			Role:      subagent.RoleCoder,
-			AgentID:   "subagent:cap-path-allow",
-			Workdir:   workdir,
-			Timeout:   2 * time.Second,
+			RunID:           "run-subagent-cap-path-allow",
+			SessionID:       "session-subagent-cap-path-allow",
+			TaskID:          "task-subagent-cap-path-allow",
+			Role:            subagent.RoleCoder,
+			AgentID:         "subagent:cap-path-allow",
+			Workdir:         workdir,
+			Timeout:         2 * time.Second,
+			CapabilityToken: &signedParent,
 			Capability: subagent.Capability{
 				AllowedTools: []string{tools.ToolNameFilesystemReadFile},
 				AllowedPaths: []string{allowed},
@@ -449,7 +621,7 @@ func TestSubAgentToolEventEmitRespectsContextCancellation(t *testing.T) {
 func TestResolveSubAgentCapabilityToken(t *testing.T) {
 	t.Parallel()
 
-	t.Run("explicit capability token should be normalized and reused", func(t *testing.T) {
+	t.Run("without parent token should not mint capability token", func(t *testing.T) {
 		t.Parallel()
 
 		service := NewWithFactory(
@@ -460,24 +632,17 @@ func TestResolveSubAgentCapabilityToken(t *testing.T) {
 			nil,
 		)
 		executor := newSubAgentRuntimeToolExecutor(service).(*subAgentRuntimeToolExecutor)
-		token := security.CapabilityToken{
-			ID:           "token-1",
-			TaskID:       "task-1",
-			AgentID:      "agent-1",
-			IssuedAt:     time.Now().UTC(),
-			ExpiresAt:    time.Now().UTC().Add(2 * time.Minute),
-			AllowedTools: []string{" filesystem_read_file ", "filesystem_read_file"},
-		}
-		got := executor.resolveCapabilityToken(subagent.ToolExecutionInput{CapabilityToken: &token})
-		if got == nil {
-			t.Fatalf("expected token")
-		}
-		if len(got.AllowedTools) != 1 || got.AllowedTools[0] != tools.ToolNameFilesystemReadFile {
-			t.Fatalf("normalized allowed tools = %v", got.AllowedTools)
+		got := executor.resolveCapabilityToken(subagent.ToolExecutionInput{
+			Capability: subagent.Capability{
+				AllowedTools: []string{tools.ToolNameFilesystemReadFile},
+			},
+		})
+		if got != nil {
+			t.Fatalf("expected nil token without parent capability token, got %+v", got)
 		}
 	})
 
-	t.Run("capability should mint signed token when manager exposes signer", func(t *testing.T) {
+	t.Run("with parent token and signer should mint constrained child token", func(t *testing.T) {
 		t.Parallel()
 
 		registry := tools.NewRegistry()
@@ -498,55 +663,56 @@ func TestResolveSubAgentCapabilityToken(t *testing.T) {
 			nil,
 		)
 		executor := newSubAgentRuntimeToolExecutor(service).(*subAgentRuntimeToolExecutor)
-		workdir := t.TempDir()
+		now := time.Now().UTC()
+		parent := security.CapabilityToken{
+			ID:              "parent-token",
+			TaskID:          "parent-task",
+			AgentID:         "agent-main",
+			IssuedAt:        now.Add(-time.Minute),
+			ExpiresAt:       now.Add(5 * time.Minute),
+			AllowedTools:    []string{tools.ToolNameFilesystemReadFile, tools.ToolNameWebFetch},
+			AllowedPaths:    []string{"/workspace"},
+			NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+			WritePermission: security.WritePermissionNone,
+		}
+		signedParent, err := manager.CapabilitySigner().Sign(parent)
+		if err != nil {
+			t.Fatalf("sign parent token: %v", err)
+		}
+
 		got := executor.resolveCapabilityToken(subagent.ToolExecutionInput{
-			TaskID:  "task-capability-sign",
-			AgentID: "subagent:capability-sign",
-			Call: providertypes.ToolCall{
-				Name: tools.ToolNameFilesystemReadFile,
-			},
+			TaskID:          "task-capability-sign",
+			AgentID:         "subagent:capability-sign",
+			CapabilityToken: &signedParent,
 			Capability: subagent.Capability{
-				AllowedTools: []string{tools.ToolNameFilesystemReadFile},
-				AllowedPaths: []string{workdir, workdir},
+				AllowedTools: []string{tools.ToolNameWebFetch},
+				AllowedPaths: []string{"/workspace/project"},
 			},
 		})
 		if got == nil {
 			t.Fatalf("expected signed capability token")
 		}
-		if strings.TrimSpace(got.Signature) == "" {
-			t.Fatalf("expected non-empty signature")
+		if got.ID == signedParent.ID {
+			t.Fatalf("expected child token id to be regenerated")
 		}
-		if len(got.AllowedPaths) != 1 || got.AllowedPaths[0] != workdir {
-			t.Fatalf("allowed_paths = %v, want [%s]", got.AllowedPaths, workdir)
+		if !slices.Equal(got.AllowedTools, []string{tools.ToolNameWebFetch}) {
+			t.Fatalf("allowed_tools = %v, want [webfetch]", got.AllowedTools)
+		}
+		if !slices.Equal(got.AllowedPaths, []string{"/workspace/project"}) {
+			t.Fatalf("allowed_paths = %v, want [/workspace/project]", got.AllowedPaths)
+		}
+		if got.NetworkPolicy.Mode != security.NetworkPermissionDenyAll {
+			t.Fatalf("network policy mode = %q, want deny_all", got.NetworkPolicy.Mode)
 		}
 		if err := manager.CapabilitySigner().Verify(*got); err != nil {
 			t.Fatalf("verify signed token: %v", err)
 		}
-	})
-
-	t.Run("capability should be skipped when no constraints", func(t *testing.T) {
-		t.Parallel()
-
-		service := NewWithFactory(
-			newRuntimeConfigManager(t),
-			&stubToolManager{},
-			newMemoryStore(),
-			&scriptedProviderFactory{provider: &scriptedProvider{}},
-			nil,
-		)
-		executor := newSubAgentRuntimeToolExecutor(service).(*subAgentRuntimeToolExecutor)
-		got := executor.resolveCapabilityToken(subagent.ToolExecutionInput{
-			TaskID: "task-empty-cap",
-			Call: providertypes.ToolCall{
-				Name: tools.ToolNameFilesystemReadFile,
-			},
-		})
-		if got != nil {
-			t.Fatalf("expected nil token, got %+v", got)
+		if err := security.EnsureCapabilitySubset(signedParent, *got); err != nil {
+			t.Fatalf("child token should be subset of parent: %v", err)
 		}
 	})
 
-	t.Run("capability should be skipped when manager has no signer provider", func(t *testing.T) {
+	t.Run("with parent token and no signer provider should fallback to parent token", func(t *testing.T) {
 		t.Parallel()
 
 		service := NewWithFactory(
@@ -557,58 +723,28 @@ func TestResolveSubAgentCapabilityToken(t *testing.T) {
 			nil,
 		)
 		executor := newSubAgentRuntimeToolExecutor(service).(*subAgentRuntimeToolExecutor)
+		parent := security.CapabilityToken{
+			ID:           "token-parent",
+			TaskID:       "task-parent",
+			AgentID:      "agent-parent",
+			IssuedAt:     time.Now().UTC().Add(-time.Minute),
+			ExpiresAt:    time.Now().UTC().Add(2 * time.Minute),
+			AllowedTools: []string{" filesystem_read_file ", "filesystem_read_file"},
+		}
 		got := executor.resolveCapabilityToken(subagent.ToolExecutionInput{
-			TaskID:  "task-no-signer",
-			AgentID: "subagent:no-signer",
-			Call: providertypes.ToolCall{
-				Name: tools.ToolNameFilesystemReadFile,
-			},
+			CapabilityToken: &parent,
 			Capability: subagent.Capability{
 				AllowedTools: []string{tools.ToolNameFilesystemReadFile},
-				AllowedPaths: []string{t.TempDir()},
-			},
-		})
-		if got != nil {
-			t.Fatalf("expected nil token when signer provider is unavailable, got %+v", got)
-		}
-	})
-
-	t.Run("capability should fall back to call name when allowed_tools is empty", func(t *testing.T) {
-		t.Parallel()
-
-		registry := tools.NewRegistry()
-		registry.Register(&stubTool{name: tools.ToolNameFilesystemReadFile, content: "ok"})
-		gateway, err := security.NewStaticGateway(security.DecisionAllow, nil)
-		if err != nil {
-			t.Fatalf("NewStaticGateway() error = %v", err)
-		}
-		manager, err := tools.NewManager(registry, gateway, nil)
-		if err != nil {
-			t.Fatalf("NewManager() error = %v", err)
-		}
-		service := NewWithFactory(
-			newRuntimeConfigManager(t),
-			manager,
-			newMemoryStore(),
-			&scriptedProviderFactory{provider: &scriptedProvider{}},
-			nil,
-		)
-		executor := newSubAgentRuntimeToolExecutor(service).(*subAgentRuntimeToolExecutor)
-		got := executor.resolveCapabilityToken(subagent.ToolExecutionInput{
-			TaskID:  "task-fallback-call",
-			AgentID: "subagent:fallback-call",
-			Call: providertypes.ToolCall{
-				Name: tools.ToolNameFilesystemReadFile,
-			},
-			Capability: subagent.Capability{
-				AllowedPaths: []string{t.TempDir()},
 			},
 		})
 		if got == nil {
-			t.Fatalf("expected signed capability token from call-name fallback")
+			t.Fatalf("expected parent token fallback")
+		}
+		if got.ID != "token-parent" {
+			t.Fatalf("token id = %q, want token-parent", got.ID)
 		}
 		if len(got.AllowedTools) != 1 || got.AllowedTools[0] != tools.ToolNameFilesystemReadFile {
-			t.Fatalf("allowed_tools = %v, want [%s]", got.AllowedTools, tools.ToolNameFilesystemReadFile)
+			t.Fatalf("normalized allowed_tools = %v", got.AllowedTools)
 		}
 	})
 }

@@ -133,8 +133,9 @@ func resolveInlineSubAgentCapability(
 		return subagent.Capability{}, err
 	}
 	return subagent.Capability{
-		AllowedTools: toolsAllowed,
-		AllowedPaths: pathsAllowed,
+		AllowedTools:    toolsAllowed,
+		AllowedPaths:    pathsAllowed,
+		CapabilityToken: &parentToken,
 	}, nil
 }
 

@@ -15,9 +15,7 @@
 - `todo_write` `set_status` requires: `{"action":"set_status","id":"<todo_id>","status":"pending|in_progress|blocked|completed|failed|canceled"}`.
 - `todo_write` `update` requires: `{"action":"update","id":"<todo_id>","patch":{...}}`; include `expected_revision` when known to prevent concurrent overwrite.
 - Execute Todos sequentially in the main loop unless the user explicitly asks for another strategy.
-- `spawn_subagent` supports two modes:
-- `mode=inline` is an immediate execution tool call: the subagent runs now and returns structured output in the same turn.
-- `mode=todo` only creates `executor=subagent` todo items; todo status transitions are driven by runtime/todo flow, not inline subagent execution.
+- `spawn_subagent` only supports `mode=inline`: the subagent runs now and returns structured output in the same turn.
 - When using `spawn_subagent`, always set minimal `allowed_tools` and `allowed_paths` so child capability boundaries remain explicit and auditable.
 
 ## Verification phase

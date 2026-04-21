@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	subAgentToolDecisionPending  = "pending"
-	stringPermissionDecisionAsk  = "ask"
-	defaultSubAgentToolTimeout   = 20 * time.Second
-	defaultSubAgentCapabilityTTL = 15 * time.Minute
+	subAgentToolDecisionPending = "pending"
+	stringPermissionDecisionAsk = "ask"
+	defaultSubAgentToolTimeout  = 20 * time.Second
 )
 
 // subAgentRuntimeToolExecutor 将 subagent 工具调用桥接到 runtime 的统一执行链路。
@@ -136,53 +135,95 @@ type capabilitySignerProvider interface {
 	CapabilitySigner() *security.CapabilitySigner
 }
 
-// resolveCapabilityToken 生成并签发子代理工具调用的 capability token，用于在权限链路硬执行能力边界。
+// resolveCapabilityToken 仅在存在父 capability token 时签发子 token；无父 token 时返回 nil，
+// 让工具调用继续走既有权限策略与审批链路，避免 inline 自签名导致绕过。
 func (e *subAgentRuntimeToolExecutor) resolveCapabilityToken(input subagent.ToolExecutionInput) *security.CapabilityToken {
-	if input.CapabilityToken != nil {
-		token := input.CapabilityToken.Normalize()
-		return &token
+	if input.CapabilityToken == nil {
+		return nil
 	}
+	parent := input.CapabilityToken.Normalize()
 	if e == nil || e.service == nil {
-		return nil
+		return &parent
 	}
-	toolsList := normalizeAllowlistToList(input.Capability.AllowedTools)
-	pathsList := normalizePathAllowlist(input.Capability.AllowedPaths)
-	if len(toolsList) == 0 && len(pathsList) == 0 {
-		return nil
+
+	childTools := tightenToolAllowlist(parent.AllowedTools, input.Capability.AllowedTools)
+	if len(childTools) == 0 {
+		return &parent
+	}
+	childPaths := tightenPathAllowlist(parent.AllowedPaths, input.Capability.AllowedPaths)
+	if len(parent.AllowedPaths) > 0 && len(childPaths) == 0 {
+		return &parent
+	}
+
+	child := parent
+	child.ID = fmt.Sprintf("subagent-%d-%s", time.Now().UTC().UnixNano(), strings.TrimSpace(input.TaskID))
+	if taskID := strings.TrimSpace(input.TaskID); taskID != "" {
+		child.TaskID = taskID
+	}
+	if agentID := strings.TrimSpace(input.AgentID); agentID != "" {
+		child.AgentID = agentID
+	}
+	child.AllowedTools = childTools
+	child.AllowedPaths = childPaths
+	child.NetworkPolicy = parent.NetworkPolicy
+	child.Signature = ""
+	if err := security.EnsureCapabilitySubset(parent, child); err != nil {
+		return &parent
 	}
 
 	signerProvider, ok := e.service.toolManager.(capabilitySignerProvider)
 	if !ok {
-		return nil
+		return &parent
 	}
 	signer := signerProvider.CapabilitySigner()
 	if signer == nil {
-		return nil
+		return &parent
 	}
-
-	toolName := strings.TrimSpace(input.Call.Name)
-	if len(toolsList) == 0 && toolName != "" {
-		toolsList = []string{toolName}
-	}
-	if len(toolsList) == 0 {
-		return nil
-	}
-	now := time.Now().UTC()
-	token := security.CapabilityToken{
-		ID:            fmt.Sprintf("subagent-%d-%s", now.UnixNano(), strings.TrimSpace(input.TaskID)),
-		TaskID:        strings.TrimSpace(input.TaskID),
-		AgentID:       strings.TrimSpace(input.AgentID),
-		IssuedAt:      now,
-		ExpiresAt:     now.Add(defaultSubAgentCapabilityTTL),
-		AllowedTools:  toolsList,
-		AllowedPaths:  pathsList,
-		NetworkPolicy: security.NetworkPolicy{Mode: security.NetworkPermissionAllowAll},
-	}
-	signed, err := signer.Sign(token)
+	signed, err := signer.Sign(child)
 	if err != nil {
-		return nil
+		return &parent
 	}
 	return &signed
+}
+
+// tightenToolAllowlist 以 parent 为上界收敛工具白名单；未请求时继承 parent。
+func tightenToolAllowlist(parent []string, requested []string) []string {
+	parent = normalizeAllowlistToList(parent)
+	requested = normalizeAllowlistToList(requested)
+	if len(parent) == 0 {
+		return requested
+	}
+	if len(requested) == 0 {
+		return append([]string(nil), parent...)
+	}
+	parentSet := normalizeAllowlist(parent)
+	out := make([]string, 0, len(requested))
+	for _, toolName := range requested {
+		if _, ok := parentSet[strings.ToLower(strings.TrimSpace(toolName))]; !ok {
+			continue
+		}
+		out = append(out, strings.ToLower(strings.TrimSpace(toolName)))
+	}
+	return normalizeAllowlistToList(out)
+}
+
+// tightenPathAllowlist 以 parent 为上界收敛路径白名单；未请求时继承 parent。
+func tightenPathAllowlist(parent []string, requested []string) []string {
+	parent = normalizePathAllowlist(parent)
+	requested = normalizePathAllowlist(requested)
+	if len(parent) == 0 {
+		return requested
+	}
+	if len(requested) == 0 {
+		return append([]string(nil), parent...)
+	}
+	out := make([]string, 0, len(requested))
+	for _, path := range requested {
+		if pathCoveredByAllowlist(path, parent) {
+			out = append(out, path)
+		}
+	}
+	return normalizePathAllowlist(out)
 }
 
 // resolveToolExecutionDecision 根据工具执行错误映射统一的权限决策结果。

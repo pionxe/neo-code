@@ -129,8 +129,8 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 	if !strings.Contains(prompt, "allowed_paths:") || !strings.Contains(prompt, "- /tmp/workdir") {
 		t.Fatalf("expected allowed_paths in system prompt, got %q", prompt)
 	}
-	if !strings.Contains(prompt, "spawn_subagent(mode=todo)") {
-		t.Fatalf("expected mode=todo responsibility guidance, got %q", prompt)
+	if strings.Contains(prompt, "spawn_subagent(mode=todo)") {
+		t.Fatalf("did not expect mode=todo guidance after inline-only migration, got %q", prompt)
 	}
 	if !strings.Contains(prompt, "只返回单个 JSON 对象") {
 		t.Fatalf("expected strict json output guidance, got %q", prompt)

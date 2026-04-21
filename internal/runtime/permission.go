@@ -189,10 +189,7 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		return base
 	}
 
-	mode, requested := parseSpawnSubAgentRuntimeOptions(call.Arguments)
-	if strings.EqualFold(mode, "todo") {
-		return base
-	}
+	_, requested := parseSpawnSubAgentRuntimeOptions(call.Arguments)
 	if requested <= 0 {
 		if base > defaultInlineSubAgentToolTimeout {
 			return base
