@@ -137,3 +137,52 @@ func extractStringArgument(raw []byte, key string) string {
 	}
 	return strings.TrimSpace(value)
 }
+// extractSpawnSubAgentTarget 提取 spawn_subagent 的稳定权限目标，优先 items[].id，再回退 id/prompt。
+func extractSpawnSubAgentTarget(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	type spawnItem struct {
+		ID string `json:"id"`
+	}
+	type spawnPayload struct {
+		ID      string      `json:"id"`
+		Prompt  string      `json:"prompt"`
+		Content string      `json:"content"`
+		Items   []spawnItem `json:"items"`
+	}
+
+	var payload spawnPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+
+	ids := make([]string, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) > 0 {
+		return strings.Join(ids, ",")
+	}
+	if id := strings.TrimSpace(payload.ID); id != "" {
+		return id
+	}
+	prompt := strings.TrimSpace(payload.Prompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(payload.Content)
+	}
+	if prompt == "" {
+		return ""
+	}
+	const maxTargetChars = 80
+	runes := []rune(prompt)
+	if len(runes) <= maxTargetChars {
+		return prompt
+	}
+	return string(runes[:maxTargetChars]) + "..."
+}

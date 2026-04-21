@@ -1228,3 +1228,40 @@ func TestExecuteToolCallWithPermissionForwardsCapabilityContext(t *testing.T) {
 		t.Fatalf("expected capability token forwarded, got %+v", manager.lastInput.CapabilityToken)
 	}
 }
+
+func TestResolveToolExecutionTimeoutForSpawnSubagent(t *testing.T) {
+	t.Parallel()
+
+	base := 20 * time.Second
+	got := resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: `{"prompt":"review auth module"}`,
+	}, base)
+	if got < defaultInlineSubAgentToolTimeout {
+		t.Fatalf("expected inline spawn timeout >= %v, got %v", defaultInlineSubAgentToolTimeout, got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: `{"mode":"todo","items":[{"id":"t1","content":"x"}]}`,
+	}, base)
+	if got != base {
+		t.Fatalf("expected todo mode to keep base timeout %v, got %v", base, got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: `{"prompt":"review","timeout_sec":1200}`,
+	}, base)
+	if got != maxInlineSubAgentToolTimeout {
+		t.Fatalf("expected clamped max timeout %v, got %v", maxInlineSubAgentToolTimeout, got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      "filesystem_read_file",
+		Arguments: `{"path":"README.md"}`,
+	}, base)
+	if got != base {
+		t.Fatalf("expected non-spawn tool to keep base timeout %v, got %v", base, got)
+	}
+}

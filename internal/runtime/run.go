@@ -168,45 +168,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			s.emitTokenUsage(ctx, &state, turnResult)
 
 			if len(turnResult.assistant.ToolCalls) == 0 {
-				beforeDispatchSignature := computeTodoStateSignature(state.session.Todos)
-				s.transitionRunPhase(ctx, &state, controlplane.PhaseDispatch)
-				progressed, err := s.dispatchTodos(ctx, &state, snapshot)
-				if err != nil {
-					return s.handleRunError(ctx, state.runID, state.session.ID, err)
-				}
-				if !progressed {
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnResult.assistant)
-					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
-					return nil
-				}
-
-				afterDispatchSignature := computeTodoStateSignature(state.session.Todos)
-				var evidence []controlplane.ProgressEvidenceRecord
-				if beforeDispatchSignature != afterDispatchSignature {
-					evidence = append(evidence, controlplane.ProgressEvidenceRecord{
-						Kind: controlplane.EvidenceNewInfoNonDup,
-					})
-				}
-				state.mu.Lock()
-				state.progress = controlplane.ApplyProgressEvidence(state.progress, evidence, "")
-				streak := state.progress.LastScore.NoProgressStreak
-				currentScore := state.progress.LastScore
-				state.mu.Unlock()
-				s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
-
-				if streak >= snapshot.noProgressStreakLimit {
-					err = ErrNoProgressStreakLimit
-					return err
-				}
-				s.transitionRunPhase(ctx, &state, controlplane.PhaseVerify)
-				break
+				s.emitRunScoped(ctx, EventAgentDone, &state, turnResult.assistant)
+				s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
+				return nil
 			}
 			s.transitionRunPhase(ctx, &state, controlplane.PhaseExecute)
 			if err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnResult.assistant); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
-			}
-			s.transitionRunPhase(ctx, &state, controlplane.PhaseDispatch)
-			if _, err := s.dispatchTodos(ctx, &state, snapshot); err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
 			s.transitionRunPhase(ctx, &state, controlplane.PhaseVerify)

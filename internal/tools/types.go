@@ -2,10 +2,12 @@ package tools
 
 import (
 	"context"
+	"time"
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/subagent"
 )
 
 // Tool 定义所有内置/扩展工具的统一契约。
@@ -34,6 +36,38 @@ type SessionMutator interface {
 	FailTodo(id string, reason string, expectedRevision int64) error
 }
 
+// SubAgentRunInput 描述一次通过工具触发的子代理即时执行请求。
+type SubAgentRunInput struct {
+	RunID        string
+	SessionID    string
+	CallerAgent  string
+	Role         subagent.Role
+	TaskID       string
+	Goal         string
+	ExpectedOut  string
+	Workdir      string
+	MaxSteps     int
+	Timeout      time.Duration
+	AllowedTools []string
+	AllowedPaths []string
+}
+
+// SubAgentRunResult 描述子代理执行完成后的结构化结果。
+type SubAgentRunResult struct {
+	Role       subagent.Role
+	TaskID     string
+	State      subagent.State
+	StopReason subagent.StopReason
+	StepCount  int
+	Output     subagent.Output
+	Error      string
+}
+
+// SubAgentInvoker 定义工具层触发子代理执行的最小桥接接口。
+type SubAgentInvoker interface {
+	Run(ctx context.Context, input SubAgentRunInput) (SubAgentRunResult, error)
+}
+
 // ToolCallInput 承载一次工具调用所需的运行时上下文。
 type ToolCallInput struct {
 	ID              string
@@ -47,6 +81,8 @@ type ToolCallInput struct {
 	WorkspacePlan   *security.WorkspaceExecutionPlan
 	// SessionMutator 仅对需要会话级写入的工具开放（例如 todo_write）。
 	SessionMutator SessionMutator
+	// SubAgentInvoker 为 spawn_subagent 等工具提供即时子代理执行入口。
+	SubAgentInvoker SubAgentInvoker
 	// EmitChunk 用于工具执行期间的流式输出回调。
 	EmitChunk ChunkEmitter
 }

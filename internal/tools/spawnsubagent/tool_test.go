@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
 )
 
@@ -19,6 +21,20 @@ type stubMutator struct {
 type failingAddMutator struct {
 	*stubMutator
 	err error
+}
+
+type stubSubAgentInvoker struct {
+	result tools.SubAgentRunResult
+	err    error
+	last   tools.SubAgentRunInput
+}
+
+func (i *stubSubAgentInvoker) Run(ctx context.Context, input tools.SubAgentRunInput) (tools.SubAgentRunResult, error) {
+	if err := ctx.Err(); err != nil {
+		return tools.SubAgentRunResult{}, err
+	}
+	i.last = input
+	return i.result, i.err
 }
 
 func (m *stubMutator) ListTodos() []agentsession.TodoItem {
@@ -216,7 +232,7 @@ func TestParseSpawnInputAndHelpers(t *testing.T) {
 	}
 
 	_, err = parseSpawnInput([]byte(`{"items":[]}`))
-	if err == nil || !strings.Contains(err.Error(), "items is empty") {
+	if err == nil || !strings.Contains(err.Error(), "either prompt or items is required") {
 		t.Fatalf("empty items error = %v", err)
 	}
 
@@ -225,9 +241,9 @@ func TestParseSpawnInputAndHelpers(t *testing.T) {
 		t.Fatalf("invalid json error = %v", err)
 	}
 
-	result := renderSpawnResult([]string{"a", "b"})
+	result := renderTodoSpawnResult([]string{"a", "b"})
 	if !strings.Contains(result, "created_count: 2") || !strings.Contains(result, "- a") {
-		t.Fatalf("renderSpawnResult() = %q", result)
+		t.Fatalf("renderTodoSpawnResult() = %q", result)
 	}
 }
 
@@ -257,6 +273,78 @@ func TestToolExecuteErrorBranches(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "injected add todo failure") {
 		t.Fatalf("Execute() add failure err = %v", err)
+	}
+}
+
+func TestToolExecuteInlineMode(t *testing.T) {
+	t.Parallel()
+
+	tool := New()
+	invoker := &stubSubAgentInvoker{
+		result: tools.SubAgentRunResult{
+			Role:       subagent.RoleCoder,
+			TaskID:     "inline-1",
+			State:      subagent.StateSucceeded,
+			StopReason: subagent.StopReasonCompleted,
+			StepCount:  2,
+			Output: subagent.Output{
+				Summary:   "done",
+				Findings:  []string{"f1"},
+				Artifacts: []string{"a.txt"},
+			},
+		},
+	}
+
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:            tools.ToolNameSpawnSubAgent,
+		AgentID:         "agent-main",
+		Workdir:         "/tmp/workdir",
+		SubAgentInvoker: invoker,
+		Arguments: []byte(`{
+			"prompt":"review code quality",
+			"id":"inline-1",
+			"role":"coder",
+			"max_steps":3,
+			"timeout_sec":90
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("Execute() inline error = %v", err)
+	}
+	if !strings.Contains(result.Content, "mode: inline") || !strings.Contains(result.Content, "state: succeeded") {
+		t.Fatalf("unexpected inline content: %q", result.Content)
+	}
+	if invoker.last.TaskID != "inline-1" || invoker.last.Goal != "review code quality" {
+		t.Fatalf("unexpected invoker input: %+v", invoker.last)
+	}
+	if invoker.last.Timeout != 90*time.Second {
+		t.Fatalf("timeout = %v, want 90s", invoker.last.Timeout)
+	}
+}
+
+func TestToolExecuteInlineModeErrors(t *testing.T) {
+	t.Parallel()
+
+	tool := New()
+	_, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: []byte(`{"prompt":"do something"}`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "subagent invoker is unavailable") {
+		t.Fatalf("missing invoker error = %v", err)
+	}
+
+	invoker := &stubSubAgentInvoker{err: errors.New("subagent failed")}
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:            tools.ToolNameSpawnSubAgent,
+		SubAgentInvoker: invoker,
+		Arguments:       []byte(`{"prompt":"do something"}`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "subagent failed") {
+		t.Fatalf("expected inline run error, got %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected result.IsError=true")
 	}
 }
 

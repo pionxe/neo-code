@@ -1302,6 +1302,21 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			want:  "",
 		},
 		{
+			name:  "extract spawn target from items",
+			input: []byte(`{"items":[{"id":"task-a"},{"id":" task-b "}],"id":"fallback"}`),
+			want:  "task-a,task-b",
+		},
+		{
+			name:  "extract spawn target falls back to top level id",
+			input: []byte(`{"id":"legacy-task"}`),
+			want:  "legacy-task",
+		},
+		{
+			name:  "extract spawn target falls back to prompt",
+			input: []byte(`{"prompt":"analyze auth module for vulnerabilities"}`),
+			want:  "analyze auth module for vulnerabilities",
+		},
+		{
 			name:       "mcp server target with server and tool",
 			serverTool: "mcp.github.create_issue",
 			serverWant: "mcp.github",
