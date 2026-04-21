@@ -14,7 +14,7 @@ import (
 )
 
 // EmitFromStream 消费 Responses SSE 流并发出统一流式事件。
-// 本函数使用简单的 bufio.Scanner 替代原有的 sse.Reader 以减少依赖。
+// 本函数基于受限行读取器按 SSE 事件边界聚合 data 段，替代原有的 sse.Reader 以减少依赖并控制内存占用。
 func EmitFromStream(
 	ctx context.Context,
 	body io.Reader,
