@@ -123,6 +123,10 @@ go run ./cmd/neocode --runtime-mode gateway
 - `/memo`：查看记忆索引
 - `/remember <text>`：保存记忆
 - `/forget <keyword>`：按关键词删除记忆
+- `/skills`：查看当前可用 skills（含当前会话激活标记）
+- `/skill use <id>`：在当前会话启用 skill
+- `/skill off <id>`：在当前会话停用 skill
+- `/skill active`：查看当前会话已激活 skills
 - `& <command>`：在当前工作区执行本地命令
 
 示例输入：
@@ -159,6 +163,7 @@ go run ./cmd/neocode --runtime-mode gateway
 - [Session 持久化设计](docs/session-persistence-design.md)
 - [Context Compact 说明](docs/context-compact.md)
 - [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
+- [Skills 设计与使用](docs/skills-system-design.md)
 - [MCP 配置指南](docs/guides/mcp-configuration.md)
 - [更新与升级](docs/guides/update.md)
 

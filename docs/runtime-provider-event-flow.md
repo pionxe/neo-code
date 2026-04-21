@@ -18,6 +18,9 @@
 - `permission_requested`
 - `permission_resolved`
 - `token_usage`
+- `skill_activated`
+- `skill_deactivated`
+- `skill_missing`
 - `compact_start`
 - `compact_applied`
 - `compact_error`
