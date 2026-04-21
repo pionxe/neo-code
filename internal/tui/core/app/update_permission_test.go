@@ -85,6 +85,10 @@ func (r *permissionTestRuntime) ListSessionSkills(ctx context.Context, sessionID
 	return nil, nil
 }
 
+func (r *permissionTestRuntime) ListAvailableSkills(ctx context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
+	return nil, nil
+}
+
 func newPermissionTestApp(runtime agentruntime.Runtime) *App {
 	input := textarea.New()
 	spin := spinner.New()

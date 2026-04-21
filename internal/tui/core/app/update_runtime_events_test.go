@@ -133,6 +133,15 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventCompactApplied]; !ok {
 		t.Fatalf("expected compact_applied handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSkillActivated]; !ok {
+		t.Fatalf("expected skill_activated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSkillDeactivated]; !ok {
+		t.Fatalf("expected skill_deactivated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSkillMissing]; !ok {
+		t.Fatalf("expected skill_missing handler to be registered")
+	}
 }
 
 func TestShouldHandleRuntimeEventFiltersBySessionAndRun(t *testing.T) {
@@ -283,5 +292,36 @@ func TestHandleRuntimeEventBindsSessionFromStableEvents(t *testing.T) {
 	})
 	if app.state.ActiveSessionID != "session-context" {
 		t.Fatalf("expected active session from run_context, got %q", app.state.ActiveSessionID)
+	}
+}
+
+func TestRuntimeSkillEventHandlers(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+
+	if handled := runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid payload to return false")
+	}
+	runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SessionSkillEventPayload{SkillID: "go-review"},
+	})
+	if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Skill activated" {
+		t.Fatalf("expected skill activated activity")
+	}
+
+	runtimeEventSkillDeactivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: map[string]any{"skill_id": "go-review"},
+	})
+	if app.activities[len(app.activities)-1].Title != "Skill deactivated" {
+		t.Fatalf("expected skill deactivated activity")
+	}
+
+	runtimeEventSkillMissingHandler(&app, agentruntime.RuntimeEvent{
+		Payload: map[string]any{"SkillID": "missing-skill"},
+	})
+	last := app.activities[len(app.activities)-1]
+	if !last.IsError || last.Title != "Skill missing in registry" {
+		t.Fatalf("expected skill missing error activity, got %+v", last)
 	}
 }

@@ -31,6 +31,8 @@ const (
 	slashCommandMemo        = "/memo"
 	slashCommandRemember    = "/remember"
 	slashCommandForget      = "/forget"
+	slashCommandSkills      = "/skills"
+	slashCommandSkill       = "/skill"
 
 	slashUsageHelp        = "/help"
 	slashUsageExit        = "/exit"
@@ -45,6 +47,10 @@ const (
 	slashUsageMemo        = "/memo"
 	slashUsageRemember    = "/remember <text>"
 	slashUsageForget      = "/forget <keyword>"
+	slashUsageSkills      = "/skills"
+	slashUsageSkillUse    = "/skill use <id>"
+	slashUsageSkillOff    = "/skill off <id>"
+	slashUsageSkillActive = "/skill active"
 
 	commandMenuTitle       = "Suggestions"
 	providerPickerTitle    = "Select Provider"
@@ -127,6 +133,10 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageMemo, Description: "Show persistent memo index"},
 	{Usage: slashUsageRemember, Description: "Save a persistent memo (/remember <text>)"},
 	{Usage: slashUsageForget, Description: "Remove memos matching keyword (/forget <keyword>)"},
+	{Usage: slashUsageSkills, Description: "List available skills for current workspace/session"},
+	{Usage: slashUsageSkillUse, Description: "Activate one skill in current session"},
+	{Usage: slashUsageSkillOff, Description: "Deactivate one skill in current session"},
+	{Usage: slashUsageSkillActive, Description: "Show active skills in current session"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageProviderAdd, Description: "Add a new custom provider"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},

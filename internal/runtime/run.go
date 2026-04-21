@@ -255,6 +255,7 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	if err != nil {
 		return turnSnapshot{}, false, err
 	}
+	toolSpecs = prioritizeToolSpecsBySkillHints(toolSpecs, activeSkills)
 
 	resolvedProvider, err := config.ResolveSelectedProvider(cfg)
 	if err != nil {

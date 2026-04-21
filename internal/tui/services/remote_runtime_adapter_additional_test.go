@@ -213,6 +213,9 @@ func TestRemoteRuntimeAdapterUnsupportedSkillMethods(t *testing.T) {
 	if _, err := adapter.ListSessionSkills(context.Background(), "s"); err == nil {
 		t.Fatalf("ListSessionSkills should be unsupported")
 	}
+	if _, err := adapter.ListAvailableSkills(context.Background(), "s"); err == nil {
+		t.Fatalf("ListAvailableSkills should be unsupported")
+	}
 }
 
 func TestRemoteRuntimeAdapterCallFrameAndDecodeHelpers(t *testing.T) {

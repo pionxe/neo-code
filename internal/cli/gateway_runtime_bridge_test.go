@@ -101,6 +101,10 @@ func (s *runtimeStub) ListSessionSkills(context.Context, string) ([]agentruntime
 	return nil, nil
 }
 
+func (s *runtimeStub) ListAvailableSkills(context.Context, string) ([]agentruntime.AvailableSkillState, error) {
+	return nil, nil
+}
+
 type runtimeWithoutCreator struct {
 	base *runtimeStub
 }
@@ -143,6 +147,13 @@ func (r *runtimeWithoutCreator) DeactivateSessionSkill(ctx context.Context, sess
 }
 func (r *runtimeWithoutCreator) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
 	return r.base.ListSessionSkills(ctx, sessionID)
+}
+
+func (r *runtimeWithoutCreator) ListAvailableSkills(
+	ctx context.Context,
+	sessionID string,
+) ([]agentruntime.AvailableSkillState, error) {
+	return r.base.ListAvailableSkills(ctx, sessionID)
 }
 
 func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 
 	"neo-code/internal/config"
@@ -380,6 +381,138 @@ func TestListSessionSkillsValidatesInput(t *testing.T) {
 	}
 	if _, err := service.ListSessionSkills(context.Background(), " "); err == nil {
 		t.Fatalf("expected empty session id to fail")
+	}
+}
+
+func TestListAvailableSkillsReportsActiveStateAndSorts(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-list-available-skills")
+	session.ActivateSkill("go-review")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	service.SetSkillsRegistry(&stubSkillsRegistry{
+		skills: map[string]skills.Skill{
+			"zeta": {
+				Descriptor: skills.Descriptor{ID: "zeta", Name: "Zeta"},
+				Content:    skills.Content{Instruction: "z"},
+			},
+			"go-review": {
+				Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+				Content:    skills.Content{Instruction: "go"},
+			},
+		},
+	})
+
+	states, err := service.ListAvailableSkills(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("ListAvailableSkills() error = %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("ListAvailableSkills() len = %d, want 2", len(states))
+	}
+	if states[0].Descriptor.ID != "go-review" || !states[0].Active {
+		t.Fatalf("expected go-review active first, got %+v", states[0])
+	}
+	if states[1].Descriptor.ID != "zeta" || states[1].Active {
+		t.Fatalf("expected zeta inactive second, got %+v", states[1])
+	}
+}
+
+func TestListAvailableSkillsHandlesValidationAndRegistryErrors(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-list-available-errors")
+	store.sessions[session.ID] = cloneSession(session)
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.ListAvailableSkills(canceledCtx, session.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled context error, got %v", err)
+	}
+	if _, err := service.ListAvailableSkills(context.Background(), session.ID); !errors.Is(err, errSkillsRegistryUnavailable) {
+		t.Fatalf("expected registry unavailable error, got %v", err)
+	}
+
+	service.SetSkillsRegistry(&stubSkillsRegistry{getErr: os.ErrPermission})
+	if _, err := service.ListAvailableSkills(context.Background(), "missing-session"); err == nil {
+		t.Fatalf("expected missing session error")
+	}
+}
+
+func TestPrioritizeToolSpecsBySkillHintsOnlyReordersVisibleTools(t *testing.T) {
+	t.Parallel()
+
+	specs := []providertypes.ToolSpec{
+		{Name: "filesystem_read_file"},
+		{Name: "bash"},
+		{Name: "webfetch"},
+	}
+	activeSkills := []skills.Skill{
+		{
+			Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+			Content: skills.Content{
+				Instruction: "review",
+				ToolHints:   []string{"webfetch", "unknown_tool", "bash"},
+			},
+		},
+	}
+
+	prioritized := prioritizeToolSpecsBySkillHints(specs, activeSkills)
+	got := []string{prioritized[0].Name, prioritized[1].Name, prioritized[2].Name}
+	want := []string{"webfetch", "bash", "filesystem_read_file"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prioritized tool order = %v, want %v", got, want)
+	}
+}
+
+func TestPrepareTurnSnapshotPrioritizesToolsByActiveSkillHints(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-skill-tool-priority")
+	session.ActivateSkill("go-review")
+	store.sessions[session.ID] = cloneSession(session)
+
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{
+			{Name: "filesystem_read_file"},
+			{Name: "bash"},
+		},
+	}
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	service.SetSkillsRegistry(&stubSkillsRegistry{
+		skills: map[string]skills.Skill{
+			"go-review": {
+				Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+				Content: skills.Content{
+					Instruction: "review",
+					ToolHints:   []string{"bash"},
+				},
+			},
+		},
+	})
+
+	state := newRunState("run-skill-tool-priority", session)
+	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
+	if err != nil {
+		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+	}
+	if rebuilt {
+		t.Fatalf("did not expect snapshot rebuild")
+	}
+	if len(snapshot.request.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(snapshot.request.Tools))
+	}
+	if snapshot.request.Tools[0].Name != "bash" {
+		t.Fatalf("expected hinted tool first, got %q", snapshot.request.Tools[0].Name)
 	}
 }
 

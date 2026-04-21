@@ -570,7 +570,7 @@ func TestAbsoluteWorkspaceTarget(t *testing.T) {
 			if err != nil {
 				t.Fatalf("filepath.Abs(%q): %v", tt.want, err)
 			}
-			if got != filepath.Clean(wantAbs) {
+			if !samePathKey(got, wantAbs) {
 				t.Fatalf("absoluteWorkspaceTarget() = %q, want %q", got, filepath.Clean(wantAbs))
 			}
 		})

@@ -1649,6 +1649,13 @@ func (s *stubRemoteRuntimeForBootstrap) ListSessionSkills(context.Context, strin
 	return nil, nil
 }
 
+func (s *stubRemoteRuntimeForBootstrap) ListAvailableSkills(
+	context.Context,
+	string,
+) ([]agentruntime.AvailableSkillState, error) {
+	return nil, nil
+}
+
 func (s *stubRemoteRuntimeForBootstrap) Close() error {
 	s.closed = true
 	return nil

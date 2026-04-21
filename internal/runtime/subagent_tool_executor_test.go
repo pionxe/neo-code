@@ -517,10 +517,12 @@ func TestSubAgentRuntimeToolExecutorExecuteToolEvents(t *testing.T) {
 		workdir := t.TempDir()
 		allowed := filepath.Join(workdir, "safe")
 		allowedFile := filepath.Join(allowed, "note.txt")
+		taskID := "task-subagent-cap-path-allow"
+		agentID := "subagent:cap-path-allow"
 		parent := security.CapabilityToken{
 			ID:              "parent-path-allow",
-			TaskID:          "task-parent-path-allow",
-			AgentID:         "agent-parent-path-allow",
+			TaskID:          taskID,
+			AgentID:         agentID,
 			IssuedAt:        time.Now().UTC().Add(-time.Minute),
 			ExpiresAt:       time.Now().UTC().Add(10 * time.Minute),
 			AllowedTools:    []string{tools.ToolNameFilesystemReadFile},
@@ -535,9 +537,9 @@ func TestSubAgentRuntimeToolExecutorExecuteToolEvents(t *testing.T) {
 		result, execErr := executor.ExecuteTool(context.Background(), subagent.ToolExecutionInput{
 			RunID:           "run-subagent-cap-path-allow",
 			SessionID:       "session-subagent-cap-path-allow",
-			TaskID:          "task-subagent-cap-path-allow",
+			TaskID:          taskID,
 			Role:            subagent.RoleCoder,
-			AgentID:         "subagent:cap-path-allow",
+			AgentID:         agentID,
 			Workdir:         workdir,
 			Timeout:         2 * time.Second,
 			CapabilityToken: &signedParent,

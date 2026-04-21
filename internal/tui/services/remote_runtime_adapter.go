@@ -382,6 +382,16 @@ func (r *RemoteRuntimeAdapter) ListSessionSkills(ctx context.Context, sessionID 
 	return nil, errors.New(unsupportedActionInGatewayMode)
 }
 
+// ListAvailableSkills 在 gateway 模式下显式不支持。
+func (r *RemoteRuntimeAdapter) ListAvailableSkills(
+	ctx context.Context,
+	sessionID string,
+) ([]agentruntime.AvailableSkillState, error) {
+	_ = ctx
+	_ = sessionID
+	return nil, errors.New(unsupportedActionInGatewayMode)
+}
+
 // Close 关闭远程适配器并结束事件桥接。
 func (r *RemoteRuntimeAdapter) Close() error {
 	var closeErr error

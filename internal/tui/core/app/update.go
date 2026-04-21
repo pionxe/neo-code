@@ -221,6 +221,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.appendActivity("command", typed.Notice, "", false)
 		}
 		return a, tea.Batch(cmds...)
+	case skillCommandResultMsg:
+		if typed.Err != nil {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = typed.Err.Error()
+			a.appendActivity("skills", "Skill command failed", typed.Err.Error(), true)
+		} else {
+			notice := strings.TrimSpace(typed.Notice)
+			if notice == "" {
+				notice = "Skill command completed."
+			}
+			a.state.ExecutionError = ""
+			a.state.StatusText = notice
+			a.appendInlineMessage(roleSystem, notice)
+			a.appendActivity("skills", "Skill command completed", notice, false)
+		}
+		a.rebuildTranscript()
+		return a, tea.Batch(cmds...)
 	case workspaceCommandResultMsg:
 		if typed.Command == "" && typed.Err != nil {
 			a.state.ExecutionError = typed.Err.Error()
@@ -1062,6 +1079,9 @@ var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentrun
 	agentruntime.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
 	agentruntime.EventTodoUpdated:                              runtimeEventTodoUpdatedHandler,
 	agentruntime.EventTodoConflict:                             runtimeEventTodoConflictHandler,
+	agentruntime.EventSkillActivated:                           runtimeEventSkillActivatedHandler,
+	agentruntime.EventSkillDeactivated:                         runtimeEventSkillDeactivatedHandler,
+	agentruntime.EventSkillMissing:                             runtimeEventSkillMissingHandler,
 }
 
 func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bool {
@@ -1159,6 +1179,71 @@ func runtimeEventTodoConflictHandler(a *App, event agentruntime.RuntimeEvent) bo
 	}
 	a.appendActivity("todo", "Todo conflict", reason, true)
 	return false
+}
+
+// runtimeEventSkillActivatedHandler 在 runtime 激活 skill 后同步活动日志。
+func runtimeEventSkillActivatedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := parseSessionSkillEventPayload(event.Payload)
+	if !ok {
+		return false
+	}
+	skillID := strings.TrimSpace(payload.SkillID)
+	if skillID == "" {
+		skillID = "(unknown)"
+	}
+	a.appendActivity("skills", "Skill activated", skillID, false)
+	return false
+}
+
+// runtimeEventSkillDeactivatedHandler 在 runtime 停用 skill 后同步活动日志。
+func runtimeEventSkillDeactivatedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := parseSessionSkillEventPayload(event.Payload)
+	if !ok {
+		return false
+	}
+	skillID := strings.TrimSpace(payload.SkillID)
+	if skillID == "" {
+		skillID = "(unknown)"
+	}
+	a.appendActivity("skills", "Skill deactivated", skillID, false)
+	return false
+}
+
+// runtimeEventSkillMissingHandler 在会话 skill 丢失时输出显式错误反馈，便于排查恢复问题。
+func runtimeEventSkillMissingHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := parseSessionSkillEventPayload(event.Payload)
+	if !ok {
+		return false
+	}
+	skillID := strings.TrimSpace(payload.SkillID)
+	if skillID == "" {
+		skillID = "(unknown)"
+	}
+	a.appendActivity("skills", "Skill missing in registry", skillID, true)
+	return false
+}
+
+// parseSessionSkillEventPayload 解析 runtime skill 事件负载并兼容 map 结构。
+func parseSessionSkillEventPayload(payload any) (agentruntime.SessionSkillEventPayload, bool) {
+	switch typed := payload.(type) {
+	case agentruntime.SessionSkillEventPayload:
+		return typed, true
+	case *agentruntime.SessionSkillEventPayload:
+		if typed == nil {
+			return agentruntime.SessionSkillEventPayload{}, false
+		}
+		return *typed, true
+	case map[string]any:
+		if raw, ok := typed["skill_id"]; ok && raw != nil {
+			return agentruntime.SessionSkillEventPayload{SkillID: strings.TrimSpace(fmt.Sprintf("%v", raw))}, true
+		}
+		if raw, ok := typed["SkillID"]; ok && raw != nil {
+			return agentruntime.SessionSkillEventPayload{SkillID: strings.TrimSpace(fmt.Sprintf("%v", raw))}, true
+		}
+		return agentruntime.SessionSkillEventPayload{}, false
+	default:
+		return agentruntime.SessionSkillEventPayload{}, false
+	}
 }
 
 func parseTodoEventPayload(payload any) (agentruntime.TodoEventPayload, bool) {
@@ -2426,6 +2511,18 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		return true, a.handleRememberCommand(rest)
 	case slashCommandForget:
 		return true, a.handleForgetCommand(rest)
+	case slashCommandSkills:
+		if strings.TrimSpace(rest) != "" {
+			errText := fmt.Sprintf("usage: %s", slashUsageSkills)
+			a.state.ExecutionError = errText
+			a.state.StatusText = errText
+			a.appendInlineMessage(roleError, errText)
+			a.rebuildTranscript()
+			return true, nil
+		}
+		return true, a.handleSkillsCommand()
+	case slashCommandSkill:
+		return true, a.handleSkillCommand(rest)
 	case slashCommandSession:
 		if err := a.ensureSessionSwitchAllowed(""); err != nil {
 			a.state.ExecutionError = err.Error()

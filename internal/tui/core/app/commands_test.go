@@ -20,6 +20,8 @@ func TestBuiltinSlashCommands(t *testing.T) {
 
 	found := false
 	foundTodo := false
+	foundSkills := false
+	foundSkillUse := false
 	for _, cmd := range builtinSlashCommands {
 		if cmd.Usage == slashUsageHelp {
 			found = true
@@ -27,12 +29,24 @@ func TestBuiltinSlashCommands(t *testing.T) {
 		if strings.HasPrefix(cmd.Usage, "/todo") {
 			foundTodo = true
 		}
+		if cmd.Usage == slashUsageSkills {
+			foundSkills = true
+		}
+		if cmd.Usage == slashUsageSkillUse {
+			foundSkillUse = true
+		}
 	}
 	if !found {
 		t.Error("expected to find /help command")
 	}
 	if foundTodo {
 		t.Error("did not expect /todo command in builtin slash commands")
+	}
+	if !foundSkills {
+		t.Error("expected to find /skills command")
+	}
+	if !foundSkillUse {
+		t.Error("expected to find /skill use command")
 	}
 }
 

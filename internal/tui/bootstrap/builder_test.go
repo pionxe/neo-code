@@ -82,6 +82,15 @@ func (r *testRuntime) ListSessionSkills(ctx context.Context, sessionID string) (
 	return []agentruntime.SessionSkillState{{SkillID: "test", Descriptor: &skills.Descriptor{ID: "test"}}}, nil
 }
 
+func (r *testRuntime) ListAvailableSkills(ctx context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
+	return []agentruntime.AvailableSkillState{
+		{
+			Descriptor: skills.Descriptor{ID: "test", Name: "Test"},
+			Active:     true,
+		},
+	}, nil
+}
+
 type testProviderService struct{}
 
 func (s *testProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
@@ -301,6 +310,10 @@ func (r noopRuntime) DeactivateSessionSkill(ctx context.Context, sessionID strin
 }
 
 func (r noopRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return nil, nil
+}
+
+func (r noopRuntime) ListAvailableSkills(ctx context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
 	return nil, nil
 }
 
