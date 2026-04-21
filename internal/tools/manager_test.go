@@ -553,6 +553,141 @@ func TestSandboxOutsideWriteApprovalCandidate(t *testing.T) {
 	}
 }
 
+func TestSandboxOutsideWriteUtilityHelpers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("candidate requires write action", func(t *testing.T) {
+		t.Parallel()
+		action := security.Action{
+			Type: security.ActionTypeRead,
+			Payload: security.ActionPayload{
+				ToolName:      ToolNameFilesystemWriteFile,
+				Resource:      ToolNameFilesystemWriteFile,
+				Workdir:       "/workspace/project",
+				Target:        "/tmp/note.txt",
+				SandboxTarget: "/tmp/note.txt",
+			},
+		}
+		if got := isSandboxOutsideWriteApprovalCandidate(action, errors.New(`security: path "/tmp/note.txt" escapes workspace root`)); got {
+			t.Fatalf("expected non-write action not to be candidate")
+		}
+	})
+
+	t.Run("candidate requires resolvable target path", func(t *testing.T) {
+		t.Parallel()
+		action := security.Action{
+			Type: security.ActionTypeWrite,
+			Payload: security.ActionPayload{
+				ToolName: ToolNameFilesystemWriteFile,
+				Resource: ToolNameFilesystemWriteFile,
+				Workdir:  "/workspace/project",
+			},
+		}
+		if got := isSandboxOutsideWriteApprovalCandidate(action, errors.New(`security: path "/tmp/note.txt" escapes workspace root`)); got {
+			t.Fatalf("expected empty target not to be candidate")
+		}
+	})
+
+	t.Run("workspace error recognizers handle nil", func(t *testing.T) {
+		t.Parallel()
+		if isWorkspaceBoundaryViolationError(nil) {
+			t.Fatalf("expected nil error not to be workspace boundary violation")
+		}
+		if isWorkspaceSymlinkViolationError(nil) {
+			t.Fatalf("expected nil error not to be workspace symlink violation")
+		}
+	})
+
+	t.Run("resolve action sandbox target path branches", func(t *testing.T) {
+		t.Parallel()
+		if got := resolveActionSandboxTargetPath(security.Action{}); got != "" {
+			t.Fatalf("expected empty target path, got %q", got)
+		}
+
+		actionWithTarget := security.Action{
+			Payload: security.ActionPayload{
+				Target:  "logs/app.log",
+				Workdir: "/workspace/project",
+			},
+		}
+		resolved := resolveActionSandboxTargetPath(actionWithTarget)
+		if !strings.HasSuffix(filepath.ToSlash(resolved), "/workspace/project/logs/app.log") {
+			t.Fatalf("expected target fallback with workdir join, got %q", resolved)
+		}
+
+		actionWithSandboxTarget := security.Action{
+			Payload: security.ActionPayload{
+				Target:        "/tmp/ignored.txt",
+				SandboxTarget: "/tmp/final.txt",
+			},
+		}
+		if got := resolveActionSandboxTargetPath(actionWithSandboxTarget); filepath.Clean(got) != filepath.Clean("/tmp/final.txt") {
+			t.Fatalf("expected sandbox target to win, got %q", got)
+		}
+	})
+
+	t.Run("low risk path rejects empty path", func(t *testing.T) {
+		t.Parallel()
+		if isLowRiskExternalWritePath(" . ") {
+			t.Fatalf("expected dot path to be rejected")
+		}
+	})
+
+	t.Run("startup profile detector os branches", func(t *testing.T) {
+		t.Parallel()
+		if isUserStartupProfilePathForOS(".", "linux") {
+			t.Fatalf("expected dot path not to be startup profile")
+		}
+		if isUserStartupProfilePathForOS(" / ", "linux") {
+			t.Fatalf("expected root path not to be startup profile")
+		}
+		if !isUserStartupProfilePathForOS(`/Users/tester/Documents/WindowsPowerShell/custom_profile.ps1`, "windows") {
+			t.Fatalf("expected windows powershell profile directory to be recognized")
+		}
+		if !isUserStartupProfilePathForOS(`/Users/tester/Documents/PowerShell/custom_profile.ps1`, "windows") {
+			t.Fatalf("expected powershell profile directory to be recognized")
+		}
+		if isUserStartupProfilePathForOS(`/Users/tester/Documents/PowerShell/readme.txt`, "windows") {
+			t.Fatalf("expected non-ps1 path not to be startup profile")
+		}
+		if !isUserStartupProfilePathForOS(`/home/tester/.config/fish/config.fish`, "linux") {
+			t.Fatalf("expected fish config path to be startup profile")
+		}
+	})
+
+	t.Run("system protected path detector os branches", func(t *testing.T) {
+		t.Parallel()
+		if !isSystemProtectedPathForOS("/", "linux") {
+			t.Fatalf("expected linux root to be protected")
+		}
+		if !isSystemProtectedPathForOS("/home/tester/.ssh/config", "linux") {
+			t.Fatalf("expected .ssh path to be protected")
+		}
+		if isSystemProtectedPathForOS("/home/tester/Documents/notes.txt", "linux") {
+			t.Fatalf("expected regular linux user path not to be protected")
+		}
+		if !isSystemProtectedPathForOS(`C:\Windows\System32\drivers\etc\hosts`, "windows") {
+			t.Fatalf("expected windows system path to be protected")
+		}
+		if !isSystemProtectedPathForOS(`C:\Users\tester\AppData\Roaming\config`, "windows") {
+			t.Fatalf("expected appdata path to be protected")
+		}
+		if !isSystemProtectedPathForOS(`C:`, "windows") {
+			t.Fatalf("expected windows drive root to be protected")
+		}
+		if isSystemProtectedPathForOS(`C:\Users\tester\Desktop\note.txt`, "windows") {
+			t.Fatalf("expected regular windows user path not to be protected")
+		}
+	})
+
+	t.Run("error message handles nil", func(t *testing.T) {
+		t.Parallel()
+		if got := errorMessage(nil); got != "" {
+			t.Fatalf("expected empty error message for nil error, got %q", got)
+		}
+	})
+}
+
 func TestSandboxErrorDetailsIncludesWorkspaceContext(t *testing.T) {
 	t.Parallel()
 
@@ -2043,6 +2178,26 @@ func TestDefaultManagerExecuteCapabilityTokenValidation(t *testing.T) {
 				}
 			},
 			expectErr: "requires non-empty action agent_id",
+		},
+		{
+			name: "deny agent mismatch",
+			buildInput: func(t *testing.T, manager *DefaultManager) ToolCallInput {
+				t.Helper()
+				signed, err := manager.CapabilitySigner().Sign(baseToken)
+				if err != nil {
+					t.Fatalf("sign token: %v", err)
+				}
+				return ToolCallInput{
+					ID:              "call-agent-mismatch",
+					Name:            "filesystem_read_file",
+					Arguments:       []byte(`{"path":"README.md"}`),
+					Workdir:         workdir,
+					TaskID:          baseToken.TaskID,
+					AgentID:         "agent-other",
+					CapabilityToken: &signed,
+				}
+			},
+			expectErr: "agent_id does not match action",
 		},
 	}
 

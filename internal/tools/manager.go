@@ -477,6 +477,11 @@ func isLowRiskExternalWritePath(targetPath string) bool {
 
 // isUserStartupProfilePath 判断路径是否命中用户级 shell/profile 启动文件，命中后必须保持硬拒绝。
 func isUserStartupProfilePath(path string) bool {
+	return isUserStartupProfilePathForOS(path, runtime.GOOS)
+}
+
+// isUserStartupProfilePathForOS 按指定操作系统判定路径是否命中用户级 shell/profile 启动文件。
+func isUserStartupProfilePathForOS(path string, goos string) bool {
 	cleaned := strings.ToLower(strings.TrimSpace(filepath.Clean(path)))
 	if cleaned == "" || cleaned == "." {
 		return false
@@ -485,8 +490,7 @@ func isUserStartupProfilePath(path string) bool {
 	base := filepath.Base(cleaned)
 	switch base {
 	case ".bashrc", ".bash_profile", ".bash_login", ".profile",
-		".zshrc", ".zprofile", ".zlogin", ".zshenv",
-		".cshrc", ".tcshrc", "config.fish",
+		".zshrc", ".zprofile", ".zlogin", ".zshenv", ".cshrc", ".tcshrc",
 		"profile.ps1", "microsoft.powershell_profile.ps1",
 		"microsoft.vscode_profile.ps1", "profile":
 		return true
@@ -496,7 +500,7 @@ func isUserStartupProfilePath(path string) bool {
 	if len(segments) == 0 {
 		return false
 	}
-	if runtime.GOOS == "windows" {
+	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
 		for i := 0; i+2 < len(segments); i++ {
 			if segments[i] == "documents" && segments[i+1] == "windowspowershell" && strings.HasSuffix(base, ".ps1") {
 				return true
@@ -517,18 +521,23 @@ func isUserStartupProfilePath(path string) bool {
 
 // isSystemProtectedPath 判定路径是否命中系统受保护目录，命中后必须保持硬拒绝。
 func isSystemProtectedPath(path string) bool {
+	return isSystemProtectedPathForOS(path, runtime.GOOS)
+}
+
+// isSystemProtectedPathForOS 按指定操作系统判定路径是否命中系统受保护目录。
+func isSystemProtectedPathForOS(path string, goos string) bool {
 	normalized := strings.ToLower(filepath.Clean(path))
-	if runtime.GOOS == "windows" {
+	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
 		volume := strings.ToLower(filepath.VolumeName(normalized))
+		if volume == "" && len(normalized) >= 2 && normalized[1] == ':' {
+			volume = normalized[:2]
+		}
 		rest := strings.TrimPrefix(normalized, volume)
 		rest = strings.TrimLeft(rest, `\/`)
 		if rest == "" {
 			return true
 		}
 		segments := splitPathSegments(rest)
-		if len(segments) == 0 {
-			return true
-		}
 		switch segments[0] {
 		case "windows", "program files", "program files (x86)", "programdata",
 			"$recycle.bin", "system volume information", "recovery", "boot":
