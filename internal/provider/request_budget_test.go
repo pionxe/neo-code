@@ -61,3 +61,42 @@ func TestNormalizeRequestAssetBudget(t *testing.T) {
 		})
 	}
 }
+
+func TestEstimateDataURLTransportBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		rawBytes int64
+		mimeType string
+		want     int64
+	}{
+		{
+			name:     "zero bytes",
+			rawBytes: 0,
+			mimeType: "image/png",
+			want:     0,
+		},
+		{
+			name:     "rounds base64 payload and includes prefix",
+			rawBytes: 2,
+			mimeType: "image/png",
+			want:     4 + 13 + 9 + 2, // encoded(4) + "data:;base64,"(13) + "image/png"(9) + json quote(2)
+		},
+		{
+			name:     "trims mime type spaces",
+			rawBytes: 3,
+			mimeType: " image/png ",
+			want:     4 + 13 + 9 + 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EstimateDataURLTransportBytes(tt.rawBytes, tt.mimeType)
+			if got != tt.want {
+				t.Fatalf("EstimateDataURLTransportBytes(%d, %q) = %d, want %d", tt.rawBytes, tt.mimeType, got, tt.want)
+			}
+		})
+	}
+}

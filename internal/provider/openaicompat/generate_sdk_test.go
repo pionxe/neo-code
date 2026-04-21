@@ -125,6 +125,20 @@ func TestConvertToSDKMessageMapsMultipartUserContent(t *testing.T) {
 	}
 }
 
+func TestConvertToChatCompletionParamsEnablesUsageInStream(t *testing.T) {
+	t.Parallel()
+
+	params := convertToChatCompletionParams(chatcompletions.Request{
+		Model: "gpt-4o-mini",
+		Messages: []chatcompletions.Message{
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if !params.StreamOptions.IncludeUsage.Valid() || !params.StreamOptions.IncludeUsage.Value {
+		t.Fatalf("expected stream_options.include_usage=true, got %+v", params.StreamOptions)
+	}
+}
+
 func TestShouldFallbackToCompatibleChatStream(t *testing.T) {
 	t.Parallel()
 

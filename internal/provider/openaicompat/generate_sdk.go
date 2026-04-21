@@ -33,6 +33,7 @@ func (p *Provider) generateSDKChatCompletions(
 	params := convertToChatCompletionParams(payload)
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
+	defer func() { _ = stream.Close() }()
 	if err := chatcompletions.EmitFromSDKStream(ctx, stream, events); err != nil {
 		if mapped, ok := mapOpenAIError(err); ok {
 			return mapped
@@ -49,6 +50,9 @@ func (p *Provider) generateSDKChatCompletions(
 func convertToChatCompletionParams(req chatcompletions.Request) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model: openai.ChatModel(req.Model),
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(true),
+		},
 	}
 
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
