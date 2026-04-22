@@ -93,6 +93,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		now := time.Time(typed)
 		needNextTick := false
 
+		if a.startupVisible {
+			a.advanceStartupAnimation()
+			needNextTick = true
+		}
 		if !a.footerErrorUntil.IsZero() && now.Before(a.footerErrorUntil) {
 			needNextTick = true
 		}

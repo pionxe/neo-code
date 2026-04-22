@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -166,6 +165,132 @@ func composeHeaderLine(left string, right string, width int) string {
 		spaceCount = gap
 	}
 	return leftText + strings.Repeat(" ", spaceCount) + right
+}
+
+// renderStartupView 渲染旧版启动页，用于启动锁屏的独立布局与相关回归测试。
+func (a App) renderStartupView(width int, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+
+	logoWidth := startupLogoCanvasWidth(startupLogoASCII)
+	logoContent := startupCenterPadLines(strings.Split(startupLogoASCII, "\n"), logoWidth)
+	subtitle := a.styles.startupSubtitle.Render(strings.ToUpper(startupSubtitleText))
+	standby := a.styles.startupHeaderMeta.Render(strings.ToUpper(startupStandbyLabel))
+	menu := strings.Join(a.renderStartupMenuLines(), "\n")
+	input := a.renderStartupInputLine()
+	footer := a.styles.startupFooter.Render("Ctrl+U Exit")
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		a.styles.startupLogo.Render(logoContent),
+		subtitle,
+		standby,
+		menu,
+		input,
+		footer,
+	)
+
+	return lipgloss.Place(
+		width,
+		height,
+		lipgloss.Center,
+		lipgloss.Center,
+		content,
+		lipgloss.WithWhitespaceChars(" "),
+	)
+}
+
+// startupTypingText 返回启动页输入占位符的当前打字机片段，并做索引上限保护。
+func (a App) startupTypingText() string {
+	runes := []rune(startupTypingPlaceholder)
+	if len(runes) == 0 {
+		return ""
+	}
+	if a.startupTypingIndex <= 0 {
+		return ""
+	}
+	if a.startupTypingIndex >= len(runes) {
+		return startupTypingPlaceholder
+	}
+	return string(runes[:a.startupTypingIndex])
+}
+
+// startupBlackLine 在黑底画布上输出固定宽度文本行，保证 ANSI 宽度稳定。
+func (a App) startupBlackLine(width int, content string) string {
+	if width <= 0 {
+		return ""
+	}
+	plain := ansi.Strip(content)
+	if ansi.StringWidth(plain) > width {
+		plain = string([]rune(plain)[:max(0, width)])
+	}
+	w := ansi.StringWidth(plain)
+	if w < width {
+		plain += strings.Repeat(" ", width-w)
+	}
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(startupLogoBaseColor)).
+		Background(lipgloss.Color(startupBackgroundColor)).
+		Render(plain)
+}
+
+// startupCenterWithinAnchor 在给定锚点宽度内居中内容，并维持最终可见宽度不变。
+func (a App) startupCenterWithinAnchor(anchorWidth int, content string) string {
+	if anchorWidth <= 0 {
+		return ""
+	}
+	plain := ansi.Strip(content)
+	if ansi.StringWidth(plain) >= anchorWidth {
+		return tuiutils.TrimMiddle(plain, anchorWidth)
+	}
+	left := (anchorWidth - ansi.StringWidth(plain)) / 2
+	right := anchorWidth - ansi.StringWidth(plain) - left
+	return strings.Repeat(" ", left) + plain + strings.Repeat(" ", right)
+}
+
+// renderStartupMenuLines 生成两列对齐的启动快捷键菜单行。
+func (a App) renderStartupMenuLines() []string {
+	if len(startupMenuItems) == 0 {
+		return nil
+	}
+	keyWidth := 0
+	actionWidth := 0
+	for _, item := range startupMenuItems {
+		keyWidth = max(keyWidth, ansi.StringWidth(item.Key))
+		actionWidth = max(actionWidth, ansi.StringWidth(item.Action))
+	}
+
+	lines := make([]string, 0, len(startupMenuItems))
+	for _, item := range startupMenuItems {
+		key := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ffffff")).
+			Background(lipgloss.Color(startupKeyCapBGColor)).
+			Padding(0, 1).
+			Width(keyWidth + 2).
+			Align(lipgloss.Center).
+			Render(item.Key)
+		action := a.styles.startupMenuAction.Width(actionWidth).Render(item.Action)
+		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Left, key, "  ", action))
+	}
+	return lines
+}
+
+// renderStartupInputLine 渲染启动页输入提示行，并在光标闪烁态附加块光标。
+func (a App) renderStartupInputLine() string {
+	typing := a.startupTypingText()
+	cursor := ""
+	if a.startupCursorOn {
+		cursor = a.styles.startupCursor.Render(" ")
+	}
+	return a.styles.startupInput.Render(
+		lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			a.styles.startupPrompt.Render("> "),
+			a.styles.startupTyping.Render(typing),
+			cursor,
+		),
+	)
 }
 
 func (a App) renderBody(lay layout) string {
