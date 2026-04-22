@@ -452,7 +452,14 @@ func TestServiceRunMCPPermissionAllowFlow(t *testing.T) {
 		tools: []mcp.ToolDescriptor{
 			{Name: "create_issue", Description: "create issue", InputSchema: map[string]any{"type": "object"}},
 		},
-		callResult: mcp.CallResult{Content: "mcp create ok"},
+		callResult: mcp.CallResult{
+			Content: "mcp create ok",
+			Metadata: map[string]any{
+				"verification_performed": true,
+				"verification_passed":    true,
+				"verification_scope":     "workspace",
+			},
+		},
 	}
 	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", mcpClient); err != nil {
 		t.Fatalf("register mcp server: %v", err)
@@ -1226,5 +1233,79 @@ func TestExecuteToolCallWithPermissionForwardsCapabilityContext(t *testing.T) {
 	}
 	if manager.lastInput.CapabilityToken == nil || manager.lastInput.CapabilityToken.ID != token.ID {
 		t.Fatalf("expected capability token forwarded, got %+v", manager.lastInput.CapabilityToken)
+	}
+}
+
+func TestResolveToolExecutionTimeoutForSpawnSubagent(t *testing.T) {
+	t.Parallel()
+
+	base := 20 * time.Second
+	got := resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: `{"prompt":"review auth module"}`,
+	}, base)
+	if got < defaultInlineSubAgentToolTimeout {
+		t.Fatalf("expected inline spawn timeout >= %v, got %v", defaultInlineSubAgentToolTimeout, got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: `{"mode":"todo","items":[{"id":"t1","content":"x"}]}`,
+	}, base)
+	if got < defaultInlineSubAgentToolTimeout {
+		t.Fatalf("expected unsupported mode payload to fall back to inline timeout >= %v, got %v", defaultInlineSubAgentToolTimeout, got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: `{"prompt":"review","timeout_sec":1200}`,
+	}, base)
+	if got != maxInlineSubAgentToolTimeout {
+		t.Fatalf("expected clamped max timeout %v, got %v", maxInlineSubAgentToolTimeout, got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      "filesystem_read_file",
+		Arguments: `{"path":"README.md"}`,
+	}, base)
+	if got != base {
+		t.Fatalf("expected non-spawn tool to keep base timeout %v, got %v", base, got)
+	}
+}
+
+func TestResolveToolExecutionTimeoutFallbackAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	got := resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: `{"prompt":"review","timeout_sec":10}`,
+	}, 0)
+	if got != minInlineSubAgentToolTimeout {
+		t.Fatalf("expected clamped min timeout %v, got %v", minInlineSubAgentToolTimeout, got)
+	}
+
+	mode, timeout := parseSpawnSubAgentRuntimeOptions("")
+	if mode != "" || timeout != 0 {
+		t.Fatalf("unexpected empty parse result mode=%q timeout=%v", mode, timeout)
+	}
+
+	mode, timeout = parseSpawnSubAgentRuntimeOptions("{")
+	if mode != "" || timeout != 0 {
+		t.Fatalf("unexpected invalid json parse result mode=%q timeout=%v", mode, timeout)
+	}
+
+	mode, timeout = parseSpawnSubAgentRuntimeOptions(`{"mode":" inline ","timeout_sec":12}`)
+	if mode != "inline" || timeout != 12*time.Second {
+		t.Fatalf("unexpected parsed options mode=%q timeout=%v", mode, timeout)
+	}
+
+	if got := clampDuration(5*time.Second, 10*time.Second, 20*time.Second); got != 10*time.Second {
+		t.Fatalf("expected lower clamp, got %v", got)
+	}
+	if got := clampDuration(25*time.Second, 10*time.Second, 20*time.Second); got != 20*time.Second {
+		t.Fatalf("expected upper clamp, got %v", got)
+	}
+	if got := clampDuration(15*time.Second, 10*time.Second, 20*time.Second); got != 15*time.Second {
+		t.Fatalf("expected unchanged clamp, got %v", got)
 	}
 }

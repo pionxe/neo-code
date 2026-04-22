@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,8 +23,9 @@ import (
 )
 
 const (
-	defaultGatewayLogLevel    = "info"
-	fallbackDispatchErrorJSON = `{"status":"error","code":"internal_error","message":"failed to encode or write error output"}`
+	defaultGatewayLogLevel          = "info"
+	fallbackDispatchErrorJSON       = `{"status":"error","code":"internal_error","message":"failed to encode or write error output"}`
+	defaultGatewayIdleShutdownDelay = 30 * time.Second
 )
 
 var (
@@ -199,6 +201,8 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 
 	signalContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	runtimeContext, cancelRuntime := context.WithCancel(signalContext)
+	defer cancelRuntime()
 
 	gatewayConfig, err := config.LoadGatewayConfig(signalContext, "")
 	if err != nil {
@@ -241,6 +245,9 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		}
 	}()
 
+	idleCloser := newGatewayIdleShutdownController(logger, cancelRuntime)
+	defer idleCloser.close()
+
 	ipcServer, err := newGatewayServer(gateway.ServerOptions{
 		ListenAddress:  options.ListenAddress,
 		Logger:         logger,
@@ -252,6 +259,9 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		Authenticator:  authManager,
 		ACL:            acl,
 		Metrics:        metrics,
+		ConnectionCountChanged: func(active int) {
+			idleCloser.observe(active)
+		},
 	})
 	if err != nil {
 		return err
@@ -282,10 +292,11 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 
 	logger.Printf("gateway ipc listen address: %s", ipcServer.ListenAddress())
 	logger.Printf("gateway network listen address: %s", networkServer.ListenAddress())
+	idleCloser.observe(0)
 
 	go func() {
-		serveErr := networkServer.Serve(signalContext, runtimePort)
-		if serveErr != nil && signalContext.Err() == nil {
+		serveErr := networkServer.Serve(runtimeContext, runtimePort)
+		if serveErr != nil && runtimeContext.Err() == nil {
 			logger.Printf(
 				"warning: HTTP server failed to start on %s (port in use?), but IPC server is still running: %v",
 				networkServer.ListenAddress(),
@@ -294,7 +305,79 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		}
 	}()
 
-	return ipcServer.Serve(signalContext, runtimePort)
+	return ipcServer.Serve(runtimeContext, runtimePort)
+}
+
+type gatewayIdleShutdownController struct {
+	logger      *log.Logger
+	idleTimeout time.Duration
+	cancel      context.CancelFunc
+
+	mu    sync.Mutex
+	timer *time.Timer
+}
+
+// newGatewayIdleShutdownController 创建网关空闲自退控制器：连接数归零后延迟退出，有连接恢复则取消退出。
+func newGatewayIdleShutdownController(logger *log.Logger, cancel context.CancelFunc) *gatewayIdleShutdownController {
+	return &gatewayIdleShutdownController{
+		logger:      logger,
+		idleTimeout: defaultGatewayIdleShutdownDelay,
+		cancel:      cancel,
+	}
+}
+
+// observe 接收 IPC 活跃连接数快照并维护空闲退出计时器。
+func (c *gatewayIdleShutdownController) observe(active int) {
+	if c == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if active > 0 {
+		if c.timer != nil {
+			c.timer.Stop()
+			c.timer = nil
+			if c.logger != nil {
+				c.logger.Printf("active ipc connections=%d, cancel idle shutdown timer", active)
+			}
+		}
+		return
+	}
+
+	if c.timer != nil {
+		return
+	}
+
+	timeout := c.idleTimeout
+	if timeout <= 0 {
+		timeout = defaultGatewayIdleShutdownDelay
+	}
+	if c.logger != nil {
+		c.logger.Printf("ipc connections dropped to zero, gateway will exit in %s if still idle", timeout)
+	}
+	c.timer = time.AfterFunc(timeout, func() {
+		if c.logger != nil {
+			c.logger.Printf("idle timeout reached, shutting down gateway")
+		}
+		if c.cancel != nil {
+			c.cancel()
+		}
+	})
+}
+
+// close 释放空闲退出控制器持有的计时器资源。
+func (c *gatewayIdleShutdownController) close() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
 }
 
 // buildGatewayControlPlaneACL 基于配置构造控制面 ACL 策略，未知模式直接拒绝启动。

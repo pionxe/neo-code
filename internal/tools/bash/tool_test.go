@@ -171,6 +171,40 @@ func TestToolExecuteErrorFormattingAndTruncation(t *testing.T) {
 	}
 }
 
+func TestToolExecuteEmitsVerificationMetadataWhenExplicitlyRequested(t *testing.T) {
+	workspace := t.TempDir()
+	tool := New(workspace, defaultShell(), 3*time.Second)
+
+	args := mustMarshalArgs(t, map[string]any{
+		"command":            safeEchoCommand(),
+		"verification":       true,
+		"verification_scope": "workspace",
+	})
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if performed, _ := result.Metadata["verification_performed"].(bool); !performed {
+		t.Fatalf("expected verification_performed=true, got %#v", result.Metadata["verification_performed"])
+	}
+	if passed, _ := result.Metadata["verification_passed"].(bool); !passed {
+		t.Fatalf("expected verification_passed=true, got %#v", result.Metadata["verification_passed"])
+	}
+	if scope, _ := result.Metadata["verification_scope"].(string); scope != "workspace" {
+		t.Fatalf("expected verification_scope=workspace, got %#v", result.Metadata["verification_scope"])
+	}
+	if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
+		t.Fatalf("expected verification facts to be populated, got %+v", result.Facts)
+	}
+	if result.Facts.VerificationScope != "workspace" {
+		t.Fatalf("expected verification fact scope workspace, got %q", result.Facts.VerificationScope)
+	}
+}
+
 func mustMarshalArgs(t *testing.T, value any) []byte {
 	t.Helper()
 

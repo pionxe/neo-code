@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestSubAgentEngineHelperFunctions(t *testing.T) {
 	if got := resolveSubAgentMaxTurns(0); got != subAgentMaxStepTurnsDefault {
 		t.Fatalf("resolveSubAgentMaxTurns(0) = %d", got)
 	}
-	if got := resolveSubAgentMaxTurns(99); got != subAgentMaxStepTurnsLimit {
+	if got := resolveSubAgentMaxTurns(99); got != 99 {
 		t.Fatalf("resolveSubAgentMaxTurns(99) = %d", got)
 	}
 	if got := resolveSubAgentMaxTurns(3); got != 3 {
@@ -81,6 +82,9 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 	t.Parallel()
 
 	messages := buildSubAgentInitialMessages(subagent.StepInput{
+		Policy: subagent.RolePolicy{
+			AllowedTools: []string{"filesystem_read_file", "filesystem_grep"},
+		},
 		Task: subagent.Task{
 			ID:             "task-init",
 			Goal:           "goal",
@@ -92,12 +96,60 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 		},
 		Workdir: "/tmp/workdir",
 		Trace:   []string{"  one ", "", "two"},
+		Capability: subagent.Capability{
+			AllowedPaths: []string{"/tmp/workdir", "/tmp/workdir", " "},
+		},
 	})
 	if len(messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(messages))
 	}
-	if text := messages[0].Parts[0].Text; text == "" {
+	text := messages[0].Parts[0].Text
+	if text == "" {
 		t.Fatalf("expected non-empty initial message")
+	}
+	if !strings.Contains(text, "allowed_tools: filesystem_read_file, filesystem_grep") {
+		t.Fatalf("expected allowed_tools in initial message, got %q", text)
+	}
+	if !strings.Contains(text, "allowed_paths:") || !strings.Contains(text, "- /tmp/workdir") {
+		t.Fatalf("expected allowed_paths in initial message, got %q", text)
+	}
+
+	prompt := buildSubAgentSystemPrompt(
+		subagent.RolePolicy{
+			SystemPrompt:        "role prompt",
+			ToolUseMode:         subagent.ToolUseModeAuto,
+			MaxToolCallsPerStep: 2,
+		},
+		[]string{"filesystem_read_file"},
+		[]string{"/tmp/workdir"},
+	)
+	if !strings.Contains(prompt, "allowed_tools: filesystem_read_file") {
+		t.Fatalf("expected allowed_tools in system prompt, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "allowed_paths:") || !strings.Contains(prompt, "- /tmp/workdir") {
+		t.Fatalf("expected allowed_paths in system prompt, got %q", prompt)
+	}
+	if strings.Contains(prompt, "spawn_subagent(mode=todo)") {
+		t.Fatalf("did not expect mode=todo guidance after inline-only migration, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "只返回单个 JSON 对象") {
+		t.Fatalf("expected strict json output guidance, got %q", prompt)
+	}
+
+	emptyPrompt := buildSubAgentSystemPrompt(
+		subagent.RolePolicy{
+			SystemPrompt:        "role prompt",
+			ToolUseMode:         subagent.ToolUseModeAuto,
+			MaxToolCallsPerStep: 1,
+		},
+		nil,
+		nil,
+	)
+	if !strings.Contains(emptyPrompt, "allowed_tools: (none)") {
+		t.Fatalf("expected explicit empty allowed_tools marker, got %q", emptyPrompt)
+	}
+	if !strings.Contains(emptyPrompt, "allowed_paths: (none)") {
+		t.Fatalf("expected explicit empty allowed_paths marker, got %q", emptyPrompt)
 	}
 
 	if _, err := extractSubAgentJSONObject("{\"summary\":"); err == nil {
@@ -105,6 +157,9 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 	}
 	if _, err := extractSubAgentJSONObject("no json"); err == nil {
 		t.Fatalf("expected missing json error")
+	}
+	if _, err := extractSubAgentJSONObject(`{"example":true}`); err == nil {
+		t.Fatalf("expected required contract keys error")
 	}
 }
 
@@ -171,5 +226,75 @@ func TestSubAgentToolExecutorUtilityFunctions(t *testing.T) {
 	}
 	if got := elapsedMilliseconds(time.Now().Add(2 * time.Second)); got != 0 {
 		t.Fatalf("future start elapsed = %d, want 0", got)
+	}
+}
+
+func TestSubAgentToolResultToMessageAppliesSubAgentLimit(t *testing.T) {
+	t.Parallel()
+
+	longContent := strings.Repeat("x", subAgentToolResultMaxRunes+128)
+	message := subAgentToolResultToMessage(
+		providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"},
+		subagent.ToolExecutionResult{
+			Name:     "filesystem_read_file",
+			Content:  longContent,
+			Decision: permissionDecisionAllow,
+			Metadata: map[string]any{"source": "tool"},
+		},
+	)
+	content := message.Parts[0].Text
+	if !strings.Contains(content, "[truncated]") {
+		t.Fatalf("expected truncated marker in tool content, got %q", content)
+	}
+	if len([]rune(content)) > subAgentToolResultMaxRunes+len([]rune(subAgentTextTruncatedSuffix)) {
+		t.Fatalf("unexpected content length after truncate, got=%d", len([]rune(content)))
+	}
+	if message.ToolMetadata["truncated"] != "true" {
+		t.Fatalf("expected truncated metadata=true, got %+v", message.ToolMetadata)
+	}
+}
+
+func TestTrimSubAgentMessageWindowKeepsPinnedAndRecent(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("task context")}},
+	}
+	for idx := 0; idx < 24; idx++ {
+		messages = append(messages, providertypes.Message{
+			Role:  providertypes.RoleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("step-%02d-%s", idx, strings.Repeat("x", 1024)))},
+		})
+	}
+
+	trimmed := trimSubAgentMessageWindow(messages)
+	if len(trimmed) > subAgentMessageWindowMaxMessages {
+		t.Fatalf("trimmed messages len = %d, want <= %d", len(trimmed), subAgentMessageWindowMaxMessages)
+	}
+	if trimmed[0].Parts[0].Text != "task context" {
+		t.Fatalf("expected pinned message kept, got %q", trimmed[0].Parts[0].Text)
+	}
+	if !strings.Contains(trimmed[1].Parts[0].Text, "[subagent_history_trimmed]") {
+		t.Fatalf("expected history summary marker, got %q", trimmed[1].Parts[0].Text)
+	}
+	last := trimmed[len(trimmed)-1].Parts[0].Text
+	if !strings.Contains(last, "step-23-") {
+		t.Fatalf("expected latest message retained, got %q", last)
+	}
+}
+
+func TestTrimSubAgentMessageWindowClampsPinnedMessage(t *testing.T) {
+	t.Parallel()
+
+	pinned := strings.Repeat("p", subAgentMessageWindowMaxRunes+64)
+	trimmed := trimSubAgentMessageWindow([]providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(pinned)}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("tail")}},
+	})
+	if len(trimmed) < 1 {
+		t.Fatalf("expected non-empty trimmed messages")
+	}
+	if got := trimmed[0].Parts[0].Text; !strings.Contains(got, "[truncated]") {
+		t.Fatalf("expected pinned message to be truncated, got %q", got)
 	}
 }

@@ -3,8 +3,11 @@ package chatcompletions
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 
 	"neo-code/internal/provider"
@@ -16,6 +19,8 @@ const errorPrefix = "openaicompat provider: "
 
 const maxSessionAssetReadBytes = session.MaxSessionAssetBytes
 const maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
+
+const htmlErrorSnippetMaxRunes = 320
 
 // BuildRequest 将 provider.GenerateRequest 转换为 Chat Completions 请求结构。
 // 模型优先取 req.Model，其次使用配置中的默认模型。
@@ -247,4 +252,128 @@ func resolveSessionAssetDataURL(
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), transportBytes, nil
+}
+
+// ParseError 解析 HTTP 错误响应并包装为 ProviderError。
+func ParseError(resp *http.Response) error {
+	if resp == nil {
+		return provider.NewProviderErrorFromStatus(0, errorPrefix+"empty http response")
+	}
+	data, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return provider.NewProviderErrorFromStatus(resp.StatusCode,
+			fmt.Sprintf("%sread error response: %v", errorPrefix, readErr))
+	}
+
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &parsed); err == nil && strings.TrimSpace(parsed.Error.Message) != "" {
+		return provider.NewProviderErrorFromStatus(resp.StatusCode, parsed.Error.Message)
+	}
+
+	contentType := normalizeErrorContentType(resp.Header.Get("Content-Type"))
+	bodyText := strings.TrimSpace(string(data))
+	if bodyText == "" {
+		return provider.NewProviderErrorFromStatus(resp.StatusCode, resp.Status)
+	}
+	if isLikelyHTMLError(contentType, bodyText) {
+		return provider.NewProviderErrorFromStatus(
+			resp.StatusCode,
+			formatHTMLErrorMessage(resp.Status, contentType, bodyText),
+		)
+	}
+
+	return provider.NewProviderErrorFromStatus(resp.StatusCode, bodyText)
+}
+
+// normalizeErrorContentType 归一化错误响应 content-type，仅保留 media type 并转小写。
+func normalizeErrorContentType(contentType string) string {
+	mediaType := strings.TrimSpace(strings.ToLower(contentType))
+	if mediaType == "" {
+		return ""
+	}
+	if index := strings.Index(mediaType, ";"); index >= 0 {
+		mediaType = strings.TrimSpace(mediaType[:index])
+	}
+	return mediaType
+}
+
+// isLikelyHTMLError 判断错误响应是否为 HTML 页面，兼容 header 缺失时的 body 特征识别。
+func isLikelyHTMLError(contentType string, body string) bool {
+	if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml") {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(body))
+	return strings.HasPrefix(normalized, "<!doctype html") ||
+		strings.HasPrefix(normalized, "<html") ||
+		strings.Contains(normalized, "<body") ||
+		strings.Contains(normalized, "</html>")
+}
+
+// formatHTMLErrorMessage 将 HTML 错误统一收敛为结构化摘要，避免把整段网页内容暴露给上层。
+func formatHTMLErrorMessage(status string, contentType string, body string) string {
+	trimmedStatus := strings.TrimSpace(status)
+	if trimmedStatus == "" {
+		trimmedStatus = "unknown"
+	}
+	trimmedType := strings.TrimSpace(contentType)
+	if trimmedType == "" {
+		trimmedType = "text/html"
+	}
+	snippet := extractErrorSnippet(body, htmlErrorSnippetMaxRunes)
+	lines := []string{
+		"upstream returned html error payload",
+		"status: " + trimmedStatus,
+		"content_type: " + trimmedType,
+	}
+	if snippet != "" {
+		lines = append(lines, "snippet: "+snippet)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// extractErrorSnippet 提取单行错误摘要，优先去掉 HTML 标签并限制最大字符数。
+func extractErrorSnippet(body string, maxRunes int) string {
+	plain := stripHTMLTags(body)
+	if strings.TrimSpace(plain) == "" {
+		plain = body
+	}
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(plain)), " ")
+	if normalized == "" || maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(normalized)
+	if len(runes) <= maxRunes {
+		return normalized
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
+// stripHTMLTags 使用轻量扫描移除 HTML 标签，降低错误摘要中的噪声。
+func stripHTMLTags(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	var builder strings.Builder
+	inTag := false
+	for _, r := range content {
+		switch r {
+		case '<':
+			inTag = true
+			continue
+		case '>':
+			if inTag {
+				inTag = false
+				builder.WriteRune(' ')
+				continue
+			}
+		}
+		if !inTag {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
 }

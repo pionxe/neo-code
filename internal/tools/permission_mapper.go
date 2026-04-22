@@ -28,7 +28,7 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 	}
 
 	switch strings.ToLower(toolName) {
-	case "bash":
+	case ToolNameBash:
 		action.Type = security.ActionTypeBash
 		action.Payload.Operation = "command"
 		action.Payload.TargetType = security.TargetTypeCommand
@@ -38,61 +38,69 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		if action.Payload.SandboxTarget == "" {
 			action.Payload.SandboxTarget = "."
 		}
-	case "filesystem_read_file":
+	case ToolNameFilesystemReadFile:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "read_file"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "filesystem_grep":
+	case ToolNameFilesystemGrep:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "grep"
 		action.Payload.TargetType = security.TargetTypeDirectory
 		action.Payload.Target = extractStringArgument(input.Arguments, "dir")
 		action.Payload.SandboxTargetType = security.TargetTypeDirectory
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "filesystem_glob":
+	case ToolNameFilesystemGlob:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "glob"
 		action.Payload.TargetType = security.TargetTypeDirectory
 		action.Payload.Target = extractStringArgument(input.Arguments, "dir")
 		action.Payload.SandboxTargetType = security.TargetTypeDirectory
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "webfetch":
+	case ToolNameWebFetch:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "fetch"
 		action.Payload.TargetType = security.TargetTypeURL
 		action.Payload.Target = extractStringArgument(input.Arguments, "url")
-	case "filesystem_write_file":
+	case ToolNameFilesystemWriteFile:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "write_file"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "filesystem_edit":
+	case ToolNameFilesystemEdit:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "edit"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "todo_write":
+	case ToolNameTodoWrite:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "todo_write"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "id")
-	case "memo_remember":
+	case ToolNameSpawnSubAgent:
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = ToolNameSpawnSubAgent
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractSpawnSubAgentTarget(input.Arguments)
+		if action.Payload.Target == "" {
+			return security.Action{}, fmt.Errorf("tools: spawn_subagent permission target is empty")
+		}
+	case ToolNameMemoRemember:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remember"
-	case "memo_recall":
+	case ToolNameMemoRecall:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "memo_recall"
-	case "memo_list":
+	case ToolNameMemoList:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "memo_list"
-	case "memo_remove":
+	case ToolNameMemoRemove:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remove"
 	default:
@@ -128,7 +136,7 @@ func extractStringArgument(raw []byte, key string) string {
 
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return ""
+		return extractStringArgumentFallback(string(raw), key)
 	}
 
 	value, ok := payload[key].(string)
@@ -136,4 +144,78 @@ func extractStringArgument(raw []byte, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+// extractStringArgumentFallback 在参数不是严格合法 JSON 时做最小字符串提取，兼容未转义的 Windows 路径。
+func extractStringArgumentFallback(raw string, key string) string {
+	quotedKey := `"` + strings.TrimSpace(key) + `"`
+	start := strings.Index(raw, quotedKey)
+	if start < 0 {
+		return ""
+	}
+	rest := raw[start+len(quotedKey):]
+	colon := strings.Index(rest, ":")
+	if colon < 0 {
+		return ""
+	}
+	rest = strings.TrimSpace(rest[colon+1:])
+	if !strings.HasPrefix(rest, `"`) {
+		return ""
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:end])
+}
+
+// extractSpawnSubAgentTarget 提取 spawn_subagent 的稳定权限目标，优先 items[].id，再回退 id/prompt。
+func extractSpawnSubAgentTarget(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	type spawnItem struct {
+		ID string `json:"id"`
+	}
+	type spawnPayload struct {
+		ID      string      `json:"id"`
+		Prompt  string      `json:"prompt"`
+		Content string      `json:"content"`
+		Items   []spawnItem `json:"items"`
+	}
+
+	var payload spawnPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+
+	ids := make([]string, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) > 0 {
+		return strings.Join(ids, ",")
+	}
+	if id := strings.TrimSpace(payload.ID); id != "" {
+		return id
+	}
+	prompt := strings.TrimSpace(payload.Prompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(payload.Content)
+	}
+	if prompt == "" {
+		return ""
+	}
+	const maxTargetChars = 80
+	runes := []rune(prompt)
+	if len(runes) <= maxTargetChars {
+		return prompt
+	}
+	return string(runes[:maxTargetChars]) + "..."
 }

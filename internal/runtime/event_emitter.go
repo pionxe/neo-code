@@ -28,8 +28,8 @@ func (s *Service) emitRunScoped(ctx context.Context, kind EventType, state *runS
 		return s.emit(ctx, kind, "", "", payload)
 	}
 	phase := ""
-	if state.phase != "" {
-		phase = string(state.phase)
+	if state.lifecycle != "" {
+		phase = string(state.lifecycle)
 	}
 	return s.emitWithEnvelope(ctx, RuntimeEvent{
 		Type:           kind,

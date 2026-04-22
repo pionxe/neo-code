@@ -36,8 +36,7 @@ var (
 
 // GlobalFlags 描述根命令共享的全局启动参数。
 type GlobalFlags struct {
-	Workdir     string
-	RuntimeMode string
+	Workdir string
 }
 
 // Execute 执行 NeoCode 根命令入口，并在退出前等待静默更新检查收尾。
@@ -75,24 +74,13 @@ func NewRootCommand() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags.Workdir = strings.TrimSpace(settings.GetString("workdir"))
-			flags.RuntimeMode = strings.ToLower(strings.TrimSpace(settings.GetString("runtime-mode")))
-			switch flags.RuntimeMode {
-			case "", app.RuntimeModeLocal:
-				flags.RuntimeMode = app.RuntimeModeLocal
-			case app.RuntimeModeGateway:
-			default:
-				return fmt.Errorf("invalid --runtime-mode %q, must be local or gateway", flags.RuntimeMode)
-			}
 			return launchRootProgram(cmd.Context(), app.BootstrapOptions{
-				Workdir:     flags.Workdir,
-				RuntimeMode: flags.RuntimeMode,
+				Workdir: flags.Workdir,
 			})
 		},
 	}
 	cmd.PersistentFlags().String("workdir", "", "workdir override for current run")
-	cmd.PersistentFlags().String("runtime-mode", app.RuntimeModeLocal, "runtime mode (local/gateway)")
 	_ = settings.BindPFlag("workdir", cmd.PersistentFlags().Lookup("workdir"))
-	_ = settings.BindPFlag("runtime-mode", cmd.PersistentFlags().Lookup("runtime-mode"))
 	cmd.AddCommand(
 		newGatewayCommand(),
 		newURLDispatchCommand(),

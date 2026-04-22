@@ -113,18 +113,11 @@ $env:QINIU_API_KEY = "your_key_here"
 go run ./cmd/neocode --workdir /path/to/workspace
 ```
 
-运行模式切换（默认 `local`）：
+Gateway 转发与自动拉起说明：
 
-```bash
-go run ./cmd/neocode --runtime-mode local
-go run ./cmd/neocode --runtime-mode gateway
-```
-
-说明：
-
-- `--runtime-mode` 仅影响当前进程，不会回写 `config.yaml`
-- `gateway` 模式会通过本地 Gateway（优先 IPC）转发 runtime 请求与事件流
-- 若 Gateway 不可达或握手失败会直接报错退出（Fail Fast），不会自动回退到 `local`
+- `neocode` 默认通过本地 Gateway（优先 IPC）转发 runtime 请求与事件流
+- 启动时会先探测本地网关；若未运行会自动后台拉起并等待就绪（无感）
+- 若自动拉起后仍不可达或握手失败，会直接报错退出（Fail Fast）
 
 ### 4) 首次使用与常用命令
 - `/help`：查看命令帮助
@@ -136,6 +129,10 @@ go run ./cmd/neocode --runtime-mode gateway
 - `/memo`：查看记忆索引
 - `/remember <text>`：保存记忆
 - `/forget <keyword>`：按关键词删除记忆
+- `/skills`：查看当前可用 skills（含当前会话激活标记）
+- `/skill use <id>`：在当前会话启用 skill
+- `/skill off <id>`：在当前会话停用 skill
+- `/skill active`：查看当前会话已激活 skills
 - `& <command>`：在当前工作区执行本地命令
 
 示例输入：
@@ -153,7 +150,7 @@ go run ./cmd/neocode --runtime-mode gateway
 
 - API Key 通过环境变量注入，不写入 `config.yaml`
 - `--workdir` 只影响当前运行，不会回写到配置文件
-- `--runtime-mode` 默认 `local`，用于灰度切换到 `gateway` 模式
+- TUI 默认通过 Gateway 连接 runtime，启动时会自动探测并在必要时后台拉起网关
 
 详细配置请参考：[docs/guides/configuration.md](docs/guides/configuration.md)
 
@@ -172,6 +169,7 @@ go run ./cmd/neocode --runtime-mode gateway
 - [Session 持久化设计](docs/session-persistence-design.md)
 - [Context Compact 说明](docs/context-compact.md)
 - [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
+- [Skills 设计与使用](docs/skills-system-design.md)
 - [MCP 配置指南](docs/guides/mcp-configuration.md)
 - [更新与升级](docs/guides/update.md)
 
@@ -193,6 +191,47 @@ go run ./cmd/neocode --runtime-mode gateway
 提交前请确认：
 - 不提交明文密钥、个人配置或会话数据
 - 不提交无关改动与临时文件
+
+## 在仓库内直接创建 Issue（Skills + 自动化）
+
+仓库提供三类同前缀 skill（位于 `.skills/`）：
+
+- `issue-rfc-proposal`（提案类，RFC 风格）
+- `issue-rfc-architecture`（架构类，RFC 风格）
+- `issue-rfc-implementation`（实现类，执行单风格）
+
+先安装 skills 到仓库内常见 AI Coding 工具目录：
+
+```bash
+make install-skills
+```
+
+默认会安装到以下目录（均在仓库内）：
+
+- `.codex/skills`
+- `.claude/skills`
+- `.cursor/skills`
+- `.windsurf/skills`
+
+如需自定义安装目标，可设置环境变量 `SKILL_INSTALL_TARGETS`（冒号分隔目录）：
+
+```bash
+SKILL_INSTALL_TARGETS=".codex/skills:.claude/skills" make install-skills
+```
+
+Skill 内部调用脚本 `scripts/create_issue.sh` 创建 issue。你也可以直接执行脚本：
+
+```bash
+./scripts/create_issue.sh --type proposal --title "统一会话中断恢复语义"
+./scripts/create_issue.sh --type architecture --title "Runtime 与 Session 账本边界梳理"
+./scripts/create_issue.sh --type implementation --title "补齐流式中断持久化" --labels "bug,priority-high"
+```
+
+脚本可选参数：
+
+- `--repo <owner/repo>`：指定目标仓库（默认自动识别当前仓库）
+- `--body-file <path>`：自定义 issue 正文文件（不传则使用内置模板）
+- `--labels <a,b,c>`：追加标签（逗号分隔）
 
 ## 网关运维与安全（GW-06）
 

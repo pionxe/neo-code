@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
@@ -39,6 +41,11 @@ const (
 	permissionToolCategoryFilesystemRead  = "filesystem_read"
 	permissionToolCategoryFilesystemWrite = "filesystem_write"
 	permissionToolCategoryMCP             = "mcp"
+
+	defaultInlineSubAgentToolTimeout = 3 * time.Minute
+	maxInlineSubAgentToolTimeout     = 10 * time.Minute
+	minInlineSubAgentToolTimeout     = 30 * time.Second
+	defaultPermissionToolTimeout     = 20 * time.Second
 )
 
 // permissionExecutionInput 汇总一次工具执行与审批协作所需的上下文。
@@ -93,8 +100,10 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 	if input.State != nil {
 		callInput.SessionMutator = newRuntimeSessionMutator(ctx, s, input.State)
 	}
+	callInput.SubAgentInvoker = newRuntimeSubAgentInvoker(s, input.RunID, input.SessionID, input.AgentID, input.Workdir)
 
-	runCtx, cancel := context.WithTimeout(ctx, input.ToolTimeout)
+	effectiveTimeout := resolveToolExecutionTimeout(input.Call, input.ToolTimeout)
+	runCtx, cancel := context.WithTimeout(ctx, effectiveTimeout)
 	result, execErr := s.toolManager.Execute(runCtx, callInput)
 	cancel()
 	if execErr == nil {
@@ -118,10 +127,22 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		return result, execErr
 	}
 
-	decision, requestID, err := s.awaitPermissionDecision(ctx, input, permissionErr)
-	if err != nil {
+	// 审批等待属于用户交互阶段，不应受工具执行超时约束；
+	// 否则用户未及时响应会被误判为工具失败并进入调度重试/失败链路。
+	var decision approvalflow.Decision
+	var requestID string
+	if err := s.enterTemporaryRunState(ctx, input.State, controlplane.RunStateWaitingPermission); err != nil {
 		return result, err
 	}
+	defer func() {
+		_ = s.leaveTemporaryRunState(ctx, input.State, controlplane.RunStateWaitingPermission)
+	}()
+	resolvedDecision, resolvedRequestID, waitErr := s.awaitPermissionDecision(ctx, input, permissionErr)
+	if waitErr != nil {
+		return result, waitErr
+	}
+	decision = resolvedDecision
+	requestID = resolvedRequestID
 
 	scope, err := rememberScopeFromDecision(decision)
 	if err != nil {
@@ -163,10 +184,60 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		string(scope),
 	)
 
-	retryCtx, retryCancel := context.WithTimeout(ctx, input.ToolTimeout)
+	retryCtx, retryCancel := context.WithTimeout(ctx, effectiveTimeout)
 	retryResult, retryErr := s.toolManager.Execute(retryCtx, callInput)
 	retryCancel()
 	return retryResult, retryErr
+}
+
+// resolveToolExecutionTimeout 为特定工具覆写默认超时策略，避免长耗时链路被统一短超时误杀。
+func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Duration) time.Duration {
+	base := fallback
+	if base <= 0 {
+		base = defaultPermissionToolTimeout
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameSpawnSubAgent) {
+		return base
+	}
+
+	_, requested := parseSpawnSubAgentRuntimeOptions(call.Arguments)
+	if requested <= 0 {
+		if base > defaultInlineSubAgentToolTimeout {
+			return base
+		}
+		return defaultInlineSubAgentToolTimeout
+	}
+	requested = clampDuration(requested, minInlineSubAgentToolTimeout, maxInlineSubAgentToolTimeout)
+	if requested > base {
+		return requested
+	}
+	return base
+}
+
+// parseSpawnSubAgentRuntimeOptions 提取 spawn_subagent 的运行模式与 timeout_sec 参数。
+func parseSpawnSubAgentRuntimeOptions(raw string) (string, time.Duration) {
+	if strings.TrimSpace(raw) == "" {
+		return "", 0
+	}
+	var payload struct {
+		Mode       string `json:"mode"`
+		TimeoutSec int    `json:"timeout_sec"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", 0
+	}
+	return strings.TrimSpace(payload.Mode), time.Duration(payload.TimeoutSec) * time.Second
+}
+
+// clampDuration 把持续时间限制在 [min,max] 区间，避免极值配置影响运行稳定性。
+func clampDuration(value time.Duration, min time.Duration, max time.Duration) time.Duration {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 // awaitPermissionDecision 发出 permission_request 事件，并等待外部审批结果。

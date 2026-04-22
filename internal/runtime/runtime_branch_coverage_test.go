@@ -16,7 +16,7 @@ func TestExecuteAssistantToolCallsReturnsNilForEmptyCalls(t *testing.T) {
 
 	service := &Service{}
 	state := &runState{}
-	err := service.executeAssistantToolCalls(context.Background(), state, turnSnapshot{}, providertypes.Message{})
+	_, err := service.executeAssistantToolCalls(context.Background(), state, turnSnapshot{}, providertypes.Message{})
 	if err != nil {
 		t.Fatalf("executeAssistantToolCalls() error = %v", err)
 	}
@@ -29,17 +29,16 @@ func TestExecuteOneToolCallStopsWhenContextCheckReturnsTrue(t *testing.T) {
 	state := newRunState("run-stop", newRuntimeSession("session-stop"))
 	called := false
 
-	service.executeOneToolCall(
+	_, _, _ = service.executeOneToolCall(
 		context.Background(),
 		&state,
 		turnSnapshot{},
 		providertypes.ToolCall{ID: "call-1", Name: "noop"},
 		&sync.Mutex{},
 		func() bool { return true },
-		func(error) { called = true },
 	)
 	if called {
-		t.Fatalf("rememberError should not be called when execution is short-circuited")
+		t.Fatalf("expected short-circuit to bypass legacy error callback path")
 	}
 }
 
@@ -91,11 +90,11 @@ func TestTransitionRunPhaseNoopBranches(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{events: make(chan RuntimeEvent, 4)}
-	service.transitionRunPhase(context.Background(), nil, controlplane.PhasePlan)
+	service.transitionRunState(context.Background(), nil, controlplane.RunStatePlan)
 
 	state := newRunState("run-phase", newRuntimeSession("session-phase"))
-	state.phase = controlplane.PhasePlan
-	service.transitionRunPhase(context.Background(), &state, controlplane.PhasePlan)
+	state.lifecycle = controlplane.RunStatePlan
+	service.transitionRunState(context.Background(), &state, controlplane.RunStatePlan)
 
 	events := collectRuntimeEvents(service.Events())
 	if len(events) != 0 {

@@ -530,6 +530,54 @@ func TestCanonicalWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestCanonicalWorkspaceRootPermissionErrorFallsBackToAbsoluteRoot(t *testing.T) {
+	originalEvalSymlinks := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	root := t.TempDir()
+	got, err := NewWorkspaceSandbox().canonicalWorkspaceRoot(root)
+	if err != nil {
+		t.Fatalf("expected permission fallback for workspace root, got %v", err)
+	}
+	want, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("filepath.Abs(root): %v", err)
+	}
+	if !samePathKey(got, want) {
+		t.Fatalf("canonicalWorkspaceRoot() = %q, want %q", got, want)
+	}
+}
+
+func TestCanonicalWorkspaceRootPermissionErrorRejectsSymlinkRoot(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	linkRoot := filepath.Join(base, "root-link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	originalEvalSymlinks := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	_, err := NewWorkspaceSandbox().canonicalWorkspaceRoot(linkRoot)
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("expected symlink root to reject permission fallback, got %v", err)
+	}
+}
+
 func TestAbsoluteWorkspaceTarget(t *testing.T) {
 	t.Parallel()
 
@@ -570,7 +618,7 @@ func TestAbsoluteWorkspaceTarget(t *testing.T) {
 			if err != nil {
 				t.Fatalf("filepath.Abs(%q): %v", tt.want, err)
 			}
-			if got != filepath.Clean(wantAbs) {
+			if !samePathKey(got, wantAbs) {
 				t.Fatalf("absoluteWorkspaceTarget() = %q, want %q", got, filepath.Clean(wantAbs))
 			}
 		})
@@ -699,6 +747,72 @@ func TestEnsureNoSymlinkEscape(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestEnsureResolvedPathWithinWorkspacePermissionErrorFallsBackForPlainPath(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "notes.txt")
+	mustWriteWorkspaceFile(t, candidate, "hello")
+
+	originalEvalSymlinks := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	err := ensureResolvedPathWithinWorkspace(root, candidate, "notes.txt")
+	if err != nil {
+		t.Fatalf("expected plain path permission fallback, got %v", err)
+	}
+}
+
+func TestEnsureResolvedPathWithinWorkspacePermissionErrorRejectsSymlinkedPath(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "secret.txt")
+	mustWriteWorkspaceFile(t, target, "secret")
+
+	link := filepath.Join(root, "linked.txt")
+	mustSymlinkOrSkip(t, target, link)
+
+	originalEvalSymlinks := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	err := ensureResolvedPathWithinWorkspace(root, link, "linked.txt")
+	if err == nil || !strings.Contains(err.Error(), "resolve symlink") {
+		t.Fatalf("expected symlink permission error, got %v", err)
+	}
+}
+
+func TestCanFallbackToCandidateOnPermissionRejectsSymlinkRoot(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+
+	symlinkRoot := filepath.Join(base, "root-link")
+	if err := os.Symlink(realRoot, symlinkRoot); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	candidate := filepath.Join(symlinkRoot, "notes.txt")
+	mustWriteWorkspaceFile(t, filepath.Join(realRoot, "notes.txt"), "hello")
+
+	allowed, err := canFallbackToCandidateOnPermission(symlinkRoot, candidate)
+	if err != nil {
+		t.Fatalf("canFallbackToCandidateOnPermission() error: %v", err)
+	}
+	if allowed {
+		t.Fatalf("expected symlink workspace root to reject permission fallback")
 	}
 }
 

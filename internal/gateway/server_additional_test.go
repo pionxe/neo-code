@@ -469,14 +469,14 @@ func TestRegisterConnectionRejectsWhenLimitExceeded(t *testing.T) {
 	conn1Server, conn1Client := net.Pipe()
 	defer conn1Client.Close()
 	defer conn1Server.Close()
-	if got := server.registerConnection(conn1Server); got != registerConnectionAccepted {
+	if got, _ := server.registerConnection(conn1Server); got != registerConnectionAccepted {
 		t.Fatalf("first register result = %v, want accepted", got)
 	}
 
 	conn2Server, conn2Client := net.Pipe()
 	defer conn2Client.Close()
 	defer conn2Server.Close()
-	if got := server.registerConnection(conn2Server); got != registerConnectionLimitExceeded {
+	if got, _ := server.registerConnection(conn2Server); got != registerConnectionLimitExceeded {
 		t.Fatalf("second register result = %v, want limit exceeded", got)
 	}
 

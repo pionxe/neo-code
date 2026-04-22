@@ -30,6 +30,12 @@
 - TUI 的 `/memo`、`/remember`、`/forget` 等 Slash Command 不再直接依赖 memo service，而是通过 `Runtime.ExecuteSystemTool` 统一入口触发系统工具执行，保证 UI 与 memo 逻辑解耦。
 - TUI 不会展示后台自动提取的中间状态。
 
+## Skills 能力集成
+- Skills 由 `internal/skills` 统一发现、加载和注册；TUI 不直接读取 `SKILL.md` 文件。
+- TUI 通过 runtime 接口管理会话激活状态：`/skills`、`/skill use <id>`、`/skill off <id>`、`/skill active`。
+- Skills 只影响提示注入与工具排序优先级，不改变工具执行入口；真实调用仍走 `Runtime -> Tool Manager -> Security -> Executor`。
+- Skills 不提供权限豁免；命中 ask/deny 规则时行为与未启用 skill 保持一致。
+
 ## TUI 集成方式
 - 本地配置操作统一通过 Slash Command 完成，例如 Base URL、API Key 和模型选择
 - runtime 事件以内联形式渲染到 transcript 中，而不是单独拆出控制台面板

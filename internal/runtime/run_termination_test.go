@@ -32,8 +32,8 @@ func TestEmitRunTerminationEmitsStopReasonOnce(t *testing.T) {
 			if !ok {
 				t.Fatalf("expected StopReasonDecidedPayload, got %#v", e.Payload)
 			}
-			if p.Reason != controlplane.StopReasonError {
-				t.Fatalf("reason = %q, want error", p.Reason)
+			if p.Reason != controlplane.StopReasonFatalError {
+				t.Fatalf("reason = %q, want fatal error", p.Reason)
 			}
 		}
 	}

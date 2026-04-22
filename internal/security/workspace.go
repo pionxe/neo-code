@@ -12,6 +12,8 @@ import (
 	"sync"
 )
 
+var evalSymlinks = filepath.EvalSymlinks
+
 // WorkspaceSandbox enforces workspace-relative path boundaries for tool actions.
 type WorkspaceSandbox struct {
 	canonicalRoots sync.Map
@@ -256,9 +258,19 @@ func resolveCanonicalWorkspaceRoot(absoluteRoot string) (string, bool, error) {
 		return "", false, fmt.Errorf("security: workspace root %q is not a directory", absoluteRoot)
 	}
 
-	canonicalRoot, err := filepath.EvalSymlinks(absoluteRoot)
+	canonicalRoot, err := evalSymlinks(absoluteRoot)
 	if err != nil {
-		return "", false, fmt.Errorf("security: resolve workspace root: %w", err)
+		if !errors.Is(err, os.ErrPermission) {
+			return "", false, fmt.Errorf("security: resolve workspace root: %w", err)
+		}
+		allowed, inspectErr := canFallbackToCandidateOnPermission(absoluteRoot, absoluteRoot)
+		if inspectErr != nil {
+			return "", false, inspectErr
+		}
+		if !allowed {
+			return "", false, fmt.Errorf("security: resolve workspace root %q: %w", absoluteRoot, err)
+		}
+		canonicalRoot = absoluteRoot
 	}
 
 	cleanedCanonical := cleanedPathKey(canonicalRoot)
@@ -317,9 +329,22 @@ func ensureNoSymlinkEscape(root string, target string, original string) (string,
 }
 
 func ensureResolvedPathWithinWorkspace(root string, candidate string, original string) error {
-	resolved, err := filepath.EvalSymlinks(candidate)
+	if samePathKey(root, candidate) {
+		return nil
+	}
+	resolved, err := evalSymlinks(candidate)
 	if err != nil {
-		return fmt.Errorf("security: resolve symlink %q: %w", candidate, err)
+		if !errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("security: resolve symlink %q: %w", candidate, err)
+		}
+		fallbackAllowed, inspectErr := canFallbackToCandidateOnPermission(root, candidate)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		if !fallbackAllowed {
+			return fmt.Errorf("security: resolve symlink %q: %w", candidate, err)
+		}
+		resolved = candidate
 	}
 	resolved, err = filepath.Abs(resolved)
 	if err != nil {
@@ -329,6 +354,38 @@ func ensureResolvedPathWithinWorkspace(root string, candidate string, original s
 		return fmt.Errorf("security: path %q escapes workspace root via symlink", original)
 	}
 	return nil
+}
+
+// canFallbackToCandidateOnPermission 在 EvalSymlinks 遇到权限错误时，逐段确认 root 到 candidate 的现存路径不含符号链接。
+func canFallbackToCandidateOnPermission(root string, candidate string) (bool, error) {
+	rootInfo, err := os.Lstat(filepath.Clean(root))
+	if err != nil {
+		return false, fmt.Errorf("security: inspect path %q: %w", root, err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return false, nil
+	}
+
+	relativePath, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false, fmt.Errorf("security: compare workspace target %q: %w", candidate, err)
+	}
+	if relativePath == "." {
+		return true, nil
+	}
+
+	current := cleanedPathKey(root)
+	for _, segment := range splitRelativePath(relativePath) {
+		current = cleanedPathKey(filepath.Join(current, segment))
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			return false, fmt.Errorf("security: inspect path %q: %w", current, statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func capturePathSnapshot(path string) (pathSnapshot, error) {

@@ -821,7 +821,7 @@ func TestServiceRun(t *testing.T) {
 			// 第二轮：普通文本回复
 			providerStreams: [][]providertypes.StreamEvent{
 				{
-					providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_edit"),
+					providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
 					providertypes.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"main.go"}`),
 				},
 				{
@@ -829,7 +829,7 @@ func TestServiceRun(t *testing.T) {
 				},
 			},
 			registerTool: &stubTool{
-				name:    "filesystem_edit",
+				name:    "filesystem_read_file",
 				content: "tool output",
 			},
 			contextBuilder: &stubContextBuilder{
@@ -864,7 +864,7 @@ func TestServiceRun(t *testing.T) {
 					if message.Role == "tool" &&
 						message.ToolCallID == "call-1" &&
 						strings.Contains(renderPartsForTest(message.Parts), "tool result") &&
-						strings.Contains(renderPartsForTest(message.Parts), "tool: filesystem_edit") &&
+						strings.Contains(renderPartsForTest(message.Parts), "tool: filesystem_read_file") &&
 						strings.Contains(renderPartsForTest(message.Parts), "status: ok") &&
 						strings.Contains(renderPartsForTest(message.Parts), "content:\ntool output") {
 						foundToolResult = true
@@ -879,7 +879,7 @@ func TestServiceRun(t *testing.T) {
 				if session.Messages[2].Role != providertypes.RoleTool || renderPartsForTest(session.Messages[2].Parts) != "tool output" {
 					t.Fatalf("expected persisted tool message to keep raw content, got %+v", session.Messages[2])
 				}
-				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_edit" {
+				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_read_file" {
 					t.Fatalf("expected persisted tool metadata to keep tool name, got %+v", session.Messages[2].ToolMetadata)
 				}
 			},
@@ -1125,12 +1125,12 @@ func TestServiceRunSchedulesMemoExtractionOnlyAfterFinalCompletion(t *testing.T)
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
 	registry := tools.NewRegistry()
-	registry.Register(&stubTool{name: "filesystem_edit", content: "tool output"})
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "tool output"})
 
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
 			{
-				providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_edit"),
+				providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
 				providertypes.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"main.go"}`),
 				providertypes.NewMessageDoneStreamEvent("tool_calls", nil),
 			},
@@ -1161,7 +1161,7 @@ func TestServiceRunMergesLateToolCallMetadata(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	tool := &stubTool{name: "filesystem_edit", content: "tool output"}
+	tool := &stubTool{name: "filesystem_read_file", content: "tool output"}
 	registry := tools.NewRegistry()
 	registry.Register(tool)
 
@@ -1169,7 +1169,7 @@ func TestServiceRunMergesLateToolCallMetadata(t *testing.T) {
 		streams: [][]providertypes.StreamEvent{
 			{
 				providertypes.NewToolCallDeltaStreamEvent(0, "", `{"path":"main.go"`),
-				providertypes.NewToolCallStartStreamEvent(0, "call-late", "filesystem_edit"),
+				providertypes.NewToolCallStartStreamEvent(0, "call-late", "filesystem_read_file"),
 				providertypes.NewToolCallDeltaStreamEvent(0, "call-late", `}`),
 			},
 			{providertypes.NewTextDeltaStreamEvent("done")},
@@ -1187,8 +1187,8 @@ func TestServiceRunMergesLateToolCallMetadata(t *testing.T) {
 	if tool.lastInput.ID != "call-late" {
 		t.Fatalf("expected merged tool call id %q, got %q", "call-late", tool.lastInput.ID)
 	}
-	if tool.lastInput.Name != "filesystem_edit" {
-		t.Fatalf("expected merged tool name %q, got %q", "filesystem_edit", tool.lastInput.Name)
+	if tool.lastInput.Name != "filesystem_read_file" {
+		t.Fatalf("expected merged tool name %q, got %q", "filesystem_read_file", tool.lastInput.Name)
 	}
 	if got := string(tool.lastInput.Arguments); got != `{"path":"main.go"}` {
 		t.Fatalf("expected merged tool arguments %q, got %q", `{"path":"main.go"}`, got)
@@ -1201,7 +1201,7 @@ func TestServiceRunMergesLateToolCallMetadata(t *testing.T) {
 	if len(session.Messages[1].ToolCalls) != 1 {
 		t.Fatalf("expected persisted assistant tool call, got %+v", session.Messages[1])
 	}
-	if session.Messages[1].ToolCalls[0].ID != "call-late" || session.Messages[1].ToolCalls[0].Name != "filesystem_edit" {
+	if session.Messages[1].ToolCalls[0].ID != "call-late" || session.Messages[1].ToolCalls[0].Name != "filesystem_read_file" {
 		t.Fatalf("expected merged assistant tool call metadata, got %+v", session.Messages[1].ToolCalls[0])
 	}
 	if session.Messages[2].ToolCallID != "call-late" {
@@ -1682,17 +1682,17 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 		AgentID:         "agent-run-tool-manager",
 		IssuedAt:        now.Add(-time.Minute),
 		ExpiresAt:       now.Add(time.Hour),
-		AllowedTools:    []string{"filesystem_edit"},
+		AllowedTools:    []string{"filesystem_read_file"},
 		AllowedPaths:    []string{t.TempDir()},
 		NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
 		WritePermission: security.WritePermissionWorkspace,
 	}
 	toolManager := &stubToolManager{
 		specs: []providertypes.ToolSpec{
-			{Name: "filesystem_edit", Description: "stub", Schema: map[string]any{"type": "object"}},
+			{Name: "filesystem_read_file", Description: "stub", Schema: map[string]any{"type": "object"}},
 		},
 		result: tools.ToolResult{
-			Name:    "filesystem_edit",
+			Name:    "filesystem_read_file",
 			Content: "tool manager output",
 			Metadata: map[string]any{
 				"path": "main.go",
@@ -1703,7 +1703,7 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
 			{
-				providertypes.NewToolCallStartStreamEvent(0, "call-manager", "filesystem_edit"),
+				providertypes.NewToolCallStartStreamEvent(0, "call-manager", "filesystem_read_file"),
 				providertypes.NewToolCallDeltaStreamEvent(0, "call-manager", `{"path":"main.go"}`),
 			},
 			{providertypes.NewTextDeltaStreamEvent("done")},
@@ -1739,7 +1739,7 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	if toolManager.lastInput.CapabilityToken == nil || toolManager.lastInput.CapabilityToken.ID != capability.ID {
 		t.Fatalf("expected forwarded capability token id %q, got %+v", capability.ID, toolManager.lastInput.CapabilityToken)
 	}
-	if len(scripted.requests) == 0 || len(scripted.requests[0].Tools) != 1 || scripted.requests[0].Tools[0].Name != "filesystem_edit" {
+	if len(scripted.requests) == 0 || len(scripted.requests[0].Tools) != 1 || scripted.requests[0].Tools[0].Name != "filesystem_read_file" {
 		t.Fatalf("expected tool specs from tool manager, got %+v", scripted.requests)
 	}
 
@@ -1748,7 +1748,7 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	for _, message := range session.Messages {
 		if message.Role == providertypes.RoleTool &&
 			renderPartsForTest(message.Parts) == "tool manager output" &&
-			message.ToolMetadata["tool_name"] == "filesystem_edit" &&
+			message.ToolMetadata["tool_name"] == "filesystem_read_file" &&
 			message.ToolMetadata["path"] == "main.go" {
 			foundToolMessage = true
 			break
@@ -2122,7 +2122,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 							ToolCalls: []providertypes.ToolCall{
 								{
 									ID:        fmt.Sprintf("loop-call-%d", i),
-									Name:      "filesystem_edit",
+									Name:      "filesystem_read_file",
 									Arguments: fmt.Sprintf(`{"path":"x", "iteration": %d}`, i),
 								},
 							},
@@ -2136,7 +2136,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				})
 				return &scriptedProvider{responses: responses}
 			}(),
-			registerTool: &stubTool{name: "filesystem_edit", content: "loop tool output"},
+			registerTool: &stubTool{name: "filesystem_read_file", content: "loop tool output"},
 			expectEvents: []EventType{EventUserMessage, EventToolStart, EventToolChunk, EventToolResult, EventAgentDone},
 			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
 				t.Helper()
@@ -3175,7 +3175,7 @@ func TestServiceRunUsesSessionWorkdirForContextAndTools(t *testing.T) {
 	session := agentsession.NewWithWorkdir("Session Workdir", sessionWorkdir)
 	store.sessions[session.ID] = cloneSession(session)
 
-	tool := &stubTool{name: "filesystem_edit", content: "ok"}
+	tool := &stubTool{name: "filesystem_read_file", content: "ok"}
 	registry := tools.NewRegistry()
 	registry.Register(tool)
 
@@ -3183,7 +3183,7 @@ func TestServiceRunUsesSessionWorkdirForContextAndTools(t *testing.T) {
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
 			{
-				providertypes.NewToolCallStartStreamEvent(0, "call-session-workdir", "filesystem_edit"),
+				providertypes.NewToolCallStartStreamEvent(0, "call-session-workdir", "filesystem_read_file"),
 				providertypes.NewToolCallDeltaStreamEvent(0, "call-session-workdir", `{"path":"main.go"}`),
 			},
 			{providertypes.NewTextDeltaStreamEvent("done")},
@@ -5006,7 +5006,7 @@ func TestParallelToolCallsPhaseMigration(t *testing.T) {
 
 	events := collectRuntimeEvents(service.Events())
 
-	// We expect EventPhaseChanged to emit plan -> execute -> verify
+	// 当前主循环不再在每轮中自动进入 dispatch。
 	var phaseChanges []PhaseChangedPayload
 	for _, e := range events {
 		if e.Type == EventPhaseChanged {
@@ -5277,7 +5277,7 @@ func TestAgentDoneEventCarriesRunScopedEnvelope(t *testing.T) {
 	if doneEvent.Turn == turnUnspecified {
 		t.Fatalf("expected run-scoped turn, got %d", doneEvent.Turn)
 	}
-	if doneEvent.Phase != string(controlplane.PhasePlan) {
-		t.Fatalf("expected phase=%q, got %q", controlplane.PhasePlan, doneEvent.Phase)
+	if doneEvent.Phase != string(controlplane.RunStatePlan) {
+		t.Fatalf("expected phase=%q, got %q", controlplane.RunStatePlan, doneEvent.Phase)
 	}
 }

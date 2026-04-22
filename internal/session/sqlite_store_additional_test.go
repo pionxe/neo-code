@@ -738,3 +738,62 @@ func TestCleanupExpiredSessionAssetsStopsOnCanceledContext(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSessionFromRowInfersLegacySubAgentExecutor(t *testing.T) {
+	t.Parallel()
+
+	nowMS := toUnixMillis(time.Now().UTC())
+	row := sqliteSessionRow{
+		ID:            "session_legacy_executor",
+		Title:         "legacy",
+		CreatedAtMS:   nowMS,
+		UpdatedAtMS:   nowMS,
+		TaskStateJSON: "{}",
+		ActivatedJSON: "[]",
+		TodosJSON:     `[{"id":"todo-1","content":"legacy subagent","status":"in_progress","owner_type":"subagent","revision":1}]`,
+	}
+
+	session, err := buildSessionFromRow(row, nil)
+	if err != nil {
+		t.Fatalf("buildSessionFromRow() error = %v", err)
+	}
+	if len(session.Todos) != 1 {
+		t.Fatalf("todos len = %d, want 1", len(session.Todos))
+	}
+	if session.Todos[0].Executor != TodoExecutorSubAgent {
+		t.Fatalf("legacy todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorSubAgent)
+	}
+	if session.TodoVersion != CurrentTodoVersion {
+		t.Fatalf("todo_version = %d, want %d", session.TodoVersion, CurrentTodoVersion)
+	}
+}
+
+func TestBuildSessionFromRowInfersLegacySubAgentExecutorByRetrySignals(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	nowMS := toUnixMillis(now)
+	nextRetry := now.Add(2 * time.Minute).Format(time.RFC3339Nano)
+	row := sqliteSessionRow{
+		ID:            "session_legacy_executor_retry",
+		Title:         "legacy-retry",
+		CreatedAtMS:   nowMS,
+		UpdatedAtMS:   nowMS,
+		TaskStateJSON: "{}",
+		ActivatedJSON: "[]",
+		TodosJSON: `[
+{"id":"todo-1","content":"legacy subagent retry","status":"blocked","owner_type":"","retry_count":1,"next_retry_at":"` + nextRetry + `","revision":1}
+]`,
+	}
+
+	session, err := buildSessionFromRow(row, nil)
+	if err != nil {
+		t.Fatalf("buildSessionFromRow() error = %v", err)
+	}
+	if len(session.Todos) != 1 {
+		t.Fatalf("todos len = %d, want 1", len(session.Todos))
+	}
+	if session.Todos[0].Executor != TodoExecutorSubAgent {
+		t.Fatalf("legacy retry todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorSubAgent)
+	}
+}

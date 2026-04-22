@@ -49,22 +49,25 @@ type ServerOptions struct {
 	Authenticator  TokenAuthenticator
 	ACL            *ControlPlaneACL
 	Metrics        *GatewayMetrics
-	listenFn       func(address string) (net.Listener, error)
+	// ConnectionCountChanged 在连接数变化时回调当前活跃连接数，可用于空闲退出治理。
+	ConnectionCountChanged func(active int)
+	listenFn               func(address string) (net.Listener, error)
 }
 
 // Server 提供基于本地 IPC 的网关服务骨架实现。
 type Server struct {
-	listenAddress  string
-	logger         *log.Logger
-	listenFn       func(address string) (net.Listener, error)
-	maxConnections int
-	maxFrameSize   int64
-	readTimeout    time.Duration
-	writeTimeout   time.Duration
-	relay          *StreamRelay
-	authenticator  TokenAuthenticator
-	acl            *ControlPlaneACL
-	metrics        *GatewayMetrics
+	listenAddress          string
+	logger                 *log.Logger
+	listenFn               func(address string) (net.Listener, error)
+	maxConnections         int
+	maxFrameSize           int64
+	readTimeout            time.Duration
+	writeTimeout           time.Duration
+	relay                  *StreamRelay
+	authenticator          TokenAuthenticator
+	acl                    *ControlPlaneACL
+	metrics                *GatewayMetrics
+	connectionCountChanged func(active int)
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -132,18 +135,19 @@ func NewServer(options ServerOptions) (*Server, error) {
 	}
 
 	return &Server{
-		listenAddress:  listenAddress,
-		logger:         logger,
-		listenFn:       listenFn,
-		maxConnections: maxConnections,
-		maxFrameSize:   maxFrameSize,
-		readTimeout:    readTimeout,
-		writeTimeout:   writeTimeout,
-		relay:          relay,
-		authenticator:  authenticator,
-		acl:            acl,
-		metrics:        options.Metrics,
-		conns:          make(map[net.Conn]struct{}),
+		listenAddress:          listenAddress,
+		logger:                 logger,
+		listenFn:               listenFn,
+		maxConnections:         maxConnections,
+		maxFrameSize:           maxFrameSize,
+		readTimeout:            readTimeout,
+		writeTimeout:           writeTimeout,
+		relay:                  relay,
+		authenticator:          authenticator,
+		acl:                    acl,
+		metrics:                options.Metrics,
+		connectionCountChanged: options.ConnectionCountChanged,
+		conns:                  make(map[net.Conn]struct{}),
 	}, nil
 }
 
@@ -188,8 +192,10 @@ func (s *Server) Serve(ctx context.Context, runtimePort RuntimePort) error {
 			return fmt.Errorf("gateway: accept connection: %w", acceptErr)
 		}
 
-		switch s.registerConnection(conn) {
+		registerResult, activeConnections := s.registerConnection(conn)
+		switch registerResult {
 		case registerConnectionAccepted:
+			s.notifyConnectionCountChanged(activeConnections)
 		case registerConnectionServerClosed:
 			_ = conn.Close()
 			continue
@@ -262,25 +268,35 @@ func (s *Server) snapshotConnections() map[net.Conn]struct{} {
 }
 
 // registerConnection 在服务可用且未超限时登记连接，并原子增加连接处理 WaitGroup 计数。
-func (s *Server) registerConnection(conn net.Conn) registerConnectionResult {
+func (s *Server) registerConnection(conn net.Conn) (registerConnectionResult, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.listener == nil {
-		return registerConnectionServerClosed
+		return registerConnectionServerClosed, 0
 	}
 	if len(s.conns) >= s.maxConnections {
-		return registerConnectionLimitExceeded
+		return registerConnectionLimitExceeded, len(s.conns)
 	}
 	s.conns[conn] = struct{}{}
 	s.wg.Add(1)
-	return registerConnectionAccepted
+	return registerConnectionAccepted, len(s.conns)
 }
 
 // untrackConnection 移除已结束连接，避免连接集合持续增长。
 func (s *Server) untrackConnection(conn net.Conn) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	delete(s.conns, conn)
+	active := len(s.conns)
+	s.mu.Unlock()
+	s.notifyConnectionCountChanged(active)
+}
+
+// notifyConnectionCountChanged 在连接数变化时向外层发送活跃连接数快照。
+func (s *Server) notifyConnectionCountChanged(active int) {
+	if s == nil || s.connectionCountChanged == nil {
+		return
+	}
+	s.connectionCountChanged(active)
 }
 
 // handleConnection 在单连接上循环处理消息帧并返回响应帧。

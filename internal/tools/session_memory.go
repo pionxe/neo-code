@@ -179,6 +179,8 @@ func sessionPermissionTargetScope(action security.Action) string {
 		return normalizePermissionPathTarget(filepath.Dir(target))
 	case security.TargetTypeDirectory:
 		return normalizePermissionPathTarget(target)
+	case security.TargetTypeCommand:
+		return normalizePermissionCommandTarget(target)
 	case security.TargetTypeMCP:
 		return normalizeMCPToolIdentity(target)
 	default:
@@ -207,4 +209,15 @@ func normalizePermissionPathTarget(raw string) string {
 		return "."
 	}
 	return strings.ToLower(filepath.ToSlash(cleaned))
+}
+
+// normalizePermissionCommandTarget 归一化命令目标，降低仅空白/换行差异导致的会话授权失配。
+func normalizePermissionCommandTarget(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "*"
+	}
+	trimmed = strings.ReplaceAll(trimmed, "\r\n", "\n")
+	trimmed = strings.ReplaceAll(trimmed, "\r", "\n")
+	return strings.ToLower(strings.Join(strings.Fields(trimmed), " "))
 }

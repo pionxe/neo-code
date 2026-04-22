@@ -392,6 +392,34 @@ func TestTodoInternalHelpers(t *testing.T) {
 	if normalized.RetryCount != 0 || normalized.RetryLimit != 0 {
 		t.Fatalf("negative retry fields should be normalized to 0, got count=%d limit=%d", normalized.RetryCount, normalized.RetryLimit)
 	}
+
+	legacySubAgent, err := normalizeTodoItem(TodoItem{
+		ID:        "legacy-subagent",
+		Content:   "legacy",
+		OwnerType: TodoOwnerTypeSubAgent,
+	})
+	if err != nil {
+		t.Fatalf("normalizeTodoItem(legacy-subagent) error = %v", err)
+	}
+	if legacySubAgent.Executor != TodoExecutorSubAgent {
+		t.Fatalf("legacy executor = %q, want %q", legacySubAgent.Executor, TodoExecutorSubAgent)
+	}
+
+	legacyRetrySubAgent, err := normalizeTodoItem(TodoItem{
+		ID:          "legacy-retry-subagent",
+		Content:     "legacy retry",
+		Status:      TodoStatusBlocked,
+		RetryCount:  1,
+		OwnerType:   "",
+		OwnerID:     "",
+		NextRetryAt: time.Now().UTC().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("normalizeTodoItem(legacy-retry-subagent) error = %v", err)
+	}
+	if legacyRetrySubAgent.Executor != TodoExecutorSubAgent {
+		t.Fatalf("legacy retry executor = %q, want %q", legacyRetrySubAgent.Executor, TodoExecutorSubAgent)
+	}
 }
 
 func TestApplyTodoPatchCoverage(t *testing.T) {
@@ -483,5 +511,66 @@ func TestApplyTodoPatchCoverage(t *testing.T) {
 		TodoPatch{Status: &status},
 	); err == nil || !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("terminal transition should fail with invalid transition, got %v", err)
+	}
+}
+
+func TestTodoExecutorNormalizationAndValidation(t *testing.T) {
+	t.Parallel()
+
+	session := New("todo-executor")
+	if err := session.AddTodo(TodoItem{
+		ID:       "task-1",
+		Content:  "run with subagent",
+		Executor: " SubAgent ",
+	}); err != nil {
+		t.Fatalf("AddTodo(task-1) error = %v", err)
+	}
+	item, ok := session.FindTodo("task-1")
+	if !ok {
+		t.Fatalf("FindTodo(task-1) not found")
+	}
+	if item.Executor != TodoExecutorSubAgent {
+		t.Fatalf("executor = %q, want %q", item.Executor, TodoExecutorSubAgent)
+	}
+
+	if err := session.AddTodo(TodoItem{
+		ID:       "task-invalid",
+		Content:  "invalid executor",
+		Executor: "robot",
+	}); err == nil || !strings.Contains(err.Error(), "invalid todo executor") {
+		t.Fatalf("AddTodo(task-invalid) error = %v, want invalid executor", err)
+	}
+}
+
+func TestSessionUpdateTodoExecutorPatch(t *testing.T) {
+	t.Parallel()
+
+	session := New("todo-executor-patch")
+	if err := session.AddTodo(TodoItem{
+		ID:      "task-1",
+		Content: "run with agent by default",
+	}); err != nil {
+		t.Fatalf("AddTodo(task-1) error = %v", err)
+	}
+	item, ok := session.FindTodo("task-1")
+	if !ok {
+		t.Fatalf("FindTodo(task-1) not found")
+	}
+	if item.Executor != TodoExecutorAgent {
+		t.Fatalf("default executor = %q, want %q", item.Executor, TodoExecutorAgent)
+	}
+
+	executor := "subagent"
+	if err := session.UpdateTodo("task-1", TodoPatch{
+		Executor: &executor,
+	}, item.Revision); err != nil {
+		t.Fatalf("UpdateTodo(task-1) error = %v", err)
+	}
+	updated, ok := session.FindTodo("task-1")
+	if !ok {
+		t.Fatalf("FindTodo(task-1) not found after update")
+	}
+	if updated.Executor != TodoExecutorSubAgent {
+		t.Fatalf("executor = %q, want %q", updated.Executor, TodoExecutorSubAgent)
 	}
 }

@@ -6,26 +6,26 @@ import (
 	"strings"
 )
 
-// StopInput 汇总停止决议所需的信号（可多信号并存，由 DecideStopReason 按优先级表决）。
+// StopInput 汇总最终 stop 决议所需的信号。
 type StopInput struct {
-	ContextCanceled bool
-	RunError        error
-	Success         bool
+	UserInterrupted bool
+	FatalError      error
+	Completed       bool
 }
 
-// DecideStopReason 按固定优先级返回唯一 StopReason：取消 > 错误 > 成功。
+// DecideStopReason 按固定优先级返回唯一的最终 stop 原因。
 func DecideStopReason(in StopInput) (StopReason, string) {
-	if in.ContextCanceled {
-		return StopReasonCanceled, ""
+	if in.UserInterrupted {
+		return StopReasonUserInterrupt, ""
 	}
-	if in.RunError != nil {
-		if errors.Is(in.RunError, context.Canceled) {
-			return StopReasonCanceled, ""
+	if in.FatalError != nil {
+		if errors.Is(in.FatalError, context.Canceled) {
+			return StopReasonUserInterrupt, ""
 		}
-		return StopReasonError, strings.TrimSpace(in.RunError.Error())
+		return StopReasonFatalError, strings.TrimSpace(in.FatalError.Error())
 	}
-	if in.Success {
-		return StopReasonSuccess, ""
+	if in.Completed {
+		return StopReasonCompleted, ""
 	}
-	return StopReasonError, "runtime: stop reason undetermined"
+	return StopReasonFatalError, "runtime: stop reason undetermined"
 }

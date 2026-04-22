@@ -35,6 +35,19 @@ func TestServiceRunTodoWriteToolCall(t *testing.T) {
 			},
 			{
 				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{
+							ID:        "todo-call-2",
+							Name:      tools.ToolNameTodoWrite,
+							Arguments: `{"action":"set_status","id":"todo-1","status":"canceled","expected_revision":1}`,
+						},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: providertypes.Message{
 					Role:  providertypes.RoleAssistant,
 					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
 				},
@@ -78,6 +91,9 @@ func TestServiceRunTodoWriteToolCall(t *testing.T) {
 	}
 	if session.Todos[0].ID != "todo-1" || session.Todos[0].Content != "implement feature" {
 		t.Fatalf("unexpected todo item: %+v", session.Todos[0])
+	}
+	if session.Todos[0].Status != "canceled" {
+		t.Fatalf("expected todo to be closed before completion, got %+v", session.Todos[0])
 	}
 
 	events := collectRuntimeEvents(service.Events())

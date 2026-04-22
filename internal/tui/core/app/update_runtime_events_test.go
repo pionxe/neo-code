@@ -5,9 +5,7 @@ import (
 	"testing"
 
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
-	"neo-code/internal/runtime/controlplane"
-	tuiservices "neo-code/internal/tui/services"
+	agentruntime "neo-code/internal/tui/services"
 )
 
 func TestRuntimeEventPhaseChangedHandlerBranches(t *testing.T) {
@@ -39,6 +37,14 @@ func TestRuntimeEventPhaseChangedHandlerBranches(t *testing.T) {
 			t.Fatalf("unexpected progress for %q: known=%v value=%v label=%q", tc.to, app.runProgressKnown, app.runProgressValue, app.runProgressLabel)
 		}
 	}
+
+	app.clearRunProgress()
+	runtimeEventPhaseChangedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.PhaseChangedPayload{To: "compacting"},
+	})
+	if app.runProgressKnown {
+		t.Fatalf("expected non-plan/execute/verify phase to keep progress unchanged")
+	}
 }
 
 func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
@@ -60,7 +66,7 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	}
 
 	handled := runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason(" success ")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason(" success ")},
 	})
 	if handled {
 		t.Fatalf("expected handler to return false")
@@ -81,7 +87,7 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	app.state.ExecutionError = ""
 	app.state.StatusText = "not-ready"
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("success")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("success")},
 	})
 	if app.state.StatusText != statusReady {
 		t.Fatalf("expected success with empty execution error to set ready status")
@@ -90,28 +96,28 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	app.state.ExecutionError = "boom"
 	app.state.StatusText = ""
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("success")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("success")},
 	})
 	if app.state.StatusText == statusReady {
 		t.Fatalf("expected success branch to keep status unchanged when execution error exists")
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("canceled")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("canceled")},
 	})
 	if app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
 		t.Fatalf("expected canceled state to clear error and set canceled status")
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("error"), Detail: "  "},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("error"), Detail: "  "},
 	})
 	if app.state.StatusText != "runtime stopped" || app.state.ExecutionError != "runtime stopped" {
 		t.Fatalf("expected default stop detail, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("error"), Detail: "explicit failure"},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("error"), Detail: "explicit failure"},
 	})
 	if app.state.StatusText != "explicit failure" || app.state.ExecutionError != "explicit failure" {
 		t.Fatalf("expected explicit stop detail to be surfaced")
@@ -132,6 +138,15 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventCompactApplied]; !ok {
 		t.Fatalf("expected compact_applied handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSkillActivated]; !ok {
+		t.Fatalf("expected skill_activated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSkillDeactivated]; !ok {
+		t.Fatalf("expected skill_deactivated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSkillMissing]; !ok {
+		t.Fatalf("expected skill_missing handler to be registered")
 	}
 }
 
@@ -274,14 +289,101 @@ func TestHandleRuntimeEventBindsSessionFromStableEvents(t *testing.T) {
 
 	app.state.ActiveSessionID = ""
 	app.handleRuntimeEvent(agentruntime.RuntimeEvent{
-		Type:      agentruntime.EventType(tuiservices.RuntimeEventRunContext),
+		Type:      agentruntime.EventType(agentruntime.RuntimeEventRunContext),
 		SessionID: "session-context",
-		Payload: tuiservices.RuntimeRunContextPayload{
+		Payload: agentruntime.RuntimeRunContextPayload{
 			Provider: "openai",
 			Model:    "gpt-5.4",
 		},
 	})
 	if app.state.ActiveSessionID != "session-context" {
 		t.Fatalf("expected active session from run_context, got %q", app.state.ActiveSessionID)
+	}
+}
+
+func TestRuntimeSkillEventHandlers(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+
+	if handled := runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid payload to return false")
+	}
+	runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SessionSkillEventPayload{SkillID: "go-review"},
+	})
+	if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Skill activated" {
+		t.Fatalf("expected skill activated activity")
+	}
+
+	runtimeEventSkillDeactivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: map[string]any{"skill_id": "go-review"},
+	})
+	if app.activities[len(app.activities)-1].Title != "Skill deactivated" {
+		t.Fatalf("expected skill deactivated activity")
+	}
+
+	runtimeEventSkillMissingHandler(&app, agentruntime.RuntimeEvent{
+		Payload: map[string]any{"SkillID": "missing-skill"},
+	})
+	last := app.activities[len(app.activities)-1]
+	if !last.IsError || last.Title != "Skill missing in registry" {
+		t.Fatalf("expected skill missing error activity, got %+v", last)
+	}
+
+	runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: &agentruntime.SessionSkillEventPayload{SkillID: " "},
+	})
+	last = app.activities[len(app.activities)-1]
+	if !strings.Contains(last.Detail, "(unknown)") {
+		t.Fatalf("expected unknown fallback for blank skill id, got %+v", last)
+	}
+
+	if handled := runtimeEventSkillDeactivatedHandler(&app, agentruntime.RuntimeEvent{Payload: map[string]any{}}); handled {
+		t.Fatalf("expected empty map payload to be rejected")
+	}
+	if handled := runtimeEventSkillMissingHandler(&app, agentruntime.RuntimeEvent{Payload: (*agentruntime.SessionSkillEventPayload)(nil)}); handled {
+		t.Fatalf("expected nil pointer payload to be rejected")
+	}
+
+	runtimeEventSkillDeactivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SessionSkillEventPayload{SkillID: " "},
+	})
+	last = app.activities[len(app.activities)-1]
+	if !strings.Contains(last.Detail, "(unknown)") {
+		t.Fatalf("expected unknown fallback for deactivated event, got %+v", last)
+	}
+
+	runtimeEventSkillMissingHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SessionSkillEventPayload{SkillID: ""},
+	})
+	last = app.activities[len(app.activities)-1]
+	if !last.IsError || !strings.Contains(last.Detail, "(unknown)") {
+		t.Fatalf("expected unknown fallback for missing event, got %+v", last)
+	}
+
+	runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SessionSkillEventPayload{SkillID: "go\x1b[31m-review"},
+	})
+	last = app.activities[len(app.activities)-1]
+	if strings.Contains(last.Detail, "\x1b") {
+		t.Fatalf("expected sanitized skill id in activity detail, got %+v", last)
+	}
+}
+
+func TestParseSessionSkillEventPayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	if payload, ok := parseSessionSkillEventPayload(map[string]any{"skill_id": 42}); !ok || payload.SkillID != "42" {
+		t.Fatalf("expected snake-case skill_id to be parsed, got payload=%+v ok=%v", payload, ok)
+	}
+	if payload, ok := parseSessionSkillEventPayload(map[string]any{"SkillID": " go-review "}); !ok || payload.SkillID != "go-review" {
+		t.Fatalf("expected camel-case SkillID to be parsed, got payload=%+v ok=%v", payload, ok)
+	}
+	if _, ok := parseSessionSkillEventPayload(map[string]any{"unexpected": "value"}); ok {
+		t.Fatalf("expected unknown map keys to be rejected")
+	}
+	if _, ok := parseSessionSkillEventPayload(nil); ok {
+		t.Fatalf("expected nil payload to be rejected")
 	}
 }

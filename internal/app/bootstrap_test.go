@@ -33,6 +33,11 @@ import (
 
 func TestNewProgram(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return &stubRemoteRuntimeForBootstrap{events: make(chan services.RuntimeEvent)}, nil
+	}
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -57,6 +62,11 @@ func TestNewProgram(t *testing.T) {
 
 func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return &stubRemoteRuntimeForBootstrap{events: make(chan services.RuntimeEvent)}, nil
+	}
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -168,6 +178,43 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	maxBytesField := cfgField.FieldByName("MaxResponseBytes")
 	if maxBytesField.Int() != 4 {
 		t.Fatalf("expected MaxResponseBytes=4, got %d", maxBytesField.Int())
+	}
+}
+
+func TestBuildToolRegistryRegistersSpawnSubAgent(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.Workdir = t.TempDir()
+
+	registry, cleanup, err := buildToolRegistry(cfg)
+	if err != nil {
+		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	tool, err := registry.Get(tools.ToolNameSpawnSubAgent)
+	if err != nil {
+		t.Fatalf("registry.Get(spawn_subagent) error = %v", err)
+	}
+	if tool.Name() != tools.ToolNameSpawnSubAgent {
+		t.Fatalf("tool.Name() = %q, want %q", tool.Name(), tools.ToolNameSpawnSubAgent)
+	}
+	specs, err := registry.ListAvailableSpecs(context.Background(), tools.SpecListInput{})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+	found := false
+	for _, spec := range specs {
+		if spec.Name == tools.ToolNameSpawnSubAgent {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected %q in available specs, got %+v", tools.ToolNameSpawnSubAgent, specs)
 	}
 }
 
@@ -1033,8 +1080,13 @@ func TestBuildRuntimeLogsSessionCleanupWarningAndContinues(t *testing.T) {
 	}
 }
 
-func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
+func TestNewProgramSkipsLocalMCPStackWhenTUIBuildFails(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return &stubRemoteRuntimeForBootstrap{events: make(chan services.RuntimeEvent)}, nil
+	}
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1062,12 +1114,12 @@ func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	closed := false
+	registerCalled := false
 	originalRegister := registerMCPStdioServer
 	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
 	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
-		client := &closeableStubMCPServerClient{closed: &closed}
-		return registry.RegisterServer(server.ID, "stdio", server.Version, client)
+		registerCalled = true
+		return nil
 	}
 
 	originalNewTUIWithMemo := newTUIWithMemo
@@ -1075,7 +1127,7 @@ func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
 	newTUIWithMemo = func(
 		cfg *config.Config,
 		configManager *config.Manager,
-		runtime agentruntime.Runtime,
+		runtime services.Runtime,
 		providerSvc tui.ProviderController,
 		memoSvc *memo.Service,
 	) (tui.App, error) {
@@ -1089,8 +1141,8 @@ func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "tui init failed") {
 		t.Fatalf("expected tui init error, got %v", err)
 	}
-	if !closed {
-		t.Fatalf("expected MCP resources to be closed when NewProgram fails")
+	if registerCalled {
+		t.Fatalf("expected TUI client deps not to initialize local MCP stack")
 	}
 }
 
@@ -1440,93 +1492,76 @@ func TestNewMemoExtractorAdapterPropagatesFactoryBuildError(t *testing.T) {
 	}
 }
 
-func TestResolveBootstrapRuntimeMode(t *testing.T) {
-	mode, err := resolveBootstrapRuntimeMode("")
-	if err != nil {
-		t.Fatalf("resolveBootstrapRuntimeMode() error = %v", err)
-	}
-	if mode != RuntimeModeLocal {
-		t.Fatalf("expected default mode %q, got %q", RuntimeModeLocal, mode)
-	}
-
-	mode, err = resolveBootstrapRuntimeMode(" GATEWAY ")
-	if err != nil {
-		t.Fatalf("resolveBootstrapRuntimeMode() error = %v", err)
-	}
-	if mode != RuntimeModeGateway {
-		t.Fatalf("expected gateway mode %q, got %q", RuntimeModeGateway, mode)
-	}
-
-	_, err = resolveBootstrapRuntimeMode("invalid")
-	if err == nil {
-		t.Fatalf("expected invalid runtime mode error")
-	}
-}
-
-func TestBuildRuntimeRejectsInvalidRuntimeMode(t *testing.T) {
-	t.Parallel()
-
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{RuntimeMode: "invalid"})
-	if err == nil {
-		t.Fatalf("expected invalid runtime mode error")
-	}
-}
-
 func TestDefaultNewRemoteRuntimeAdapterReturnsInitError(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
 	_, err := defaultNewRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{
-		ListenAddress: "ipc://127.0.0.1",
-		TokenFile:     home + "/missing-token.json",
+		ListenAddress: "://invalid",
 	})
 	if err == nil {
-		t.Fatalf("expected defaultNewRemoteRuntimeAdapter to fail when token is missing")
+		t.Fatalf("expected defaultNewRemoteRuntimeAdapter to fail when listen address is invalid")
 	}
 }
 
-func TestBuildRuntimeGatewayModeUsesRemoteAdapter(t *testing.T) {
+func TestBuildTUIClientDepsSkipsLocalRuntimeStack(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
+	originalBuildToolManager := buildToolManagerFunc
+	t.Cleanup(func() { buildToolManagerFunc = originalBuildToolManager })
+
+	buildToolManagerCalled := false
+	buildToolManagerFunc = func(registry *tools.Registry) (tools.Manager, error) {
+		buildToolManagerCalled = true
+		return originalBuildToolManager(registry)
+	}
+
+	bundle, err := BuildTUIClientDeps(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildTUIClientDeps() error = %v", err)
+	}
+	if bundle.Runtime != nil || bundle.MemoService != nil {
+		t.Fatalf("expected TUI client deps not to build local runtime/memo stack")
+	}
+	if buildToolManagerCalled {
+		t.Fatalf("expected TUI client deps not to build local tool manager/runtime stack")
+	}
+}
+
+func TestNewProgramUsesRemoteRuntimeAdapter(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
 	originalFactory := newRemoteRuntimeAdapter
 	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
 
 	stubRuntime := &stubRemoteRuntimeForBootstrap{
-		events: make(chan agentruntime.RuntimeEvent),
+		events: make(chan services.RuntimeEvent),
 	}
 	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
 		return stubRuntime, nil
 	}
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeGateway})
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("NewProgram() error = %v", err)
 	}
-	if bundle.Runtime != stubRuntime {
-		t.Fatalf("expected gateway runtime adapter to be wired")
+	if program == nil {
+		t.Fatalf("expected tea program")
 	}
-	if bundle.Close == nil {
+	if cleanup == nil {
 		t.Fatalf("expected non-nil close function")
 	}
-	if err := bundle.Close(); err != nil {
-		t.Fatalf("bundle.Close() error = %v", err)
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup() error = %v", err)
 	}
 	if !stubRuntime.closed {
 		t.Fatalf("expected remote runtime close to be called")
 	}
 }
 
-func TestBuildRuntimeGatewayModeFailsFastWhenAdapterInitFails(t *testing.T) {
+func TestNewProgramFailsFastWhenRemoteAdapterInitFails(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
-
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
 
 	originalFactory := newRemoteRuntimeAdapter
 	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
@@ -1535,9 +1570,9 @@ func TestBuildRuntimeGatewayModeFailsFastWhenAdapterInitFails(t *testing.T) {
 		return nil, errors.New("gateway connect failed")
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeGateway})
+	_, _, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err == nil {
-		t.Fatalf("expected gateway mode fail-fast error")
+		t.Fatalf("expected fail-fast error")
 	}
 	if !strings.Contains(err.Error(), "gateway connect failed") {
 		t.Fatalf("unexpected error: %v", err)
@@ -1549,38 +1584,100 @@ type stubToolForBootstrap struct {
 	content string
 }
 
-type stubRemoteRuntimeForBootstrap struct {
-	closed bool
+type stubRuntimeForBootstrap struct {
 	events chan agentruntime.RuntimeEvent
 }
 
-func (s *stubRemoteRuntimeForBootstrap) Submit(context.Context, agentruntime.PrepareInput) error {
+func (s *stubRuntimeForBootstrap) Submit(context.Context, agentruntime.PrepareInput) error {
 	return nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) PrepareUserInput(
+func (s *stubRuntimeForBootstrap) PrepareUserInput(
 	context.Context,
 	agentruntime.PrepareInput,
 ) (agentruntime.UserInput, error) {
 	return agentruntime.UserInput{}, nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) Run(context.Context, agentruntime.UserInput) error {
+func (s *stubRuntimeForBootstrap) Run(context.Context, agentruntime.UserInput) error {
 	return nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) Compact(context.Context, agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+func (s *stubRuntimeForBootstrap) Compact(context.Context, agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	return agentruntime.CompactResult{}, nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) ExecuteSystemTool(
+func (s *stubRuntimeForBootstrap) ExecuteSystemTool(
 	context.Context,
 	agentruntime.SystemToolInput,
 ) (tools.ToolResult, error) {
 	return tools.ToolResult{}, nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) ResolvePermission(context.Context, agentruntime.PermissionResolutionInput) error {
+func (s *stubRuntimeForBootstrap) ResolvePermission(context.Context, agentruntime.PermissionResolutionInput) error {
+	return nil
+}
+
+func (s *stubRuntimeForBootstrap) CancelActiveRun() bool {
+	return false
+}
+
+func (s *stubRuntimeForBootstrap) Events() <-chan agentruntime.RuntimeEvent {
+	return s.events
+}
+
+func (s *stubRuntimeForBootstrap) ListSessions(context.Context) ([]agentsession.Summary, error) {
+	return nil, nil
+}
+
+func (s *stubRuntimeForBootstrap) LoadSession(context.Context, string) (agentsession.Session, error) {
+	return agentsession.Session{}, nil
+}
+
+func (s *stubRuntimeForBootstrap) ActivateSessionSkill(context.Context, string, string) error {
+	return nil
+}
+
+func (s *stubRuntimeForBootstrap) DeactivateSessionSkill(context.Context, string, string) error {
+	return nil
+}
+
+func (s *stubRuntimeForBootstrap) ListSessionSkills(context.Context, string) ([]agentruntime.SessionSkillState, error) {
+	return nil, nil
+}
+
+type stubRemoteRuntimeForBootstrap struct {
+	closed bool
+	events chan services.RuntimeEvent
+}
+
+func (s *stubRemoteRuntimeForBootstrap) Submit(context.Context, services.PrepareInput) error {
+	return nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) PrepareUserInput(
+	context.Context,
+	services.PrepareInput,
+) (services.UserInput, error) {
+	return services.UserInput{}, nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) Run(context.Context, services.UserInput) error {
+	return nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) Compact(context.Context, services.CompactInput) (services.CompactResult, error) {
+	return services.CompactResult{}, nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) ExecuteSystemTool(
+	context.Context,
+	services.SystemToolInput,
+) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) ResolvePermission(context.Context, services.PermissionResolutionInput) error {
 	return nil
 }
 
@@ -1588,7 +1685,7 @@ func (s *stubRemoteRuntimeForBootstrap) CancelActiveRun() bool {
 	return false
 }
 
-func (s *stubRemoteRuntimeForBootstrap) Events() <-chan agentruntime.RuntimeEvent {
+func (s *stubRemoteRuntimeForBootstrap) Events() <-chan services.RuntimeEvent {
 	return s.events
 }
 
@@ -1608,7 +1705,14 @@ func (s *stubRemoteRuntimeForBootstrap) DeactivateSessionSkill(context.Context, 
 	return nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) ListSessionSkills(context.Context, string) ([]agentruntime.SessionSkillState, error) {
+func (s *stubRemoteRuntimeForBootstrap) ListSessionSkills(context.Context, string) ([]services.SessionSkillState, error) {
+	return nil, nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) ListAvailableSkills(
+	context.Context,
+	string,
+) ([]services.AvailableSkillState, error) {
 	return nil, nil
 }
 

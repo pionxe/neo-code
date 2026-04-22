@@ -10,6 +10,7 @@ const (
 	ToolNameFilesystemGlob      = "filesystem_glob"
 	ToolNameFilesystemEdit      = "filesystem_edit"
 	ToolNameTodoWrite           = "todo_write"
+	ToolNameSpawnSubAgent       = "spawn_subagent"
 	ToolNameMemoRemember        = "memo_remember"
 	ToolNameMemoRecall          = "memo_recall"
 	ToolNameMemoList            = "memo_list"

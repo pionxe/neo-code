@@ -28,8 +28,12 @@ type runState struct {
 	agentID                 string
 	capabilityToken         *security.CapabilityToken
 	turn                    int
-	phase                   controlplane.Phase
+	baseLifecycle           controlplane.RunState
+	lifecycle               controlplane.RunState
+	waitingPermissionCount  int
+	compactingCount         int
 	stopEmitted             bool
+	completion              controlplane.CompletionState
 	progress                controlplane.ProgressState
 	reportedMissingSkills   map[string]struct{}
 }
@@ -89,15 +93,16 @@ func (s *runState) markSkillMissingReported(skillID string) bool {
 
 // turnSnapshot 冻结单轮推理所需的配置、上下文与 provider 请求。
 // noProgressStreakLimit 由 prepareTurnSnapshot 一次性解析并存储，确保同一轮的
-// 纠偏注入阈值与熔断阈值来自同一配置快照，避免并发 reload 导致阈值不一致。
+// 提示词纠偏阈值来自同一配置快照，避免并发 reload 导致注入行为不一致。
 type turnSnapshot struct {
-	config                config.Config
-	providerConfig        provider.RuntimeConfig
-	model                 string
-	workdir               string
-	toolTimeout           time.Duration
-	noProgressStreakLimit int
-	request               providertypes.GenerateRequest
+	config                 config.Config
+	providerConfig         provider.RuntimeConfig
+	model                  string
+	workdir                string
+	toolTimeout            time.Duration
+	noProgressStreakLimit  int
+	repeatCycleStreakLimit int
+	request                providertypes.GenerateRequest
 }
 
 // providerTurnResult 表示单轮 provider 调用成功后的结构化结果。

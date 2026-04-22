@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 
 	"neo-code/internal/config"
@@ -17,16 +19,22 @@ import (
 )
 
 type stubSkillsRegistry struct {
-	skills map[string]skills.Skill
-	getErr error
+	skills         map[string]skills.Skill
+	getErr         error
+	lastListInput  skills.ListInput
+	listFilterByWS bool
 }
 
 func (r *stubSkillsRegistry) List(ctx context.Context, input skills.ListInput) ([]skills.Descriptor, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	r.lastListInput = input
 	result := make([]skills.Descriptor, 0, len(r.skills))
 	for _, skill := range r.skills {
+		if r.listFilterByWS && skill.Descriptor.Scope == skills.ScopeWorkspace && strings.TrimSpace(input.Workspace) == "" {
+			continue
+		}
 		result = append(result, skill.Descriptor)
 	}
 	return result, nil
@@ -383,6 +391,198 @@ func TestListSessionSkillsValidatesInput(t *testing.T) {
 	}
 }
 
+func TestListAvailableSkillsReportsActiveStateAndSorts(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-list-available-skills")
+	session.ActivateSkill("go-review")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	service.SetSkillsRegistry(&stubSkillsRegistry{
+		skills: map[string]skills.Skill{
+			"zeta": {
+				Descriptor: skills.Descriptor{ID: "zeta", Name: "Zeta"},
+				Content:    skills.Content{Instruction: "z"},
+			},
+			"go-review": {
+				Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+				Content:    skills.Content{Instruction: "go"},
+			},
+		},
+	})
+
+	states, err := service.ListAvailableSkills(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("ListAvailableSkills() error = %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("ListAvailableSkills() len = %d, want 2", len(states))
+	}
+	if states[0].Descriptor.ID != "go-review" || !states[0].Active {
+		t.Fatalf("expected go-review active first, got %+v", states[0])
+	}
+	if states[1].Descriptor.ID != "zeta" || states[1].Active {
+		t.Fatalf("expected zeta inactive second, got %+v", states[1])
+	}
+}
+
+func TestListAvailableSkillsUsesConfigWorkdirWhenSessionIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	registry := &stubSkillsRegistry{
+		listFilterByWS: true,
+		skills: map[string]skills.Skill{
+			"workspace-only": {
+				Descriptor: skills.Descriptor{
+					ID:    "workspace-only",
+					Name:  "Workspace Only",
+					Scope: skills.ScopeWorkspace,
+				},
+				Content: skills.Content{Instruction: "workspace"},
+			},
+		},
+	}
+	service.SetSkillsRegistry(registry)
+
+	states, err := service.ListAvailableSkills(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListAvailableSkills() error = %v", err)
+	}
+	if len(states) != 1 || states[0].Descriptor.ID != "workspace-only" {
+		t.Fatalf("expected workspace skill visible with config workdir fallback, got %+v", states)
+	}
+	if strings.TrimSpace(registry.lastListInput.Workspace) == "" {
+		t.Fatalf("expected non-empty workspace fallback, got %+v", registry.lastListInput)
+	}
+}
+
+func TestListAvailableSkillsHandlesValidationAndRegistryErrors(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-list-available-errors")
+	store.sessions[session.ID] = cloneSession(session)
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.ListAvailableSkills(canceledCtx, session.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled context error, got %v", err)
+	}
+	if _, err := service.ListAvailableSkills(context.Background(), session.ID); !errors.Is(err, errSkillsRegistryUnavailable) {
+		t.Fatalf("expected registry unavailable error, got %v", err)
+	}
+
+	service.SetSkillsRegistry(&stubSkillsRegistry{getErr: os.ErrPermission})
+	if _, err := service.ListAvailableSkills(context.Background(), "missing-session"); err == nil {
+		t.Fatalf("expected missing session error")
+	}
+}
+
+func TestPrioritizeToolSpecsBySkillHintsOnlyReordersVisibleTools(t *testing.T) {
+	t.Parallel()
+
+	specs := []providertypes.ToolSpec{
+		{Name: "filesystem_read_file"},
+		{Name: "bash"},
+		{Name: "webfetch"},
+	}
+	activeSkills := []skills.Skill{
+		{
+			Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+			Content: skills.Content{
+				Instruction: "review",
+				ToolHints:   []string{"webfetch", "unknown_tool", "bash"},
+			},
+		},
+	}
+
+	prioritized := prioritizeToolSpecsBySkillHints(specs, activeSkills)
+	got := []string{prioritized[0].Name, prioritized[1].Name, prioritized[2].Name}
+	want := []string{"webfetch", "bash", "filesystem_read_file"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prioritized tool order = %v, want %v", got, want)
+	}
+}
+
+func TestPrioritizeToolSpecsBySkillHintsKeepsNonHintedRelativeOrder(t *testing.T) {
+	t.Parallel()
+
+	specs := []providertypes.ToolSpec{
+		{Name: "filesystem_read_file"},
+		{Name: "webfetch"},
+		{Name: "bash"},
+		{Name: "mcp_tool"},
+	}
+	activeSkills := []skills.Skill{
+		{
+			Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+			Content: skills.Content{
+				Instruction: "review",
+				ToolHints:   []string{"bash"},
+			},
+		},
+	}
+
+	prioritized := prioritizeToolSpecsBySkillHints(specs, activeSkills)
+	got := []string{prioritized[0].Name, prioritized[1].Name, prioritized[2].Name, prioritized[3].Name}
+	want := []string{"bash", "filesystem_read_file", "webfetch", "mcp_tool"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prioritized tool order = %v, want %v", got, want)
+	}
+}
+
+func TestPrepareTurnSnapshotPrioritizesToolsByActiveSkillHints(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-skill-tool-priority")
+	session.ActivateSkill("go-review")
+	store.sessions[session.ID] = cloneSession(session)
+
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{
+			{Name: "filesystem_read_file"},
+			{Name: "bash"},
+		},
+	}
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	service.SetSkillsRegistry(&stubSkillsRegistry{
+		skills: map[string]skills.Skill{
+			"go-review": {
+				Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+				Content: skills.Content{
+					Instruction: "review",
+					ToolHints:   []string{"bash"},
+				},
+			},
+		},
+	})
+
+	state := newRunState("run-skill-tool-priority", session)
+	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
+	if err != nil {
+		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+	}
+	if rebuilt {
+		t.Fatalf("did not expect snapshot rebuild")
+	}
+	if len(snapshot.request.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(snapshot.request.Tools))
+	}
+	if snapshot.request.Tools[0].Name != "bash" {
+		t.Fatalf("expected hinted tool first, got %q", snapshot.request.Tools[0].Name)
+	}
+}
+
 func TestMutateSessionSkillsCoversValidationAndSaveFailure(t *testing.T) {
 	t.Parallel()
 
@@ -431,6 +631,125 @@ func TestNormalizeRuntimeSkillID(t *testing.T) {
 	}
 	if got := normalizeRuntimeSkillID(" -  "); got != "" {
 		t.Fatalf("expected blank normalized id, got %q", got)
+	}
+}
+
+func TestResolveActiveSkillsBranchCoverage(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-resolve-active-skills")
+	session.ActivateSkill("missing-a")
+	session.ActivateSkill("missing-b")
+	store.sessions[session.ID] = cloneSession(session)
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.resolveActiveSkills(canceledCtx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled context to fail early, got %v", err)
+	}
+	if skillsResolved, err := service.resolveActiveSkills(context.Background(), nil); err != nil || skillsResolved != nil {
+		t.Fatalf("expected nil state to return nil,nil; got %+v err=%v", skillsResolved, err)
+	}
+
+	state := newRunState("run-resolve-active-skills", session)
+	skillsResolved, err := service.resolveActiveSkills(context.Background(), &state)
+	if err != nil {
+		t.Fatalf("resolveActiveSkills() error = %v", err)
+	}
+	if len(skillsResolved) != 0 {
+		t.Fatalf("expected unresolved skills with nil registry, got %+v", skillsResolved)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	if len(events) != 2 {
+		t.Fatalf("expected two skill_missing events, got %+v", events)
+	}
+}
+
+func TestListSessionSkillsHandlesSkillNotFoundFromRegistry(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-list-session-skills-missing")
+	session.ActivateSkill("missing-skill")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	service.SetSkillsRegistry(&stubSkillsRegistry{skills: map[string]skills.Skill{}})
+
+	states, err := service.ListSessionSkills(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("ListSessionSkills() error = %v", err)
+	}
+	if len(states) != 1 || !states[0].Missing || states[0].Descriptor != nil {
+		t.Fatalf("expected skill-not-found to map to missing state, got %+v", states)
+	}
+}
+
+func TestListAvailableSkillsAdditionalBranches(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-list-available-branches")
+	session.Workdir = "/tmp/project"
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	registry := &stubSkillsRegistry{skills: map[string]skills.Skill{}}
+	service.SetSkillsRegistry(registry)
+
+	states, err := service.ListAvailableSkills(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("ListAvailableSkills() error = %v", err)
+	}
+	if states != nil {
+		t.Fatalf("expected nil states for empty descriptor list, got %+v", states)
+	}
+	if strings.TrimSpace(registry.lastListInput.Workspace) == "" {
+		t.Fatalf("expected workspace from session/config, got %+v", registry.lastListInput)
+	}
+
+	service.configManager = nil
+	if _, err := service.ListAvailableSkills(context.Background(), session.ID); err != nil {
+		t.Fatalf("expected config-manager-nil branch to still succeed, got %v", err)
+	}
+	if strings.TrimSpace(registry.lastListInput.Workspace) != "/tmp/project" {
+		t.Fatalf("expected workspace from session workdir when config manager nil, got %+v", registry.lastListInput)
+	}
+}
+
+func TestSkillHelperFunctionsBranches(t *testing.T) {
+	t.Parallel()
+
+	if set := skillSetFromIDs(nil); len(set) != 0 {
+		t.Fatalf("expected empty set for nil input, got %+v", set)
+	}
+	set := skillSetFromIDs([]string{"  ", "Go_Review", "go-review"})
+	if len(set) != 1 {
+		t.Fatalf("expected deduped set size 1, got %+v", set)
+	}
+	if _, ok := set["go-review"]; !ok {
+		t.Fatalf("expected normalized key in set, got %+v", set)
+	}
+
+	hints := collectSkillToolHints([]skills.Skill{
+		{
+			Content: skills.Content{ToolHints: []string{"", "bash", " Bash ", "web_fetch"}},
+		},
+		{
+			Content: skills.Content{ToolHints: []string{"web-fetch"}},
+		},
+	})
+	if !reflect.DeepEqual(hints, []string{"bash", "web-fetch"}) {
+		t.Fatalf("unexpected normalized hints: %+v", hints)
+	}
+	if collectSkillToolHints(nil) != nil {
+		t.Fatalf("expected nil for empty active skills")
 	}
 }
 

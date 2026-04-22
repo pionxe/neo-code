@@ -327,3 +327,36 @@ func TestSessionPermissionMemoryResolveRequiresMCPToolScopeMatch(t *testing.T) {
 		t.Fatalf("expected other MCP tool on same server to miss memory")
 	}
 }
+
+func TestSessionPermissionMemoryResolveMatchesNormalizedCommandScope(t *testing.T) {
+	t.Parallel()
+
+	memory := newSessionPermissionMemory()
+	sessionID := "session-bash-command-scope"
+
+	remembered := security.Action{
+		Type: security.ActionTypeBash,
+		Payload: security.ActionPayload{
+			ToolName:   "bash",
+			Resource:   "bash",
+			TargetType: security.TargetTypeCommand,
+			Target:     "Get-ChildItem   -Force\r\n|   Select-String    'TODO'",
+		},
+	}
+	if err := memory.remember(sessionID, remembered, SessionPermissionScopeAlways); err != nil {
+		t.Fatalf("remember bash action: %v", err)
+	}
+
+	normalizedEquivalent := security.Action{
+		Type: security.ActionTypeBash,
+		Payload: security.ActionPayload{
+			ToolName:   "bash",
+			Resource:   "bash",
+			TargetType: security.TargetTypeCommand,
+			Target:     "Get-ChildItem -Force | Select-String 'TODO'",
+		},
+	}
+	if _, _, ok := memory.resolve(sessionID, normalizedEquivalent); !ok {
+		t.Fatalf("expected normalized-equivalent command to hit session memory")
+	}
+}

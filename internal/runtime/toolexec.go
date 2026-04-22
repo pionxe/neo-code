@@ -10,24 +10,31 @@ import (
 	"neo-code/internal/tools"
 )
 
-// executeAssistantToolCalls 并发执行 assistant 返回的全部工具调用并回写结果。
+type indexedToolCall struct {
+	index int
+	call  providertypes.ToolCall
+}
+
+// executeAssistantToolCalls 并发执行 assistant 返回的全部工具调用并返回结构化执行摘要。
 func (s *Service) executeAssistantToolCalls(
 	ctx context.Context,
 	state *runState,
 	snapshot turnSnapshot,
 	assistant providertypes.Message,
-) error {
+) (toolExecutionSummary, error) {
 	if len(assistant.ToolCalls) == 0 {
-		return nil
+		return toolExecutionSummary{}, nil
 	}
 
 	execCtx, cancelExec := context.WithCancel(ctx)
 	defer cancelExec()
 
 	parallelism := resolveToolParallelism(len(assistant.ToolCalls))
-	orderedCalls := reorderToolCallsByNameRoundRobin(assistant.ToolCalls)
 	toolLocks := buildToolExecutionLocks(assistant.ToolCalls)
-	taskCh := make(chan providertypes.ToolCall)
+	taskCh := make(chan indexedToolCall)
+	results := make([]tools.ToolResult, len(assistant.ToolCalls))
+	completed := make([]bool, len(assistant.ToolCalls))
+	writes := make([]bool, len(assistant.ToolCalls))
 	var mu sync.Mutex
 	var firstErr error
 	var workerWG sync.WaitGroup
@@ -40,32 +47,51 @@ func (s *Service) executeAssistantToolCalls(
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()
-			for call := range taskCh {
-				s.executeOneToolCall(
+			for task := range taskCh {
+				result, wrote, err := s.executeOneToolCall(
 					execCtx,
 					state,
 					snapshot,
-					call,
-					toolLocks[normalizeToolLockKey(call.Name)],
+					task.call,
+					toolLocks[normalizeToolLockKey(task.call.Name)],
 					checkContext,
-					func(err error) {
-						recordAndCancelOnFirstError(&mu, &firstErr, err, cancelExec)
-					},
 				)
+				mu.Lock()
+				results[task.index] = result
+				completed[task.index] = true
+				writes[task.index] = wrote
+				mu.Unlock()
+				if err != nil {
+					recordAndCancelOnFirstError(&mu, &firstErr, err, cancelExec)
+				}
 			}
 		}()
 	}
 
-	for _, call := range orderedCalls {
+	for index, call := range assistant.ToolCalls {
 		if checkContext() {
 			break
 		}
-		taskCh <- call
+		taskCh <- indexedToolCall{index: index, call: call}
 	}
 
 	close(taskCh)
 	workerWG.Wait()
-	return firstErr
+
+	summary := toolExecutionSummary{
+		Calls: append([]providertypes.ToolCall(nil), assistant.ToolCalls...),
+	}
+	for index, ok := range completed {
+		if !ok {
+			continue
+		}
+		summary.Results = append(summary.Results, results[index])
+		if writes[index] {
+			summary.HasSuccessfulWorkspaceWrite = true
+		}
+	}
+	summary.HasSuccessfulVerification = hasSuccessfulVerificationResult(summary.Results)
+	return summary, firstErr
 }
 
 // executeOneToolCall 在单个 worker 中执行一次工具调用并处理结果回写与事件发射。
@@ -76,10 +102,9 @@ func (s *Service) executeOneToolCall(
 	call providertypes.ToolCall,
 	toolLock *sync.Mutex,
 	checkContext func() bool,
-	rememberError func(error),
-) {
+) (tools.ToolResult, bool, error) {
 	if checkContext() {
-		return
+		return tools.ToolResult{}, false, ctx.Err()
 	}
 
 	toolLock.Lock()
@@ -100,13 +125,8 @@ func (s *Service) executeOneToolCall(
 	})
 
 	if errors.Is(execErr, context.Canceled) {
-		rememberError(execErr)
-		return
+		return result, false, execErr
 	}
-	if execErr == nil && checkContext() {
-		return
-	}
-
 	if execErr != nil && strings.TrimSpace(result.Content) == "" {
 		result.Content = execErr.Error()
 	}
@@ -115,12 +135,7 @@ func (s *Service) executeOneToolCall(
 		if execErr != nil && errors.Is(err, context.Canceled) {
 			s.emitRunScoped(ctx, EventToolResult, state, result)
 		}
-		rememberError(err)
-		return
-	}
-
-	if execErr == nil && checkContext() {
-		return
+		return result, false, err
 	}
 
 	s.emitRunScoped(ctx, EventToolResult, state, result)
@@ -132,9 +147,13 @@ func (s *Service) executeOneToolCall(
 		state.mu.Unlock()
 	}
 
-	if execErr != nil && checkContext() {
-		return
+	if checkContext() {
+		return result, hasSuccessfulWorkspaceWriteFact(result, execErr), ctx.Err()
 	}
+	if execErr != nil {
+		return result, false, nil
+	}
+	return result, hasSuccessfulWorkspaceWriteFact(result, execErr), nil
 }
 
 // resolveToolParallelism 计算本轮工具执行的并发上限，避免无界 goroutine 扩散。
@@ -146,40 +165,6 @@ func resolveToolParallelism(toolCallCount int) int {
 		return toolCallCount
 	}
 	return defaultToolParallelism
-}
-
-// reorderToolCallsByNameRoundRobin 按工具名分组后轮询展开，降低同名批量调用导致的队头阻塞。
-func reorderToolCallsByNameRoundRobin(calls []providertypes.ToolCall) []providertypes.ToolCall {
-	if len(calls) <= 1 {
-		return append([]providertypes.ToolCall(nil), calls...)
-	}
-	grouped := make(map[string][]providertypes.ToolCall, len(calls))
-	order := make([]string, 0, len(calls))
-	for _, call := range calls {
-		key := normalizeToolLockKey(call.Name)
-		if _, ok := grouped[key]; !ok {
-			order = append(order, key)
-		}
-		grouped[key] = append(grouped[key], call)
-	}
-
-	ordered := make([]providertypes.ToolCall, 0, len(calls))
-	for {
-		progressed := false
-		for _, key := range order {
-			queue := grouped[key]
-			if len(queue) == 0 {
-				continue
-			}
-			ordered = append(ordered, queue[0])
-			grouped[key] = queue[1:]
-			progressed = true
-		}
-		if !progressed {
-			break
-		}
-	}
-	return ordered
 }
 
 // buildToolExecutionLocks 按工具名构造互斥锁，确保同名工具调用在单轮内串行执行。
@@ -252,4 +237,12 @@ func (s *Service) emitTodoToolEvent(
 	if strings.Contains(strings.ToLower(strings.TrimSpace(reason)), "conflict") {
 		s.emitRunScoped(ctx, EventTodoConflict, state, TodoEventPayload{Action: action, Reason: reason})
 	}
+}
+
+// hasSuccessfulWorkspaceWriteFact 判断工具结果是否产出了成功写入事实。
+func hasSuccessfulWorkspaceWriteFact(result tools.ToolResult, execErr error) bool {
+	if execErr != nil || result.IsError {
+		return false
+	}
+	return result.Facts.WorkspaceWrite
 }

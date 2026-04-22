@@ -3,15 +3,18 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
+	agentruntime "neo-code/internal/tui/services"
 )
 
 type testRuntime struct{}
@@ -80,6 +83,15 @@ func (r *testRuntime) DeactivateSessionSkill(ctx context.Context, sessionID stri
 
 func (r *testRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
 	return []agentruntime.SessionSkillState{{SkillID: "test", Descriptor: &skills.Descriptor{ID: "test"}}}, nil
+}
+
+func (r *testRuntime) ListAvailableSkills(ctx context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
+	return []agentruntime.AvailableSkillState{
+		{
+			Descriptor: skills.Descriptor{ID: "test", Name: "Test"},
+			Active:     true,
+		},
+	}, nil
 }
 
 type testProviderService struct{}
@@ -304,6 +316,10 @@ func (r noopRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([
 	return nil, nil
 }
 
+func (r noopRuntime) ListAvailableSkills(ctx context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
+	return nil, nil
+}
+
 type noopProviderService struct{}
 
 func (s noopProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
@@ -376,5 +392,36 @@ func TestBuildFactoryErrors(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected nil provider factory error")
+	}
+}
+
+func TestInternalTUINonTestFilesDoNotImportRuntimePackage(t *testing.T) {
+	tuiRoot := filepath.Clean(filepath.Join(".."))
+	var offenders []string
+
+	err := filepath.WalkDir(tuiRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(content), "neo-code/internal/runtime") {
+			offenders = append(offenders, filepath.Clean(path))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan internal/tui imports: %v", err)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("found runtime imports in internal/tui non-test files: %v", offenders)
 	}
 }

@@ -481,7 +481,7 @@ func TestExecuteAssistantToolCallsRemainingBranches(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		state := newRunState("run", newRuntimeSession("session-top-cancel"))
-		err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
+		_, err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -499,7 +499,7 @@ func TestExecuteAssistantToolCallsRemainingBranches(t *testing.T) {
 		store.sessions[session.ID] = cloneSession(session)
 		service := &Service{events: make(chan RuntimeEvent, 8), approvalBroker: approvalflow.NewBroker(), toolManager: manager, sessionStore: store}
 		state := newRunState("run", session)
-		err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
+		_, err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -518,7 +518,7 @@ func TestExecuteAssistantToolCallsRemainingBranches(t *testing.T) {
 		service := &Service{events: make(chan RuntimeEvent, 8), approvalBroker: approvalflow.NewBroker(), toolManager: manager, sessionStore: store}
 
 		state := newRunState("run", session)
-		err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
+		_, err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -537,7 +537,7 @@ func TestExecuteAssistantToolCallsRemainingBranches(t *testing.T) {
 		service := &Service{events: make(chan RuntimeEvent, 8), approvalBroker: approvalflow.NewBroker(), toolManager: manager, sessionStore: store}
 
 		state := newRunState("run", session)
-		err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
+		_, err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}

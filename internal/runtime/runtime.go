@@ -3,8 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
-	"os"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +46,7 @@ type Runtime interface {
 	ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error
 	DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error
 	ListSessionSkills(ctx context.Context, sessionID string) ([]SessionSkillState, error)
+	ListAvailableSkills(ctx context.Context, sessionID string) ([]AvailableSkillState, error)
 }
 
 // UserInput 描述一次用户输入请求的最小运行参数。

@@ -11,38 +11,39 @@ func TestDecideStopReasonPriority(t *testing.T) {
 
 	errSample := errors.New("boom")
 	cases := []struct {
-		name   string
-		in     StopInput
-		reason StopReason
+		name       string
+		in         StopInput
+		wantReason StopReason
 	}{
 		{
-			name: "canceled_wins_over_error",
+			name: "user_interrupt_wins_over_fatal",
 			in: StopInput{
-				ContextCanceled: true,
-				RunError:        errSample,
+				UserInterrupted: true,
+				FatalError:      errSample,
 			},
-			reason: StopReasonCanceled,
+			wantReason: StopReasonUserInterrupt,
 		},
 		{
-			name: "error",
+			name: "fatal_error_wins_over_completed",
 			in: StopInput{
-				RunError: errSample,
+				FatalError: errSample,
+				Completed:  true,
 			},
-			reason: StopReasonError,
+			wantReason: StopReasonFatalError,
 		},
 		{
-			name: "success",
+			name: "completed",
 			in: StopInput{
-				Success: true,
+				Completed: true,
 			},
-			reason: StopReasonSuccess,
+			wantReason: StopReasonCompleted,
 		},
 		{
-			name: "context_canceled_on_error_field",
+			name: "context_canceled_maps_to_user_interrupt",
 			in: StopInput{
-				RunError: context.Canceled,
+				FatalError: context.Canceled,
 			},
-			reason: StopReasonCanceled,
+			wantReason: StopReasonUserInterrupt,
 		},
 	}
 
@@ -50,9 +51,10 @@ func TestDecideStopReasonPriority(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
 			got, _ := DecideStopReason(tc.in)
-			if got != tc.reason {
-				t.Fatalf("DecideStopReason() = %q, want %q", got, tc.reason)
+			if got != tc.wantReason {
+				t.Fatalf("DecideStopReason() = %q, want %q", got, tc.wantReason)
 			}
 		})
 	}
@@ -62,8 +64,8 @@ func TestDecideStopReasonDetails(t *testing.T) {
 	t.Parallel()
 
 	reason, detail := DecideStopReason(StopInput{})
-	if reason != StopReasonError {
-		t.Fatalf("reason = %q, want %q", reason, StopReasonError)
+	if reason != StopReasonFatalError {
+		t.Fatalf("reason = %q, want %q", reason, StopReasonFatalError)
 	}
 	if detail != "runtime: stop reason undetermined" {
 		t.Fatalf("detail = %q, want undetermined detail", detail)

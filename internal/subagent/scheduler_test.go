@@ -29,6 +29,11 @@ type schedulerStoreWithClaimError struct {
 func newSchedulerStore(t *testing.T, items []agentsession.TodoItem) *schedulerStore {
 	t.Helper()
 	session := agentsession.New("scheduler")
+	for idx := range items {
+		if strings.TrimSpace(items[idx].Executor) == "" {
+			items[idx].Executor = agentsession.TodoExecutorSubAgent
+		}
+	}
 	if err := session.ReplaceTodos(items); err != nil {
 		t.Fatalf("ReplaceTodos() error = %v", err)
 	}
@@ -1021,6 +1026,49 @@ func TestSchedulerRunProgressEventDeduplicatedForRetryBackoff(t *testing.T) {
 	}
 }
 
+func TestSchedulerRunDispatchOnceReturnsWithoutPolling(t *testing.T) {
+	t.Parallel()
+
+	store := newSchedulerStore(t, []agentsession.TodoItem{
+		{
+			ID:          "backoff-once",
+			Content:     "wait retry window",
+			Status:      agentsession.TodoStatusPending,
+			RetryCount:  1,
+			RetryLimit:  3,
+			NextRetryAt: time.Now().Add(5 * time.Second),
+		},
+	})
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("unused"), nil
+	})
+
+	startedAt := time.Now()
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{
+		MaxConcurrency: 1,
+		PollInterval:   time.Second,
+		DispatchOnce:   true,
+	})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	result, err := scheduler.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 300*time.Millisecond {
+		t.Fatalf("Run() elapsed = %v, want <= 300ms", elapsed)
+	}
+	if !contains(result.BlockedLeft, "backoff-once") {
+		t.Fatalf("BlockedLeft = %v, want backoff-once", result.BlockedLeft)
+	}
+}
+
 func TestSchedulerHandleOneOutcomeIgnoresStaleAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -1151,8 +1199,62 @@ func TestSchedulerRunStopsOnDependencyDeadEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !contains(result.BlockedLeft, "child") {
-		t.Fatalf("BlockedLeft = %v, want child", result.BlockedLeft)
+	if len(result.BlockedLeft) != 0 {
+		t.Fatalf("BlockedLeft = %v, want empty", result.BlockedLeft)
+	}
+	if !contains(result.Failed, "child") {
+		t.Fatalf("Failed = %v, want child", result.Failed)
+	}
+	child, ok := store.FindTodo("child")
+	if !ok {
+		t.Fatalf("FindTodo(child) expected true")
+	}
+	if child.Status != agentsession.TodoStatusFailed {
+		t.Fatalf("child status = %q, want failed", child.Status)
+	}
+	if !strings.Contains(child.FailureReason, "dependency_failed") {
+		t.Fatalf("child failure_reason = %q, want contains dependency_failed", child.FailureReason)
+	}
+}
+
+func TestSchedulerRunPropagatesDependencyFailureTransitively(t *testing.T) {
+	t.Parallel()
+
+	store := newSchedulerStore(t, []agentsession.TodoItem{
+		{ID: "root", Content: "root", Status: agentsession.TodoStatusFailed},
+		{ID: "child", Content: "child", Dependencies: []string{"root"}, Status: agentsession.TodoStatusPending},
+		{ID: "leaf", Content: "leaf", Dependencies: []string{"child"}, Status: agentsession.TodoStatusPending},
+	})
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep(taskID), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{
+		MaxConcurrency: 1,
+		PollInterval:   2 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := scheduler.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !contains(result.Failed, "child") || !contains(result.Failed, "leaf") {
+		t.Fatalf("Failed = %v, want [child leaf]", result.Failed)
+	}
+	leaf, ok := store.FindTodo("leaf")
+	if !ok {
+		t.Fatalf("FindTodo(leaf) expected true")
+	}
+	if leaf.Status != agentsession.TodoStatusFailed {
+		t.Fatalf("leaf status = %q, want failed", leaf.Status)
 	}
 }
 
@@ -1543,14 +1645,16 @@ func TestSchedulerHelpersCoverage(t *testing.T) {
 		t.Fatalf("waitWithContext canceled error = %v", err)
 	}
 
-	left := collectBlockedLeft([]string{"a", "b", "c"}, []agentsession.TodoItem{
-		{ID: "a", Content: "a", Status: agentsession.TodoStatusCompleted},
-		{ID: "b", Content: "b", Status: agentsession.TodoStatusBlocked},
+	left := collectBlockedLeft([]string{"a", "b", "c", "d"}, []agentsession.TodoItem{
+		{ID: "a", Content: "a", Status: agentsession.TodoStatusCompleted, Executor: agentsession.TodoExecutorSubAgent},
+		{ID: "b", Content: "b", Status: agentsession.TodoStatusBlocked, Executor: agentsession.TodoExecutorSubAgent},
+		{ID: "c", Content: "c", Status: agentsession.TodoStatusBlocked, Executor: agentsession.TodoExecutorAgent},
+		{ID: "d", Content: "d", Status: agentsession.TodoStatusPending, Executor: agentsession.TodoExecutorSubAgent},
 	}, map[string]runningTask{
-		"c": {id: "c"},
+		"d": {id: "d"},
 	})
-	if len(left) != 2 || left[0] != "b" || left[1] != "c" {
-		t.Fatalf("collectBlockedLeft() = %v, want [b c]", left)
+	if len(left) != 2 || left[0] != "b" || left[1] != "d" {
+		t.Fatalf("collectBlockedLeft() = %v, want [b d]", left)
 	}
 
 	outcome := taskOutcome{err: errors.New(" boom ")}

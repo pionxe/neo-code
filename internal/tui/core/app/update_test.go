@@ -18,12 +18,11 @@ import (
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
-	approvalflow "neo-code/internal/runtime/approval"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
-	tuiservices "neo-code/internal/tui/services"
+	agentruntime "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
 )
 
@@ -107,24 +106,38 @@ func (s stubProviderService) CreateCustomProvider(
 }
 
 type stubRuntime struct {
-	events          chan agentruntime.RuntimeEvent
-	prepareInputs   []agentruntime.PrepareInput
-	prepareErr      error
-	preparedOutput  agentruntime.UserInput
-	runInputs       []agentruntime.UserInput
-	systemToolCalls []agentruntime.SystemToolInput
-	systemToolRes   tools.ToolResult
-	systemToolErr   error
-	resolveCalls    []agentruntime.PermissionResolutionInput
-	resolveErr      error
-	cancelInvoked   bool
-	listSessions    []agentsession.Summary
-	listSessionsErr error
-	loadSessions    map[string]agentsession.Session
-	loadSessionErr  error
-	logEntriesBySID map[string][]agentruntime.SessionLogEntry
-	loadLogErr      error
-	saveLogErr      error
+	events             chan agentruntime.RuntimeEvent
+	prepareInputs      []agentruntime.PrepareInput
+	prepareErr         error
+	preparedOutput     agentruntime.UserInput
+	runInputs          []agentruntime.UserInput
+	systemToolCalls    []agentruntime.SystemToolInput
+	systemToolRes      tools.ToolResult
+	systemToolErr      error
+	resolveCalls       []agentruntime.PermissionResolutionInput
+	resolveErr         error
+	cancelInvoked      bool
+	listSessions       []agentsession.Summary
+	listSessionsErr    error
+	loadSessions       map[string]agentsession.Session
+	loadSessionErr     error
+	logEntriesBySID    map[string][]agentruntime.SessionLogEntry
+	loadLogErr         error
+	saveLogErr         error
+	activateSkillCalls []struct {
+		SessionID string
+		SkillID   string
+	}
+	activateSkillErr     error
+	deactivateSkillCalls []struct {
+		SessionID string
+		SkillID   string
+	}
+	deactivateSkillErr    error
+	sessionSkillsResult   []agentruntime.SessionSkillState
+	sessionSkillsErr      error
+	availableSkillsResult []agentruntime.AvailableSkillState
+	availableSkillsErr    error
 }
 
 type snapshotRuntime struct {
@@ -224,15 +237,39 @@ func (s *stubRuntime) LoadSession(ctx context.Context, id string) (agentsession.
 }
 
 func (s *stubRuntime) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
-	return nil
+	s.activateSkillCalls = append(s.activateSkillCalls, struct {
+		SessionID string
+		SkillID   string
+	}{
+		SessionID: sessionID,
+		SkillID:   skillID,
+	})
+	return s.activateSkillErr
 }
 
 func (s *stubRuntime) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
-	return nil
+	s.deactivateSkillCalls = append(s.deactivateSkillCalls, struct {
+		SessionID string
+		SkillID   string
+	}{
+		SessionID: sessionID,
+		SkillID:   skillID,
+	})
+	return s.deactivateSkillErr
 }
 
 func (s *stubRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
-	return nil, nil
+	if s.sessionSkillsErr != nil {
+		return nil, s.sessionSkillsErr
+	}
+	return append([]agentruntime.SessionSkillState(nil), s.sessionSkillsResult...), nil
+}
+
+func (s *stubRuntime) ListAvailableSkills(ctx context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
+	if s.availableSkillsErr != nil {
+		return nil, s.availableSkillsErr
+	}
+	return append([]agentruntime.AvailableSkillState(nil), s.availableSkillsResult...), nil
 }
 
 func (s *stubRuntime) LoadSessionLogEntries(ctx context.Context, sessionID string) ([]agentruntime.SessionLogEntry, error) {
@@ -603,13 +640,13 @@ func TestRefreshSessionPickerSelectsActiveSession(t *testing.T) {
 }
 
 func TestParsePermissionShortcutFromKeyInput(t *testing.T) {
-	if decision, ok := parsePermissionShortcut("y"); !ok || decision != approvalflow.DecisionAllowOnce {
+	if decision, ok := parsePermissionShortcut("y"); !ok || decision != agentruntime.DecisionAllowOnce {
 		t.Fatalf("expected allow_once, got %v (ok=%v)", decision, ok)
 	}
-	if decision, ok := parsePermissionShortcut("a"); !ok || decision != approvalflow.DecisionAllowSession {
+	if decision, ok := parsePermissionShortcut("a"); !ok || decision != agentruntime.DecisionAllowSession {
 		t.Fatalf("expected allow_session, got %v (ok=%v)", decision, ok)
 	}
-	if decision, ok := parsePermissionShortcut("n"); !ok || decision != approvalflow.DecisionReject {
+	if decision, ok := parsePermissionShortcut("n"); !ok || decision != agentruntime.DecisionReject {
 		t.Fatalf("expected reject, got %v (ok=%v)", decision, ok)
 	}
 	if _, ok := parsePermissionShortcut("x"); ok {
@@ -684,7 +721,7 @@ func TestUpdatePermissionResolveFlow(t *testing.T) {
 	if len(runtime.resolveCalls) != 1 || runtime.resolveCalls[0].RequestID != "perm-3" {
 		t.Fatalf("expected ResolvePermission to be called")
 	}
-	if runtime.resolveCalls[0].Decision != approvalflow.DecisionAllowOnce {
+	if runtime.resolveCalls[0].Decision != agentruntime.DecisionAllowOnce {
 		t.Fatalf("unexpected decision forwarded: %s", runtime.resolveCalls[0].Decision)
 	}
 
@@ -707,7 +744,7 @@ func TestUpdatePermissionResolvedError(t *testing.T) {
 
 	model, _ := app.Update(permissionResolutionFinishedMsg{
 		RequestID: "perm-4",
-		Decision:  approvalflow.DecisionAllowOnce,
+		Decision:  string(agentruntime.DecisionAllowOnce),
 		Err:       errors.New("boom"),
 	})
 	app = model.(App)
@@ -722,7 +759,7 @@ func TestUpdatePermissionResolvedError(t *testing.T) {
 
 func TestRunResolvePermissionCommand(t *testing.T) {
 	runtime := newStubRuntime()
-	cmd := runResolvePermission(runtime, "perm-5", approvalflow.DecisionAllowSession)
+	cmd := runResolvePermission(runtime, "perm-5", agentruntime.DecisionAllowSession)
 	if cmd == nil {
 		t.Fatalf("expected command")
 	}
@@ -731,7 +768,7 @@ func TestRunResolvePermissionCommand(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected permissionResolutionFinishedMsg, got %T", msg)
 	}
-	if resolved.RequestID != "perm-5" || resolved.Decision != approvalflow.DecisionAllowSession {
+	if resolved.RequestID != "perm-5" || resolved.Decision != string(agentruntime.DecisionAllowSession) {
 		t.Fatalf("unexpected resolved msg: %#v", resolved)
 	}
 	if len(runtime.resolveCalls) != 1 {
@@ -762,7 +799,7 @@ func TestUpdatePermissionResolutionFinishedMsgIgnoresMismatch(t *testing.T) {
 	}
 	model, cmd := app.Update(permissionResolutionFinishedMsg{
 		RequestID: "perm-8",
-		Decision:  approvalflow.DecisionAllowOnce,
+		Decision:  string(agentruntime.DecisionAllowOnce),
 	})
 	if model == nil {
 		t.Fatalf("expected model")
@@ -801,7 +838,7 @@ func TestUpdatePermissionRejectFlow(t *testing.T) {
 	msg := cmd()
 	next, _ := app.Update(msg)
 	app = next.(App)
-	if len(runtime.resolveCalls) != 1 || runtime.resolveCalls[0].Decision != approvalflow.DecisionReject {
+	if len(runtime.resolveCalls) != 1 || runtime.resolveCalls[0].Decision != agentruntime.DecisionReject {
 		t.Fatalf("expected reject decision to be submitted")
 	}
 	if app.state.StatusText != statusPermissionSubmitted {
@@ -853,6 +890,108 @@ func TestRuntimeEventAgentDoneHandlerAppendsMessage(t *testing.T) {
 	}
 	if len(app.activeMessages) == 0 {
 		t.Fatalf("expected message appended")
+	}
+}
+
+func TestParseFenceOpenLine(t *testing.T) {
+	info, ok := parseFenceOpenLine("```go")
+	if !ok || info != "go" {
+		t.Fatalf("expected fence info, got %q ok=%v", info, ok)
+	}
+	info, ok = parseFenceOpenLine(" not a fence")
+	if ok || info != "" {
+		t.Fatalf("expected no fence")
+	}
+}
+
+func TestIsFenceCloseLine(t *testing.T) {
+	if !isFenceCloseLine("```") {
+		t.Fatalf("expected fence close")
+	}
+	if isFenceCloseLine("```go") {
+		t.Fatalf("expected not fence close")
+	}
+}
+
+func TestIsIndentedCodeLine(t *testing.T) {
+	if !isIndentedCodeLine("\tcode") {
+		t.Fatalf("expected tab-indented code")
+	}
+	if !isIndentedCodeLine("    code") {
+		t.Fatalf("expected space-indented code")
+	}
+	if isIndentedCodeLine("code") {
+		t.Fatalf("expected non-indented line")
+	}
+}
+
+func TestTrimCodeIndent(t *testing.T) {
+	if got := trimCodeIndent("\tcode"); got != "code" {
+		t.Fatalf("expected trimmed tab indent, got %q", got)
+	}
+	if got := trimCodeIndent("    code"); got != "code" {
+		t.Fatalf("expected trimmed space indent, got %q", got)
+	}
+	if got := trimCodeIndent("code"); got != "code" {
+		t.Fatalf("expected unchanged line, got %q", got)
+	}
+}
+
+func TestSplitMarkdownSegmentsFenced(t *testing.T) {
+	content := "hello\n```go\nfmt.Println(\"ok\")\n```\nworld"
+	segments := splitMarkdownSegments(content)
+	if len(segments) < 2 {
+		t.Fatalf("expected multiple segments, got %d", len(segments))
+	}
+	if segments[1].Kind != markdownSegmentCode || segments[1].Code == "" {
+		t.Fatalf("expected code segment")
+	}
+}
+
+func TestSplitMarkdownSegmentsIndented(t *testing.T) {
+	content := "hello\n    code line\nworld"
+	segments := splitMarkdownSegments(content)
+	if len(segments) < 2 {
+		t.Fatalf("expected multiple segments, got %d", len(segments))
+	}
+	foundCode := false
+	for _, seg := range segments {
+		if seg.Kind == markdownSegmentCode && seg.Code != "" {
+			foundCode = true
+		}
+	}
+	if !foundCode {
+		t.Fatalf("expected indented code segment")
+	}
+}
+
+func TestSplitIndentedCodeSegmentsDoesNotGuessByKeywords(t *testing.T) {
+	content := "func main() {\nreturn 1\n}\nplain text"
+	segments := splitIndentedCodeSegments(content)
+	if len(segments) != 1 {
+		t.Fatalf("expected plain text segment only, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected text segment, got kind=%v", segments[0].Kind)
+	}
+}
+
+func TestSplitMarkdownSegmentsMarkdownSyntaxNotMisclassifiedAsCode(t *testing.T) {
+	content := "# Title\n- item one\n- item two\n\n**bold** and `inline`"
+	segments := splitMarkdownSegments(content)
+	if len(segments) != 1 {
+		t.Fatalf("expected markdown to stay as one text segment, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected text segment, got kind=%v", segments[0].Kind)
+	}
+}
+
+func TestExtractFencedCodeBlocks(t *testing.T) {
+	content := "text\n```go\nfmt.Println(\"ok\")\n```\nend"
+	blocks := extractFencedCodeBlocks(content)
+	if len(blocks) != 1 || blocks[0] == "" {
+		t.Fatalf("expected one code block")
 	}
 }
 
@@ -1195,7 +1334,7 @@ func TestRuntimeEventUserMessageHandlerDeduplicatesByRunID(t *testing.T) {
 
 func TestRuntimeEventRunContextHandler(t *testing.T) {
 	app, _ := newTestApp(t)
-	payload := tuiservices.RuntimeRunContextPayload{
+	payload := agentruntime.RuntimeRunContextPayload{
 		Provider: "p1",
 		Model:    "m1",
 		Workdir:  "/tmp",
@@ -1504,7 +1643,7 @@ func TestHandleImmediateSlashCommandSessionWhileBusy(t *testing.T) {
 
 func TestRuntimeEventToolStatusHandler(t *testing.T) {
 	app, _ := newTestApp(t)
-	payload := tuiservices.RuntimeToolStatusPayload{ToolCallID: "tool-1", ToolName: "bash", Status: string(tuistate.ToolLifecyclePlanned)}
+	payload := agentruntime.RuntimeToolStatusPayload{ToolCallID: "tool-1", ToolName: "bash", Status: string(tuistate.ToolLifecyclePlanned)}
 	handled := runtimeEventToolStatusHandler(&app, agentruntime.RuntimeEvent{Payload: payload})
 	if handled {
 		t.Fatalf("expected false")
@@ -1521,7 +1660,7 @@ func TestRuntimeEventToolStatusHandler(t *testing.T) {
 
 func TestRuntimeEventUsageHandler(t *testing.T) {
 	app, _ := newTestApp(t)
-	payload := tuiservices.RuntimeUsagePayload{Run: tuiservices.RuntimeUsageSnapshot{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}}
+	payload := agentruntime.RuntimeUsagePayload{Run: agentruntime.RuntimeUsageSnapshot{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}}
 	handled := runtimeEventUsageHandler(&app, agentruntime.RuntimeEvent{Payload: payload})
 	if handled {
 		t.Fatalf("expected false")
@@ -1976,6 +2115,112 @@ func TestHandleRememberAndForgetValidation(t *testing.T) {
 	}
 }
 
+func TestHandleSkillsSlashCommands(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-skills"
+	runtime.availableSkillsResult = []agentruntime.AvailableSkillState{
+		{
+			Descriptor: skills.Descriptor{
+				ID:          "go-review",
+				Description: "review go code",
+				Source:      skills.Source{Kind: skills.SourceKindLocal},
+				Scope:       skills.ScopeSession,
+				Version:     "v1",
+			},
+			Active: true,
+		},
+	}
+
+	handled, cmd := app.handleImmediateSlashCommand("/skills")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /skills command to return async cmd")
+	}
+	model, _ := app.Update(cmd())
+	app = model.(App)
+	if !strings.Contains(app.state.StatusText, "Available skills:") {
+		t.Fatalf("expected available skill notice, got %q", app.state.StatusText)
+	}
+	if len(app.activeMessages) == 0 || !strings.Contains(messageText(app.activeMessages[len(app.activeMessages)-1]), "go-review") {
+		t.Fatalf("expected transcript to include listed skill")
+	}
+}
+
+func TestHandleSkillUseOffAndActiveCommands(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-skills"
+	runtime.sessionSkillsResult = []agentruntime.SessionSkillState{
+		{SkillID: "go-review", Descriptor: &skills.Descriptor{ID: "go-review", Description: "review"}},
+	}
+
+	handled, cmd := app.handleImmediateSlashCommand("/skill use go-review")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /skill use to produce command")
+	}
+	model, _ := app.Update(cmd())
+	app = model.(App)
+	if len(runtime.activateSkillCalls) != 1 || runtime.activateSkillCalls[0].SkillID != "go-review" {
+		t.Fatalf("unexpected activate calls: %+v", runtime.activateSkillCalls)
+	}
+	if !strings.Contains(app.state.StatusText, "Skill activated") {
+		t.Fatalf("expected activate notice, got %q", app.state.StatusText)
+	}
+
+	handled, cmd = app.handleImmediateSlashCommand("/skill off go-review")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /skill off to produce command")
+	}
+	model, _ = app.Update(cmd())
+	app = model.(App)
+	if len(runtime.deactivateSkillCalls) != 1 || runtime.deactivateSkillCalls[0].SkillID != "go-review" {
+		t.Fatalf("unexpected deactivate calls: %+v", runtime.deactivateSkillCalls)
+	}
+	if !strings.Contains(app.state.StatusText, "Skill deactivated") {
+		t.Fatalf("expected deactivate notice, got %q", app.state.StatusText)
+	}
+
+	handled, cmd = app.handleImmediateSlashCommand("/skill active")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /skill active to produce command")
+	}
+	model, _ = app.Update(cmd())
+	app = model.(App)
+	if !strings.Contains(app.state.StatusText, "Active skills:") {
+		t.Fatalf("expected active skill listing, got %q", app.state.StatusText)
+	}
+}
+
+func TestHandleSkillCommandValidationAndGatewayErrors(t *testing.T) {
+	app, runtime := newTestApp(t)
+
+	handled, cmd := app.handleImmediateSlashCommand("/skill use go-review")
+	if !handled || cmd != nil {
+		t.Fatalf("expected missing session branch handled without cmd")
+	}
+	if !strings.Contains(app.state.StatusText, "requires an active session") {
+		t.Fatalf("expected missing session hint, got %q", app.state.StatusText)
+	}
+
+	app.state.ActiveSessionID = "session-skills"
+	handled, cmd = app.handleImmediateSlashCommand("/skills now")
+	if !handled || cmd != nil {
+		t.Fatalf("expected /skills with args to reject usage")
+	}
+	if !strings.Contains(app.state.StatusText, "usage: /skills") {
+		t.Fatalf("expected /skills usage error, got %q", app.state.StatusText)
+	}
+
+	runtime.activateSkillErr = agentruntime.ErrUnsupportedActionInGatewayMode
+	handled, cmd = app.handleImmediateSlashCommand("/skill use go-review")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /skill use to produce cmd on gateway error")
+	}
+	model, _ := app.Update(cmd())
+	app = model.(App)
+	if !strings.Contains(strings.ToLower(app.state.StatusText), "gateway") {
+		t.Fatalf("expected gateway unsupported hint, got %q", app.state.StatusText)
+	}
+}
+
 func TestUpdateCompactFinishedAndRefreshMessagesError(t *testing.T) {
 	app, runtime := newTestApp(t)
 	app.state.ActiveSessionID = "session-error"
@@ -2361,7 +2606,11 @@ func TestListenForRuntimeEvent(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected RuntimeMsg, got %T", msg)
 	}
-	if runtimeMsg.Event.RunID != "run-listen" {
+	forwarded, ok := runtimeMsg.Event.(agentruntime.RuntimeEvent)
+	if !ok {
+		t.Fatalf("expected runtime event payload, got %T", runtimeMsg.Event)
+	}
+	if forwarded.RunID != "run-listen" {
 		t.Fatalf("expected forwarded runtime event")
 	}
 
@@ -2370,6 +2619,18 @@ func TestListenForRuntimeEvent(t *testing.T) {
 	msg = cmd()
 	if _, ok := msg.(RuntimeClosedMsg); !ok {
 		t.Fatalf("expected RuntimeClosedMsg after channel close, got %T", msg)
+	}
+}
+
+func TestUpdateRuntimeMsgWithInvalidEventTypeSchedulesNextListen(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	updated, cmd := app.Update(RuntimeMsg{Event: "not-runtime-event"})
+	if updated == nil {
+		t.Fatalf("expected updated model")
+	}
+	if cmd == nil {
+		t.Fatalf("expected follow-up listen command")
 	}
 }
 
@@ -3503,24 +3764,6 @@ func TestRebuildTranscriptCollapsesConsecutiveAssistantTags(t *testing.T) {
 	}
 }
 
-func TestRebuildTranscriptDoesNotCollapseAssistantAcrossToolBoundary(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.width = 120
-	app.height = 32
-	app.applyComponentLayout(true)
-	app.activeMessages = []providertypes.Message{
-		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before tool")}},
-		{Role: roleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool output")}},
-		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after tool")}},
-	}
-
-	app.rebuildTranscript()
-	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
-	if count := strings.Count(plain, messageTagAgent); count != 2 {
-		t.Fatalf("expected two agent tags across tool boundary, got %d in %q", count, plain)
-	}
-}
-
 func TestTranscriptManualScrollPersistsWhileBusy(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 120
@@ -3994,13 +4237,108 @@ func TestHandleTranscriptMouseWheelAndClickFallback(t *testing.T) {
 		t.Fatalf("expected transcript wheel down to be handled")
 	}
 
-	if app.handleTranscriptMouse(tea.MouseMsg{
+	if !app.handleTranscriptMouse(tea.MouseMsg{
 		X:      x + 1,
 		Y:      y + 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionPress,
 	}) {
-		t.Fatalf("expected plain left click without copy button hit to return false")
+		t.Fatalf("expected left click in transcript to begin selection")
+	}
+	if !app.textSelection.dragging {
+		t.Fatalf("expected left click to enter selection dragging mode")
+	}
+}
+
+func TestMouseSelectionUsesYOffsetAndCopiesExactRange(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	lines := make([]string, 0, 40)
+	for i := 0; i < 40; i++ {
+		lines = append(lines, fmt.Sprintf("row-%02d-abcdef", i))
+	}
+	app.setTranscriptContent(strings.Join(lines, "\n"))
+	app.transcript.SetYOffset(10)
+
+	x, y, _, _ := app.transcriptBounds()
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 5,
+		Y:      y + 2,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected left press to begin selection")
+	}
+	if got := app.textSelection.startLine; got != 12 {
+		t.Fatalf("expected selection start line to include y-offset, got %d", got)
+	}
+
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 9,
+		Y:      y + 3,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionMotion,
+		Type:   tea.MouseMotion,
+	}) {
+		t.Fatalf("expected mouse drag motion to update selection")
+	}
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 9,
+		Y:      y + 3,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionRelease,
+		Type:   tea.MouseRelease,
+	}) {
+		t.Fatalf("expected release to finish selection")
+	}
+
+	originalClipboard := clipboardWriteAll
+	var copied string
+	clipboardWriteAll = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() { clipboardWriteAll = originalClipboard }()
+
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 9,
+		Y:      y + 3,
+		Button: tea.MouseButtonRight,
+		Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected right click to copy selected text")
+	}
+
+	want := "2-abcdef\nrow-13-ab"
+	if copied != want {
+		t.Fatalf("expected copied selection %q, got %q", want, copied)
+	}
+	if app.textSelection.active {
+		t.Fatalf("expected selection to be cleared after copy")
+	}
+}
+
+func TestHighlightTranscriptContentUsesColumnRange(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.textSelection.active = true
+	app.textSelection.startLine = 0
+	app.textSelection.startCol = 6
+	app.textSelection.endLine = 0
+	app.textSelection.endCol = 11
+	app.setTranscriptContent("\x1b[31mhello world\x1b[0m")
+
+	highlighted := app.highlightTranscriptContent(app.transcriptContent)
+	plain := copyCodeANSIPattern.ReplaceAllString(highlighted, "")
+	if plain != "hello world" {
+		t.Fatalf("expected highlighted output to preserve visible text, got %q", plain)
+	}
+	if app.transcriptContent != "\x1b[31mhello world\x1b[0m" {
+		t.Fatalf("expected transcriptContent to keep raw normalized content")
 	}
 }
 
@@ -4042,4 +4380,84 @@ func TestRebuildActivityWithHeightAndPersistPathGuard(t *testing.T) {
 
 	app.state.ActiveSessionID = "___"
 	app.persistLogEntriesForActiveSession()
+}
+
+func updateWithSkillCommandResult(t *testing.T, app App, result skillCommandResultMsg) App {
+	t.Helper()
+
+	model, _ := app.Update(result)
+	return model.(App)
+}
+
+func assertIgnoredStaleSkillResultActivity(t *testing.T, app App, beforeActivities int, wantError bool) tuistate.ActivityEntry {
+	t.Helper()
+
+	if len(app.activities) != beforeActivities+1 {
+		t.Fatalf("expected stale skill result to be logged, got %d activities", len(app.activities))
+	}
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Ignored stale skill command result" {
+		t.Fatalf("expected stale result activity title, got %q", last.Title)
+	}
+	if last.IsError != wantError {
+		t.Fatalf("expected stale result error flag=%v, got %v", wantError, last.IsError)
+	}
+	return last
+}
+
+func TestUpdateIgnoresStaleSkillCommandResultBySession(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-current"
+	app.state.StatusText = "before"
+	beforeActivities := len(app.activities)
+
+	app = updateWithSkillCommandResult(t, app, skillCommandResultMsg{
+		Notice:           "should be ignored",
+		RequestSessionID: "session-old",
+	})
+
+	if app.state.StatusText != "before" {
+		t.Fatalf("expected stale skill result to be ignored, got status %q", app.state.StatusText)
+	}
+	assertIgnoredStaleSkillResultActivity(t, app, beforeActivities, false)
+}
+
+func TestUpdateAcceptsSkillCommandResultForCurrentSession(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-current"
+
+	app = updateWithSkillCommandResult(t, app, skillCommandResultMsg{
+		Notice:           "Skill command completed.",
+		RequestSessionID: "session-current",
+	})
+
+	if app.state.StatusText != "Skill command completed." {
+		t.Fatalf("expected status to be updated, got %q", app.state.StatusText)
+	}
+}
+
+func TestUpdateLogsStaleSkillCommandErrorBySession(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-current"
+	app.state.StatusText = "before"
+	beforeActivities := len(app.activities)
+
+	app = updateWithSkillCommandResult(t, app, skillCommandResultMsg{
+		Err:              errors.New("activate failed"),
+		RequestSessionID: "session-old",
+	})
+
+	if app.state.StatusText != "before" {
+		t.Fatalf("expected stale skill error to keep current status, got %q", app.state.StatusText)
+	}
+	last := assertIgnoredStaleSkillResultActivity(t, app, beforeActivities, true)
+	if !strings.Contains(last.Detail, "activate failed") {
+		t.Fatalf("expected stale error detail to include original error, got %q", last.Detail)
+	}
 }

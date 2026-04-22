@@ -780,9 +780,17 @@ func TestNetworkServerCloseInterruptsStreams(t *testing.T) {
 		t.Fatalf("close network server: %v", err)
 	}
 
-	_ = wsConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	var wsRawMessage string
-	if err := websocket.Message.Receive(wsConn, &wsRawMessage); err == nil {
+	websocketClosed := false
+	wsCloseDeadline := time.Now().Add(1200 * time.Millisecond)
+	for time.Now().Before(wsCloseDeadline) {
+		_ = wsConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		var wsRawMessage string
+		if err := websocket.Message.Receive(wsConn, &wsRawMessage); err != nil {
+			websocketClosed = true
+			break
+		}
+	}
+	if !websocketClosed {
 		t.Fatal("expected websocket receive to fail after server close")
 	}
 

@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -12,10 +11,12 @@ import (
 	agentcontext "neo-code/internal/context"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
+	todotool "neo-code/internal/tools/todo"
 )
 
-func TestProgressStreakStopsRun(t *testing.T) {
+func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
 	cfg := config.Config{
@@ -35,13 +36,20 @@ func TestProgressStreakStopsRun(t *testing.T) {
 	}
 
 	var promptInjected bool
+	var providerCalls int32
 	var signatureSeq int32
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				call := atomic.AddInt32(&providerCalls, 1)
 				seq := atomic.AddInt32(&signatureSeq, 1)
 				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
 					promptInjected = true
+				}
+				if call >= 5 {
+					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+					return nil
 				}
 				// the model always decides to call the tool
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
@@ -71,22 +79,18 @@ func TestProgressStreakStopsRun(t *testing.T) {
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger error loop")},
 	}
 
-	err := service.Run(context.Background(), input)
-	if err == nil {
-		t.Fatal("expected error from streak limit, got nil")
-	}
-
-	if !errors.Is(err, ErrNoProgressStreakLimit) {
-		t.Fatalf("expected ErrNoProgressStreakLimit, got %v", err)
+	if err := service.Run(context.Background(), input); err != nil {
+		t.Fatalf("expected run success without no-progress hard stop, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
-
-	// Verify StopReason is error and specifies the streak limit
-	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrNoProgressStreakLimit.Error())
+	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
 
 	if !promptInjected {
-		t.Error("expected self-healing prompt to be injected before streak limit is reached, but it wasn't")
+		t.Error("expected self-healing prompt to be injected before repetitive no-progress turns")
+	}
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
 	}
 }
 
@@ -162,10 +166,10 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonSuccess, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
 }
 
-func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
+func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
 	cfg := config.Config{
@@ -194,9 +198,14 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				atomic.AddInt32(&providerCalls, 1)
+				call := atomic.AddInt32(&providerCalls, 1)
 				if strings.Contains(req.SystemPrompt, selfHealingRepeatReminder) {
 					promptInjected = true
+				}
+				if call >= 5 {
+					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+					return nil
 				}
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_repeat", "tool_repeat")
 				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_repeat", `{"path":"x"}`)
@@ -219,29 +228,25 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 		RunID: "run-repeat-streak",
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat loop")},
 	})
-	if err == nil {
-		t.Fatal("expected repeat cycle limit error, got nil")
-	}
-	if !errors.Is(err, ErrRepeatCycleLimit) {
-		t.Fatalf("expected ErrRepeatCycleLimit, got %v", err)
+	if err != nil {
+		t.Fatalf("expected run success without repeat hard stop, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
-
-	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrRepeatCycleLimit.Error())
+	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
 
 	if !promptInjected {
 		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
 	}
-	if executeCalls != 3 {
-		t.Fatalf("expected break on the 3rd identical tool execution, got %d", executeCalls)
+	if executeCalls != 4 {
+		t.Fatalf("expected repeated tool executions to continue until model stops, got %d", executeCalls)
 	}
-	if providerCalls != 3 {
-		t.Fatalf("expected 3 provider turns before repeat breaker, got %d", providerCalls)
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
 	}
 }
 
-func TestRepeatCycleStreakCountsFailedToolCalls(t *testing.T) {
+func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
 	cfg := config.Config{
@@ -269,7 +274,12 @@ func TestRepeatCycleStreakCountsFailedToolCalls(t *testing.T) {
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				atomic.AddInt32(&providerCalls, 1)
+				call := atomic.AddInt32(&providerCalls, 1)
+				if call >= 5 {
+					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+					return nil
+				}
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_repeat_fail", "tool_repeat_fail")
 				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_repeat_fail", `{"path":"x"}`)
 				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
@@ -291,14 +301,14 @@ func TestRepeatCycleStreakCountsFailedToolCalls(t *testing.T) {
 		RunID: "run-repeat-fail-streak",
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat fail loop")},
 	})
-	if !errors.Is(err, ErrRepeatCycleLimit) {
-		t.Fatalf("expected ErrRepeatCycleLimit, got %v", err)
+	if err != nil {
+		t.Fatalf("expected run success without repeat hard stop, got %v", err)
 	}
-	if executeCalls != 3 {
-		t.Fatalf("expected failed repeated calls to break on the 3rd execution, got %d", executeCalls)
+	if executeCalls != 4 {
+		t.Fatalf("expected failed repeated calls to continue until model stops, got %d", executeCalls)
 	}
-	if providerCalls != 3 {
-		t.Fatalf("expected 3 provider turns before repeat breaker, got %d", providerCalls)
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
 	}
 }
 
@@ -348,6 +358,8 @@ func TestPrepareTurnSnapshotInjectRepeatReminderWithEmptyPrompt(t *testing.T) {
 	}
 	state := newRunState("run-repeat-reminder-empty", newRuntimeSession("session-repeat-reminder-empty"))
 	state.progress.LastScore.RepeatCycleStreak = 2
+	state.progress.LastScore.StalledProgressState = controlplane.StalledProgressStalled
+	state.progress.LastScore.ReminderKind = controlplane.ReminderKindRepeatCycle
 
 	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
 	if err != nil {
@@ -383,6 +395,8 @@ func TestPrepareTurnSnapshotRepeatReminderTakesPriority(t *testing.T) {
 	state := newRunState("run-reminder-priority", newRuntimeSession("session-reminder-priority"))
 	state.progress.LastScore.NoProgressStreak = 2
 	state.progress.LastScore.RepeatCycleStreak = 2
+	state.progress.LastScore.StalledProgressState = controlplane.StalledProgressStalled
+	state.progress.LastScore.ReminderKind = controlplane.ReminderKindRepeatCycle
 
 	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
 	if err != nil {
@@ -413,6 +427,140 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: 6}); got != 6 {
 		t.Fatalf("expected explicit repeat limit 6, got %d", got)
 	}
+}
+
+func TestComputeTodoStateSignature(t *testing.T) {
+	t.Parallel()
+
+	if got := computeTodoStateSignature(nil); got != "" {
+		t.Fatalf("computeTodoStateSignature(nil) = %q", got)
+	}
+
+	base := []agentsession.TodoItem{
+		{
+			ID:       "t1",
+			Content:  "task",
+			Status:   agentsession.TodoStatusPending,
+			Executor: agentsession.TodoExecutorAgent,
+		},
+	}
+	sig1 := computeTodoStateSignature(base)
+	if strings.TrimSpace(sig1) == "" {
+		t.Fatal("expected non-empty signature")
+	}
+
+	same := []agentsession.TodoItem{
+		{
+			ID:       "t1",
+			Content:  "task",
+			Status:   agentsession.TodoStatusPending,
+			Executor: agentsession.TodoExecutorAgent,
+		},
+	}
+	sig2 := computeTodoStateSignature(same)
+	if sig1 != sig2 {
+		t.Fatalf("expected stable signature, got %q vs %q", sig1, sig2)
+	}
+
+	changed := []agentsession.TodoItem{
+		{
+			ID:       "t1",
+			Content:  "task",
+			Status:   agentsession.TodoStatusCompleted,
+			Executor: agentsession.TodoExecutorAgent,
+		},
+	}
+	sig3 := computeTodoStateSignature(changed)
+	if sig3 == sig1 {
+		t.Fatalf("expected changed signature when todo state changes")
+	}
+}
+
+func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.MaxNoProgressStreak = 1
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-no-tool-reminder")
+	session.Todos = []agentsession.TodoItem{
+		{
+			ID:       "todo-1",
+			Content:  "close me",
+			Status:   agentsession.TodoStatusPending,
+			Executor: agentsession.TodoExecutorAgent,
+			Revision: 1,
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(todotool.New())
+
+	providerImpl := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+				},
+				FinishReason: "stop",
+			},
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{
+							ID:        "todo-close",
+							Name:      tools.ToolNameTodoWrite,
+							Arguments: `{"action":"set_status","id":"todo-1","status":"canceled","expected_revision":1}`,
+						},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(
+		manager,
+		registry,
+		store,
+		&scriptedProviderFactory{provider: providerImpl},
+		&stubContextBuilder{},
+	)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID:     "run-no-tool-reminder",
+		SessionID: session.ID,
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(providerImpl.requests) < 2 {
+		t.Fatalf("expected at least 2 provider requests, got %d", len(providerImpl.requests))
+	}
+	if !strings.Contains(providerImpl.requests[1].SystemPrompt, selfHealingReminder) {
+		t.Fatalf("expected stalled reminder in second provider request, got %q", providerImpl.requests[1].SystemPrompt)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventProgressEvaluated)
+	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
 }
 
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {

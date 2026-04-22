@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"log"
 	"path/filepath"
 	"strings"
@@ -27,6 +26,7 @@ import (
 	"neo-code/internal/tools/filesystem"
 	"neo-code/internal/tools/mcp"
 	memotool "neo-code/internal/tools/memo"
+	"neo-code/internal/tools/spawnsubagent"
 	"neo-code/internal/tools/todo"
 	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
@@ -34,13 +34,6 @@ import (
 )
 
 const utf8CodePage = 65001
-
-const (
-	// RuntimeModeLocal 表示继续使用进程内 runtime 直连模式。
-	RuntimeModeLocal = "local"
-	// RuntimeModeGateway 表示通过 Gateway JSON-RPC 转发 runtime 调用。
-	RuntimeModeGateway = "gateway"
-)
 
 var (
 	setConsoleOutputCodePage = platformSetConsoleOutputCodePage
@@ -59,8 +52,7 @@ var (
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
 type BootstrapOptions struct {
-	Workdir     string
-	RuntimeMode string
+	Workdir string
 }
 
 type memoExtractorScheduler interface {
@@ -68,8 +60,14 @@ type memoExtractorScheduler interface {
 }
 
 type runtimeWithClose interface {
-	agentruntime.Runtime
+	services.Runtime
 	Close() error
+}
+
+type bootstrapSharedBundle struct {
+	Config            config.Config
+	ConfigManager     *config.Manager
+	ProviderSelection *configstate.Service
 }
 
 func newMemoExtractorAdapter(
@@ -128,35 +126,13 @@ func EnsureConsoleUTF8() {
 	_ = setConsoleInputCodePage(utf8CodePage)
 }
 
-// BuildRuntime 构建 CLI 与 TUI 共用的运行时依赖。
-func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
-	runtimeMode, err := resolveBootstrapRuntimeMode(opts.RuntimeMode)
+// BuildGatewayServerDeps 构建 Gateway 服务端运行时依赖，包含 runtime/tool/session 全栈能力。
+func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
+	sharedDeps, providerRegistry, modelCatalogs, err := BuildSharedConfigDeps(ctx, opts)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
-
-	defaultCfg, err := bootstrapDefaultConfig(opts)
-	if err != nil {
-		return RuntimeBundle{}, err
-	}
-
-	loader := config.NewLoader("", defaultCfg)
-	manager := config.NewManager(loader)
-	if _, err := manager.Load(ctx); err != nil {
-		return RuntimeBundle{}, err
-	}
-
-	providerRegistry, err := builtin.NewRegistry()
-	if err != nil {
-		return RuntimeBundle{}, err
-	}
-	modelCatalogs := providercatalog.NewService(manager.BaseDir(), providerRegistry, nil)
-	providerSelection := configstate.NewService(manager, providerRegistry, modelCatalogs)
-	if _, err := providerSelection.EnsureSelection(ctx); err != nil {
-		return RuntimeBundle{}, err
-	}
-
-	cfg := manager.Get()
+	cfg := sharedDeps.Config
 
 	toolRegistry, toolsCleanup, err := buildToolRegistry(cfg)
 	if err != nil {
@@ -183,7 +159,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 	// Session Store 绑定到启动时的 workdir 哈希分桶，整个应用生命周期内不可变。
 	// 这意味着所有会话都归属到启动时指定的项目目录下，运行时不会因配置变更而迁移存储位置。
-	sessionStore = agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
+	sessionStore = agentsession.NewStore(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
 
 	// 启动时自动清理过期会话，避免数据库无限膨胀。
 	if _, err := cleanupExpiredSessions(ctx, sessionStore, agentsession.DefaultSessionMaxAge); err != nil {
@@ -196,7 +172,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	var contextBuilder agentcontext.Builder = agentcontext.NewBuilderWithToolPoliciesAndSummarizers(toolRegistry, toolRegistry)
 	var memoSvc *memo.Service
 	if cfg.Memo.Enabled {
-		memoStore := memo.NewFileStore(loader.BaseDir(), cfg.Workdir)
+		memoStore := memo.NewFileStore(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
 		memoSource := memo.NewContextSource(memoStore)
 		var sourceInvl func()
 		if invalidator, ok := memoSource.(interface{ InvalidateCache() }); ok {
@@ -211,7 +187,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	}
 
 	runtimeSvc := agentruntime.NewWithFactory(
-		manager,
+		sharedDeps.ConfigManager,
 		toolManager,
 		sessionStore,
 		providerRegistry,
@@ -219,7 +195,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	)
 	runtimeSvc.SetSessionAssetStore(sessionStore)
 	runtimeSvc.SetUserInputPreparer(agentruntime.NewSessionInputPreparer(sessionStore, sessionStore))
-	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, loader.BaseDir()))
+	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, sharedDeps.ConfigManager.BaseDir()))
 	runtimeSvc.SetAutoCompactThresholdResolver(runtimeAutoCompactThresholdResolverFunc(
 		func(ctx context.Context, cfg config.Config) (int, error) {
 			resolution, err := configstate.ResolveAutoCompactThreshold(ctx, cfg, modelCatalogs)
@@ -234,21 +210,13 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	if memoSvc != nil && cfg.Memo.AutoExtract {
 		runtimeSvc.SetMemoExtractor(newMemoExtractorAdapter(
 			providerRegistry,
-			manager,
+			sharedDeps.ConfigManager,
 			memo.NewAutoExtractor(nil, memoSvc, time.Duration(cfg.Memo.ExtractTimeoutSec)*time.Second),
 		))
 	}
 
 	runtimeImpl := agentruntime.Runtime(runtimeSvc)
 	closeFns := []func() error{toolsCleanup, sessionStore.Close}
-	if runtimeMode == RuntimeModeGateway {
-		remoteRuntime, remoteErr := newRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{})
-		if remoteErr != nil {
-			return RuntimeBundle{}, remoteErr
-		}
-		runtimeImpl = remoteRuntime
-		closeFns = append([]func() error{remoteRuntime.Close}, closeFns...)
-	}
 
 	needCleanup = false
 
@@ -256,25 +224,39 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 	return RuntimeBundle{
 		Config:            cfg,
-		ConfigManager:     manager,
+		ConfigManager:     sharedDeps.ConfigManager,
 		Runtime:           runtimeImpl,
-		ProviderSelection: providerSelection,
+		ProviderSelection: sharedDeps.ProviderSelection,
 		MemoService:       memoSvc,
 		Close:             closeBundle,
 	}, nil
 }
 
+// BuildRuntime 兼容旧入口，内部转发到 BuildGatewayServerDeps。
+func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
+	return BuildGatewayServerDeps(ctx, opts)
+}
+
 // NewProgram 基于共享运行时依赖构建并返回 TUI 程序，同时返回退出时应调用的资源清理函数。
 func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func() error, error) {
-	bundle, err := BuildRuntime(ctx, opts)
+	bundle, err := BuildTUIClientDeps(ctx, opts)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	tuiApp, err := newTUIWithMemo(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection, bundle.MemoService)
+	tuiRuntime, err := newRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{})
 	if err != nil {
 		if bundle.Close != nil {
 			_ = bundle.Close()
+		}
+		return nil, nil, err
+	}
+	cleanup := combineRuntimeClosers(tuiRuntime.Close, bundle.Close)
+
+	tuiApp, err := newTUIWithMemo(&bundle.Config, bundle.ConfigManager, tuiRuntime, bundle.ProviderSelection, bundle.MemoService)
+	if err != nil {
+		if cleanup != nil {
+			_ = cleanup()
 		}
 		return nil, nil, err
 	}
@@ -282,7 +264,55 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 		tuiApp,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
-	), bundle.Close, nil
+	), cleanup, nil
+}
+
+// BuildSharedConfigDeps 统一构建共享配置依赖：配置、Provider 注册与当前选择服务。
+func BuildSharedConfigDeps(
+	ctx context.Context,
+	opts BootstrapOptions,
+) (bootstrapSharedBundle, agentruntime.ProviderFactory, *providercatalog.Service, error) {
+	defaultCfg, err := bootstrapDefaultConfig(opts)
+	if err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+
+	loader := config.NewLoader("", defaultCfg)
+	manager := config.NewManager(loader)
+	if _, err := manager.Load(ctx); err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+
+	providerRegistry, err := builtin.NewRegistry()
+	if err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+	modelCatalogs := providercatalog.NewService(manager.BaseDir(), providerRegistry, nil)
+	providerSelection := configstate.NewService(manager, providerRegistry, modelCatalogs)
+	if _, err := providerSelection.EnsureSelection(ctx); err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+
+	return bootstrapSharedBundle{
+		Config:            manager.Get(),
+		ConfigManager:     manager,
+		ProviderSelection: providerSelection,
+	}, providerRegistry, modelCatalogs, nil
+}
+
+// BuildTUIClientDeps 构建 TUI 客户端依赖，仅保留配置与 Provider 选择，不创建本地 runtime/tool 栈。
+func BuildTUIClientDeps(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
+	sharedDeps, _, _, err := BuildSharedConfigDeps(ctx, opts)
+	if err != nil {
+		return RuntimeBundle{}, err
+	}
+	return RuntimeBundle{
+		Config:            sharedDeps.Config,
+		ConfigManager:     sharedDeps.ConfigManager,
+		ProviderSelection: sharedDeps.ProviderSelection,
+		MemoService:       nil,
+		Close:             nil,
+	}, nil
 }
 
 // bootstrapDefaultConfig 负责计算本次启动应使用的默认配置快照。
@@ -306,20 +336,6 @@ func resolveBootstrapWorkdir(workdir string) (string, error) {
 	return agentsession.ResolveExistingDir(workdir)
 }
 
-// resolveBootstrapRuntimeMode 归一化并校验 runtime 运行模式。
-func resolveBootstrapRuntimeMode(mode string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(mode))
-	if normalized == "" {
-		return RuntimeModeLocal, nil
-	}
-	switch normalized {
-	case RuntimeModeLocal, RuntimeModeGateway:
-		return normalized, nil
-	default:
-		return "", errors.New("bootstrap: runtime mode must be local or gateway")
-	}
-}
-
 func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error) {
 	toolRegistry := tools.NewRegistry()
 	toolRegistry.Register(filesystem.New(cfg.Workdir))
@@ -334,6 +350,7 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 		SupportedContentTypes: cfg.Tools.WebFetch.SupportedContentTypes,
 	}))
 	toolRegistry.Register(todo.New())
+	toolRegistry.Register(spawnsubagent.New())
 	mcpRegistry, err := buildMCPRegistry(cfg)
 	if err != nil {
 		return nil, nil, err

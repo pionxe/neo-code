@@ -1,10 +1,12 @@
 package todo
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	agentsession "neo-code/internal/session"
@@ -48,6 +50,7 @@ type writeInput struct {
 	Patch            *todoPatchInput         `json:"patch,omitempty"`
 	Status           agentsession.TodoStatus `json:"status,omitempty"`
 	ExpectedRevision int64                   `json:"expected_revision,omitempty"`
+	Executor         string                  `json:"executor,omitempty"`
 	OwnerType        string                  `json:"owner_type,omitempty"`
 	OwnerID          string                  `json:"owner_id,omitempty"`
 	Artifacts        []string                `json:"artifacts,omitempty"`
@@ -64,6 +67,7 @@ type todoPatchInput struct {
 	Status        *agentsession.TodoStatus `json:"status,omitempty"`
 	Dependencies  *[]string                `json:"dependencies,omitempty"`
 	Priority      *int                     `json:"priority,omitempty"`
+	Executor      *string                  `json:"executor,omitempty"`
 	OwnerType     *string                  `json:"owner_type,omitempty"`
 	OwnerID       *string                  `json:"owner_id,omitempty"`
 	Acceptance    *[]string                `json:"acceptance,omitempty"`
@@ -80,6 +84,7 @@ func (p *todoPatchInput) toSessionPatch() agentsession.TodoPatch {
 		Status:        p.Status,
 		Dependencies:  p.Dependencies,
 		Priority:      p.Priority,
+		Executor:      p.Executor,
 		OwnerType:     p.OwnerType,
 		OwnerID:       p.OwnerID,
 		Acceptance:    p.Acceptance,
@@ -96,6 +101,7 @@ type todoWireItem struct {
 	Status        agentsession.TodoStatus `json:"status,omitempty"`
 	Dependencies  []string                `json:"dependencies,omitempty"`
 	Priority      int                     `json:"priority,omitempty"`
+	Executor      string                  `json:"executor,omitempty"`
 	OwnerType     string                  `json:"owner_type,omitempty"`
 	OwnerID       string                  `json:"owner_id,omitempty"`
 	Acceptance    []string                `json:"acceptance,omitempty"`
@@ -113,22 +119,200 @@ func parseInput(raw []byte) (writeInput, error) {
 		)
 	}
 
+	normalizedRaw, err := normalizeWriteInputArguments(raw)
+	if err != nil {
+		return writeInput{}, err
+	}
+
 	var input writeInput
-	if err := json.Unmarshal(raw, &input); err != nil {
+	if err := json.Unmarshal(normalizedRaw, &input); err != nil {
 		return writeInput{}, fmt.Errorf("todo_write: parse arguments: %w", err)
 	}
-	if err := applyLegacyTitleCompat(raw, &input); err != nil {
+	if err := applyLegacyTitleCompat(normalizedRaw, &input); err != nil {
 		return writeInput{}, err
 	}
 	input.Action = strings.ToLower(strings.TrimSpace(input.Action))
 	input.ID = strings.TrimSpace(input.ID)
+	input.Executor = strings.TrimSpace(input.Executor)
 	input.OwnerType = strings.TrimSpace(input.OwnerType)
 	input.OwnerID = strings.TrimSpace(input.OwnerID)
 	input.Reason = strings.TrimSpace(input.Reason)
+	input.Status = normalizeTodoStatus(input.Status)
+	normalizeInputStatuses(&input)
 	if err := validateInputLimits(input); err != nil {
 		return writeInput{}, err
 	}
 	return input, nil
+}
+
+// normalizeWriteInputArguments 预处理 todo_write 原始 JSON，兼容数字 id 与字符串数组中的标量类型。
+func normalizeWriteInputArguments(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+
+	var payload map[string]any
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, fmt.Errorf("todo_write: parse arguments: %w", err)
+	}
+	normalizeWriteInputObject(payload)
+	normalizedRaw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("todo_write: normalize arguments: %w", err)
+	}
+	return normalizedRaw, nil
+}
+
+// normalizeWriteInputObject 递归规范化顶层 todo_write 参数对象，降低模型输出变体导致的解析失败。
+func normalizeWriteInputObject(payload map[string]any) {
+	normalizeStringField(payload, "action")
+	normalizeStringField(payload, "id")
+	normalizeStringField(payload, "executor")
+	normalizeStringField(payload, "owner_type")
+	normalizeStringField(payload, "owner_id")
+	normalizeStringField(payload, "reason")
+	normalizeStringField(payload, "status")
+	normalizeStringArrayField(payload, "artifacts")
+
+	if patch, ok := payload["patch"].(map[string]any); ok {
+		normalizeTodoPatchObject(patch)
+	}
+	if item, ok := payload["item"].(map[string]any); ok {
+		normalizeTodoItemObject(item)
+	}
+	if items, ok := payload["items"].([]any); ok {
+		for _, raw := range items {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			normalizeTodoItemObject(item)
+		}
+	}
+}
+
+// normalizeTodoPatchObject 规范化 patch 内的字符串与字符串数组字段。
+func normalizeTodoPatchObject(payload map[string]any) {
+	normalizeStringField(payload, "content")
+	normalizeStringField(payload, "status")
+	normalizeStringField(payload, "executor")
+	normalizeStringField(payload, "owner_type")
+	normalizeStringField(payload, "owner_id")
+	normalizeStringField(payload, "failure_reason")
+	normalizeStringArrayField(payload, "dependencies")
+	normalizeStringArrayField(payload, "acceptance")
+	normalizeStringArrayField(payload, "artifacts")
+}
+
+// normalizeTodoItemObject 规范化 todo item 对象，确保 id/dependency 等字段稳定为字符串。
+func normalizeTodoItemObject(payload map[string]any) {
+	normalizeStringField(payload, "id")
+	normalizeStringField(payload, "content")
+	normalizeStringField(payload, "title")
+	normalizeStringField(payload, "status")
+	normalizeStringField(payload, "executor")
+	normalizeStringField(payload, "owner_type")
+	normalizeStringField(payload, "owner_id")
+	normalizeStringField(payload, "failure_reason")
+	normalizeStringArrayField(payload, "dependencies")
+	normalizeStringArrayField(payload, "acceptance")
+	normalizeStringArrayField(payload, "artifacts")
+}
+
+// normalizeStringArrayField 将数组中的标量统一转换为字符串并裁掉首尾空白。
+func normalizeStringArrayField(payload map[string]any, field string) {
+	raw, ok := payload[field]
+	if !ok {
+		return
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return
+	}
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		s, ok := stringifyScalar(value)
+		if !ok {
+			continue
+		}
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	payload[field] = out
+}
+
+// normalizeStringField 把 JSON 标量转换为字符串，兼容模型输出的数字 id 等常见变体。
+func normalizeStringField(payload map[string]any, field string) {
+	raw, ok := payload[field]
+	if !ok {
+		return
+	}
+	s, ok := stringifyScalar(raw)
+	if !ok {
+		return
+	}
+	payload[field] = strings.TrimSpace(s)
+}
+
+// stringifyScalar 将 JSON 标量转换成字符串，非标量（object/array/null）返回 false。
+func stringifyScalar(raw any) (string, bool) {
+	switch value := raw.(type) {
+	case string:
+		return value, true
+	case json.Number:
+		return value.String(), true
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64), true
+	case float32:
+		return strconv.FormatFloat(float64(value), 'f', -1, 32), true
+	case int:
+		return strconv.Itoa(value), true
+	case int64:
+		return strconv.FormatInt(value, 10), true
+	case uint64:
+		return strconv.FormatUint(value, 10), true
+	case bool:
+		return strconv.FormatBool(value), true
+	default:
+		return "", false
+	}
+}
+
+// normalizeInputStatuses 统一规整输入中的 status 字段，兼容常见别名和分隔符差异。
+func normalizeInputStatuses(input *writeInput) {
+	if input == nil {
+		return
+	}
+	for idx := range input.Items {
+		input.Items[idx].Status = normalizeTodoStatus(input.Items[idx].Status)
+	}
+	if input.Item != nil {
+		input.Item.Status = normalizeTodoStatus(input.Item.Status)
+	}
+	if input.Patch != nil && input.Patch.Status != nil {
+		status := normalizeTodoStatus(*input.Patch.Status)
+		input.Patch.Status = &status
+	}
+}
+
+// normalizeTodoStatus 将状态值转换为规范枚举格式，兼容 in-progress/done/cancelled 等别名。
+func normalizeTodoStatus(status agentsession.TodoStatus) agentsession.TodoStatus {
+	raw := strings.ToLower(strings.TrimSpace(string(status)))
+	raw = strings.ReplaceAll(raw, "-", "_")
+	raw = strings.ReplaceAll(raw, " ", "_")
+	raw = strings.ReplaceAll(raw, "__", "_")
+
+	switch raw {
+	case "inprogress", "doing", "running":
+		raw = string(agentsession.TodoStatusInProgress)
+	case "done":
+		raw = string(agentsession.TodoStatusCompleted)
+	case "cancelled":
+		raw = string(agentsession.TodoStatusCanceled)
+	}
+	return agentsession.TodoStatus(raw)
 }
 
 // applyLegacyTitleCompat 兼容旧参数里的 title 字段，统一映射到 content。
@@ -188,6 +372,7 @@ func decodeLegacyItem(rawItem json.RawMessage) (agentsession.TodoItem, error) {
 		Status:        wire.Status,
 		Dependencies:  wire.Dependencies,
 		Priority:      wire.Priority,
+		Executor:      wire.Executor,
 		OwnerType:     wire.OwnerType,
 		OwnerID:       wire.OwnerID,
 		Acceptance:    wire.Acceptance,
@@ -203,6 +388,9 @@ func validateInputLimits(input writeInput) error {
 		return fmt.Errorf("%w: expected_revision must be >= 0", errTodoInvalidArguments)
 	}
 	if err := ensureTodoWriteTextLength("id", input.ID); err != nil {
+		return err
+	}
+	if err := ensureTodoWriteTextLength("executor", input.Executor); err != nil {
 		return err
 	}
 	if err := ensureTodoWriteTextLength("owner_type", input.OwnerType); err != nil {
@@ -254,6 +442,7 @@ func ensureTodoWriteItemLength(field string, item agentsession.TodoItem) error {
 	}{
 		{field: field + ".id", value: item.ID},
 		{field: field + ".content", value: item.Content},
+		{field: field + ".executor", value: item.Executor},
 		{field: field + ".owner_type", value: item.OwnerType},
 		{field: field + ".owner_id", value: item.OwnerID},
 		{field: field + ".failure_reason", value: item.FailureReason},
@@ -284,6 +473,11 @@ func ensureTodoWritePatchLength(patch todoPatchInput) error {
 	}
 	if patch.OwnerType != nil {
 		if err := ensureTodoWriteTextLength("patch.owner_type", *patch.OwnerType); err != nil {
+			return err
+		}
+	}
+	if patch.Executor != nil {
+		if err := ensureTodoWriteTextLength("patch.executor", *patch.Executor); err != nil {
 			return err
 		}
 	}
@@ -404,7 +598,15 @@ func renderTodos(action string, items []agentsession.TodoItem) string {
 	lines = append(lines, "todos:")
 	for _, item := range items {
 		lines = append(lines,
-			fmt.Sprintf("- [%s] %s (rev=%d, p=%d) %s", item.Status, item.ID, item.Revision, item.Priority, item.Content),
+			fmt.Sprintf(
+				"- [%s] %s (rev=%d, p=%d, executor=%s) %s",
+				item.Status,
+				item.ID,
+				item.Revision,
+				item.Priority,
+				strings.TrimSpace(item.Executor),
+				item.Content,
+			),
 		)
 	}
 	return strings.Join(lines, "\n")

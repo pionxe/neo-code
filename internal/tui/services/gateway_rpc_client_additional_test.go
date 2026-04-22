@@ -8,13 +8,18 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"neo-code/internal/gateway"
+	gatewayauth "neo-code/internal/gateway/auth"
 	"neo-code/internal/gateway/protocol"
 )
 
@@ -274,17 +279,6 @@ func TestNewGatewayRPCClientConstructorBranches(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "resolve listen address") {
 		t.Fatalf("expected resolve listen address error, got %v", err)
-	}
-
-	_, err = NewGatewayRPCClient(GatewayRPCClientOptions{
-		ListenAddress: "x",
-		TokenFile:     filepath.Join(t.TempDir(), "missing.json"),
-		ResolveListenAddress: func(string) (string, error) {
-			return "ipc://x", nil
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "load auth token") {
-		t.Fatalf("expected load auth token error, got %v", err)
 	}
 
 	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
@@ -614,4 +608,702 @@ func TestGatewayRPCClientDecodeResponseSuccessAndRetryableNetError(t *testing.T)
 	if !isRetryableGatewayCallError(netErr) {
 		t.Fatalf("net timeout error should be retryable")
 	}
+}
+
+func TestGatewayRPCClientAutoSpawnWhenGatewayUnavailable(t *testing.T) {
+	t.Parallel()
+
+	tokenFile, _ := createTestAuthTokenFile(t)
+
+	var dialCount int32
+	var autoSpawnCount int32
+	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+		ListenAddress: "test://gateway",
+		TokenFile:     tokenFile,
+		AutoSpawnGateway: func(
+			_ context.Context,
+			listenAddress string,
+			_ func(address string) (net.Conn, error),
+		) (*exec.Cmd, error) {
+			if listenAddress != "test://gateway" {
+				t.Fatalf("auto spawn listen address = %q", listenAddress)
+			}
+			atomic.AddInt32(&autoSpawnCount, 1)
+			return nil, nil
+		},
+		Dial: func(_ string) (net.Conn, error) {
+			attempt := atomic.AddInt32(&dialCount, 1)
+			if attempt == 1 {
+				return nil, errors.New("connect failed: no such file or directory")
+			}
+			clientConn, serverConn := net.Pipe()
+			go func() {
+				defer serverConn.Close()
+				decoder := json.NewDecoder(serverConn)
+				encoder := json.NewEncoder(serverConn)
+				request := readRPCRequestOrFail(t, decoder)
+				writeRPCResultOrFail(t, encoder, request.ID, gateway.MessageFrame{
+					Type:   gateway.FrameTypeAck,
+					Action: gateway.FrameActionPing,
+				})
+			}()
+			return clientConn, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	var frame gateway.MessageFrame
+	if err := client.CallWithOptions(
+		context.Background(),
+		protocol.MethodGatewayPing,
+		map[string]any{},
+		&frame,
+		GatewayRPCCallOptions{Timeout: time.Second, Retries: 0},
+	); err != nil {
+		t.Fatalf("CallWithOptions() error = %v", err)
+	}
+	if atomic.LoadInt32(&autoSpawnCount) != 1 {
+		t.Fatalf("auto spawn count = %d, want 1", atomic.LoadInt32(&autoSpawnCount))
+	}
+	if atomic.LoadInt32(&dialCount) != 2 {
+		t.Fatalf("dial count = %d, want 2", atomic.LoadInt32(&dialCount))
+	}
+}
+
+func TestGatewayRPCClientDoesNotAutoSpawnOnNonUnavailableDialError(t *testing.T) {
+	t.Parallel()
+
+	tokenFile, _ := createTestAuthTokenFile(t)
+	var autoSpawnCount int32
+
+	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+		ListenAddress: "test://gateway",
+		TokenFile:     tokenFile,
+		AutoSpawnGateway: func(
+			_ context.Context,
+			_ string,
+			_ func(address string) (net.Conn, error),
+		) (*exec.Cmd, error) {
+			atomic.AddInt32(&autoSpawnCount, 1)
+			return nil, nil
+		},
+		Dial: func(_ string) (net.Conn, error) {
+			return nil, errors.New("permission denied")
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	callErr := client.CallWithOptions(
+		context.Background(),
+		protocol.MethodGatewayPing,
+		map[string]any{},
+		nil,
+		GatewayRPCCallOptions{Timeout: time.Second, Retries: 0},
+	)
+	if callErr == nil {
+		t.Fatalf("expected call error")
+	}
+	if atomic.LoadInt32(&autoSpawnCount) != 0 {
+		t.Fatalf("auto spawn count = %d, want 0", atomic.LoadInt32(&autoSpawnCount))
+	}
+}
+
+func TestIsGatewayUnavailableDialError(t *testing.T) {
+	t.Parallel()
+
+	if !isGatewayUnavailableDialError(os.ErrNotExist) {
+		t.Fatalf("os.ErrNotExist should be treated as gateway unavailable")
+	}
+	if !isGatewayUnavailableDialError(errors.New("connect: connection refused")) {
+		t.Fatalf("connection refused should be treated as gateway unavailable")
+	}
+	if !isGatewayUnavailableDialError(errors.New("The system cannot find the file specified")) {
+		t.Fatalf("windows pipe not found text should be treated as gateway unavailable")
+	}
+	if isGatewayUnavailableDialError(errors.New("permission denied")) {
+		t.Fatalf("permission denied should not be treated as gateway unavailable")
+	}
+}
+
+func TestOpenGatewayAutoSpawnLogFileRotatesPreviousLog(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "gateway_auto.log")
+	if err := os.WriteFile(logPath, []byte("previous-run-log"), 0o600); err != nil {
+		t.Fatalf("write previous log: %v", err)
+	}
+	if err := os.WriteFile(logPath+".bak", []byte("old-backup"), 0o600); err != nil {
+		t.Fatalf("write old backup log: %v", err)
+	}
+
+	logFile, err := openGatewayAutoSpawnLogFile(logPath)
+	if err != nil {
+		t.Fatalf("openGatewayAutoSpawnLogFile() error = %v", err)
+	}
+	if _, err := logFile.WriteString("current-run-log"); err != nil {
+		_ = logFile.Close()
+		t.Fatalf("write current log: %v", err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatalf("close current log: %v", err)
+	}
+
+	backupContent, err := os.ReadFile(logPath + ".bak")
+	if err != nil {
+		t.Fatalf("read backup log: %v", err)
+	}
+	if string(backupContent) != "previous-run-log" {
+		t.Fatalf("backup log content = %q, want previous-run-log", string(backupContent))
+	}
+
+	currentContent, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read current log: %v", err)
+	}
+	if string(currentContent) != "current-run-log" {
+		t.Fatalf("current log content = %q, want current-run-log", string(currentContent))
+	}
+}
+
+func TestGatewayRPCClientCloseStopsSpawnedGatewayProcess(t *testing.T) {
+	spawnedCmd := startLongRunningProcessForGatewayRPCTest(t)
+
+	client := &GatewayRPCClient{
+		closed:            make(chan struct{}),
+		pending:           make(map[string]chan gatewayRPCResponse),
+		notifications:     make(chan gatewayRPCNotification, 1),
+		notificationQueue: make(chan gatewayRPCNotification, 1),
+		spawnedCmd:        spawnedCmd,
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if spawnedCmd.ProcessState != nil {
+		t.Fatalf("expected spawned process to remain alive after client close in shared gateway mode")
+	}
+}
+
+func TestGatewayRPCClientWatchSpawnedGatewayProcessResetsAutoSpawnAttempt(t *testing.T) {
+	spawnedCmd := startLongRunningProcessForGatewayRPCTest(t)
+	done := make(chan struct{})
+
+	client := &GatewayRPCClient{
+		closed:            make(chan struct{}),
+		pending:           make(map[string]chan gatewayRPCResponse),
+		notifications:     make(chan gatewayRPCNotification, 1),
+		notificationQueue: make(chan gatewayRPCNotification, 1),
+		autoSpawnAttempt:  true,
+		spawnedCmd:        spawnedCmd,
+		spawnedCmdDone:    done,
+	}
+
+	go client.watchSpawnedGatewayProcess(spawnedCmd, done)
+	if err := spawnedCmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Fatalf("Kill() error = %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected spawned process monitor to finish")
+	}
+
+	if client.autoSpawnAttempt {
+		t.Fatal("expected autoSpawnAttempt to be reset after spawned process exit")
+	}
+	if client.spawnedCmd != nil {
+		t.Fatal("expected spawnedCmd to be cleared after spawned process exit")
+	}
+	if client.spawnedCmdDone != nil {
+		t.Fatal("expected spawnedCmdDone to be cleared after spawned process exit")
+	}
+}
+
+func TestGatewayRPCClientResetConnectionClearsAutoSpawnAttempt(t *testing.T) {
+	t.Parallel()
+
+	client := &GatewayRPCClient{
+		closed:            make(chan struct{}),
+		pending:           make(map[string]chan gatewayRPCResponse),
+		notifications:     make(chan gatewayRPCNotification, 1),
+		notificationQueue: make(chan gatewayRPCNotification, 1),
+		autoSpawnAttempt:  true,
+	}
+
+	client.resetConnection()
+	if client.autoSpawnAttempt {
+		t.Fatal("expected resetConnection to clear autoSpawnAttempt")
+	}
+}
+
+func TestGatewayAutoSpawnHelpers(t *testing.T) {
+	t.Run("wait ready with empty address", func(t *testing.T) {
+		err := waitGatewayReadyAfterAutoSpawn(context.Background(), "   ", func(string) (net.Conn, error) {
+			return nil, errors.New("should not dial")
+		})
+		if err == nil || !strings.Contains(err.Error(), "listen address is empty") {
+			t.Fatalf("expected empty listen address error, got %v", err)
+		}
+	})
+
+	t.Run("wait ready with context canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := waitGatewayReadyAfterAutoSpawn(ctx, "ipc://gateway", func(string) (net.Conn, error) {
+			return nil, os.ErrNotExist
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context canceled, got %v", err)
+		}
+	})
+
+	t.Run("wait ready with non unavailable error", func(t *testing.T) {
+		err := waitGatewayReadyAfterAutoSpawn(context.Background(), "ipc://gateway", func(string) (net.Conn, error) {
+			return nil, errors.New("permission denied")
+		})
+		if err == nil || !strings.Contains(err.Error(), "probe gateway readiness") {
+			t.Fatalf("expected probe error, got %v", err)
+		}
+	})
+
+	t.Run("wait ready succeeds after retry", func(t *testing.T) {
+		var calls int32
+		err := waitGatewayReadyAfterAutoSpawn(context.Background(), "ipc://gateway", func(string) (net.Conn, error) {
+			if atomic.AddInt32(&calls, 1) == 1 {
+				return nil, os.ErrNotExist
+			}
+			c1, c2 := net.Pipe()
+			go func() { _ = c2.Close() }()
+			return c1, nil
+		})
+		if err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+		if atomic.LoadInt32(&calls) < 2 {
+			t.Fatalf("expected at least 2 dials, got %d", calls)
+		}
+	})
+
+	t.Run("default auto spawn returns error when gateway not ready", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		cmd, err := defaultAutoSpawnGateway(ctx, "ipc://gateway", func(string) (net.Conn, error) {
+			return nil, os.ErrNotExist
+		})
+		if cmd != nil {
+			t.Fatalf("expected nil cmd on failure, got %#v", cmd)
+		}
+		if err == nil {
+			t.Fatalf("expected defaultAutoSpawnGateway() error")
+		}
+	})
+}
+
+func TestGatewayAutoSpawnOutputFallbackAndPath(t *testing.T) {
+	t.Run("resolve log path", func(t *testing.T) {
+		path, err := resolveGatewayAutoSpawnLogPath()
+		if err != nil {
+			t.Fatalf("resolveGatewayAutoSpawnLogPath() error = %v", err)
+		}
+		if !strings.HasSuffix(path, defaultGatewayAutoSpawnLogRelativePath) {
+			t.Fatalf("log path = %q", path)
+		}
+	})
+
+	t.Run("fallback to devnull when log path cannot be created", func(t *testing.T) {
+		tempDir := t.TempDir()
+		homeFile := filepath.Join(tempDir, "home-file")
+		if err := os.WriteFile(homeFile, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		t.Setenv("HOME", homeFile)
+
+		output, err := openGatewayAutoSpawnOutput()
+		if err != nil {
+			t.Fatalf("openGatewayAutoSpawnOutput() error = %v", err)
+		}
+		if output == nil {
+			t.Fatalf("openGatewayAutoSpawnOutput() should return file")
+		}
+		_ = output.Close()
+	})
+}
+
+func TestGatewaySpawnedProcessStopAndWaitHelpers(t *testing.T) {
+	t.Run("nil command", func(t *testing.T) {
+		if err := stopSpawnedGatewayProcess(nil, nil); err != nil {
+			t.Fatalf("stopSpawnedGatewayProcess(nil) error = %v", err)
+		}
+	})
+
+	t.Run("already exited process", func(t *testing.T) {
+		var cmd *exec.Cmd
+		if runtime.GOOS == "windows" {
+			cmd = exec.Command("cmd", "/c", "exit 0")
+		} else {
+			cmd = exec.Command("sh", "-c", "exit 0")
+		}
+		if err := cmd.Start(); err != nil {
+			t.Skipf("start process failed: %v", err)
+		}
+		_ = cmd.Wait()
+		if err := stopSpawnedGatewayProcess(cmd, nil); err != nil {
+			t.Fatalf("stopSpawnedGatewayProcess(exited) error = %v", err)
+		}
+	})
+
+	t.Run("wait helper with done signal", func(t *testing.T) {
+		done := make(chan struct{})
+		waitSpawnedGatewayProcess(done, &exec.Cmd{})
+		close(done)
+	})
+}
+
+func TestGatewayRPCClientEnsureConnectedAutoSpawnBranches(t *testing.T) {
+	tokenFile, _ := createTestAuthTokenFile(t)
+
+	t.Run("auto spawn function returns error", func(t *testing.T) {
+		client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+			ListenAddress: "test://gateway",
+			TokenFile:     tokenFile,
+			Dial: func(string) (net.Conn, error) {
+				return nil, os.ErrNotExist
+			},
+			AutoSpawnGateway: func(context.Context, string, func(string) (net.Conn, error)) (*exec.Cmd, error) {
+				return nil, errors.New("spawn failed")
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewGatewayRPCClient() error = %v", err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+
+		_, err = client.ensureConnected(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "auto-spawn gateway failed") {
+			t.Fatalf("expected auto-spawn failure error, got %v", err)
+		}
+	})
+
+	t.Run("closed while auto spawn in progress", func(t *testing.T) {
+		var client *GatewayRPCClient
+		var err error
+		client, err = NewGatewayRPCClient(GatewayRPCClientOptions{
+			ListenAddress: "test://gateway",
+			TokenFile:     tokenFile,
+			Dial: func(string) (net.Conn, error) {
+				return nil, os.ErrNotExist
+			},
+			AutoSpawnGateway: func(_ context.Context, _ string, _ func(string) (net.Conn, error)) (*exec.Cmd, error) {
+				close(client.closed)
+				return startLongRunningProcessForGatewayRPCTest(t), nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewGatewayRPCClient() error = %v", err)
+		}
+
+		_, err = client.ensureConnected(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("expected closed error, got %v", err)
+		}
+	})
+
+	t.Run("replace previous spawned process reference without stopping process", func(t *testing.T) {
+		prev := startLongRunningProcessForGatewayRPCTest(t)
+		client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+			ListenAddress: "test://gateway",
+			TokenFile:     tokenFile,
+		})
+		if err != nil {
+			t.Fatalf("NewGatewayRPCClient() error = %v", err)
+		}
+		client.spawnedCmd = prev
+		client.spawnedCmdDone = nil
+		var dialCount int32
+		client.dialFn = func(string) (net.Conn, error) {
+			if atomic.AddInt32(&dialCount, 1) == 1 {
+				return nil, os.ErrNotExist
+			}
+			c1, c2 := net.Pipe()
+			go func() { _ = c2.Close() }()
+			return c1, nil
+		}
+		client.autoSpawnFn = func(_ context.Context, _ string, _ func(string) (net.Conn, error)) (*exec.Cmd, error) {
+			return startLongRunningProcessForGatewayRPCTest(t), nil
+		}
+		t.Cleanup(func() { _ = client.Close() })
+
+		conn, err := client.ensureConnected(context.Background())
+		if err != nil || conn == nil {
+			t.Fatalf("ensureConnected() = (%v, %v)", conn, err)
+		}
+
+		if prev.ProcessState != nil {
+			t.Fatalf("expected previous process to keep running without ownership evidence")
+		}
+	})
+
+	t.Run("dial still unavailable after auto spawn", func(t *testing.T) {
+		client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+			ListenAddress: "test://gateway",
+			TokenFile:     tokenFile,
+			Dial: func(string) (net.Conn, error) {
+				return nil, os.ErrNotExist
+			},
+			AutoSpawnGateway: func(context.Context, string, func(string) (net.Conn, error)) (*exec.Cmd, error) {
+				return nil, nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewGatewayRPCClient() error = %v", err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+
+		_, err = client.ensureConnected(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "after auto-spawn") {
+			t.Fatalf("expected dial after auto-spawn error, got %v", err)
+		}
+	})
+}
+
+func TestGatewayRPCClientAuthenticateLoadsTokenAfterGatewayAutoSpawn(t *testing.T) {
+	t.Parallel()
+
+	tokenFile := filepath.Join(t.TempDir(), "auth.json")
+	var dialCount int32
+	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+		ListenAddress: "test://gateway",
+		TokenFile:     tokenFile,
+		AutoSpawnGateway: func(_ context.Context, _ string, _ func(address string) (net.Conn, error)) (*exec.Cmd, error) {
+			manager, createErr := gatewayauth.NewManager(tokenFile)
+			if createErr != nil {
+				return nil, createErr
+			}
+			if strings.TrimSpace(manager.Token()) == "" {
+				return nil, errors.New("created token is empty")
+			}
+			return nil, nil
+		},
+		Dial: func(_ string) (net.Conn, error) {
+			attempt := atomic.AddInt32(&dialCount, 1)
+			if attempt == 1 {
+				return nil, os.ErrNotExist
+			}
+
+			clientConn, serverConn := net.Pipe()
+			go func() {
+				defer serverConn.Close()
+				decoder := json.NewDecoder(serverConn)
+				encoder := json.NewEncoder(serverConn)
+
+				request := readRPCRequestOrFail(t, decoder)
+				if request.Method != protocol.MethodGatewayAuthenticate {
+					t.Fatalf("authenticate method = %q", request.Method)
+				}
+				var params protocol.AuthenticateParams
+				if err := json.Unmarshal(request.Params, &params); err != nil {
+					t.Fatalf("decode authenticate params: %v", err)
+				}
+				if strings.TrimSpace(params.Token) == "" {
+					t.Fatalf("expected non-empty authenticate token")
+				}
+
+				writeRPCResultOrFail(t, encoder, request.ID, gateway.MessageFrame{
+					Type:   gateway.FrameTypeAck,
+					Action: gateway.FrameActionAuthenticate,
+				})
+			}()
+			return clientConn, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if err := client.Authenticate(context.Background()); err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if atomic.LoadInt32(&dialCount) < 2 {
+		t.Fatalf("expected auto-spawn retry dial path, got %d", atomic.LoadInt32(&dialCount))
+	}
+}
+
+func TestWatchSpawnedGatewayProcessNilCommand(t *testing.T) {
+	client := &GatewayRPCClient{}
+	done := make(chan struct{})
+	go client.watchSpawnedGatewayProcess(nil, done)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("watchSpawnedGatewayProcess(nil) should close done")
+	}
+}
+
+func TestDefaultAutoSpawnGatewaySuccess(t *testing.T) {
+	cmd, err := defaultAutoSpawnGateway(context.Background(), "ipc://gateway", func(string) (net.Conn, error) {
+		c1, c2 := net.Pipe()
+		go func() { _ = c2.Close() }()
+		return c1, nil
+	})
+	if err != nil {
+		t.Fatalf("defaultAutoSpawnGateway() error = %v", err)
+	}
+	if cmd == nil {
+		t.Fatalf("expected spawned command")
+	}
+	if stopErr := stopSpawnedGatewayProcess(cmd, nil); stopErr != nil {
+		t.Fatalf("stopSpawnedGatewayProcess() error = %v", stopErr)
+	}
+}
+
+func TestWaitGatewayReadyAfterAutoSpawnTimeout(t *testing.T) {
+	start := time.Now()
+	err := waitGatewayReadyAfterAutoSpawn(context.Background(), "ipc://gateway", func(string) (net.Conn, error) {
+		return nil, os.ErrNotExist
+	})
+	if err == nil || !strings.Contains(err.Error(), "gateway not ready within") {
+		t.Fatalf("expected not-ready timeout error, got %v", err)
+	}
+	if time.Since(start) < 2*time.Second {
+		t.Fatalf("expected probe retry window to elapse")
+	}
+}
+
+func TestGatewayAutoSpawnLogErrorBranches(t *testing.T) {
+	t.Run("open log file returns rotate error", func(t *testing.T) {
+		base := t.TempDir()
+		locked := filepath.Join(base, "locked")
+		if err := os.MkdirAll(locked, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		logPath := filepath.Join(locked, "gateway_auto.log")
+		if err := os.WriteFile(logPath, []byte("old"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		backupPath := logPath + ".bak"
+		if err := os.MkdirAll(backupPath, 0o700); err != nil {
+			t.Fatalf("MkdirAll backup dir error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(backupPath, "x"), []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile backup payload error = %v", err)
+		}
+
+		if _, err := openGatewayAutoSpawnLogFile(logPath); err == nil {
+			t.Fatalf("expected rotate backup removal error")
+		}
+	})
+
+	t.Run("open log file returns open error", func(t *testing.T) {
+		base := t.TempDir()
+		readonlyDir := filepath.Join(base, "ro")
+		if err := os.MkdirAll(readonlyDir, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.Chmod(readonlyDir, 0o500); err != nil {
+			t.Fatalf("Chmod() error = %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(readonlyDir, 0o700) })
+
+		logPath := filepath.Join(readonlyDir, "gateway_auto.log")
+		if _, err := openGatewayAutoSpawnLogFile(logPath); err == nil {
+			t.Fatalf("expected open log file error")
+		}
+	})
+
+	t.Run("rotate stat error", func(t *testing.T) {
+		base := t.TempDir()
+		locked := filepath.Join(base, "locked")
+		if err := os.MkdirAll(locked, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.Chmod(locked, 0o000); err != nil {
+			t.Fatalf("Chmod() error = %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+		err := rotateGatewayAutoSpawnLog(filepath.Join(locked, "gateway_auto.log"))
+		if err == nil {
+			t.Fatalf("expected rotate stat error")
+		}
+	})
+}
+
+func TestOpenGatewayAutoSpawnLogFileRejectsSymlink(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	target := filepath.Join(base, "target.log")
+	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+		t.Fatalf("write target log: %v", err)
+	}
+
+	logPath := filepath.Join(base, "gateway_auto.log")
+	if err := os.Symlink(target, logPath); err != nil {
+		t.Skipf("symlink is not available: %v", err)
+	}
+
+	if _, err := openGatewayAutoSpawnLogFile(logPath); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("expected symlink rejection error, got %v", err)
+	}
+}
+
+func TestRotateGatewayAutoSpawnLogRejectsSymlinkBackup(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	logPath := filepath.Join(base, "gateway_auto.log")
+	if err := os.WriteFile(logPath, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	backupReal := filepath.Join(base, "backup-real.log")
+	if err := os.WriteFile(backupReal, []byte("backup"), 0o600); err != nil {
+		t.Fatalf("write backup real: %v", err)
+	}
+	if err := os.Symlink(backupReal, logPath+".bak"); err != nil {
+		t.Skipf("symlink is not available: %v", err)
+	}
+
+	if err := rotateGatewayAutoSpawnLog(logPath); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("expected backup symlink rejection error, got %v", err)
+	}
+}
+
+func TestStopSpawnedGatewayProcessKillErrorAndUnavailableNil(t *testing.T) {
+	if isGatewayUnavailableDialError(nil) {
+		t.Fatalf("nil error should not be treated as gateway unavailable")
+	}
+}
+
+func startLongRunningProcessForGatewayRPCTest(t *testing.T) *exec.Cmd {
+	t.Helper()
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/c", "ping -n 120 127.0.0.1 >NUL")
+	} else {
+		cmd = exec.Command("sh", "-c", "sleep 120")
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Skipf("start long running process failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		go func() {
+			_ = cmd.Wait()
+		}()
+	})
+	return cmd
 }

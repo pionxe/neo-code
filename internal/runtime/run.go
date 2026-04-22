@@ -54,6 +54,20 @@ func computeToolSignature(calls []providertypes.ToolCall) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// computeTodoStateSignature 计算当前 Todo 列表的状态签名，用于识别 dispatch 是否产生了真实状态变化。
+func computeTodoStateSignature(items []agentsession.TodoItem) string {
+	normalized := cloneTodosForPersistence(items)
+	if len(normalized) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return ""
+	}
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:])
+}
+
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
 // 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
 // 新会话在创建后再绑定会话锁，不同会话可并行执行。
@@ -108,7 +122,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 	for turn := 0; ; turn++ {
 		state.turn = turn
-		s.transitionRunPhase(ctx, &state, controlplane.PhasePlan)
+		if err := s.setBaseRunState(ctx, &state, controlplane.RunStatePlan); err != nil {
+			return s.handleRunError(ctx, state.runID, state.session.ID, err)
+		}
 
 		for {
 			if err := ctx.Err(); err != nil {
@@ -153,55 +169,76 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			s.emitTokenUsage(ctx, &state, turnResult)
 
+			state.mu.Lock()
+			state.completion = collectCompletionState(
+				&state,
+				turnResult.assistant,
+				len(turnResult.assistant.ToolCalls) > 0,
+			)
+			completionState, completed := controlplane.EvaluateCompletion(
+				state.completion,
+				len(turnResult.assistant.ToolCalls) > 0,
+			)
+			state.completion = completionState
+			state.mu.Unlock()
+
 			if len(turnResult.assistant.ToolCalls) == 0 {
-				s.emitRunScoped(ctx, EventAgentDone, &state, turnResult.assistant)
-				s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
-				return nil
+				if completed {
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnResult.assistant)
+					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
+					return nil
+				}
+				state.mu.Lock()
+				progressInput := collectProgressInput(
+					controlplane.RunStatePlan,
+					state.session.TaskState.Clone(),
+					state.session.TaskState.Clone(),
+					cloneTodosForPersistence(state.session.Todos),
+					cloneTodosForPersistence(state.session.Todos),
+					toolExecutionSummary{},
+					snapshot.noProgressStreakLimit,
+					snapshot.repeatCycleStreakLimit,
+				)
+				state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
+				currentScore := state.progress.LastScore
+				state.mu.Unlock()
+
+				s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
+				break
 			}
-			s.transitionRunPhase(ctx, &state, controlplane.PhaseExecute)
-			if err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnResult.assistant); err != nil {
+
+			beforeTask := state.session.TaskState.Clone()
+			beforeTodos := cloneTodosForPersistence(state.session.Todos)
+			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
-			s.transitionRunPhase(ctx, &state, controlplane.PhaseVerify)
-
-			var evidence []controlplane.ProgressEvidenceRecord
-			toolCallCount := len(turnResult.assistant.ToolCalls)
-			currentSignature := computeToolSignature(turnResult.assistant.ToolCalls)
-
-			state.mu.Lock()
-			if len(state.session.Messages) >= toolCallCount {
-				for i := len(state.session.Messages) - toolCallCount; i < len(state.session.Messages); i++ {
-					if msg := state.session.Messages[i]; msg.Role == providertypes.RoleTool && !msg.IsError {
-						evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceNewInfoNonDup})
-						break
-					}
-				}
+			summary, err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnResult.assistant)
+			if err != nil {
+				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
 
-			state.progress = controlplane.ApplyProgressEvidence(state.progress, evidence, currentSignature)
-			streak := state.progress.LastScore.NoProgressStreak
-			repeatStreak := state.progress.LastScore.RepeatCycleStreak
+			state.mu.Lock()
+			state.completion = applyToolExecutionCompletion(state.completion, summary)
+			afterTask := state.session.TaskState.Clone()
+			afterTodos := cloneTodosForPersistence(state.session.Todos)
+			progressInput := collectProgressInput(
+				controlplane.RunStateExecute,
+				beforeTask,
+				afterTask,
+				beforeTodos,
+				afterTodos,
+				summary,
+				snapshot.noProgressStreakLimit,
+				snapshot.repeatCycleStreakLimit,
+			)
+			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 			currentScore := state.progress.LastScore
 			state.mu.Unlock()
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
-
-			repeatLimit := snapshot.config.Runtime.MaxRepeatCycleStreak
-			if repeatLimit <= 0 {
-				repeatLimit = config.DefaultMaxRepeatCycleStreak
+			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
+				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
-
-			if repeatStreak >= repeatLimit {
-				err = ErrRepeatCycleLimit
-				return err
-			}
-
-			limit := snapshot.noProgressStreakLimit
-			if streak >= limit {
-				err = ErrNoProgressStreakLimit
-				return err
-			}
-
 			break
 		}
 	}
@@ -259,6 +296,7 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	if err != nil {
 		return turnSnapshot{}, false, err
 	}
+	toolSpecs = prioritizeToolSpecsBySkillHints(toolSpecs, activeSkills)
 
 	resolvedProvider, err := config.ResolveSelectedProvider(cfg)
 	if err != nil {
@@ -270,25 +308,22 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	}
 
 	state.mu.Lock()
-	streak := state.progress.LastScore.NoProgressStreak
-	repeatStreak := state.progress.LastScore.RepeatCycleStreak
+	score := state.progress.LastScore
 	state.mu.Unlock()
 
 	limit := resolveNoProgressStreakLimit(cfg.Runtime)
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
-	systemPrompt, repeatInjected := withSelfHealingRepeatReminder(builtContext.SystemPrompt, repeatStreak, repeatLimit)
-	if !repeatInjected {
-		systemPrompt = withSelfHealingReminder(systemPrompt, streak, limit)
-	}
+	systemPrompt := withProgressReminder(builtContext.SystemPrompt, score)
 
 	model := strings.TrimSpace(cfg.CurrentModel)
 	return turnSnapshot{
-		config:                cfg,
-		providerConfig:        providerRuntimeCfg,
-		model:                 model,
-		workdir:               activeWorkdir,
-		toolTimeout:           time.Duration(cfg.ToolTimeoutSec) * time.Second,
-		noProgressStreakLimit: limit,
+		config:                 cfg,
+		providerConfig:         providerRuntimeCfg,
+		model:                  model,
+		workdir:                activeWorkdir,
+		toolTimeout:            time.Duration(cfg.ToolTimeoutSec) * time.Second,
+		noProgressStreakLimit:  limit,
+		repeatCycleStreakLimit: repeatLimit,
 		request: providertypes.GenerateRequest{
 			Model:              model,
 			SystemPrompt:       systemPrompt,
@@ -395,17 +430,31 @@ func (s *Service) applyCompactForState(
 	mode contextcompact.Mode,
 	errorPolicy compactErrorPolicy,
 ) (bool, error) {
-	session, result, err := s.runCompactForSession(ctx, state.runID, state.session, cfg, mode, errorPolicy)
+	applied := false
+	if err := s.enterTemporaryRunState(ctx, state, controlplane.RunStateCompacting); err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = s.leaveTemporaryRunState(ctx, state, controlplane.RunStateCompacting)
+	}()
+
+	err := func() error {
+		session, result, compactErr := s.runCompactForSession(ctx, state.runID, state.session, cfg, mode, errorPolicy)
+		if compactErr != nil {
+			return compactErr
+		}
+		state.session = session
+		if result.Applied {
+			state.resetTokenTotals()
+			state.compactApplied = true
+			applied = true
+		}
+		return nil
+	}()
 	if err != nil {
 		return false, err
 	}
-	state.session = session
-	if result.Applied {
-		state.resetTokenTotals()
-		state.compactApplied = true
-		return true, nil
-	}
-	return false, nil
+	return applied, nil
 }
 
 // autoCompactThreshold 返回当前配置下的自动 compact 触发阈值。
@@ -521,28 +570,23 @@ func (s *Service) bindSessionLock(sessionID string) func() {
 	}
 }
 
-// withSelfHealingReminder 在无进展临界轮次注入自愈提醒，保持提示词拼接规则集中。
-func withSelfHealingReminder(systemPrompt string, streak int, limit int) string {
-	if streak != limit-1 {
+// withProgressReminder 根据当前 progress 快照选择并注入唯一的自愈提醒。
+func withProgressReminder(systemPrompt string, score controlplane.ProgressScore) string {
+	var reminder string
+	switch score.ReminderKind {
+	case controlplane.ReminderKindRepeatCycle:
+		reminder = selfHealingRepeatReminder
+	case controlplane.ReminderKindNoProgress, controlplane.ReminderKindGenericStalled:
+		reminder = selfHealingReminder
+	default:
 		return systemPrompt
 	}
-	trimmed := strings.TrimSpace(systemPrompt)
-	if trimmed == "" {
-		return selfHealingReminder
-	}
-	return trimmed + "\n\n" + selfHealingReminder
-}
 
-// withSelfHealingRepeatReminder 在重复循环临界轮次注入循环自愈提醒，避免模型继续相同工具调用。
-func withSelfHealingRepeatReminder(systemPrompt string, repeatStreak int, repeatLimit int) (string, bool) {
-	if repeatStreak != repeatLimit-1 {
-		return systemPrompt, false
-	}
 	trimmed := strings.TrimSpace(systemPrompt)
 	if trimmed == "" {
-		return selfHealingRepeatReminder, true
+		return reminder
 	}
-	return trimmed + "\n\n" + selfHealingRepeatReminder, true
+	return trimmed + "\n\n" + reminder
 }
 
 // autoCompactCacheKeyFromConfig 提取会影响自动压缩阈值解析的配置维度，用于 run 内缓存命中判断。

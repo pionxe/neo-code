@@ -1438,6 +1438,27 @@ func TestLoadCustomProvidersReturnsEmptyWhenProvidersDirMissing(t *testing.T) {
 	}
 }
 
+func TestLoadCustomProvidersRejectsProvidersPathFile(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	providersPath := filepath.Join(baseDir, providersDirName)
+	if err := os.WriteFile(providersPath, []byte("not-a-dir"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	providers, err := loadCustomProviders(baseDir)
+	if err == nil {
+		t.Fatal("expected providers dir read error")
+	}
+	if providers != nil {
+		t.Fatalf("expected nil providers on read error, got %d", len(providers))
+	}
+	if !strings.Contains(err.Error(), "read providers dir") {
+		t.Fatalf("expected read providers dir error, got %v", err)
+	}
+}
+
 func TestLoadCustomProviderReadErrors(t *testing.T) {
 	t.Run("missing provider yaml", func(t *testing.T) {
 		providerDir := t.TempDir()

@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
+	agentruntime "neo-code/internal/tui/services"
 )
 
 func TestParseTodoFilter(t *testing.T) {
@@ -562,6 +562,11 @@ func TestParseTodoEventPayload(t *testing.T) {
 	got, ok = parseTodoEventPayload(payload)
 	if !ok || got.Action != "x" || got.Reason != "y" {
 		t.Fatalf("unexpected pointer parse result: %#v ok=%v", got, ok)
+	}
+	var nilPayload *agentruntime.TodoEventPayload
+	got, ok = parseTodoEventPayload(nilPayload)
+	if ok || got != (agentruntime.TodoEventPayload{}) {
+		t.Fatalf("expected nil pointer payload to fail parse, got %#v ok=%v", got, ok)
 	}
 
 	got, ok = parseTodoEventPayload(map[string]any{"action": "plan", "reason": "conflict"})

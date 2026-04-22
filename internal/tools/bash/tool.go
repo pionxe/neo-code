@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"neo-code/internal/tools"
@@ -17,8 +18,10 @@ type Tool struct {
 }
 
 type input struct {
-	Command string `json:"command"`
-	Workdir string `json:"workdir,omitempty"`
+	Command           string `json:"command"`
+	Workdir           string `json:"workdir,omitempty"`
+	Verification      bool   `json:"verification,omitempty"`
+	VerificationScope string `json:"verification_scope,omitempty"`
 }
 
 func New(root string, shell string, timeout time.Duration) *Tool {
@@ -64,6 +67,14 @@ func (t *Tool) Schema() map[string]any {
 				"type":        "string",
 				"description": "Optional working directory relative to the workspace root.",
 			},
+			"verification": map[string]any{
+				"type":        "boolean",
+				"description": "Set true when this command is explicitly used for verification.",
+			},
+			"verification_scope": map[string]any{
+				"type":        "string",
+				"description": "Optional verification scope. Defaults to workspace when verification=true.",
+			},
 		},
 		"required": []string{"command"},
 	}
@@ -84,5 +95,41 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	return t.executor.Execute(ctx, call, in.Command, in.Workdir)
+	result, err := t.executor.Execute(ctx, call, in.Command, in.Workdir)
+	result.Metadata = withVerificationMetadata(result.Metadata, in, err == nil && !result.IsError)
+	result.Facts = withVerificationFacts(result.Facts, in, err == nil && !result.IsError)
+	return result, err
+}
+
+// withVerificationMetadata 在 bash 调用显式声明验证意图时写入结构化验证元数据。
+func withVerificationMetadata(metadata map[string]any, in input, succeeded bool) map[string]any {
+	scope := in.VerificationScope
+	if !in.Verification && scope == "" {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = make(map[string]any, 3)
+	}
+	metadata["verification_performed"] = true
+	metadata["verification_passed"] = succeeded
+	if scope == "" {
+		scope = "workspace"
+	}
+	metadata["verification_scope"] = scope
+	return metadata
+}
+
+// withVerificationFacts 在 bash 调用显式声明验证意图时写入受信的结构化事实。
+func withVerificationFacts(facts tools.ToolExecutionFacts, in input, succeeded bool) tools.ToolExecutionFacts {
+	scope := strings.TrimSpace(in.VerificationScope)
+	if !in.Verification && scope == "" {
+		return facts
+	}
+	facts.VerificationPerformed = true
+	facts.VerificationPassed = succeeded
+	if scope == "" {
+		scope = "workspace"
+	}
+	facts.VerificationScope = scope
+	return facts
 }

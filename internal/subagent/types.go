@@ -7,6 +7,7 @@ import (
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/security"
 )
 
 // Role 表示子代理的执行角色。
@@ -57,15 +58,22 @@ func (b Budget) normalize(defaults Budget) Budget {
 
 // Capability 描述子代理运行时可用能力边界。
 type Capability struct {
-	AllowedTools []string
-	AllowedPaths []string
+	AllowedTools    []string
+	AllowedPaths    []string
+	CapabilityToken *security.CapabilityToken
 }
 
 // normalize 归一化能力列表并去重。
 func (c Capability) normalize() Capability {
+	var token *security.CapabilityToken
+	if c.CapabilityToken != nil {
+		normalized := c.CapabilityToken.Normalize()
+		token = &normalized
+	}
 	return Capability{
-		AllowedTools: dedupeAndTrim(c.AllowedTools),
-		AllowedPaths: dedupeAndTrim(c.AllowedPaths),
+		AllowedTools:    dedupeAndTrim(c.AllowedTools),
+		AllowedPaths:    dedupeAndTrim(c.AllowedPaths),
+		CapabilityToken: token,
 	}
 }
 
@@ -214,14 +222,16 @@ type ToolSpecListInput struct {
 
 // ToolExecutionInput 描述一次子代理工具执行请求。
 type ToolExecutionInput struct {
-	RunID     string
-	SessionID string
-	TaskID    string
-	Role      Role
-	AgentID   string
-	Workdir   string
-	Timeout   time.Duration
-	Call      providertypes.ToolCall
+	RunID           string
+	SessionID       string
+	TaskID          string
+	Role            Role
+	AgentID         string
+	Workdir         string
+	Timeout         time.Duration
+	Call            providertypes.ToolCall
+	Capability      Capability
+	CapabilityToken *security.CapabilityToken
 }
 
 // ToolExecutionResult 描述子代理工具执行后的标准结果。
