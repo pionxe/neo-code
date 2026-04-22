@@ -9,6 +9,19 @@ NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-A
 
 它适合希望在本地工作流中完成代码理解、修改、调试与自动化操作的开发者。
 
+## 项目介绍页
+
+- 仓库内置了基于 VitePress 的 GitHub Pages 站点源码，目录为 `www/`
+- 启用仓库的 GitHub Pages 并选择 `GitHub Actions` 后，站点将发布到：
+  `https://<仓库拥有者>.github.io/neo-code/`
+- 本地预览站点可使用：
+  ```bash
+  cd www
+  pnpm install
+  pnpm docs:dev
+  ```
+- 开发服务器启动后，默认从 `http://localhost:5173/neo-code/` 访问首页
+
 ## 有什么能力？
 - 终端原生 TUI 交互体验（Bubble Tea）
 - Agent 可调用内置工具完成文件与命令相关任务
