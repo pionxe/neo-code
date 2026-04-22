@@ -90,6 +90,22 @@ func TestAnalyzeBashCommandClassifiesGitCommand(t *testing.T) {
 			wantUnknown: true,
 		},
 		{
+			name:        "path based git binary is treated as unknown",
+			command:     ".\\git status --short",
+			wantIsGit:   false,
+			wantClass:   BashIntentClassificationUnknown,
+			wantPrefix:  "bash.command|sha256=",
+			wantUnknown: true,
+		},
+		{
+			name:        "absolute path git binary is treated as unknown",
+			command:     "C:\\tmp\\git.exe status --short",
+			wantIsGit:   false,
+			wantClass:   BashIntentClassificationUnknown,
+			wantPrefix:  "bash.command|sha256=",
+			wantUnknown: true,
+		},
+		{
 			name:        "composite command is unknown",
 			command:     "git status && git log -1",
 			wantIsGit:   false,

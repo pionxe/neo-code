@@ -3,7 +3,6 @@ package tools
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -307,9 +306,15 @@ func tokenizeShellCommand(command string) ([]string, error) {
 
 // isGitBinary 判断首 token 是否为 git 可执行文件。
 func isGitBinary(token string) bool {
-	base := strings.ToLower(strings.TrimSpace(filepath.Base(token)))
-	base = strings.TrimSuffix(base, ".exe")
-	return base == "git"
+	normalized := strings.ToLower(strings.TrimSpace(token))
+	if normalized == "" {
+		return false
+	}
+	// 仅允许裸命令 git/git.exe，拒绝路径形式（例如 ./git、C:\tmp\git.exe）防止可执行文件伪装绕过审批。
+	if strings.ContainsAny(normalized, `/\:`) {
+		return false
+	}
+	return normalized == "git" || normalized == "git.exe"
 }
 
 // normalizeGitArgs 归一化 git 参数，输出稳定 flags 与 positional 参数。

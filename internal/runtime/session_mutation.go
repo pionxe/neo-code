@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	providertypes "neo-code/internal/provider/types"
@@ -133,12 +134,103 @@ func toolResultMarkedFailed(metadata map[string]any) bool {
 	if len(metadata) == 0 {
 		return false
 	}
-	raw, exists := metadata["ok"]
-	if !exists {
-		return false
+	if raw, exists := metadata["ok"]; exists {
+		if ok, resolved := parseToolResultOK(raw); resolved {
+			return !ok
+		}
 	}
-	ok, cast := raw.(bool)
-	return cast && !ok
+	if rawExitCode, exists := metadata["exit_code"]; exists {
+		if exitCode, resolved := parseToolResultExitCode(rawExitCode); resolved {
+			return exitCode != 0
+		}
+	}
+	return false
+}
+
+// parseToolResultOK 解析工具元数据里的 ok 字段，兼容 bool/数字/字符串等常见序列化形态。
+func parseToolResultOK(raw any) (bool, bool) {
+	switch value := raw.(type) {
+	case bool:
+		return value, true
+	case string:
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		switch trimmed {
+		case "true", "1", "yes", "y":
+			return true, true
+		case "false", "0", "no", "n":
+			return false, true
+		default:
+			return false, false
+		}
+	case int:
+		return value != 0, true
+	case int8:
+		return value != 0, true
+	case int16:
+		return value != 0, true
+	case int32:
+		return value != 0, true
+	case int64:
+		return value != 0, true
+	case uint:
+		return value != 0, true
+	case uint8:
+		return value != 0, true
+	case uint16:
+		return value != 0, true
+	case uint32:
+		return value != 0, true
+	case uint64:
+		return value != 0, true
+	case float32:
+		return value != 0, true
+	case float64:
+		return value != 0, true
+	default:
+		return false, false
+	}
+}
+
+// parseToolResultExitCode 解析工具元数据里的 exit_code 字段，兼容数字和字符串。
+func parseToolResultExitCode(raw any) (int, bool) {
+	switch value := raw.(type) {
+	case int:
+		return value, true
+	case int8:
+		return int(value), true
+	case int16:
+		return int(value), true
+	case int32:
+		return int(value), true
+	case int64:
+		return int(value), true
+	case uint:
+		return int(value), true
+	case uint8:
+		return int(value), true
+	case uint16:
+		return int(value), true
+	case uint32:
+		return int(value), true
+	case uint64:
+		return int(value), true
+	case float32:
+		return int(value), true
+	case float64:
+		return int(value), true
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return 0, false
+		}
+		parsed, err := strconv.Atoi(trimmed)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
 }
 
 // createSessionInputFromSession 将运行态 session 转为建库时使用的会话头输入。
