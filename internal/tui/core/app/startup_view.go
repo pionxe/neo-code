@@ -15,12 +15,12 @@ const startupLogo = `
 ██║ ╚████║███████╗╚██████╔╝██████╗ ╚██████╔╝██████╔╝███████╗
 ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝`
 
-type startupMenuItem struct {
+type startupQuickActionItem struct {
 	Key   string
 	Label string
 }
 
-var startupMenu = []startupMenuItem{
+var startupQuickActions = []startupQuickActionItem{
 	{Key: "Ctrl+N", Label: "New Chat"},
 	{Key: "/", Label: "Open Command Palette"},
 	{Key: "Ctrl+L", Label: "Open Log Viewer"},
@@ -98,8 +98,8 @@ func (a App) renderStartupScreen(width int, height int) string {
 
 	logoContent := startupCenterPadLines(strings.Split(startupLogo, "\n"), logoCanvasWidth)
 
-	menuLines := make([]string, 0, len(startupMenu))
-	for _, item := range startupMenu {
+	menuLines := make([]string, 0, len(startupQuickActions))
+	for _, item := range startupQuickActions {
 		menuLines = append(menuLines, lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			menuKeyStyle.Render(item.Key),
