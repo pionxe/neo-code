@@ -21,17 +21,18 @@ type layout struct {
 
 const headerBarHeight = 2
 const transcriptScrollbarWidth = 3
+const startupCommandMenuMinReservedHeight = 8
 
 const (
 	pickerPanelHorizontalInset = 8
 	pickerPanelVerticalInset   = 4
 	pickerPanelMinWidth        = 42
-	pickerPanelMaxWidth        = 72
+	pickerPanelMaxWidth        = 76
 	pickerPanelMinHeight       = 14
-	pickerPanelMaxHeight       = 24
+	pickerPanelMaxHeight       = 26
 	pickerListMinWidth         = 28
 	pickerListMinHeight        = 8
-	pickerHeaderRows           = 2
+	pickerHeaderRows           = 3
 )
 
 type pickerLayoutSpec struct {
@@ -51,16 +52,29 @@ func (a App) View() string {
 	lay := a.computeLayout()
 	header := a.renderHeader(lay.contentWidth)
 	body := a.renderBody(lay)
-	helpView := a.renderHelp(lay.contentWidth)
-	usedHeight := lipgloss.Height(header) + lipgloss.Height(body) + lipgloss.Height(helpView)
+	footerView := a.renderFooter(lay.contentWidth)
+	usedHeight := lipgloss.Height(header) + lipgloss.Height(body) + lipgloss.Height(footerView)
 	spacerHeight := max(0, docHeight-usedHeight)
 	parts := []string{header, body}
 	if spacerHeight > 0 {
 		parts = append(parts, lipgloss.NewStyle().Height(spacerHeight).Render(""))
 	}
-	parts = append(parts, helpView)
+	if strings.TrimSpace(footerView) != "" {
+		parts = append(parts, footerView)
+	}
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, content)), "\n")
+}
+
+func (a App) renderFooter(width int) string {
+	if a.shouldRenderStartupScreen() {
+		errorLine := a.footerErrorLine(width)
+		if strings.TrimSpace(errorLine) == "" {
+			return ""
+		}
+		return a.styles.footer.Width(width).Render(errorLine)
+	}
+	return a.renderHelp(width)
 }
 
 func (a App) renderHeader(width int) string {
@@ -78,11 +92,49 @@ func (a App) renderHeader(width int) string {
 
 	model := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentModel), "unknown-model")
 	workdir := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentWorkdir), "-")
-	headerText := fmt.Sprintf("NeoCode | %s | %s | cwd: %s", model, status, workdir)
-	if lipgloss.Width(headerText) > width {
-		headerText = tuiutils.TrimMiddle(headerText, max(8, width))
-	}
+	leftText := fmt.Sprintf("NeoCode / %s / %s", model, status)
+	rightText := "cwd: " + workdir
+	headerText := composeHeaderLine(leftText, rightText, width)
 	return a.styles.headerBar.Width(width).Height(headerBarHeight).Render(headerText)
+}
+
+func composeHeaderLine(left string, right string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if right == "" {
+		return tuiutils.TrimMiddle(left, max(8, width))
+	}
+
+	rightWidth := lipgloss.Width(right)
+	if width <= rightWidth {
+		return tuiutils.TrimMiddle(right, max(8, width))
+	}
+
+	if left == "" {
+		return tuiutils.TrimMiddle(right, max(8, width))
+	}
+
+	gap := 2
+	leftMax := width - rightWidth - gap
+	if leftMax < 8 {
+		// Keep at least one separating space when width is tight.
+		leftMax = max(1, width-rightWidth-1)
+		gap = 1
+	}
+	if leftMax <= 0 {
+		return tuiutils.TrimMiddle(right, max(8, width))
+	}
+
+	leftText := tuiutils.TrimMiddle(left, leftMax)
+	spaceCount := width - lipgloss.Width(leftText) - rightWidth
+	if spaceCount < gap {
+		spaceCount = gap
+	}
+	return leftText + strings.Repeat(" ", spaceCount) + right
 }
 
 func (a App) renderBody(lay layout) string {
@@ -93,7 +145,7 @@ func (a App) renderBody(lay layout) string {
 func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
 	activityHeight := 0
 	todoHeight := a.todoPreviewHeight()
-	menuHeight := a.commandMenuHeight(width)
+	menuHeight := a.commandMenuHeight(width, height)
 	promptHeight := lipgloss.Height(a.renderPrompt(width))
 	transcriptHeight := max(6, height-activityHeight-todoHeight-menuHeight-promptHeight)
 	return transcriptHeight, activityHeight, menuHeight, todoHeight
@@ -115,8 +167,10 @@ func (a App) renderWaterfall(width int, height int) string {
 		return a.renderLogViewer(width, height)
 	}
 
-	transcriptContent := a.transcript.View()
-	transcript := a.renderTranscriptWithScrollbar(width, transcriptContent)
+	transcript := a.renderTranscriptWithScrollbar(width, a.transcript.View())
+	if a.shouldRenderStartupScreen() {
+		transcript = a.renderStartupScreen(width, max(1, a.transcript.Height))
+	}
 
 	parts := []string{transcript}
 	if a.state.IsAgentRunning && a.state.StatusText == statusThinking {
@@ -135,7 +189,11 @@ func (a App) renderWaterfall(width int, height int) string {
 	if todo := a.renderTodoPreview(width); todo != "" {
 		parts = append(parts, todo)
 	}
-	if menu := a.renderCommandMenu(width); menu != "" {
+	menu := a.renderCommandMenu(width)
+	if a.shouldRenderStartupScreen() {
+		menu = a.padStartupCommandMenuSlot(width, menu, a.commandMenuHeight(width, height))
+	}
+	if menu != "" {
 		parts = append(parts, menu)
 	}
 	parts = append(parts, a.renderPrompt(width))
@@ -201,8 +259,9 @@ func (a App) buildPickerLayout(contentWidth int, contentHeight int) pickerLayout
 	panelWidth := tuiutils.Clamp(contentWidth-pickerPanelHorizontalInset, pickerPanelMinWidth, pickerPanelMaxWidth)
 	panelHeight := tuiutils.Clamp(contentHeight-pickerPanelVerticalInset, pickerPanelMinHeight, pickerPanelMaxHeight)
 
-	frameWidth := a.styles.panelFocused.GetHorizontalFrameSize()
-	frameHeight := a.styles.panelFocused.GetVerticalFrameSize()
+	panelStyle := a.pickerPanelStyle()
+	frameWidth := panelStyle.GetHorizontalFrameSize()
+	frameHeight := panelStyle.GetVerticalFrameSize()
 	listWidth := max(pickerListMinWidth, panelWidth-frameWidth)
 	listHeight := max(pickerListMinHeight, panelHeight-frameHeight-pickerHeaderRows)
 
@@ -214,8 +273,16 @@ func (a App) buildPickerLayout(contentWidth int, contentHeight int) pickerLayout
 	}
 }
 
+func (a App) pickerPanelStyle() lipgloss.Style {
+	return a.styles.panelFocused.Copy().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(borderDark)).
+		Padding(1, 1)
+}
+
 func (a App) renderPicker(width int, height int) string {
-	frameHeight := a.styles.panelFocused.GetVerticalFrameSize()
+	panelStyle := a.pickerPanelStyle()
+	frameHeight := panelStyle.GetVerticalFrameSize()
 	title := modelPickerTitle
 	subtitle := modelPickerSubtitle
 	body := a.modelPicker.View()
@@ -247,10 +314,11 @@ func (a App) renderPicker(width int, height int) string {
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		a.styles.panelTitle.Render(title),
-		a.styles.panelSubtitle.Render(subtitle),
+		a.styles.panelSubtitle.Foreground(lipgloss.Color(midGray)).Render(subtitle),
+		"",
 		body,
 	)
-	panel := a.styles.panelFocused.
+	panel := panelStyle.
 		Width(max(1, width-2)).
 		Height(max(1, height-frameHeight)).
 		Render(content)
@@ -404,7 +472,12 @@ func (a App) renderPrompt(width int) string {
 		box = a.styles.inputBoxFocused
 	}
 
-	return box.Width(width).Margin(1, 0, 0, 0).Render(a.input.View())
+	promptWidth := a.startupPanelWidth(width)
+	prompt := box.Width(promptWidth).Margin(1, 0, 0, 0).Render(a.input.View())
+	if promptWidth < width {
+		return lipgloss.PlaceHorizontal(width, lipgloss.Center, prompt)
+	}
+	return prompt
 }
 
 func (a App) renderPanel(title string, subtitle string, body string, width int, height int, focused bool) string {
@@ -452,7 +525,6 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 
 	switch message.Role {
 	case roleUser:
-		maxMessageWidth = tuiutils.Clamp(int(float64(width)*0.68), 24, width)
 		tag = messageTagUser
 		tagStyle = a.styles.messageUserTag
 		bodyStyle = a.styles.messageUserBody
@@ -490,24 +562,7 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	}
 
 	tagLine := tagStyle.Render(tag)
-	blockAlign := lipgloss.Left
-	if message.Role == roleUser {
-		blockAlign = lipgloss.Right
-		rightInset := bodyStyle.GetMarginRight() - tagStyle.GetPaddingRight()
-		if rightInset < 0 {
-			rightInset = 0
-		}
-		if rightInset > 0 {
-			tagLine = tagStyle.Copy().MarginRight(rightInset).Render(tag)
-		}
-	}
-	parts := []string{tagLine, contentBlock}
-	block := lipgloss.JoinVertical(blockAlign, parts...)
-
-	if message.Role == roleUser {
-		return lipgloss.PlaceHorizontal(width, lipgloss.Right, block), nil
-	}
-	return block, copyButtons
+	return lipgloss.JoinVertical(lipgloss.Left, tagLine, contentBlock), copyButtons
 }
 
 func (a App) renderCommandMenu(width int) string {
@@ -522,21 +577,57 @@ func (a App) renderCommandMenu(width int) string {
 	if body == "" {
 		return ""
 	}
-	return tuicomponents.RenderCommandMenu(tuicomponents.CommandMenuData{
+	menuWidth := a.startupPanelWidth(width)
+	menu := tuicomponents.RenderCommandMenu(tuicomponents.CommandMenuData{
 		Title:          title,
 		Body:           body,
-		Width:          width,
+		Width:          menuWidth,
 		ContainerStyle: a.styles.commandMenu,
 		TitleStyle:     a.styles.commandMenuTitle,
 	})
+	if menuWidth < width {
+		return lipgloss.PlaceHorizontal(width, lipgloss.Center, menu)
+	}
+	return menu
 }
 
-func (a App) commandMenuHeight(width int) int {
+func (a App) startupPanelWidth(totalWidth int) int {
+	if totalWidth <= 0 || !a.shouldRenderStartupScreen() {
+		return max(0, totalWidth)
+	}
+	return min(totalWidth, startupPromptWidth(totalWidth))
+}
+
+func (a App) commandMenuHeight(width int, totalHeight int) int {
 	menu := a.renderCommandMenu(width)
+	if a.shouldRenderStartupScreen() {
+		reserved := a.startupCommandMenuReserveHeight(menu)
+		promptHeight := lipgloss.Height(a.renderPrompt(width))
+		availableMenuHeight := max(0, totalHeight-a.activityPreviewHeight()-a.todoPreviewHeight()-promptHeight-6)
+		return min(reserved, availableMenuHeight)
+	}
 	if strings.TrimSpace(menu) == "" {
 		return 0
 	}
 	return lipgloss.Height(menu)
+}
+
+func (a App) startupCommandMenuReserveHeight(menu string) int {
+	menuHeight := lipgloss.Height(menu)
+	if menuHeight < startupCommandMenuMinReservedHeight {
+		return startupCommandMenuMinReservedHeight
+	}
+	return menuHeight
+}
+
+func (a App) padStartupCommandMenuSlot(width int, menu string, slotHeight int) string {
+	if slotHeight <= 0 {
+		return ""
+	}
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(slotHeight).
+		Render(menu)
 }
 
 func (a App) renderHelp(width int) string {
@@ -567,6 +658,7 @@ func (a App) footerErrorLine(width int) string {
 
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(errorRed)).
+		Align(lipgloss.Center).
 		Width(width).
 		Render(compactStatusText(message, max(8, width)))
 }
@@ -646,7 +738,7 @@ func (a App) computeLayout() layout {
 
 // helpHeight 仅计算帮助区高度，避免在 layout 计算阶段触发完整渲染。
 func (a App) helpHeight(width int) int {
-	return lipgloss.Height(a.renderHelp(width))
+	return lipgloss.Height(a.renderFooter(width))
 }
 
 func (a App) renderLogViewer(width int, height int) string {
