@@ -12,7 +12,7 @@ func TestDecideTurnBudgetAccurateBranches(t *testing.T) {
 		},
 		EstimatedInputTokens: 120,
 		EstimateSource:       "provider",
-		Accurate:             true,
+		GatePolicy:           TurnBudgetGatePolicyGateable,
 	}
 
 	within := DecideTurnBudget(baseEstimate, 120, 0)
@@ -22,8 +22,8 @@ func TestDecideTurnBudgetAccurateBranches(t *testing.T) {
 	if within.Reason != BudgetDecisionReasonWithinBudget {
 		t.Fatalf("within.Reason = %q", within.Reason)
 	}
-	if !within.EstimateAccurate {
-		t.Fatalf("within.EstimateAccurate = false, want true")
+	if within.EstimateGatePolicy != TurnBudgetGatePolicyGateable {
+		t.Fatalf("within.EstimateGatePolicy = %q, want %q", within.EstimateGatePolicy, TurnBudgetGatePolicyGateable)
 	}
 
 	firstExceed := DecideTurnBudget(baseEstimate, 100, 0)
@@ -33,23 +33,23 @@ func TestDecideTurnBudgetAccurateBranches(t *testing.T) {
 	if firstExceed.Reason != BudgetDecisionReasonExceedsBudgetFirstTime {
 		t.Fatalf("firstExceed.Reason = %q", firstExceed.Reason)
 	}
-	if !firstExceed.EstimateAccurate {
-		t.Fatalf("firstExceed.EstimateAccurate = false, want true")
+	if firstExceed.EstimateGatePolicy != TurnBudgetGatePolicyGateable {
+		t.Fatalf("firstExceed.EstimateGatePolicy = %q, want %q", firstExceed.EstimateGatePolicy, TurnBudgetGatePolicyGateable)
 	}
 
 	afterCompact := DecideTurnBudget(baseEstimate, 100, 1)
 	if afterCompact.Action != TurnBudgetActionStop {
 		t.Fatalf("afterCompact.Action = %q", afterCompact.Action)
 	}
-	if afterCompact.Reason != BudgetDecisionReasonExceedsBudgetAfterCompact {
+	if afterCompact.Reason != BudgetDecisionReasonExceedsBudgetAfterCompactStop {
 		t.Fatalf("afterCompact.Reason = %q", afterCompact.Reason)
 	}
-	if !afterCompact.EstimateAccurate {
-		t.Fatalf("afterCompact.EstimateAccurate = false, want true")
+	if afterCompact.EstimateGatePolicy != TurnBudgetGatePolicyGateable {
+		t.Fatalf("afterCompact.EstimateGatePolicy = %q, want %q", afterCompact.EstimateGatePolicy, TurnBudgetGatePolicyGateable)
 	}
 }
 
-func TestDecideTurnBudgetInaccurateBranches(t *testing.T) {
+func TestDecideTurnBudgetAdvisoryBranches(t *testing.T) {
 	t.Parallel()
 
 	estimate := TurnBudgetEstimate{
@@ -59,28 +59,28 @@ func TestDecideTurnBudgetInaccurateBranches(t *testing.T) {
 		},
 		EstimatedInputTokens: 200,
 		EstimateSource:       "local",
-		Accurate:             false,
+		GatePolicy:           TurnBudgetGatePolicyAdvisory,
 	}
 
 	firstExceed := DecideTurnBudget(estimate, 100, 0)
 	if firstExceed.Action != TurnBudgetActionCompact {
 		t.Fatalf("firstExceed.Action = %q", firstExceed.Action)
 	}
-	if firstExceed.Reason != BudgetDecisionReasonExceedsBudgetInaccurateFirstTime {
+	if firstExceed.Reason != BudgetDecisionReasonExceedsBudgetFirstTime {
 		t.Fatalf("firstExceed.Reason = %q", firstExceed.Reason)
 	}
-	if firstExceed.EstimateAccurate {
-		t.Fatalf("firstExceed.EstimateAccurate = true, want false")
+	if firstExceed.EstimateGatePolicy != TurnBudgetGatePolicyAdvisory {
+		t.Fatalf("firstExceed.EstimateGatePolicy = %q, want %q", firstExceed.EstimateGatePolicy, TurnBudgetGatePolicyAdvisory)
 	}
 
 	afterCompact := DecideTurnBudget(estimate, 100, 1)
 	if afterCompact.Action != TurnBudgetActionAllow {
 		t.Fatalf("afterCompact.Action = %q", afterCompact.Action)
 	}
-	if afterCompact.Reason != BudgetDecisionReasonExceedsBudgetInaccurateAfterCompactAllow {
+	if afterCompact.Reason != BudgetDecisionReasonExceedsBudgetAfterCompactAllowAdvisory {
 		t.Fatalf("afterCompact.Reason = %q", afterCompact.Reason)
 	}
-	if afterCompact.EstimateAccurate {
-		t.Fatalf("afterCompact.EstimateAccurate = true, want false")
+	if afterCompact.EstimateGatePolicy != TurnBudgetGatePolicyAdvisory {
+		t.Fatalf("afterCompact.EstimateGatePolicy = %q, want %q", afterCompact.EstimateGatePolicy, TurnBudgetGatePolicyAdvisory)
 	}
 }

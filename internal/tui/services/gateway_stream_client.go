@@ -14,7 +14,7 @@ import (
 	"neo-code/internal/tools"
 )
 
-const runtimeEventPayloadVersion = 3
+const runtimeEventPayloadVersion = 4
 
 // GatewayStreamClient 负责消费 gateway.event 并恢复为 TUI 事件。
 type GatewayStreamClient struct {

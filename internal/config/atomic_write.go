@@ -1,0 +1,78 @@
+package config
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"syscall"
+)
+
+var (
+	atomicCreateTemp = os.CreateTemp
+	atomicReadFile   = os.ReadFile
+	atomicRename     = os.Rename
+)
+
+// writeFileAtomically 通过同目录临时文件与原子替换写入目标文件，并在写后做回读校验。
+func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	pattern := "." + filepath.Base(path) + ".tmp-*"
+	tempFile, err := atomicCreateTemp(dir, pattern)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+
+	tempPath := tempFile.Name()
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.Write(data); err != nil {
+		_ = tempFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tempFile.Sync(); err != nil {
+		_ = tempFile.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Chmod(tempPath, perm); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := atomicRename(tempPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	cleanupTemp = false
+
+	written, err := atomicReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read back written file: %w", err)
+	}
+	if !bytes.Equal(written, data) {
+		return errors.New("read back mismatch")
+	}
+	if err := fsyncDirectory(dir); err != nil {
+		return fmt.Errorf("sync target directory: %w", err)
+	}
+	return nil
+}
+
+// fsyncDirectory 尝试同步目录元数据，确保 rename 后的目录项在支持的平台尽快落盘。
+func fsyncDirectory(dir string) error {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	if err := handle.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, os.ErrInvalid) {
+		return err
+	}
+	return nil
+}

@@ -541,7 +541,7 @@ func (p *scriptedProvider) EstimateInputTokens(
 	return providertypes.BudgetEstimate{
 		EstimatedInputTokens: provider.EstimateTextTokens(req.SystemPrompt + renderMessagesForEstimate(req.Messages)),
 		EstimateSource:       provider.EstimateSourceLocal,
-		Accurate:             false,
+		GatePolicy:           provider.EstimateGateGateable,
 	}, nil
 }
 
@@ -4476,7 +4476,7 @@ func TestResolvePromptBudgetFallsBackWhenResolverErrors(t *testing.T) {
 	}
 }
 
-func TestServiceRunAllowsAfterProactiveCompactWhenEstimateInaccurate(t *testing.T) {
+func TestServiceRunStopsAfterProactiveCompactWhenEstimateGateable(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -4497,7 +4497,7 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateInaccurate(t *testing.
 			return providertypes.BudgetEstimate{
 				EstimatedInputTokens: 99,
 				EstimateSource:       provider.EstimateSourceLocal,
-				Accurate:             false,
+				GatePolicy:           provider.EstimateGateGateable,
 			}, nil
 		},
 		responses: []scriptedResponse{
@@ -4532,7 +4532,122 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateInaccurate(t *testing.
 	}
 
 	if err := service.Run(context.Background(), UserInput{
-		RunID: "run-budget-inaccurate-allow",
+		RunID: "run-budget-gateable-stop",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	compactRunner := service.compactRunner.(*stubCompactRunner)
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected one proactive compact, got %d", len(compactRunner.calls))
+	}
+	if compactRunner.calls[0].Mode != contextcompact.ModeProactive {
+		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeProactive, compactRunner.calls[0].Mode)
+	}
+	if scripted.callCount != 0 {
+		t.Fatalf("expected provider Generate to be skipped after budget stop, got %d calls", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	var budgetActions []string
+	var budgetReasons []string
+	var budgetGatePolicies []string
+	var stopPayload StopReasonDecidedPayload
+	for _, event := range events {
+		switch event.Type {
+		case EventBudgetChecked:
+			payload, ok := event.Payload.(BudgetCheckedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetCheckedPayload, got %T", event.Payload)
+			}
+			budgetActions = append(budgetActions, payload.Action)
+			budgetReasons = append(budgetReasons, payload.Reason)
+			budgetGatePolicies = append(budgetGatePolicies, payload.EstimateGatePolicy)
+		case EventStopReasonDecided:
+			payload, ok := event.Payload.(StopReasonDecidedPayload)
+			if !ok {
+				t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
+			}
+			stopPayload = payload
+		}
+	}
+
+	if len(budgetActions) != 2 || budgetActions[0] != "compact" || budgetActions[1] != "stop" {
+		t.Fatalf("expected budget actions [compact stop], got %v", budgetActions)
+	}
+	if len(budgetReasons) != 2 ||
+		budgetReasons[0] != controlplane.BudgetDecisionReasonExceedsBudgetFirstTime ||
+		budgetReasons[1] != controlplane.BudgetDecisionReasonExceedsBudgetAfterCompactStop {
+		t.Fatalf("unexpected budget reasons %v", budgetReasons)
+	}
+	if len(budgetGatePolicies) != 2 ||
+		budgetGatePolicies[0] != provider.EstimateGateGateable ||
+		budgetGatePolicies[1] != provider.EstimateGateGateable {
+		t.Fatalf("expected gateable estimates, got %v", budgetGatePolicies)
+	}
+	if stopPayload.Reason != controlplane.StopReasonBudgetExceeded {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonBudgetExceeded, stopPayload.Reason)
+	}
+}
+
+func TestServiceRunAllowsAfterProactiveCompactWhenEstimateAdvisory(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 10
+		cfg.Context.Budget.FallbackPromptBudget = 10
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{
+				EstimatedInputTokens: 99,
+				EstimateSource:       provider.EstimateSourceLocal,
+				GatePolicy:           provider.EstimateGateAdvisory,
+			}, nil
+		},
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("继续执行")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Applied: true,
+			Messages: []providertypes.Message{
+				{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")},
+				},
+				{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+				},
+			},
+			Metrics: contextcompact.Metrics{
+				TriggerMode: string(contextcompact.ModeProactive),
+			},
+		},
+	}
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-advisory-allow",
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -4552,7 +4667,7 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateInaccurate(t *testing.
 	events := collectRuntimeEvents(service.Events())
 	var budgetActions []string
 	var budgetReasons []string
-	var budgetAccuracies []bool
+	var budgetGatePolicies []string
 	var stopPayload StopReasonDecidedPayload
 	for _, event := range events {
 		switch event.Type {
@@ -4563,7 +4678,7 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateInaccurate(t *testing.
 			}
 			budgetActions = append(budgetActions, payload.Action)
 			budgetReasons = append(budgetReasons, payload.Reason)
-			budgetAccuracies = append(budgetAccuracies, payload.EstimateAccurate)
+			budgetGatePolicies = append(budgetGatePolicies, payload.EstimateGatePolicy)
 		case EventStopReasonDecided:
 			payload, ok := event.Payload.(StopReasonDecidedPayload)
 			if !ok {
@@ -4577,12 +4692,14 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateInaccurate(t *testing.
 		t.Fatalf("expected budget actions [compact allow], got %v", budgetActions)
 	}
 	if len(budgetReasons) != 2 ||
-		budgetReasons[0] != controlplane.BudgetDecisionReasonExceedsBudgetInaccurateFirstTime ||
-		budgetReasons[1] != controlplane.BudgetDecisionReasonExceedsBudgetInaccurateAfterCompactAllow {
+		budgetReasons[0] != controlplane.BudgetDecisionReasonExceedsBudgetFirstTime ||
+		budgetReasons[1] != controlplane.BudgetDecisionReasonExceedsBudgetAfterCompactAllowAdvisory {
 		t.Fatalf("unexpected budget reasons %v", budgetReasons)
 	}
-	if len(budgetAccuracies) != 2 || budgetAccuracies[0] || budgetAccuracies[1] {
-		t.Fatalf("expected inaccurate estimates, got %v", budgetAccuracies)
+	if len(budgetGatePolicies) != 2 ||
+		budgetGatePolicies[0] != provider.EstimateGateAdvisory ||
+		budgetGatePolicies[1] != provider.EstimateGateAdvisory {
+		t.Fatalf("expected advisory estimates, got %v", budgetGatePolicies)
 	}
 	if stopPayload.Reason != controlplane.StopReasonCompleted {
 		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)
@@ -4602,7 +4719,7 @@ func TestServiceRunReconcilesUnknownOutputUsage(t *testing.T) {
 			return providertypes.BudgetEstimate{
 				EstimatedInputTokens: 17,
 				EstimateSource:       provider.EstimateSourceLocal,
-				Accurate:             false,
+				GatePolicy:           provider.EstimateGateGateable,
 			}, nil
 		},
 		responses: []scriptedResponse{

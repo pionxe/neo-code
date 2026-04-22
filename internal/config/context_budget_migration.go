@@ -66,10 +66,10 @@ func MigrateContextBudgetConfigFile(path string, dryRun bool) (ContextBudgetMigr
 	}
 
 	backup := path + ".bak"
-	if err := os.WriteFile(backup, raw, 0o644); err != nil {
+	if err := writeFileAtomically(backup, raw, 0o644); err != nil {
 		return result, fmt.Errorf("config: write migration backup %s: %w", backup, err)
 	}
-	if err := os.WriteFile(path, migrated, 0o644); err != nil {
+	if err := writeFileAtomically(path, migrated, 0o644); err != nil {
 		return result, fmt.Errorf("config: write migrated config %s: %w", path, err)
 	}
 	result.Backup = backup

@@ -75,7 +75,7 @@ func (p *Provider) EstimateInputTokens(
 	return providertypes.BudgetEstimate{
 		EstimatedInputTokens: tokens,
 		EstimateSource:       provider.EstimateSourceLocal,
-		Accurate:             false,
+		GatePolicy:           provider.EstimateGateGateable,
 	}, nil
 }
 

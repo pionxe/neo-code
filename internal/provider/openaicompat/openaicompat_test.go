@@ -245,6 +245,33 @@ func TestDiscoverModelsParsesNestedContainerAndAliasFields(t *testing.T) {
 	}
 }
 
+func TestEstimateInputTokensReturnsGateableLocalEstimate(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(resolvedConfig("", ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	estimate, err := p.EstimateInputTokens(context.Background(), providertypes.GenerateRequest{
+		Messages: []providertypes.Message{{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("EstimateInputTokens() error = %v", err)
+	}
+	if estimate.EstimateSource != provider.EstimateSourceLocal {
+		t.Fatalf("estimate source = %q, want %q", estimate.EstimateSource, provider.EstimateSourceLocal)
+	}
+	if estimate.GatePolicy != provider.EstimateGateGateable {
+		t.Fatalf("gate policy = %q, want %q", estimate.GatePolicy, provider.EstimateGateGateable)
+	}
+	if estimate.EstimatedInputTokens <= 0 {
+		t.Fatalf("expected positive estimate tokens, got %d", estimate.EstimatedInputTokens)
+	}
+}
+
 func TestDiscoverModelsOpenAIProfileFallsBackToGenericListKeys(t *testing.T) {
 	t.Parallel()
 

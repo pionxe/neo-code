@@ -186,6 +186,40 @@ func TestBuildRequestRejectsSessionAssetWithoutReader(t *testing.T) {
 	}
 }
 
+func TestEstimateInputTokensReturnsGateableLocalEstimate(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(provider.RuntimeConfig{
+		Driver:         provider.DriverGemini,
+		BaseURL:        "https://generativelanguage.googleapis.com/v1beta",
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	estimate, err := p.EstimateInputTokens(context.Background(), providertypes.GenerateRequest{
+		Messages: []providertypes.Message{{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("EstimateInputTokens() error = %v", err)
+	}
+	if estimate.EstimateSource != provider.EstimateSourceLocal {
+		t.Fatalf("estimate source = %q, want %q", estimate.EstimateSource, provider.EstimateSourceLocal)
+	}
+	if estimate.GatePolicy != provider.EstimateGateGateable {
+		t.Fatalf("gate policy = %q, want %q", estimate.GatePolicy, provider.EstimateGateGateable)
+	}
+	if estimate.EstimatedInputTokens <= 0 {
+		t.Fatalf("expected positive estimate tokens, got %d", estimate.EstimatedInputTokens)
+	}
+}
+
 func drainEvents(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
 	var drained []providertypes.StreamEvent
 	for {

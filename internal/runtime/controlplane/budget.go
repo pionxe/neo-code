@@ -10,16 +10,21 @@ const (
 )
 
 const (
+	// TurnBudgetGatePolicyGateable 表示估算可作为预算硬停门禁依据。
+	TurnBudgetGatePolicyGateable = "gateable"
+	// TurnBudgetGatePolicyAdvisory 表示估算仅用于提示或触发 compact，不能硬停。
+	TurnBudgetGatePolicyAdvisory = "advisory"
+)
+
+const (
 	// BudgetDecisionReasonWithinBudget 表示估算在预算范围内。
 	BudgetDecisionReasonWithinBudget = "within_budget"
 	// BudgetDecisionReasonExceedsBudgetFirstTime 表示首次超预算，需要先 compact。
 	BudgetDecisionReasonExceedsBudgetFirstTime = "exceeds_budget_first_time"
-	// BudgetDecisionReasonExceedsBudgetAfterCompact 表示高置信估算在 compact 后仍超预算，需要停止。
-	BudgetDecisionReasonExceedsBudgetAfterCompact = "exceeds_budget_after_compact"
-	// BudgetDecisionReasonExceedsBudgetInaccurateFirstTime 表示低置信估算首次超预算，先 compact 再验证。
-	BudgetDecisionReasonExceedsBudgetInaccurateFirstTime = "exceeds_budget_inaccurate_first_time"
-	// BudgetDecisionReasonExceedsBudgetInaccurateAfterCompactAllow 表示低置信估算 compact 后仍超预算但允许放行。
-	BudgetDecisionReasonExceedsBudgetInaccurateAfterCompactAllow = "exceeds_budget_inaccurate_after_compact_allow"
+	// BudgetDecisionReasonExceedsBudgetAfterCompactStop 表示 compact 后仍超预算且可门禁，必须停止。
+	BudgetDecisionReasonExceedsBudgetAfterCompactStop = "exceeds_budget_after_compact_stop"
+	// BudgetDecisionReasonExceedsBudgetAfterCompactAllowAdvisory 表示 compact 后仍超预算但仅 advisory，允许放行。
+	BudgetDecisionReasonExceedsBudgetAfterCompactAllowAdvisory = "exceeds_budget_after_compact_allow_advisory"
 )
 
 // TurnBudgetID 标识一次冻结预算尝试，避免 estimate、decision 与 usage observation 串用。
@@ -33,7 +38,7 @@ type TurnBudgetEstimate struct {
 	ID                   TurnBudgetID `json:"id"`
 	EstimatedInputTokens int          `json:"estimated_input_tokens"`
 	EstimateSource       string       `json:"estimate_source,omitempty"`
-	Accurate             bool         `json:"accurate"`
+	GatePolicy           string       `json:"gate_policy,omitempty"`
 }
 
 // TurnBudgetDecision 描述冻结请求在当前预算事实下的决策结果。
@@ -44,7 +49,7 @@ type TurnBudgetDecision struct {
 	EstimatedInputTokens int              `json:"estimated_input_tokens"`
 	PromptBudget         int              `json:"prompt_budget"`
 	EstimateSource       string           `json:"estimate_source,omitempty"`
-	EstimateAccurate     bool             `json:"estimate_accurate"`
+	EstimateGatePolicy   string           `json:"estimate_gate_policy,omitempty"`
 }
 
 // DecideTurnBudget 根据输入预算事实输出 allow、compact 或 stop 三种动作。
@@ -58,7 +63,7 @@ func DecideTurnBudget(
 		EstimatedInputTokens: estimate.EstimatedInputTokens,
 		PromptBudget:         promptBudget,
 		EstimateSource:       estimate.EstimateSource,
-		EstimateAccurate:     estimate.Accurate,
+		EstimateGatePolicy:   estimate.GatePolicy,
 	}
 	if estimate.EstimatedInputTokens <= promptBudget {
 		decision.Action = TurnBudgetActionAllow
@@ -67,19 +72,15 @@ func DecideTurnBudget(
 	}
 	if compactCount == 0 {
 		decision.Action = TurnBudgetActionCompact
-		if estimate.Accurate {
-			decision.Reason = BudgetDecisionReasonExceedsBudgetFirstTime
-		} else {
-			decision.Reason = BudgetDecisionReasonExceedsBudgetInaccurateFirstTime
-		}
+		decision.Reason = BudgetDecisionReasonExceedsBudgetFirstTime
 		return decision
 	}
-	if estimate.Accurate {
+	if estimate.GatePolicy == TurnBudgetGatePolicyGateable {
 		decision.Action = TurnBudgetActionStop
-		decision.Reason = BudgetDecisionReasonExceedsBudgetAfterCompact
+		decision.Reason = BudgetDecisionReasonExceedsBudgetAfterCompactStop
 		return decision
 	}
 	decision.Action = TurnBudgetActionAllow
-	decision.Reason = BudgetDecisionReasonExceedsBudgetInaccurateAfterCompactAllow
+	decision.Reason = BudgetDecisionReasonExceedsBudgetAfterCompactAllowAdvisory
 	return decision
 }

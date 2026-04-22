@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,5 +178,132 @@ context:
 	}
 	if len(result.Notes) != 1 || result.Notes[0] != ContextBudgetMigrationNoteEnabledDeprecated {
 		t.Fatalf("expected note %q, got %v", ContextBudgetMigrationNoteEnabledDeprecated, result.Notes)
+	}
+}
+
+func TestMigrateContextBudgetConfigFileKeepsOriginalWhenBackupWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, configName)
+	original := strings.TrimSpace(`
+context:
+  auto_compact:
+    input_token_threshold: 120000
+`) + "\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	restore := stubAtomicWriteOps(t)
+	defer restore()
+	atomicCreateTemp = func(dir string, pattern string) (*os.File, error) {
+		return nil, errors.New("create temp failed")
+	}
+
+	_, err := MigrateContextBudgetConfigFile(target, false)
+	if err == nil || !strings.Contains(err.Error(), "write migration backup") {
+		t.Fatalf("expected backup write error, got %v", err)
+	}
+	raw, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target: %v", readErr)
+	}
+	if string(raw) != original {
+		t.Fatalf("expected original config to stay unchanged, got:\n%s", raw)
+	}
+}
+
+func TestMigrateContextBudgetConfigFileKeepsOriginalWhenTargetReplaceFails(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, configName)
+	original := strings.TrimSpace(`
+context:
+  auto_compact:
+    input_token_threshold: 120000
+`) + "\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	restore := stubAtomicWriteOps(t)
+	defer restore()
+	renameCount := 0
+	atomicRename = func(oldpath string, newpath string) error {
+		renameCount++
+		if renameCount == 2 {
+			return errors.New("rename target failed")
+		}
+		return os.Rename(oldpath, newpath)
+	}
+
+	_, err := MigrateContextBudgetConfigFile(target, false)
+	if err == nil || !strings.Contains(err.Error(), "write migrated config") {
+		t.Fatalf("expected migrated config write error, got %v", err)
+	}
+	if renameCount < 2 {
+		t.Fatalf("expected second rename to fail, got renameCount=%d", renameCount)
+	}
+
+	raw, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target: %v", readErr)
+	}
+	if string(raw) != original {
+		t.Fatalf("expected original config to stay unchanged, got:\n%s", raw)
+	}
+
+	backupRaw, backupErr := os.ReadFile(target + ".bak")
+	if backupErr != nil {
+		t.Fatalf("read backup: %v", backupErr)
+	}
+	if string(backupRaw) != original {
+		t.Fatalf("expected backup to keep original content, got:\n%s", backupRaw)
+	}
+}
+
+func TestMigrateContextBudgetConfigFileKeepsOriginalWhenBackupVerificationFails(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, configName)
+	original := strings.TrimSpace(`
+context:
+  auto_compact:
+    input_token_threshold: 120000
+`) + "\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	restore := stubAtomicWriteOps(t)
+	defer restore()
+	readCount := 0
+	atomicReadFile = func(path string) ([]byte, error) {
+		readCount++
+		if readCount == 1 {
+			return []byte("corrupted"), nil
+		}
+		return os.ReadFile(path)
+	}
+
+	_, err := MigrateContextBudgetConfigFile(target, false)
+	if err == nil || !strings.Contains(err.Error(), "read back mismatch") {
+		t.Fatalf("expected read back mismatch error, got %v", err)
+	}
+	raw, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target: %v", readErr)
+	}
+	if string(raw) != original {
+		t.Fatalf("expected original config to stay unchanged, got:\n%s", raw)
+	}
+}
+
+func stubAtomicWriteOps(t *testing.T) func() {
+	t.Helper()
+	prevCreateTemp := atomicCreateTemp
+	prevReadFile := atomicReadFile
+	prevRename := atomicRename
+	return func() {
+		atomicCreateTemp = prevCreateTemp
+		atomicReadFile = prevReadFile
+		atomicRename = prevRename
 	}
 }

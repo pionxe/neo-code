@@ -125,8 +125,8 @@ BuildRequest -> FreezeSnapshot -> EstimateInput -> DecideBudget -> (allow | comp
 - provider 发送前一定先做输入 token estimate。
 - 如果 estimate 没超过 `prompt_budget`，本轮允许发送。
 - 如果 estimate 首次超预算，先执行一次 `proactive` compact，然后重建请求并重新估算。
-- 如果 compact 后仍超预算且估算为高置信（`accurate=true`），停止当前 run，并产出 `STOP_BUDGET_EXCEEDED`。
-- 如果 compact 后仍超预算但估算为低置信（`accurate=false`），不直接硬停，继续发送请求。
+- 如果 compact 后仍超预算且 `gate_policy=gateable`，停止当前 run，并产出 `STOP_BUDGET_EXCEEDED`。
+- 如果 compact 后仍超预算但 `gate_policy=advisory`，不直接硬停，继续发送请求。
 - 如果 provider 返回 `context_too_long`，runtime 会进入 `reactive` compact 恢复链路，并重新进入同一预算闭环。
 
 ## provider 策略

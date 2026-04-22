@@ -1913,7 +1913,7 @@ func (s *stubMemoProvider) EstimateInputTokens(
 	return providertypes.BudgetEstimate{
 		EstimatedInputTokens: provider.EstimateTextTokens(req.SystemPrompt),
 		EstimateSource:       provider.EstimateSourceLocal,
-		Accurate:             false,
+		GatePolicy:           provider.EstimateGateGateable,
 	}, nil
 }
 

@@ -11,5 +11,5 @@ type Usage struct {
 type BudgetEstimate struct {
 	EstimatedInputTokens int    `json:"estimated_input_tokens"`
 	EstimateSource       string `json:"estimate_source"`
-	Accurate             bool   `json:"accurate"`
+	GatePolicy           string `json:"gate_policy"`
 }

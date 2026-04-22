@@ -8,6 +8,8 @@ import (
 const (
 	EstimateSourceNative = "native"
 	EstimateSourceLocal  = "local"
+	EstimateGateAdvisory = "advisory"
+	EstimateGateGateable = "gateable"
 	localEstimateSlack   = 1.15
 )
 

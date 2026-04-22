@@ -23,7 +23,7 @@ func (s *stubTextGenProvider) EstimateInputTokens(
 	return providertypes.BudgetEstimate{
 		EstimatedInputTokens: provider.EstimateTextTokens(req.SystemPrompt + renderEstimateMessages(req.Messages)),
 		EstimateSource:       provider.EstimateSourceLocal,
-		Accurate:             false,
+		GatePolicy:           provider.EstimateGateGateable,
 	}, nil
 }
 

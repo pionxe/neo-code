@@ -69,8 +69,8 @@ BuildRequest -> FreezeSnapshot -> EstimateInput -> DecideBudget -> (allow | comp
 - `context.Builder` 只构建 provider-facing request，不再返回旧的 builder 压缩建议布尔值。
 - provider 发送前一定先做输入 token estimate。
 - estimate 首次超预算时，runtime 执行一次 `proactive` compact，然后重建 request 并重新估算。
-- compact 后仍超预算且估算高置信（`accurate=true`）时，runtime 停止本次 run，并返回 `STOP_BUDGET_EXCEEDED`。
-- compact 后仍超预算但估算低置信（`accurate=false`）时，runtime 继续发送请求，不因低置信估算直接硬停。
+- compact 后仍超预算且 `gate_policy=gateable` 时，runtime 停止本次 run，并返回 `STOP_BUDGET_EXCEEDED`。
+- compact 后仍超预算但 `gate_policy=advisory` 时，runtime 继续发送请求，不直接硬停。
 - provider 返回 `context_too_long` 时，runtime 触发 `reactive` compact，并重新进入同一预算闭环。
 
 ## compact 如何压缩

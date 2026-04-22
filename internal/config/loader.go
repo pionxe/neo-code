@@ -165,7 +165,7 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 		return err
 	}
 
-	if err := os.WriteFile(l.ConfigPath(), data, 0o644); err != nil {
+	if err := writeFileAtomically(l.ConfigPath(), data, 0o644); err != nil {
 		return fmt.Errorf("config: write config file: %w", err)
 	}
 

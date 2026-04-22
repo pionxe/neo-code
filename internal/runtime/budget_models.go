@@ -91,11 +91,15 @@ func newTurnBudgetEstimate(
 	id controlplane.TurnBudgetID,
 	estimate providertypes.BudgetEstimate,
 ) controlplane.TurnBudgetEstimate {
+	gatePolicy := controlplane.TurnBudgetGatePolicyAdvisory
+	if estimate.GatePolicy == provider.EstimateGateGateable {
+		gatePolicy = controlplane.TurnBudgetGatePolicyGateable
+	}
 	return controlplane.TurnBudgetEstimate{
 		ID:                   id,
 		EstimatedInputTokens: estimate.EstimatedInputTokens,
 		EstimateSource:       estimate.EstimateSource,
-		Accurate:             estimate.Accurate,
+		GatePolicy:           gatePolicy,
 	}
 }
 
