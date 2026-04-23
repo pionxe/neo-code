@@ -108,13 +108,14 @@ func newTurnBudgetUsageObservation(
 	id controlplane.TurnBudgetID,
 	inputTokens int,
 	outputTokens int,
-	observed bool,
+	inputObserved bool,
+	outputObserved bool,
 ) TurnBudgetUsageObservation {
 	return TurnBudgetUsageObservation{
 		ID:             id,
 		InputTokens:    inputTokens,
 		OutputTokens:   outputTokens,
-		InputObserved:  observed,
-		OutputObserved: observed,
+		InputObserved:  inputObserved,
+		OutputObserved: outputObserved,
 	}
 }

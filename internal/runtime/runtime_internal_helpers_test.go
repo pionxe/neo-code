@@ -11,6 +11,7 @@ import (
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
@@ -622,6 +623,74 @@ func TestEmitTokenUsageSkipsZeroUsage(t *testing.T) {
 	events = collectRuntimeEvents(service.Events())
 	if len(events) != 1 || events[0].Type != EventTokenUsage {
 		t.Fatalf("expected one token usage event, got %+v", events)
+	}
+}
+
+func TestReconcileLedgerSupportsPartialObservation(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	state := &runState{session: newRuntimeSession("session-partial-observed")}
+	id := controlplane.TurnBudgetID{AttemptSeq: 2, RequestHash: "hash-partial-observed"}
+	decision := controlplane.TurnBudgetDecision{
+		ID:                   id,
+		EstimatedInputTokens: 37,
+	}
+	observation := TurnBudgetUsageObservation{
+		ID:             id,
+		InputTokens:    13,
+		OutputTokens:   0,
+		InputObserved:  true,
+		OutputObserved: false,
+	}
+
+	result, err := service.reconcileLedger(state, decision, observation)
+	if err != nil {
+		t.Fatalf("reconcileLedger() error = %v", err)
+	}
+	if result.inputTokens != 13 || result.inputSource != usageSourceObserved {
+		t.Fatalf("expected observed input reconciliation, got %+v", result)
+	}
+	if result.outputTokens != 0 || result.outputSource != usageSourceUnknown {
+		t.Fatalf("expected unknown output reconciliation, got %+v", result)
+	}
+	if !result.hasUnknownUsage {
+		t.Fatalf("expected hasUnknownUsage=true for partial observation")
+	}
+	if !state.session.HasUnknownUsage || !state.hasUnknownUsage {
+		t.Fatalf("expected unknown usage flag to propagate to run state")
+	}
+}
+
+func TestReconcileLedgerUsesEstimateWhenInputNotObserved(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	id := controlplane.TurnBudgetID{AttemptSeq: 3, RequestHash: "hash-no-input-observed"}
+	decision := controlplane.TurnBudgetDecision{
+		ID:                   id,
+		EstimatedInputTokens: 41,
+	}
+	observation := TurnBudgetUsageObservation{
+		ID:             id,
+		InputTokens:    0,
+		OutputTokens:   7,
+		InputObserved:  false,
+		OutputObserved: true,
+	}
+
+	result, err := service.reconcileLedger(nil, decision, observation)
+	if err != nil {
+		t.Fatalf("reconcileLedger() error = %v", err)
+	}
+	if result.inputTokens != 41 || result.inputSource != usageSourceEstimated {
+		t.Fatalf("expected estimated input reconciliation, got %+v", result)
+	}
+	if result.outputTokens != 7 || result.outputSource != usageSourceObserved {
+		t.Fatalf("expected observed output reconciliation, got %+v", result)
+	}
+	if !result.hasUnknownUsage {
+		t.Fatalf("expected hasUnknownUsage=true when any side is unobserved")
 	}
 }
 

@@ -36,7 +36,7 @@ func EmitFromStream(
 		if reason == "" {
 			reason = "stop"
 		}
-		return provider.EmitMessageDone(ctx, events, reason, &usage)
+		return provider.EmitMessageDone(ctx, events, reason, doneUsagePtr(usage))
 	}
 	processPayload := func(payload string) error {
 		if strings.TrimSpace(payload) == "[DONE]" {
@@ -392,9 +392,11 @@ func extractUsage(usage *providertypes.Usage, response *streamResponse) {
 		return
 	}
 	*usage = providertypes.Usage{
-		InputTokens:  response.Usage.InputTokens,
-		OutputTokens: response.Usage.OutputTokens,
-		TotalTokens:  response.Usage.TotalTokens,
+		InputTokens:    response.Usage.InputTokens,
+		OutputTokens:   response.Usage.OutputTokens,
+		TotalTokens:    response.Usage.TotalTokens,
+		InputObserved:  true,
+		OutputObserved: true,
 	}
 }
 
@@ -434,4 +436,13 @@ func resolveFinishReason(eventType string, response *streamResponse) string {
 	default:
 		return ""
 	}
+}
+
+// doneUsagePtr 在 message_done 事件中按 usage 观测状态返回 payload，未观测时返回 nil。
+func doneUsagePtr(usage providertypes.Usage) *providertypes.Usage {
+	if !usage.InputObserved && !usage.OutputObserved {
+		return nil
+	}
+	copy := usage
+	return &copy
 }

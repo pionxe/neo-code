@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 
@@ -25,6 +26,14 @@ type toolCallState struct {
 // Provider 封装 Anthropic messages 协议的请求发送与流式解析。
 type Provider struct {
 	cfg provider.RuntimeConfig
+
+	mu       sync.Mutex
+	prepared *preparedRequest
+}
+
+type preparedRequest struct {
+	signature string
+	params    anthropic.MessageNewParams
 }
 
 // EstimateInputTokens 基于 Anthropic 最终请求结构做本地输入 token 估算。
@@ -40,10 +49,11 @@ func (p *Provider) EstimateInputTokens(
 	if err != nil {
 		return providertypes.BudgetEstimate{}, err
 	}
+	p.storePreparedRequest(provider.BuildGenerateRequestSignature(req), params)
 	return providertypes.BudgetEstimate{
 		EstimatedInputTokens: tokens,
 		EstimateSource:       provider.EstimateSourceLocal,
-		GatePolicy:           provider.EstimateGateGateable,
+		GatePolicy:           provider.EstimateGateAdvisory,
 	}, nil
 }
 
@@ -57,9 +67,13 @@ func New(cfg provider.RuntimeConfig) (*Provider, error) {
 
 // Generate 发起 Anthropic 流式请求，并将 typed stream 转为统一事件。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	params, err := BuildRequest(ctx, p.cfg, req)
-	if err != nil {
-		return err
+	params, ok := p.takePreparedRequest(provider.BuildGenerateRequestSignature(req))
+	if !ok {
+		var err error
+		params, err = BuildRequest(ctx, p.cfg, req)
+		if err != nil {
+			return err
+		}
 	}
 
 	client, err := newSDKClient(p.cfg)
@@ -82,11 +96,13 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 		event := streamReader.Current()
 		switch variant := event.AsAny().(type) {
 		case anthropic.MessageStartEvent:
-			if variant.Message.Usage.InputTokens > 0 {
+			if variant.Message.Usage.JSON.InputTokens.Valid() {
 				usage.InputTokens = int(variant.Message.Usage.InputTokens)
+				usage.InputObserved = true
 			}
-			if variant.Message.Usage.OutputTokens > 0 {
+			if variant.Message.Usage.JSON.OutputTokens.Valid() {
 				usage.OutputTokens = int(variant.Message.Usage.OutputTokens)
+				usage.OutputObserved = true
 			}
 		case anthropic.ContentBlockStartEvent:
 			switch block := variant.ContentBlock.AsAny().(type) {
@@ -151,11 +167,13 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 			if reason := strings.TrimSpace(string(variant.Delta.StopReason)); reason != "" {
 				finishReason = reason
 			}
-			if variant.Usage.OutputTokens > 0 {
+			if variant.Usage.JSON.OutputTokens.Valid() {
 				usage.OutputTokens = int(variant.Usage.OutputTokens)
+				usage.OutputObserved = true
 			}
-			if variant.Usage.InputTokens > 0 {
+			if variant.Usage.JSON.InputTokens.Valid() {
 				usage.InputTokens = int(variant.Usage.InputTokens)
+				usage.InputObserved = true
 			}
 		}
 	}
@@ -179,10 +197,38 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 			return fmt.Errorf("%sinvalid tool_use stream at index %d: missing tool name", errorPrefix, index)
 		}
 	}
-	if usage.TotalTokens <= 0 {
+	if usage.TotalTokens <= 0 && (usage.InputObserved || usage.OutputObserved) {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	if !usage.InputObserved && !usage.OutputObserved {
+		return provider.EmitMessageDone(ctx, events, finishReason, nil)
+	}
 	return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+}
+
+// storePreparedRequest 缓存估算阶段已构建的 Anthropic 请求，供同轮发送复用。
+func (p *Provider) storePreparedRequest(signature string, params anthropic.MessageNewParams) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prepared = &preparedRequest{
+		signature: strings.TrimSpace(signature),
+		params:    params,
+	}
+}
+
+// takePreparedRequest 读取并消费匹配签名的预构建请求，避免跨请求误复用。
+func (p *Provider) takePreparedRequest(signature string) (anthropic.MessageNewParams, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prepared == nil {
+		return anthropic.MessageNewParams{}, false
+	}
+	current := p.prepared
+	p.prepared = nil
+	if strings.TrimSpace(signature) == "" || current.signature != strings.TrimSpace(signature) {
+		return anthropic.MessageNewParams{}, false
+	}
+	return current.params, true
 }
 
 // mapAnthropicSDKError 统一映射 SDK 错误为 provider 领域错误。

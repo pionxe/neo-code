@@ -16,6 +16,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/streaming"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
@@ -329,6 +330,35 @@ func TestApplyCompactForStateStrictErrorBranch(t *testing.T) {
 	}
 }
 
+func TestApplyCompactForStateDoesNotIncreaseCompactCountWhenNotApplied(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 8),
+		compactRunner: &stubCompactRunner{
+			result: contextcompact.Result{
+				Applied: false,
+			},
+		},
+	}
+	state := newRunState("run-apply-compact-not-applied", newRuntimeSession("session-apply-compact-not-applied"))
+	state.compactCount = 1
+	if err := service.setBaseRunState(context.Background(), &state, controlplane.RunStatePlan); err != nil {
+		t.Fatalf("set base run state: %v", err)
+	}
+
+	applied, err := service.applyCompactForState(context.Background(), &state, config.Config{}, contextcompact.ModeProactive, compactErrorStrict)
+	if err != nil {
+		t.Fatalf("applyCompactForState() error = %v", err)
+	}
+	if applied {
+		t.Fatalf("expected applied=false when compact runner result is not applied")
+	}
+	if state.compactCount != 1 {
+		t.Fatalf("expected compactCount to stay 1 when compact not applied, got %d", state.compactCount)
+	}
+}
+
 func TestExecuteToolCallWithPermissionRemainingBranches(t *testing.T) {
 	t.Parallel()
 
@@ -606,7 +636,12 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		}()
 		service := &Service{providerFactory: &scriptedProviderFactory{provider: providerRetry}, events: make(chan RuntimeEvent, 8)}
 		state := newRunState("run-retry-backoff", newRuntimeSession("session-retry-backoff"))
-		_, err := service.callProviderWithRetry(ctx, &state, TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}})
+		_, err := service.callProviderWithRetry(
+			ctx,
+			&state,
+			TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}},
+			providerRetry,
+		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -621,7 +656,12 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		}}
 		service := &Service{providerFactory: &scriptedProviderFactory{provider: providerRetry}, events: make(chan RuntimeEvent, 8)}
 		state := newRunState("run-retry-ctx-check", newRuntimeSession("session-retry-ctx-check"))
-		_, err := service.callProviderWithRetry(ctx, &state, TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}})
+		_, err := service.callProviderWithRetry(
+			ctx,
+			&state,
+			TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}},
+			providerRetry,
+		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}

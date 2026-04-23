@@ -147,7 +147,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				continue
 			}
 
-			decision, err := s.evaluateTurnBudget(ctx, &state, snapshot)
+			modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
+			if err != nil {
+				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+			}
+
+			decision, err := s.evaluateTurnBudget(ctx, &state, snapshot, modelProvider)
 			if err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
@@ -168,7 +173,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return nil
 			}
 
-			turnOutput, err := s.callProviderWithRetry(ctx, &state, snapshot)
+			turnOutput, err := s.callProviderWithRetry(ctx, &state, snapshot, modelProvider)
 			if err != nil {
 				if provider.IsContextTooLong(err) &&
 					state.reactiveCompactAttempts < snapshot.Config.Context.Budget.MaxReactiveCompacts {
@@ -388,6 +393,7 @@ func (s *Service) callProviderWithRetry(
 	ctx context.Context,
 	state *runState,
 	snapshot TurnBudgetSnapshot,
+	initialProvider provider.Provider,
 ) (turnProviderOutput, error) {
 	var lastErr error
 
@@ -405,9 +411,13 @@ func (s *Service) callProviderWithRetry(
 			}
 		}
 
-		modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
-		if err != nil {
-			return turnProviderOutput{}, err
+		modelProvider := initialProvider
+		if retryAttempt > 0 {
+			var err error
+			modelProvider, err = s.providerFactory.Build(ctx, snapshot.ProviderConfig)
+			if err != nil {
+				return turnProviderOutput{}, err
+			}
 		}
 
 		streamOutcome := generateStreamingMessage(ctx, modelProvider, snapshot.Request, streaming.Hooks{
@@ -435,7 +445,8 @@ func (s *Service) callProviderWithRetry(
 				snapshot.ID,
 				streamOutcome.inputTokens,
 				streamOutcome.outputTokens,
-				streamOutcome.usagePresent,
+				streamOutcome.inputObserved,
+				streamOutcome.outputObserved,
 			),
 		}, nil
 	}
@@ -483,11 +494,11 @@ func (s *Service) applyCompactForState(
 		if compactErr != nil {
 			return compactErr
 		}
-		if mode == contextcompact.ModeProactive || mode == contextcompact.ModeReactive {
-			state.compactCount++
-		}
 		state.session = session
 		if result.Applied {
+			if mode == contextcompact.ModeProactive || mode == contextcompact.ModeReactive {
+				state.compactCount++
+			}
 			state.resetTokenTotals()
 			state.nextAttemptSeq++
 			applied = true
@@ -524,14 +535,26 @@ func (s *Service) evaluateTurnBudget(
 	ctx context.Context,
 	state *runState,
 	snapshot TurnBudgetSnapshot,
+	modelProvider provider.Provider,
 ) (controlplane.TurnBudgetDecision, error) {
-	modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
-	if err != nil {
-		return controlplane.TurnBudgetDecision{}, err
-	}
 	providerEstimate, err := modelProvider.EstimateInputTokens(ctx, snapshot.Request)
 	if err != nil {
-		return controlplane.TurnBudgetDecision{}, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return controlplane.TurnBudgetDecision{}, err
+		}
+		if !shouldBypassEstimateFailure(err) {
+			return controlplane.TurnBudgetDecision{}, fmt.Errorf("runtime: estimate input tokens: %w", err)
+		}
+		s.emitRunScoped(ctx, EventBudgetEstimateFailed, state, newBudgetEstimateFailedPayload(snapshot.ID, err))
+		decision := controlplane.TurnBudgetDecision{
+			ID:                 snapshot.ID,
+			Action:             controlplane.TurnBudgetActionAllow,
+			Reason:             controlplane.BudgetDecisionReasonEstimateFailedBypass,
+			PromptBudget:       snapshot.PromptBudget,
+			EstimateGatePolicy: provider.EstimateGateAdvisory,
+		}
+		s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
+		return decision, nil
 	}
 	estimate := newTurnBudgetEstimate(snapshot.ID, providerEstimate)
 	decision := controlplane.DecideTurnBudget(
@@ -541,6 +564,12 @@ func (s *Service) evaluateTurnBudget(
 	)
 	s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
 	return decision, nil
+}
+
+// shouldBypassEstimateFailure 判断估算失败是否允许降级放行，仅对可恢复 provider 错误放行。
+func shouldBypassEstimateFailure(err error) bool {
+	var providerErr *provider.ProviderError
+	return errors.As(err, &providerErr) && providerErr.Retryable
 }
 
 // reconcileLedger 根据 observed usage 或发送前 estimate 生成本轮账本写入结果。
@@ -553,18 +582,23 @@ func (s *Service) reconcileLedger(
 		return ledgerReconcileResult{}, fmt.Errorf("runtime: turn budget id mismatch between decision and usage observation")
 	}
 	reconciled := ledgerReconcileResult{
-		inputTokens:  observation.InputTokens,
-		inputSource:  usageSourceObserved,
-		outputTokens: observation.OutputTokens,
-		outputSource: usageSourceObserved,
+		inputSource:  usageSourceUnknown,
+		outputSource: usageSourceUnknown,
+	}
+	if observation.InputObserved {
+		reconciled.inputTokens = observation.InputTokens
+		reconciled.inputSource = usageSourceObserved
+	} else {
+		reconciled.inputTokens = decision.EstimatedInputTokens
+		reconciled.inputSource = usageSourceEstimated
+	}
+	if observation.OutputObserved {
+		reconciled.outputTokens = observation.OutputTokens
+		reconciled.outputSource = usageSourceObserved
 	}
 	if observation.InputObserved && observation.OutputObserved {
 		return reconciled, nil
 	}
-	reconciled.inputTokens = decision.EstimatedInputTokens
-	reconciled.inputSource = usageSourceEstimated
-	reconciled.outputTokens = 0
-	reconciled.outputSource = usageSourceUnknown
 	reconciled.hasUnknownUsage = true
 	if state != nil {
 		state.session.HasUnknownUsage = true
