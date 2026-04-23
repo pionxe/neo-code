@@ -154,11 +154,7 @@ func sessionPermissionCategory(action security.Action) string {
 		}
 	case security.ActionTypeBash:
 		if strings.EqualFold(strings.TrimSpace(action.Payload.SemanticType), "git") {
-			semanticClass := strings.ToLower(strings.TrimSpace(action.Payload.SemanticClass))
-			if semanticClass == "" {
-				semanticClass = BashIntentClassificationUnknown
-			}
-			return "bash_git_" + semanticClass
+			return BashGitResourceForClass(action.Payload.SemanticClass)
 		}
 		return "bash"
 	case security.ActionTypeMCP:
@@ -246,5 +242,5 @@ func shouldSkipSessionPermissionRemember(action security.Action, scope SessionPe
 		return false
 	}
 	return scope == SessionPermissionScopeAlways &&
-		strings.EqualFold(strings.TrimSpace(action.Payload.SemanticClass), BashIntentClassificationRemoteOp)
+		NormalizeGitSemanticClass(action.Payload.SemanticClass) == BashIntentClassificationRemoteOp
 }

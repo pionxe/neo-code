@@ -7,6 +7,30 @@ import (
 	"time"
 )
 
+func assertPolicyCheckResult(t *testing.T, engine *PolicyEngine, action Action, wantDecision Decision, wantRuleID string, wantReason string) {
+	t.Helper()
+
+	result, checkErr := engine.Check(context.Background(), action)
+	if checkErr != nil {
+		t.Fatalf("Check() error = %v", checkErr)
+	}
+	if result.Decision != wantDecision {
+		t.Fatalf("expected decision %q, got %q", wantDecision, result.Decision)
+	}
+	if wantRuleID == "" {
+		if result.Rule != nil {
+			t.Fatalf("expected no matched rule, got %+v", result.Rule)
+		}
+		return
+	}
+	if result.Rule == nil || result.Rule.ID != wantRuleID {
+		t.Fatalf("expected rule id %q, got %+v", wantRuleID, result.Rule)
+	}
+	if wantReason != "" && result.Reason != wantReason {
+		t.Fatalf("expected reason %q, got %q", wantReason, result.Reason)
+	}
+}
+
 func TestPolicyEngineRecommendedRules(t *testing.T) {
 	t.Parallel()
 
@@ -22,7 +46,7 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 		wantRuleID   string
 	}{
 		{
-			name: "git read-only bash ask",
+			name: "git read-only bash allow",
 			action: Action{
 				Type: ActionTypeBash,
 				Payload: ActionPayload{
@@ -37,8 +61,103 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 					PermissionFingerprint: "bash.git|read_only|status",
 				},
 			},
+			wantDecision: DecisionAllow,
+			wantRuleID:   "allow-bash-git-read-only",
+		},
+		{
+			name: "git read-only sensitive path ask",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_show",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git show",
+					TargetType:            TargetTypeCommand,
+					Target:                "git show HEAD:.env.production",
+					PermissionFingerprint: "bash.git|read_only|show",
+				},
+			},
 			wantDecision: DecisionAsk,
-			wantRuleID:   "ask-bash-git-read-only",
+			wantRuleID:   "ask-bash-git-read-only-sensitive",
+		},
+		{
+			name: "git read-only private key deny",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_show",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git show",
+					TargetType:            TargetTypeCommand,
+					Target:                "git show HEAD:.ssh/id_rsa",
+					PermissionFingerprint: "bash.git|read_only|show",
+				},
+			},
+			wantDecision: DecisionDeny,
+			wantRuleID:   "deny-bash-git-read-only-private-keys",
+		},
+		{
+			name: "git read-only id_dsa deny even when non-sensitive keyword missing",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_show",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git show",
+					TargetType:            TargetTypeCommand,
+					Target:                "git show HEAD:keys/id_dsa",
+					PermissionFingerprint: "bash.git|read_only|show",
+				},
+			},
+			wantDecision: DecisionDeny,
+			wantRuleID:   "deny-bash-git-read-only-private-keys",
+		},
+		{
+			name: "git read-only p12 deny even when path is not generally sensitive",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_show",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git show",
+					TargetType:            TargetTypeCommand,
+					Target:                "git show HEAD:certs/client.p12",
+					PermissionFingerprint: "bash.git|read_only|show",
+				},
+			},
+			wantDecision: DecisionDeny,
+			wantRuleID:   "deny-bash-git-read-only-private-keys",
+		},
+		{
+			name: "git read-only quoted private key deny",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_show",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git show",
+					TargetType:            TargetTypeCommand,
+					Target:                "git show 'HEAD:.ssh/id_rsa'",
+					PermissionFingerprint: "bash.git|read_only|show",
+				},
+			},
+			wantDecision: DecisionDeny,
+			wantRuleID:   "deny-bash-git-read-only-private-keys",
 		},
 		{
 			name: "git remote bash ask",
@@ -215,23 +334,36 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, checkErr := engine.Check(context.Background(), tt.action)
-			if checkErr != nil {
-				t.Fatalf("Check() error = %v", checkErr)
-			}
-			if result.Decision != tt.wantDecision {
-				t.Fatalf("expected decision %q, got %q", tt.wantDecision, result.Decision)
-			}
-			if tt.wantRuleID == "" {
-				if result.Rule != nil {
-					t.Fatalf("expected no matched rule, got %+v", result.Rule)
-				}
-				return
-			}
-			if result.Rule == nil || result.Rule.ID != tt.wantRuleID {
-				t.Fatalf("expected rule id %q, got %+v", tt.wantRuleID, result.Rule)
-			}
+			assertPolicyCheckResult(t, engine, tt.action, tt.wantDecision, tt.wantRuleID, "")
 		})
+	}
+}
+
+func TestClassifySensitiveGitReadOnlyCommandPathspecVariants(t *testing.T) {
+	t.Parallel()
+
+	if !classifySensitiveGitReadOnlyCommand(`git show "HEAD:.env.production"`) {
+		t.Fatalf("expected quoted HEAD:path env selector to be sensitive")
+	}
+	if !classifySensitiveGitReadOnlyCommand(`git diff -- ":(glob)**/.env"`) {
+		t.Fatalf("expected pathspec magic env selector to be sensitive")
+	}
+	if classifySensitiveGitReadOnlyCommand(`git status --short`) {
+		t.Fatalf("expected plain git status to be non-sensitive")
+	}
+}
+
+func TestClassifyPrivateKeyGitReadOnlyCommandVariants(t *testing.T) {
+	t.Parallel()
+
+	if !classifyPrivateKeyGitReadOnlyCommand(`git show 'HEAD:.ssh/id_rsa'`) {
+		t.Fatalf("expected quoted private key selector to be detected")
+	}
+	if !classifyPrivateKeyGitReadOnlyCommand(`git show HEAD:secrets/deploy.pem`) {
+		t.Fatalf("expected pem selector to be detected as private key")
+	}
+	if classifyPrivateKeyGitReadOnlyCommand(`git show HEAD:README.md`) {
+		t.Fatalf("expected regular file selector to be non-private-key")
 	}
 }
 
@@ -345,26 +477,7 @@ func TestPolicyEngineMCPRuleTemplates(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-
-			result, checkErr := engine.Check(context.Background(), tt.action)
-			if checkErr != nil {
-				t.Fatalf("Check() error = %v", checkErr)
-			}
-			if result.Decision != tt.wantDecision {
-				t.Fatalf("expected decision %q, got %q", tt.wantDecision, result.Decision)
-			}
-			if tt.wantRuleID == "" {
-				if result.Rule != nil {
-					t.Fatalf("expected no matched rule, got %+v", result.Rule)
-				}
-				return
-			}
-			if result.Rule == nil || result.Rule.ID != tt.wantRuleID {
-				t.Fatalf("expected rule id %q, got %+v", tt.wantRuleID, result.Rule)
-			}
-			if result.Reason != tt.wantReason {
-				t.Fatalf("expected reason %q, got %q", tt.wantReason, result.Reason)
-			}
+			assertPolicyCheckResult(t, engine, tt.action, tt.wantDecision, tt.wantRuleID, tt.wantReason)
 		})
 	}
 }

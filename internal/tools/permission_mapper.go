@@ -40,19 +40,9 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.PermissionFingerprint = intent.PermissionFingerprint
 		if intent.IsGit {
 			action.Payload.SemanticType = "git"
+			action.Payload.SemanticClass = NormalizeGitSemanticClass(intent.Classification)
 			action.Payload.Operation = "git_" + strings.TrimSpace(intent.Subcommand)
-			switch intent.Classification {
-			case BashIntentClassificationReadOnly:
-				action.Payload.Resource = "bash_git_read_only"
-			case BashIntentClassificationLocalMutation:
-				action.Payload.Resource = "bash_git_local_mutation"
-			case BashIntentClassificationRemoteOp:
-				action.Payload.Resource = "bash_git_remote_op"
-			case BashIntentClassificationDestructive:
-				action.Payload.Resource = "bash_git_destructive"
-			default:
-				action.Payload.Resource = "bash_git_unknown"
-			}
+			action.Payload.Resource = BashGitResourceForClass(action.Payload.SemanticClass)
 			if strings.TrimSpace(intent.Subcommand) == "" {
 				action.Payload.Operation = "git_unknown"
 			}

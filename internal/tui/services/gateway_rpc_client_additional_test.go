@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -239,7 +240,7 @@ func TestGatewayRPCClientCallWithClosedClientAndInvalidResult(t *testing.T) {
 				defer serverConn.Close()
 				dec := json.NewDecoder(serverConn)
 				enc := json.NewEncoder(serverConn)
-				req := readRPCRequestOrFail(t, dec)
+				req := readRPCRequestOrFail(dec)
 				response := protocol.JSONRPCResponse{JSONRPC: protocol.JSONRPCVersion, ID: req.ID, Result: json.RawMessage(`1`)}
 				if encodeErr := enc.Encode(response); encodeErr != nil {
 					t.Errorf("encode response: %v", encodeErr)
@@ -640,8 +641,8 @@ func TestGatewayRPCClientAutoSpawnWhenGatewayUnavailable(t *testing.T) {
 				defer serverConn.Close()
 				decoder := json.NewDecoder(serverConn)
 				encoder := json.NewEncoder(serverConn)
-				request := readRPCRequestOrFail(t, decoder)
-				writeRPCResultOrFail(t, encoder, request.ID, gateway.MessageFrame{
+				request := readRPCRequestOrFail(decoder)
+				writeRPCResultOrFail(encoder, request.ID, gateway.MessageFrame{
 					Type:   gateway.FrameTypeAck,
 					Action: gateway.FrameActionPing,
 				})
@@ -1078,6 +1079,7 @@ func TestGatewayRPCClientAuthenticateLoadsTokenAfterGatewayAutoSpawn(t *testing.
 
 	tokenFile := filepath.Join(t.TempDir(), "auth.json")
 	var dialCount int32
+	serverErrCh := make(chan error, 1)
 	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
 		ListenAddress: "test://gateway",
 		TokenFile:     tokenFile,
@@ -1097,22 +1099,26 @@ func TestGatewayRPCClientAuthenticateLoadsTokenAfterGatewayAutoSpawn(t *testing.
 				decoder := json.NewDecoder(serverConn)
 				encoder := json.NewEncoder(serverConn)
 
-				request := readRPCRequestOrFail(t, decoder)
+				request := readRPCRequestOrFail(decoder)
 				if request.Method != protocol.MethodGatewayAuthenticate {
-					t.Fatalf("authenticate method = %q", request.Method)
+					serverErrCh <- fmt.Errorf("authenticate method = %q", request.Method)
+					return
 				}
 				var params protocol.AuthenticateParams
 				if err := json.Unmarshal(request.Params, &params); err != nil {
-					t.Fatalf("decode authenticate params: %v", err)
+					serverErrCh <- fmt.Errorf("decode authenticate params: %w", err)
+					return
 				}
 				if strings.TrimSpace(params.Token) == "" {
-					t.Fatalf("expected non-empty authenticate token")
+					serverErrCh <- errors.New("expected non-empty authenticate token")
+					return
 				}
 
-				writeRPCResultOrFail(t, encoder, request.ID, gateway.MessageFrame{
+				writeRPCResultOrFail(encoder, request.ID, gateway.MessageFrame{
 					Type:   gateway.FrameTypeAck,
 					Action: gateway.FrameActionAuthenticate,
 				})
+				serverErrCh <- nil
 			}()
 			return clientConn, nil
 		},
@@ -1124,6 +1130,14 @@ func TestGatewayRPCClientAuthenticateLoadsTokenAfterGatewayAutoSpawn(t *testing.
 
 	if err := client.Authenticate(context.Background()); err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
+	}
+	select {
+	case serverErr := <-serverErrCh:
+		if serverErr != nil {
+			t.Fatalf("gateway rpc server assertion failed: %v", serverErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timeout waiting for gateway rpc server assertions")
 	}
 	if atomic.LoadInt32(&dialCount) < 2 {
 		t.Fatalf("expected auto-spawn retry dial path, got %d", atomic.LoadInt32(&dialCount))

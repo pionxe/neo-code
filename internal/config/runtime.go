@@ -8,14 +8,16 @@ import (
 )
 
 const (
-	DefaultMaxNoProgressStreak  = 3
+	DefaultMaxNoProgressStreak  = 5
 	DefaultMaxRepeatCycleStreak = 3
+	DefaultMaxTurns             = 40
 )
 
 // RuntimeConfig 定义 runtime 层的可调参数。
 type RuntimeConfig struct {
 	MaxNoProgressStreak  int                 `yaml:"max_no_progress_streak,omitempty"`
 	MaxRepeatCycleStreak int                 `yaml:"max_repeat_cycle_streak,omitempty"`
+	MaxTurns             int                 `yaml:"max_turns,omitempty"`
 	Assets               RuntimeAssetsConfig `yaml:"assets,omitempty"`
 }
 
@@ -30,6 +32,7 @@ func defaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
 		MaxNoProgressStreak:  DefaultMaxNoProgressStreak,
 		MaxRepeatCycleStreak: DefaultMaxRepeatCycleStreak,
+		MaxTurns:             DefaultMaxTurns,
 		Assets:               defaultRuntimeAssetsConfig(),
 	}
 }
@@ -47,6 +50,7 @@ func (c RuntimeConfig) Clone() RuntimeConfig {
 	return RuntimeConfig{
 		MaxNoProgressStreak:  c.MaxNoProgressStreak,
 		MaxRepeatCycleStreak: c.MaxRepeatCycleStreak,
+		MaxTurns:             c.MaxTurns,
 		Assets:               c.Assets.Clone(),
 	}
 }
@@ -62,6 +66,9 @@ func (c *RuntimeConfig) ApplyDefaults(defaults RuntimeConfig) {
 	if c.MaxRepeatCycleStreak <= 0 {
 		c.MaxRepeatCycleStreak = defaults.MaxRepeatCycleStreak
 	}
+	if c.MaxTurns <= 0 {
+		c.MaxTurns = defaults.MaxTurns
+	}
 	c.Assets.ApplyDefaults(defaults.Assets)
 }
 
@@ -72,6 +79,9 @@ func (c RuntimeConfig) Validate() error {
 	}
 	if c.MaxRepeatCycleStreak <= 0 {
 		return errors.New("max_repeat_cycle_streak must be greater than 0")
+	}
+	if c.MaxTurns < 0 {
+		return errors.New("max_turns must be greater than or equal to 0")
 	}
 	if err := c.Assets.Validate(); err != nil {
 		return err

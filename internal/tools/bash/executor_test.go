@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 )
 
 type stubRunner struct {
-	run func(ctx context.Context, binary string, args []string, workdir string) ([]byte, error)
+	run func(ctx context.Context, binary string, args []string, workdir string, env []string) ([]byte, error)
 }
 
 func (r stubRunner) CombinedOutput(
@@ -20,9 +21,10 @@ func (r stubRunner) CombinedOutput(
 	binary string,
 	args []string,
 	workdir string,
+	env []string,
 ) ([]byte, error) {
 	if r.run != nil {
-		return r.run(ctx, binary, args, workdir)
+		return r.run(ctx, binary, args, workdir, env)
 	}
 	return []byte("ok"), nil
 }
@@ -43,7 +45,7 @@ func TestDefaultSecurityExecutorExecute(t *testing.T) {
 		callWorkdir  string
 		command      string
 		requestedDir string
-		overrideRun  func(ctx context.Context, binary string, args []string, workdir string) ([]byte, error)
+		overrideRun  func(ctx context.Context, binary string, args []string, workdir string, env []string) ([]byte, error)
 		expectErr    string
 		expectResult []string
 		expectMeta   string
@@ -65,7 +67,7 @@ func TestDefaultSecurityExecutorExecute(t *testing.T) {
 			name:        "handles timeout from runner context",
 			command:     "slow",
 			callWorkdir: workspace,
-			overrideRun: func(ctx context.Context, binary string, args []string, workdir string) ([]byte, error) {
+			overrideRun: func(ctx context.Context, binary string, args []string, workdir string, env []string) ([]byte, error) {
 				<-ctx.Done()
 				return nil, ctx.Err()
 			},
@@ -77,7 +79,7 @@ func TestDefaultSecurityExecutorExecute(t *testing.T) {
 			name:        "applies output truncation on error details",
 			command:     "boom",
 			callWorkdir: workspace,
-			overrideRun: func(ctx context.Context, binary string, args []string, workdir string) ([]byte, error) {
+			overrideRun: func(ctx context.Context, binary string, args []string, workdir string, env []string) ([]byte, error) {
 				return []byte(strings.Repeat("x", tools.DefaultOutputLimitBytes+100)), errors.New("exit status 1")
 			},
 			expectErr:    "exit status 1",
@@ -88,10 +90,32 @@ func TestDefaultSecurityExecutorExecute(t *testing.T) {
 			name:        "success returns output and metadata",
 			command:     "ok",
 			callWorkdir: workspace,
-			overrideRun: func(ctx context.Context, binary string, args []string, workdir string) ([]byte, error) {
+			overrideRun: func(ctx context.Context, binary string, args []string, workdir string, env []string) ([]byte, error) {
 				return []byte("hello"), nil
 			},
 			expectResult: []string{"hello"},
+			expectMeta:   workspace,
+		},
+		{
+			name:        "git read-only command emits hardened metadata",
+			command:     "git status --short",
+			callWorkdir: workspace,
+			overrideRun: func(ctx context.Context, binary string, args []string, workdir string, env []string) ([]byte, error) {
+				lookup := map[string]string{}
+				for _, entry := range env {
+					if idx := strings.Index(entry, "="); idx > 0 {
+						lookup[entry[:idx]] = entry[idx+1:]
+					}
+				}
+				if lookup["GIT_CONFIG_NOSYSTEM"] != "1" {
+					return nil, errors.New("missing GIT_CONFIG_NOSYSTEM hardening")
+				}
+				if lookup["GIT_PAGER"] != "cat" {
+					return nil, errors.New("missing GIT_PAGER hardening")
+				}
+				return []byte("clean"), nil
+			},
+			expectResult: []string{"clean"},
 			expectMeta:   workspace,
 		},
 	}
@@ -141,8 +165,87 @@ func TestDefaultSecurityExecutorExecute(t *testing.T) {
 				if _, exists := result.Metadata["classification"]; !exists {
 					t.Fatalf("expected classification metadata to exist, got %#v", result.Metadata)
 				}
+				if _, exists := result.Metadata["env_hardened"]; !exists {
+					t.Fatalf("expected env_hardened metadata to exist, got %#v", result.Metadata)
+				}
 			}
 		})
+	}
+}
+
+func TestBuildCommandEnvRejectsUnstableReadOnlyIntent(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := buildCommandEnv(tools.BashSemanticIntent{
+		IsGit:          true,
+		Classification: tools.BashIntentClassificationReadOnly,
+		Subcommand:     "status",
+		ParseError:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot safely classify git read-only command") {
+		t.Fatalf("buildCommandEnv() error = %v, want unstable classification error", err)
+	}
+}
+
+func TestBuildCommandEnvRejectsUnsupportedReadOnlySubcommand(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := buildCommandEnv(tools.BashSemanticIntent{
+		IsGit:          true,
+		Classification: tools.BashIntentClassificationReadOnly,
+		Subcommand:     "show",
+	})
+	if err == nil || !strings.Contains(err.Error(), "is not allowed for auto execution") {
+		t.Fatalf("buildCommandEnv() error = %v, want unsupported subcommand error", err)
+	}
+}
+
+func TestSanitizeGitReadOnlyEnv(t *testing.T) {
+	t.Parallel()
+
+	env, err := sanitizeGitReadOnlyEnv([]string{
+		"PATH=/usr/bin",
+		"GIT_PAGER=less",
+		"GIT_CONFIG_NOSYSTEM=0",
+		"LANG=en_US.UTF-8",
+		"PAGER=less",
+		"GIT_EXTERNAL_DIFF=script.sh",
+	})
+	if err != nil {
+		t.Fatalf("sanitizeGitReadOnlyEnv() error = %v", err)
+	}
+
+	lookup := map[string]string{}
+	for _, entry := range env {
+		idx := strings.Index(entry, "=")
+		if idx <= 0 {
+			t.Fatalf("invalid env entry %q", entry)
+		}
+		lookup[entry[:idx]] = entry[idx+1:]
+	}
+
+	if lookup["PATH"] != "/usr/bin" {
+		t.Fatalf("PATH should be preserved, got %q", lookup["PATH"])
+	}
+	if lookup["GIT_CONFIG_NOSYSTEM"] != "1" {
+		t.Fatalf("GIT_CONFIG_NOSYSTEM = %q, want 1", lookup["GIT_CONFIG_NOSYSTEM"])
+	}
+	if lookup["GIT_PAGER"] != "cat" {
+		t.Fatalf("GIT_PAGER = %q, want cat", lookup["GIT_PAGER"])
+	}
+	if lookup["PAGER"] != "cat" {
+		t.Fatalf("PAGER = %q, want cat", lookup["PAGER"])
+	}
+	if lookup["GIT_EXTERNAL_DIFF"] != "" {
+		t.Fatalf("GIT_EXTERNAL_DIFF = %q, want empty", lookup["GIT_EXTERNAL_DIFF"])
+	}
+
+	wantNull := "/dev/null"
+	if runtime.GOOS == "windows" {
+		wantNull = "NUL"
+	}
+	if lookup["GIT_CONFIG_GLOBAL"] != wantNull {
+		t.Fatalf("GIT_CONFIG_GLOBAL = %q, want %q", lookup["GIT_CONFIG_GLOBAL"], wantNull)
 	}
 }
 

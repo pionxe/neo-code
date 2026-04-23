@@ -191,21 +191,22 @@ func (s *Scheduler) recoverInterruptedTodos() ([]string, []string, error) {
 			RetryLimit:    &retryLimit,
 			NextRetryAt:   &nextRetryAt,
 		}
-		if err := s.store.UpdateTodo(item.ID, patch, item.Revision); err != nil {
-			if isRevisionConflict(err) {
-				continue
-			}
-			return nil, nil, fmt.Errorf("subagent: recover interrupted todo %q: %w", item.ID, err)
+		updated, changed, err := s.updateTodoWithPatch(item, patch, "recover interrupted")
+		if err != nil {
+			return nil, nil, err
 		}
-		recovered = append(recovered, item.ID)
+		if !changed {
+			continue
+		}
+		recovered = append(recovered, updated.ID)
 		if status == agentsession.TodoStatusFailed {
-			failed = append(failed, item.ID)
+			failed = append(failed, updated.ID)
 		}
 
 		if status == agentsession.TodoStatusBlocked {
 			s.emit(SchedulerEvent{
 				Type:    SchedulerEventSubAgentRetried,
-				TaskID:  item.ID,
+				TaskID:  updated.ID,
 				Attempt: nextRetry,
 				Reason:  "recovered",
 				At:      now,
@@ -213,7 +214,7 @@ func (s *Scheduler) recoverInterruptedTodos() ([]string, []string, error) {
 		} else {
 			s.emit(SchedulerEvent{
 				Type:    SchedulerEventSubAgentFailed,
-				TaskID:  item.ID,
+				TaskID:  updated.ID,
 				Attempt: nextRetry,
 				Reason:  reason,
 				At:      now,
@@ -318,8 +319,8 @@ func (s *Scheduler) ensureBlocked(item agentsession.TodoItem, reason string, sta
 	if item.Status != agentsession.TodoStatusBlocked {
 		status := agentsession.TodoStatusBlocked
 		patch := agentsession.TodoPatch{Status: &status}
-		if err := s.store.UpdateTodo(item.ID, patch, item.Revision); err != nil && !isRevisionConflict(err) {
-			return fmt.Errorf("subagent: mark todo blocked: %w", err)
+		if _, _, err := s.updateTodoWithPatch(item, patch, "mark blocked"); err != nil {
+			return err
 		}
 	}
 
@@ -371,26 +372,12 @@ func (s *Scheduler) ensureDependencyFailed(
 		RetryCount:    &zeroRetryCount,
 		NextRetryAt:   &zeroRetryAt,
 	}
-	if err := s.store.UpdateTodo(item.ID, patch, item.Revision); err != nil {
-		if isRevisionConflict(err) {
-			latest, ok := s.store.FindTodo(item.ID)
-			if ok {
-				return latest, nil
-			}
-			return item, nil
-		}
-		return item, fmt.Errorf("subagent: mark dependency-failed todo: %w", err)
+	updated, changed, err := s.updateTodoWithPatch(item, patch, "mark dependency-failed")
+	if err != nil {
+		return item, err
 	}
-
-	updated, ok := s.store.FindTodo(item.ID)
-	if !ok {
-		updated = item.Clone()
-		updated.Status = status
-		updated.OwnerType = ownerType
-		updated.OwnerID = ownerID
-		updated.FailureReason = reason
-		updated.RetryCount = zeroRetryCount
-		updated.NextRetryAt = zeroRetryAt
+	if !changed {
+		return updated, nil
 	}
 	if summary != nil {
 		appendUniqueString(&summary.Failed, updated.ID)
@@ -435,14 +422,11 @@ func (s *Scheduler) ensureReadyStatus(item agentsession.TodoItem) (agentsession.
 			Status:      &status,
 			NextRetryAt: &zeroRetry,
 		}
-		if err := s.store.UpdateTodo(item.ID, patch, item.Revision); err != nil {
-			if isRevisionConflict(err) {
-				return item, false, nil
-			}
-			return item, false, fmt.Errorf("subagent: unlock blocked todo: %w", err)
+		next, changed, err := s.updateTodoWithPatch(item, patch, "unlock blocked")
+		if err != nil {
+			return item, false, err
 		}
-		next, ok := s.store.FindTodo(item.ID)
-		if !ok {
+		if !changed {
 			return item, false, nil
 		}
 		return next, true, nil
@@ -638,6 +622,29 @@ func (s *Scheduler) applyOutcome(outcome taskOutcome, state *schedulerState, sum
 	return s.handleTaskFailure(current, outcome, state, summary)
 }
 
+// updateTodoWithPatch 统一执行 Todo 状态补丁写回，并收敛 revision 冲突与最新快照读取逻辑。
+func (s *Scheduler) updateTodoWithPatch(
+	item agentsession.TodoItem,
+	patch agentsession.TodoPatch,
+	operation string,
+) (agentsession.TodoItem, bool, error) {
+	if err := s.store.UpdateTodo(item.ID, patch, item.Revision); err != nil {
+		if isRevisionConflict(err) {
+			latest, ok := s.store.FindTodo(item.ID)
+			if ok {
+				return latest, false, nil
+			}
+			return item, false, nil
+		}
+		return item, false, fmt.Errorf("subagent: %s todo %q: %w", operation, item.ID, err)
+	}
+	latest, ok := s.store.FindTodo(item.ID)
+	if !ok {
+		return item, false, nil
+	}
+	return latest, true, nil
+}
+
 // handleTaskFailure 处理失败回写，按重试预算决定重排或终态失败。
 func (s *Scheduler) handleTaskFailure(
 	current agentsession.TodoItem,
@@ -667,11 +674,10 @@ func (s *Scheduler) handleTaskFailure(
 			RetryLimit:    &retryLimit,
 			NextRetryAt:   &nextRetryAt,
 		}
-		if err := s.store.UpdateTodo(current.ID, patch, current.Revision); err != nil {
-			if isRevisionConflict(err) {
-				return nil
-			}
-			return fmt.Errorf("subagent: schedule retry for todo %q: %w", current.ID, err)
+		if _, changed, err := s.updateTodoWithPatch(current, patch, "schedule retry"); err != nil {
+			return err
+		} else if !changed {
+			return nil
 		}
 
 		summary.Retried[current.ID] = nextRetryCount
@@ -707,11 +713,10 @@ func (s *Scheduler) handleTaskFailure(
 		RetryLimit:    &retryLimit,
 		NextRetryAt:   &zeroRetryAt,
 	}
-	if err := s.store.UpdateTodo(current.ID, patch, current.Revision); err != nil {
-		if isRevisionConflict(err) {
-			return nil
-		}
-		return fmt.Errorf("subagent: fail todo %q: %w", current.ID, err)
+	if _, changed, err := s.updateTodoWithPatch(current, patch, "mark failed"); err != nil {
+		return err
+	} else if !changed {
+		return nil
 	}
 
 	appendUniqueString(&summary.Failed, current.ID)
@@ -760,7 +765,7 @@ func (s *Scheduler) cancelRunningTodos(state *schedulerState, cause error) {
 			OwnerID:       &ownerID,
 			FailureReason: &reason,
 		}
-		if err := s.store.UpdateTodo(item.ID, patch, item.Revision); err != nil && !isRevisionConflict(err) {
+		if _, _, err := s.updateTodoWithPatch(item, patch, "cancel running"); err != nil {
 			continue
 		}
 		s.emit(SchedulerEvent{

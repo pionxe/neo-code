@@ -407,6 +407,9 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 	item.Content = strings.TrimSpace(item.Content)
 	item.Dependencies = normalizeTodoDependencies(item.Dependencies)
 	item.Executor = normalizeTodoExecutor(item.Executor)
+	if item.Executor == "" {
+		item.Executor = TodoExecutorAgent
+	}
 	item.OwnerType = normalizeTodoOwnerType(item.OwnerType)
 	item.OwnerID = strings.TrimSpace(item.OwnerID)
 	item.Acceptance = normalizeTodoTextList(item.Acceptance)

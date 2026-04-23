@@ -26,6 +26,57 @@ type schedulerStoreWithClaimError struct {
 	claimErrors map[string]error
 }
 
+type functionTodoStore struct {
+	listFn     func() []agentsession.TodoItem
+	findFn     func(id string) (agentsession.TodoItem, bool)
+	updateFn   func(id string, patch agentsession.TodoPatch, expectedRevision int64) error
+	claimFn    func(id string, ownerType string, ownerID string, expectedRevision int64) error
+	completeFn func(id string, artifacts []string, expectedRevision int64) error
+	failFn     func(id string, reason string, expectedRevision int64) error
+}
+
+func (s *functionTodoStore) ListTodos() []agentsession.TodoItem {
+	if s.listFn != nil {
+		return s.listFn()
+	}
+	return nil
+}
+
+func (s *functionTodoStore) FindTodo(id string) (agentsession.TodoItem, bool) {
+	if s.findFn != nil {
+		return s.findFn(id)
+	}
+	return agentsession.TodoItem{}, false
+}
+
+func (s *functionTodoStore) UpdateTodo(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+	if s.updateFn != nil {
+		return s.updateFn(id, patch, expectedRevision)
+	}
+	return nil
+}
+
+func (s *functionTodoStore) ClaimTodo(id string, ownerType string, ownerID string, expectedRevision int64) error {
+	if s.claimFn != nil {
+		return s.claimFn(id, ownerType, ownerID, expectedRevision)
+	}
+	return nil
+}
+
+func (s *functionTodoStore) CompleteTodo(id string, artifacts []string, expectedRevision int64) error {
+	if s.completeFn != nil {
+		return s.completeFn(id, artifacts, expectedRevision)
+	}
+	return nil
+}
+
+func (s *functionTodoStore) FailTodo(id string, reason string, expectedRevision int64) error {
+	if s.failFn != nil {
+		return s.failFn(id, reason, expectedRevision)
+	}
+	return nil
+}
+
 func newSchedulerStore(t *testing.T, items []agentsession.TodoItem) *schedulerStore {
 	t.Helper()
 	session := agentsession.New("scheduler")
@@ -1134,6 +1185,489 @@ func TestSchedulerHandleOneOutcomeIgnoresStaleAttempt(t *testing.T) {
 	item, _ = store.FindTodo("stale")
 	if item.Status != agentsession.TodoStatusCompleted {
 		t.Fatalf("todo status = %q, want completed", item.Status)
+	}
+}
+
+func TestSchedulerUpdateTodoWithPatchSuccessFallsBackToInputSnapshotWithoutStateChange(t *testing.T) {
+	t.Parallel()
+
+	store := &functionTodoStore{
+		findFn: func(id string) (agentsession.TodoItem, bool) {
+			return agentsession.TodoItem{}, false
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	item := agentsession.TodoItem{ID: "todo-1", Revision: 2}
+	latest, changed, err := scheduler.updateTodoWithPatch(item, agentsession.TodoPatch{}, "mark failed")
+	if err != nil {
+		t.Fatalf("updateTodoWithPatch() error = %v", err)
+	}
+	if changed {
+		t.Fatalf("changed = true, want false when latest snapshot missing")
+	}
+	if latest.ID != item.ID || latest.Revision != item.Revision {
+		t.Fatalf("latest = %+v, want fallback item %+v", latest, item)
+	}
+}
+
+func TestSchedulerUpdateTodoWithPatchRevisionConflictReturnsLatestSnapshot(t *testing.T) {
+	t.Parallel()
+
+	latestItem := agentsession.TodoItem{ID: "todo-2", Revision: 7, Status: agentsession.TodoStatusBlocked}
+	store := &functionTodoStore{
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = patch
+			_ = expectedRevision
+			return fmt.Errorf("%w: injected", agentsession.ErrRevisionConflict)
+		},
+		findFn: func(id string) (agentsession.TodoItem, bool) {
+			if id == latestItem.ID {
+				return latestItem, true
+			}
+			return agentsession.TodoItem{}, false
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	item := agentsession.TodoItem{ID: latestItem.ID, Revision: 3}
+	got, changed, err := scheduler.updateTodoWithPatch(item, agentsession.TodoPatch{}, "schedule retry")
+	if err != nil {
+		t.Fatalf("updateTodoWithPatch() error = %v", err)
+	}
+	if changed {
+		t.Fatalf("changed = true, want false on revision conflict")
+	}
+	if got.Revision != latestItem.Revision || got.Status != latestItem.Status {
+		t.Fatalf("latest snapshot mismatch: got %+v, want %+v", got, latestItem)
+	}
+}
+
+func TestSchedulerUpdateTodoWithPatchWrapsStoreError(t *testing.T) {
+	t.Parallel()
+
+	store := &functionTodoStore{
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = id
+			_ = patch
+			_ = expectedRevision
+			return errors.New("write failed")
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	item := agentsession.TodoItem{ID: "todo-3", Revision: 1}
+	_, changed, err := scheduler.updateTodoWithPatch(item, agentsession.TodoPatch{}, "mark failed")
+	if err == nil || !strings.Contains(err.Error(), `subagent: mark failed todo "todo-3": write failed`) {
+		t.Fatalf("updateTodoWithPatch() err = %v", err)
+	}
+	if changed {
+		t.Fatalf("changed = true, want false on error")
+	}
+}
+
+func TestSchedulerApplyOutcomeCompleteHandlesRevisionConflict(t *testing.T) {
+	t.Parallel()
+
+	todo := agentsession.TodoItem{
+		ID:       "done-with-conflict",
+		Status:   agentsession.TodoStatusInProgress,
+		Revision: 4,
+	}
+	store := &functionTodoStore{
+		findFn: func(id string) (agentsession.TodoItem, bool) {
+			if id == todo.ID {
+				return todo, true
+			}
+			return agentsession.TodoItem{}, false
+		},
+		completeFn: func(id string, artifacts []string, expectedRevision int64) error {
+			_ = id
+			_ = artifacts
+			_ = expectedRevision
+			return fmt.Errorf("%w: injected", agentsession.ErrRevisionConflict)
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	state := newSchedulerState(1)
+	summary := &ScheduleResult{Retried: map[string]int{}}
+	err = scheduler.applyOutcome(taskOutcome{
+		id:      todo.ID,
+		attempt: 1,
+		result: Result{
+			State: StateSucceeded,
+			Output: Output{
+				Artifacts: []string{"report.md"},
+			},
+		},
+	}, state, summary)
+	if err != nil {
+		t.Fatalf("applyOutcome() error = %v", err)
+	}
+	if len(summary.Succeeded) != 0 {
+		t.Fatalf("Succeeded = %v, want empty on revision conflict", summary.Succeeded)
+	}
+}
+
+func TestSchedulerApplyOutcomeWrapsCompleteError(t *testing.T) {
+	t.Parallel()
+
+	todo := agentsession.TodoItem{
+		ID:       "done-with-error",
+		Status:   agentsession.TodoStatusInProgress,
+		Revision: 5,
+	}
+	store := &functionTodoStore{
+		findFn: func(id string) (agentsession.TodoItem, bool) {
+			if id == todo.ID {
+				return todo, true
+			}
+			return agentsession.TodoItem{}, false
+		},
+		completeFn: func(id string, artifacts []string, expectedRevision int64) error {
+			_ = id
+			_ = artifacts
+			_ = expectedRevision
+			return errors.New("disk io failed")
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	state := newSchedulerState(1)
+	summary := &ScheduleResult{Retried: map[string]int{}}
+	err = scheduler.applyOutcome(taskOutcome{
+		id:      todo.ID,
+		attempt: 1,
+		result: Result{
+			State: StateSucceeded,
+		},
+	}, state, summary)
+	if err == nil || !strings.Contains(err.Error(), `subagent: complete todo "done-with-error": disk io failed`) {
+		t.Fatalf("applyOutcome() err = %v", err)
+	}
+}
+
+func TestSchedulerRecoverInterruptedTodosReturnsErrorOnPatchFailure(t *testing.T) {
+	t.Parallel()
+
+	store := &functionTodoStore{
+		listFn: func() []agentsession.TodoItem {
+			return []agentsession.TodoItem{{
+				ID:         "recover-err",
+				Executor:   agentsession.TodoExecutorSubAgent,
+				Status:     agentsession.TodoStatusInProgress,
+				RetryCount: 1,
+				RetryLimit: 3,
+			}}
+		},
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = id
+			_ = patch
+			_ = expectedRevision
+			return errors.New("write failure")
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	_, _, err = scheduler.recoverInterruptedTodos()
+	if err == nil || !strings.Contains(err.Error(), `subagent: recover interrupted todo "recover-err": write failure`) {
+		t.Fatalf("recoverInterruptedTodos() err = %v", err)
+	}
+}
+
+func TestSchedulerEnsureBlockedReturnsUpdateError(t *testing.T) {
+	t.Parallel()
+
+	item := agentsession.TodoItem{ID: "blocked-err", Status: agentsession.TodoStatusPending, Revision: 2}
+	store := &functionTodoStore{
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = id
+			_ = patch
+			_ = expectedRevision
+			return errors.New("cannot mark blocked")
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	err = scheduler.ensureBlocked(item, "dependency_pending", newSchedulerState(1))
+	if err == nil || !strings.Contains(err.Error(), `subagent: mark blocked todo "blocked-err": cannot mark blocked`) {
+		t.Fatalf("ensureBlocked() err = %v", err)
+	}
+}
+
+func TestSchedulerEnsureDependencyFailedReturnsCurrentOnNoChange(t *testing.T) {
+	t.Parallel()
+
+	item := agentsession.TodoItem{ID: "dep-unchanged", Status: agentsession.TodoStatusPending, Revision: 4}
+	store := &functionTodoStore{
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = id
+			_ = patch
+			_ = expectedRevision
+			return fmt.Errorf("%w: injected", agentsession.ErrRevisionConflict)
+		},
+		findFn: func(id string) (agentsession.TodoItem, bool) {
+			return agentsession.TodoItem{ID: id, Status: agentsession.TodoStatusPending, Revision: 6}, true
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	summary := &ScheduleResult{Retried: map[string]int{}}
+	updated, err := scheduler.ensureDependencyFailed(item, "dep failed", newSchedulerState(1), summary)
+	if err != nil {
+		t.Fatalf("ensureDependencyFailed() err = %v", err)
+	}
+	if updated.Revision != 6 {
+		t.Fatalf("updated revision = %d, want 6", updated.Revision)
+	}
+	if len(summary.Failed) != 0 {
+		t.Fatalf("summary.Failed = %v, want empty", summary.Failed)
+	}
+}
+
+func TestSchedulerEnsureReadyStatusReturnsErrorWhenUnlockFails(t *testing.T) {
+	t.Parallel()
+
+	item := agentsession.TodoItem{ID: "ready-err", Status: agentsession.TodoStatusBlocked, Revision: 1}
+	store := &functionTodoStore{
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = id
+			_ = patch
+			_ = expectedRevision
+			return errors.New("unlock failed")
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	_, _, err = scheduler.ensureReadyStatus(item)
+	if err == nil || !strings.Contains(err.Error(), `subagent: unlock blocked todo "ready-err": unlock failed`) {
+		t.Fatalf("ensureReadyStatus() err = %v", err)
+	}
+}
+
+func TestSchedulerUpdateTodoWithPatchRevisionConflictWithoutLatest(t *testing.T) {
+	t.Parallel()
+
+	store := &functionTodoStore{
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = id
+			_ = patch
+			_ = expectedRevision
+			return fmt.Errorf("%w: injected", agentsession.ErrRevisionConflict)
+		},
+		findFn: func(id string) (agentsession.TodoItem, bool) {
+			return agentsession.TodoItem{}, false
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	item := agentsession.TodoItem{ID: "todo-conflict-missing", Revision: 3}
+	got, changed, err := scheduler.updateTodoWithPatch(item, agentsession.TodoPatch{}, "schedule retry")
+	if err != nil {
+		t.Fatalf("updateTodoWithPatch() err = %v", err)
+	}
+	if changed {
+		t.Fatalf("changed = true, want false")
+	}
+	if got.ID != item.ID || got.Revision != item.Revision {
+		t.Fatalf("got = %+v, want fallback item %+v", got, item)
+	}
+}
+
+func TestSchedulerHandleTaskFailureReturnsNilWhenRetryPatchNotChanged(t *testing.T) {
+	t.Parallel()
+
+	current := agentsession.TodoItem{
+		ID:         "retry-nochange",
+		Status:     agentsession.TodoStatusInProgress,
+		Revision:   2,
+		RetryCount: 0,
+		RetryLimit: 2,
+	}
+	store := &functionTodoStore{
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = id
+			_ = patch
+			_ = expectedRevision
+			return fmt.Errorf("%w: injected", agentsession.ErrRevisionConflict)
+		},
+		findFn: func(id string) (agentsession.TodoItem, bool) {
+			return current, true
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	state := newSchedulerState(1)
+	summary := &ScheduleResult{Retried: map[string]int{}}
+	err = scheduler.handleTaskFailure(current, taskOutcome{
+		id:      current.ID,
+		attempt: 1,
+		err:     errors.New("worker failed"),
+	}, state, summary)
+	if err != nil {
+		t.Fatalf("handleTaskFailure() err = %v", err)
+	}
+	if len(summary.Retried) != 0 {
+		t.Fatalf("Retried = %v, want empty", summary.Retried)
+	}
+}
+
+func TestSchedulerHandleTaskFailureReturnsNilWhenFailPatchNotChanged(t *testing.T) {
+	t.Parallel()
+
+	current := agentsession.TodoItem{
+		ID:         "fail-nochange",
+		Status:     agentsession.TodoStatusInProgress,
+		Revision:   5,
+		RetryCount: 2,
+		RetryLimit: 2,
+	}
+	store := &functionTodoStore{
+		updateFn: func(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
+			_ = id
+			_ = patch
+			_ = expectedRevision
+			return fmt.Errorf("%w: injected", agentsession.ErrRevisionConflict)
+		},
+		findFn: func(id string) (agentsession.TodoItem, bool) {
+			return current, true
+		},
+	}
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("noop"), nil
+	})
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	state := newSchedulerState(1)
+	summary := &ScheduleResult{Retried: map[string]int{}}
+	err = scheduler.handleTaskFailure(current, taskOutcome{
+		id:      current.ID,
+		attempt: 3,
+		err:     errors.New("worker failed"),
+	}, state, summary)
+	if err != nil {
+		t.Fatalf("handleTaskFailure() err = %v", err)
+	}
+	if len(summary.Failed) != 0 {
+		t.Fatalf("Failed = %v, want empty", summary.Failed)
 	}
 }
 

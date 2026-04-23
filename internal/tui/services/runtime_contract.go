@@ -191,6 +191,8 @@ const (
 	StopReasonUserInterrupt StopReason = "STOP_USER_INTERRUPT"
 	// StopReasonFatalError 表示 runtime 当前协议中的不可恢复错误原因。
 	StopReasonFatalError StopReason = "STOP_FATAL_ERROR"
+	// StopReasonMaxTurnsReached 表示 runtime 达到最大轮次上限后的受控停止原因。
+	StopReasonMaxTurnsReached StopReason = "STOP_MAX_TURNS_REACHED"
 	// StopReasonBudgetExceeded 表示 runtime 当前协议中的预算超限停止原因。
 	StopReasonBudgetExceeded StopReason = "STOP_BUDGET_EXCEEDED"
 )

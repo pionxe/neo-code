@@ -1109,6 +1109,14 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.state.ExecutionError = ""
 		a.state.StatusText = detail
 		a.appendActivity("run", "Context budget exceeded", detail, false)
+	case strings.ToLower(string(tuiservices.StopReasonMaxTurnsReached)):
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "Max turns reached"
+		}
+		a.state.ExecutionError = ""
+		a.state.StatusText = detail
+		a.appendActivity("run", "Max turn limit reached", detail, false)
 	case strings.ToLower(string(tuiservices.StopReasonFatalError)):
 		detail := strings.TrimSpace(payload.Detail)
 		if detail == "" {

@@ -47,8 +47,8 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 				defer serverConn.Close()
 				decoder := json.NewDecoder(serverConn)
 				encoder := json.NewEncoder(serverConn)
-				request := readRPCRequestOrFail(t, decoder)
-				writeRPCResultOrFail(t, encoder, request.ID, gateway.MessageFrame{
+				request := readRPCRequestOrFail(decoder)
+				writeRPCResultOrFail(encoder, request.ID, gateway.MessageFrame{
 					Type:   gateway.FrameTypeAck,
 					Action: gateway.FrameActionAuthenticate,
 				})

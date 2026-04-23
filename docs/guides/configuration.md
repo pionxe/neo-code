@@ -25,8 +25,9 @@ shell: bash
 tool_timeout_sec: 20
 
 runtime:
-  max_no_progress_streak: 3
+  max_no_progress_streak: 5
   max_repeat_cycle_streak: 3
+  max_turns: 40
   assets:
     max_session_asset_bytes: 20971520
     max_session_assets_total_bytes: 20971520
@@ -84,6 +85,16 @@ context:
 | `context.budget.reserve_tokens` | 自动推导输入预算时，从模型窗口中预留给输出、tool call、system prompt 的缓冲 |
 | `context.budget.fallback_prompt_budget` | 模型窗口不可用或推导失败时使用的保底输入预算 |
 | `context.budget.max_reactive_compacts` | 单次 `Run()` 内允许的 reactive compact 最大次数 |
+
+## `runtime` 字段
+
+| 字段 | 说明 |
+|------|------|
+| `runtime.max_no_progress_streak` | 连续“无进展”轮次提醒阈值，默认 `5`；达到 `limit-1` 起会向模型注入纠偏提示，不会直接终止运行 |
+| `runtime.max_repeat_cycle_streak` | 连续“重复调用同一工具参数”提醒阈值，默认 `3`；达到阈值后触发重复循环提醒，不会直接终止运行 |
+| `runtime.max_turns` | 单次 Run 的最大推理轮数上限，默认 `40`；达到上限后直接终止并返回明确 stop reason |
+| `runtime.assets.max_session_asset_bytes` | 单个 `session_asset` 最大原始字节数，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
+| `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 `session_asset` 原始总字节上限，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 
 ## Budget 解析规则
 

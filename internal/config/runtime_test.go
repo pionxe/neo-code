@@ -5,13 +5,16 @@ import "testing"
 func TestRuntimeConfigClone(t *testing.T) {
 	t.Parallel()
 
-	cfg := RuntimeConfig{MaxNoProgressStreak: 7, MaxRepeatCycleStreak: 4}
+	cfg := RuntimeConfig{MaxNoProgressStreak: 7, MaxRepeatCycleStreak: 4, MaxTurns: 21}
 	cloned := cfg.Clone()
 	if cloned.MaxNoProgressStreak != 7 {
 		t.Fatalf("expected cloned MaxNoProgressStreak=7, got %d", cloned.MaxNoProgressStreak)
 	}
 	if cloned.MaxRepeatCycleStreak != 4 {
 		t.Fatalf("expected cloned MaxRepeatCycleStreak=4, got %d", cloned.MaxRepeatCycleStreak)
+	}
+	if cloned.MaxTurns != 21 {
+		t.Fatalf("expected cloned MaxTurns=21, got %d", cloned.MaxTurns)
 	}
 	if cloned.Assets.MaxSessionAssetBytes != cfg.Assets.MaxSessionAssetBytes {
 		t.Fatalf("expected cloned MaxSessionAssetBytes=%d, got %d", cfg.Assets.MaxSessionAssetBytes, cloned.Assets.MaxSessionAssetBytes)
@@ -31,19 +34,23 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 	defaults := RuntimeConfig{
 		MaxNoProgressStreak:  3,
 		MaxRepeatCycleStreak: 5,
+		MaxTurns:             7,
 		Assets: RuntimeAssetsConfig{
 			MaxSessionAssetBytes:       11,
 			MaxSessionAssetsTotalBytes: 22,
 		},
 	}
 
-	cfg := RuntimeConfig{MaxNoProgressStreak: 0, MaxRepeatCycleStreak: 0}
+	cfg := RuntimeConfig{MaxNoProgressStreak: 0, MaxRepeatCycleStreak: 0, MaxTurns: 0}
 	cfg.ApplyDefaults(defaults)
 	if cfg.MaxNoProgressStreak != 3 {
 		t.Fatalf("expected defaulted MaxNoProgressStreak=3, got %d", cfg.MaxNoProgressStreak)
 	}
 	if cfg.MaxRepeatCycleStreak != 5 {
 		t.Fatalf("expected defaulted MaxRepeatCycleStreak=5, got %d", cfg.MaxRepeatCycleStreak)
+	}
+	if cfg.MaxTurns != 7 {
+		t.Fatalf("expected defaulted MaxTurns=7, got %d", cfg.MaxTurns)
 	}
 	if cfg.Assets.MaxSessionAssetBytes != 11 {
 		t.Fatalf("expected defaulted MaxSessionAssetBytes=11, got %d", cfg.Assets.MaxSessionAssetBytes)
@@ -52,7 +59,7 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 		t.Fatalf("expected defaulted MaxSessionAssetsTotalBytes=22, got %d", cfg.Assets.MaxSessionAssetsTotalBytes)
 	}
 
-	cfg = RuntimeConfig{MaxNoProgressStreak: 5, MaxRepeatCycleStreak: 8}
+	cfg = RuntimeConfig{MaxNoProgressStreak: 5, MaxRepeatCycleStreak: 8, MaxTurns: 9}
 	cfg.ApplyDefaults(defaults)
 	if cfg.MaxNoProgressStreak != 5 {
 		t.Fatalf("expected existing MaxNoProgressStreak=5 to be preserved, got %d", cfg.MaxNoProgressStreak)
@@ -60,11 +67,17 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 	if cfg.MaxRepeatCycleStreak != 8 {
 		t.Fatalf("expected existing MaxRepeatCycleStreak=8 to be preserved, got %d", cfg.MaxRepeatCycleStreak)
 	}
+	if cfg.MaxTurns != 9 {
+		t.Fatalf("expected existing MaxTurns=9 to be preserved, got %d", cfg.MaxTurns)
+	}
 
-	cfg = RuntimeConfig{MaxNoProgressStreak: 2, MaxRepeatCycleStreak: -1}
+	cfg = RuntimeConfig{MaxNoProgressStreak: 2, MaxRepeatCycleStreak: -1, MaxTurns: -1}
 	cfg.ApplyDefaults(defaults)
 	if cfg.MaxRepeatCycleStreak != 5 {
 		t.Fatalf("expected negative MaxRepeatCycleStreak=-1 to be replaced by default=5, got %d", cfg.MaxRepeatCycleStreak)
+	}
+	if cfg.MaxTurns != 7 {
+		t.Fatalf("expected negative MaxTurns=-1 to be replaced by default=7, got %d", cfg.MaxTurns)
 	}
 
 	var nilCfg *RuntimeConfig
@@ -74,25 +87,34 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 func TestRuntimeConfigValidate(t *testing.T) {
 	t.Parallel()
 
-	if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 1}).Validate(); err != nil {
+	if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 1, MaxTurns: 1}).Validate(); err != nil {
 		t.Fatalf("expected valid config, got %v", err)
 	}
 
 	for _, bad := range []int{0, -1, -99} {
-		if err := (RuntimeConfig{MaxNoProgressStreak: bad}).Validate(); err == nil {
+		if err := (RuntimeConfig{MaxNoProgressStreak: bad, MaxRepeatCycleStreak: 1, MaxTurns: 1}).Validate(); err == nil {
 			t.Fatalf("expected validation error for MaxNoProgressStreak=%d", bad)
 		}
 	}
 
 	for _, bad := range []int{0, -1, -99} {
-		if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: bad}).Validate(); err == nil {
+		if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: bad, MaxTurns: 1}).Validate(); err == nil {
 			t.Fatalf("expected validation error for MaxRepeatCycleStreak=%d", bad)
 		}
+	}
+	for _, bad := range []int{-1, -99} {
+		if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 1, MaxTurns: bad}).Validate(); err == nil {
+			t.Fatalf("expected validation error for MaxTurns=%d", bad)
+		}
+	}
+	if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 1, MaxTurns: 0}).Validate(); err != nil {
+		t.Fatalf("expected MaxTurns=0 to be valid (use default), got %v", err)
 	}
 
 	if err := (RuntimeConfig{
 		MaxNoProgressStreak:  1,
 		MaxRepeatCycleStreak: 1,
+		MaxTurns:             1,
 		Assets: RuntimeAssetsConfig{
 			MaxSessionAssetBytes:       1,
 			MaxSessionAssetsTotalBytes: 1,
@@ -103,6 +125,7 @@ func TestRuntimeConfigValidate(t *testing.T) {
 	if err := (RuntimeConfig{
 		MaxNoProgressStreak:  1,
 		MaxRepeatCycleStreak: 1,
+		MaxTurns:             1,
 		Assets: RuntimeAssetsConfig{
 			MaxSessionAssetBytes:       -1,
 			MaxSessionAssetsTotalBytes: 1,
@@ -113,6 +136,7 @@ func TestRuntimeConfigValidate(t *testing.T) {
 	if err := (RuntimeConfig{
 		MaxNoProgressStreak:  1,
 		MaxRepeatCycleStreak: 1,
+		MaxTurns:             1,
 		Assets: RuntimeAssetsConfig{
 			MaxSessionAssetBytes:       1,
 			MaxSessionAssetsTotalBytes: -1,

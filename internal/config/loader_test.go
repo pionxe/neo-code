@@ -1757,6 +1757,28 @@ shell: powershell
 	}
 }
 
+func TestLoaderRejectsLegacyMemoMaxIndexLinesField(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+memo:
+  max_index_lines: 123
+`
+	writeLoaderConfig(t, loader, raw)
+
+	cfg, err := loader.Load(context.Background())
+	if err == nil {
+		t.Fatalf("expected legacy memo field to be rejected, cfg=%+v", cfg)
+	}
+	if !strings.Contains(err.Error(), "memo.max_index_lines has been removed") {
+		t.Fatalf("expected migration hint for max_index_lines, got %v", err)
+	}
+}
+
 func TestLoaderRejectsExplicitInvalidMemoNumbers(t *testing.T) {
 	t.Parallel()
 
@@ -1807,25 +1829,6 @@ memo:
 				t.Fatalf("expected %q, got %v", tt.errContain, err)
 			}
 		})
-	}
-}
-
-func TestLoaderRejectsLegacyMemoMaxIndexLinesField(t *testing.T) {
-	t.Parallel()
-
-	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	raw := `
-selected_provider: openai
-current_model: gpt-4.1
-shell: powershell
-memo:
-  max_index_lines: 123
-`
-	writeLoaderConfig(t, loader, raw)
-
-	_, err := loader.Load(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "field max_index_lines not found") {
-		t.Fatalf("expected legacy memo field rejection, got %v", err)
 	}
 }
 

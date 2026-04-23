@@ -23,6 +23,10 @@ func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 		Providers:        []config.ProviderConfig{{Name: "test-progress", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
 		SelectedProvider: "test-progress",
 		Workdir:          t.TempDir(),
+		Runtime: config.RuntimeConfig{
+			MaxNoProgressStreak:  3,
+			MaxRepeatCycleStreak: 6,
+		},
 	}
 
 	toolManager := &stubToolManager{
@@ -312,6 +316,70 @@ func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 	}
 }
 
+func TestRunStopsWhenMaxTurnsReached(t *testing.T) {
+	t.Setenv("TEST_KEY", "dummy")
+
+	cfg := config.Config{
+		Providers:        []config.ProviderConfig{{Name: "test-max-turns", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
+		SelectedProvider: "test-max-turns",
+		Workdir:          t.TempDir(),
+		Runtime: config.RuntimeConfig{
+			MaxTurns: 1,
+		},
+	}
+
+	var toolCalls int32
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{{Name: "tool_loop"}},
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			_ = ctx
+			atomic.AddInt32(&toolCalls, 1)
+			return tools.ToolResult{Name: input.Name, Content: "ok"}, nil
+		},
+	}
+
+	var providerCalls int32
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				_ = ctx
+				_ = req
+				atomic.AddInt32(&providerCalls, 1)
+				events <- providertypes.NewToolCallStartStreamEvent(0, "call_loop", "tool_loop")
+				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_loop", `{"step":"loop"}`)
+				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
+				return nil
+			},
+		},
+	}
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
+	service := NewWithFactory(
+		manager,
+		toolManager,
+		newMemoryStore(),
+		providerFactory,
+		nil,
+	)
+
+	err := service.Run(context.Background(), UserInput{
+		RunID: "run-max-turns",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger loop")},
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime: max turn limit reached (1)") {
+		t.Fatalf("Run() err = %v, want max turn limit reached", err)
+	}
+	if toolCalls != 1 {
+		t.Fatalf("toolCalls = %d, want 1", toolCalls)
+	}
+	if providerCalls != 1 {
+		t.Fatalf("providerCalls = %d, want 1", providerCalls)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonMaxTurnsReached, "runtime: max turn limit reached (1)")
+}
+
 func TestComputeToolSignatureNormalizationAndFallback(t *testing.T) {
 	if got := computeToolSignature(nil); got != "" {
 		t.Fatalf("expected empty signature for nil tool calls, got %q", got)
@@ -426,6 +494,13 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	}
 	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: 6}); got != 6 {
 		t.Fatalf("expected explicit repeat limit 6, got %d", got)
+	}
+
+	if got := resolveRuntimeMaxTurns(config.RuntimeConfig{MaxTurns: 0}); got != config.DefaultMaxTurns {
+		t.Fatalf("expected default max turns %d, got %d", config.DefaultMaxTurns, got)
+	}
+	if got := resolveRuntimeMaxTurns(config.RuntimeConfig{MaxTurns: 30}); got != 30 {
+		t.Fatalf("expected explicit max turns 30, got %d", got)
 	}
 }
 

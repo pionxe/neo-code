@@ -77,8 +77,7 @@ func computeTodoStateSignature(items []agentsession.TodoItem) string {
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
 // 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
 // 新会话在创建后再绑定会话锁，不同会话可并行执行。
-// 当前实现不再设置内部轮数上限，因此 Run 仅在拿到最终 assistant 回复、遇到错误或收到外部取消时结束。
-// 这也意味着同一 session 的锁会覆盖整个运行周期，调用方需要依赖模型终止条件或取消机制兜底。
+// Run 会执行受配置约束的最大轮数，避免 provider 异常输出时出现无限循环。
 func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	var statePtr *runState
 
@@ -126,7 +125,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(ctx, state.runID, state.session.ID, err)
 	}
 
+	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
 	for turn := 0; ; turn++ {
+		if turn >= maxTurns {
+			state.maxTurnsReached = true
+			state.maxTurnsLimit = maxTurns
+			return s.handleRunError(
+				ctx,
+				state.runID,
+				state.session.ID,
+				newMaxTurnLimitError(maxTurns),
+			)
+		}
 		state.turn = turn
 		state.compactCount = 0
 		state.nextAttemptSeq = 1
@@ -386,6 +396,14 @@ func resolveRepeatCycleStreakLimit(rc config.RuntimeConfig) int {
 		return config.DefaultMaxRepeatCycleStreak
 	}
 	return rc.MaxRepeatCycleStreak
+}
+
+// resolveRuntimeMaxTurns 统一解析运行期最大轮数，避免无效配置导致主循环失控。
+func resolveRuntimeMaxTurns(rc config.RuntimeConfig) int {
+	if rc.MaxTurns <= 0 {
+		return config.DefaultMaxTurns
+	}
+	return rc.MaxTurns
 }
 
 // callProviderWithRetry 使用冻结后的 TurnBudgetSnapshot 执行 provider 调用与必要重试。

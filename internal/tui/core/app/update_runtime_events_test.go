@@ -115,6 +115,15 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	if app.state.ExecutionError != "" || app.state.StatusText != "Context budget exceeded" {
 		t.Fatalf("expected budget stop without execution error, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
+	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.StopReasonDecidedPayload{
+			Reason: agentruntime.StopReasonMaxTurnsReached,
+			Detail: "runtime: max turn limit reached (40)",
+		},
+	})
+	if app.state.ExecutionError != "" || app.state.StatusText != "runtime: max turn limit reached (40)" {
+		t.Fatalf("expected max turns stop without execution error, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
+	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonFatalError, Detail: "  "},

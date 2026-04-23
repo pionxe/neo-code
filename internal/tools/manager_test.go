@@ -1520,6 +1520,21 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantFPPrefix: "bash.git|read_only|status",
 		},
 		{
+			name: "git log maps unknown semantic resource for safety",
+			input: ToolCallInput{
+				Name:      "bash",
+				Arguments: []byte(`{"command":"git log --oneline -5"}`),
+			},
+			wantType:     security.ActionTypeBash,
+			wantResource: "bash_git_unknown",
+			wantOp:       "git_log",
+			wantTarget:   "git log --oneline -5",
+			wantSandbox:  ".",
+			wantSemantic: "git",
+			wantClass:    BashIntentClassificationUnknown,
+			wantFPPrefix: "bash.git|unknown|log",
+		},
+		{
 			name: "git remote bash maps semantic resource",
 			input: ToolCallInput{
 				Name:      "bash",
