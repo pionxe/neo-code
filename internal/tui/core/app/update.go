@@ -87,26 +87,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.deferredFooterTick = nil
 	}
 
-	if workspaceResult, ok := msg.(workspaceCommandResultMsg); ok {
-		if workspaceResult.Command == "" && workspaceResult.Err != nil {
-			a.state.ExecutionError = workspaceResult.Err.Error()
-			a.state.StatusText = workspaceResult.Err.Error()
-			a.appendActivity("command", "Workspace command failed", workspaceResult.Err.Error(), true)
-			return a, batchUpdateCmds()
-		}
-		result := formatWorkspaceCommandResult(workspaceResult.Command, workspaceResult.Output, workspaceResult.Err)
-		if workspaceResult.Err != nil {
-			a.state.ExecutionError = workspaceResult.Err.Error()
-			a.state.StatusText = fmt.Sprintf("Command failed: %s", workspaceResult.Command)
-			a.appendActivity("command", "Command failed", result, true)
-		} else {
-			a.state.ExecutionError = ""
-			a.state.StatusText = statusCommandDone
-			a.appendActivity("command", "Command finished", result, false)
-		}
-		return a, batchUpdateCmds()
-	}
-
 	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width = typed.Width
@@ -504,21 +484,6 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.applyComponentLayout(true)
 			a.refreshCommandMenu()
 			a.resetPasteHeuristics()
-			if isWorkspaceCommandInput(input) {
-				command, err := extractWorkspaceCommand(input)
-				if err != nil {
-					a.state.ExecutionError = err.Error()
-					a.state.StatusText = err.Error()
-					a.appendActivity("command", "Invalid workspace command", err.Error(), true)
-					return a, batchUpdateCmds()
-				}
-				a.clearActivities()
-				a.state.StatusText = statusRunningCommand
-				a.state.ExecutionError = ""
-				a.appendActivity("command", "Running command", command, false)
-				cmds = append(cmds, runWorkspaceCommand(a.configManager, a.state.CurrentWorkdir, input))
-				return a, batchUpdateCmds()
-			}
 			switch strings.ToLower(input) {
 			case slashCommandHelp:
 				a.refreshHelpPicker()
