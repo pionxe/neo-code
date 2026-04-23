@@ -1,0 +1,277 @@
+package repository
+
+import (
+	"context"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+const (
+	defaultRetrievalLimit = 20
+	maxRetrievalLimit     = 50
+	defaultContextLines   = 3
+	maxContextLines       = 8
+	maxSnippetLines       = 20
+)
+
+// retrieveByPath 按路径读取目标文件的受限片段。
+func (s *Service) retrieveByPath(ctx context.Context, root string, query RetrievalQuery) ([]RetrievalHit, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	_, target, err := resolveWorkspacePath(root, query.Value)
+	if err != nil {
+		return nil, err
+	}
+	content, err := s.readFile(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []RetrievalHit{}, nil
+		}
+		return nil, err
+	}
+
+	snippet, lineHint := snippetAroundLine(string(content), 1, query.ContextLines)
+	relativePath, err := filepath.Rel(root, target)
+	if err != nil {
+		return nil, err
+	}
+	return []RetrievalHit{{
+		Path:          filepath.Clean(relativePath),
+		Kind:          string(RetrievalModePath),
+		SymbolOrQuery: query.Value,
+		Snippet:       snippet,
+		LineHint:      lineHint,
+	}}, nil
+}
+
+// retrieveByGlob 按 glob 模式在工作区内定位候选文件。
+func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string, query RetrievalQuery) ([]RetrievalHit, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	hits := make([]RetrievalHit, 0, query.Limit)
+	err := walkWorkspaceFiles(root, scope, func(path string, entry fs.DirEntry) error {
+		if len(hits) >= query.Limit {
+			return nil
+		}
+		match, matchErr := filepath.Match(query.Value, filepath.Base(path))
+		if matchErr != nil {
+			return matchErr
+		}
+		if !match {
+			relative, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			match, matchErr = filepath.Match(query.Value, filepath.ToSlash(relative))
+			if matchErr != nil {
+				return matchErr
+			}
+		}
+		if !match {
+			return nil
+		}
+
+		content, readErr := s.readFile(path)
+		if readErr != nil {
+			return nil
+		}
+		snippet, lineHint := snippetAroundLine(string(content), 1, query.ContextLines)
+		relative, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		hits = append(hits, RetrievalHit{
+			Path:          filepath.Clean(relative),
+			Kind:          string(RetrievalModeGlob),
+			SymbolOrQuery: query.Value,
+			Snippet:       snippet,
+			LineHint:      lineHint,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(hits, func(i int, j int) bool {
+		return hits[i].Path < hits[j].Path
+	})
+	return hits, nil
+}
+
+// retrieveByText 扫描工作区文本文件并返回稳定排序的关键字命中。
+func (s *Service) retrieveByText(ctx context.Context, root string, scope string, query RetrievalQuery, wholeWord bool) ([]RetrievalHit, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var matcher *regexp.Regexp
+	if wholeWord {
+		matcher = regexp.MustCompile(`\b` + regexp.QuoteMeta(query.Value) + `\b`)
+	}
+
+	hits := make([]RetrievalHit, 0, query.Limit)
+	err := walkWorkspaceFiles(root, scope, func(path string, entry fs.DirEntry) error {
+		if len(hits) >= query.Limit {
+			return nil
+		}
+		contentBytes, readErr := s.readFile(path)
+		if readErr != nil {
+			return nil
+		}
+
+		content := string(contentBytes)
+		lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+		for index, line := range lines {
+			if len(hits) >= query.Limit {
+				break
+			}
+			matched := strings.Contains(line, query.Value)
+			if wholeWord {
+				matched = matcher.MatchString(line)
+			}
+			if !matched {
+				continue
+			}
+
+			snippet, lineHint := snippetAroundLine(content, index+1, query.ContextLines)
+			relative, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			hits = append(hits, RetrievalHit{
+				Path:          filepath.Clean(relative),
+				Kind:          string(RetrievalModeText),
+				SymbolOrQuery: query.Value,
+				Snippet:       snippet,
+				LineHint:      lineHint,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sortRetrievalHits(hits)
+	return hits, nil
+}
+
+// retrieveBySymbol 先做 Go 定义检索，再在无定义命中时回退到 whole-word 文本检索。
+func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope string, query RetrievalQuery) ([]RetrievalHit, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	hits := make([]RetrievalHit, 0, query.Limit)
+	err := walkWorkspaceFiles(root, scope, func(path string, entry fs.DirEntry) error {
+		if len(hits) >= query.Limit {
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		contentBytes, readErr := s.readFile(path)
+		if readErr != nil {
+			return nil
+		}
+		content := string(contentBytes)
+		lineNumbers := findGoSymbolDefinitions(content, query.Value)
+		for _, lineNumber := range lineNumbers {
+			if len(hits) >= query.Limit {
+				break
+			}
+			snippet, lineHint := snippetAroundLine(content, lineNumber, query.ContextLines)
+			relative, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			hits = append(hits, RetrievalHit{
+				Path:          filepath.Clean(relative),
+				Kind:          string(RetrievalModeSymbol),
+				SymbolOrQuery: query.Value,
+				Snippet:       snippet,
+				LineHint:      lineHint,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(hits) > 0 {
+		sortRetrievalHits(hits)
+		return hits, nil
+	}
+
+	textHits, err := s.retrieveByText(ctx, root, scope, query, true)
+	if err != nil {
+		return nil, err
+	}
+	for index := range textHits {
+		textHits[index].Kind = string(RetrievalModeSymbol)
+	}
+	return textHits, nil
+}
+
+// findGoSymbolDefinitions 以轻量正则匹配 Go 定义，不尝试跨文件语义解析。
+func findGoSymbolDefinitions(content string, symbol string) []int {
+	if strings.TrimSpace(symbol) == "" {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	directFunc := regexp.MustCompile(`^\s*func\s+` + regexp.QuoteMeta(symbol) + `\s*\(`)
+	methodFunc := regexp.MustCompile(`^\s*func\s*\([^)]*\)\s*` + regexp.QuoteMeta(symbol) + `\s*\(`)
+	directType := regexp.MustCompile(`^\s*type\s+` + regexp.QuoteMeta(symbol) + `\b`)
+	directConst := regexp.MustCompile(`^\s*const\s+` + regexp.QuoteMeta(symbol) + `\b`)
+	directVar := regexp.MustCompile(`^\s*var\s+` + regexp.QuoteMeta(symbol) + `\b`)
+	blockSymbol := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(symbol) + `\b`)
+
+	results := make([]int, 0, 4)
+	inConstBlock := false
+	inVarBlock := false
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "const ("):
+			inConstBlock = true
+		case strings.HasPrefix(trimmed, "var ("):
+			inVarBlock = true
+		case trimmed == ")":
+			inConstBlock = false
+			inVarBlock = false
+		}
+
+		if directFunc.MatchString(line) ||
+			methodFunc.MatchString(line) ||
+			directType.MatchString(line) ||
+			directConst.MatchString(line) ||
+			directVar.MatchString(line) ||
+			((inConstBlock || inVarBlock) && blockSymbol.MatchString(line)) {
+			results = append(results, index+1)
+		}
+	}
+	return results
+}
+
+// sortRetrievalHits 统一按 path + line 排序，保证同输入下输出稳定。
+func sortRetrievalHits(hits []RetrievalHit) {
+	sort.Slice(hits, func(i int, j int) bool {
+		if hits[i].Path == hits[j].Path {
+			return hits[i].LineHint < hits[j].LineHint
+		}
+		return hits[i].Path < hits[j].Path
+	})
+}
+
+func readFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}

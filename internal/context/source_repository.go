@@ -1,0 +1,95 @@
+package context
+
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+// repositoryContextSource 负责把 runtime 决策好的 repository 上下文渲染为单独 section。
+type repositoryContextSource struct{}
+
+// Sections 仅消费 BuildInput 中的 repository 投影结果，不主动触发任何仓库检索。
+func (repositoryContextSource) Sections(ctx context.Context, input BuildInput) ([]promptSection, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	content := renderRepositoryContext(input.Repository)
+	if strings.TrimSpace(content) == "" {
+		return nil, nil
+	}
+	return []promptSection{{Title: "Repository Context", Content: content}}, nil
+}
+
+// renderRepositoryContext 统一拼接 changed-files 与 retrieval 两类 repository 子段落。
+func renderRepositoryContext(repo RepositoryContext) string {
+	parts := make([]string, 0, 2)
+	if changed := renderChangedFilesRepositoryContext(repo.ChangedFiles); changed != "" {
+		parts = append(parts, changed)
+	}
+	if retrieval := renderRetrievalRepositoryContext(repo.Retrieval); retrieval != "" {
+		parts = append(parts, retrieval)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// renderChangedFilesRepositoryContext 以紧凑列表渲染当前轮允许注入的 changed-files 摘要。
+func renderChangedFilesRepositoryContext(section *RepositoryChangedFilesSection) string {
+	if section == nil || len(section.Files) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		"### Changed Files",
+		fmt.Sprintf("- total_changed_files: `%d`", section.TotalCount),
+		fmt.Sprintf("- returned_changed_files: `%d`", section.ReturnedCount),
+		fmt.Sprintf("- truncated: `%t`", section.Truncated),
+	}
+	for _, file := range section.Files {
+		switch {
+		case strings.TrimSpace(file.OldPath) != "":
+			lines = append(lines, fmt.Sprintf("- `%s` %s -> %s", file.Status, file.OldPath, file.Path))
+		default:
+			lines = append(lines, fmt.Sprintf("- `%s` %s", file.Status, file.Path))
+		}
+		if snippet := strings.TrimSpace(file.Snippet); snippet != "" {
+			lines = append(lines, "  snippet:")
+			lines = append(lines, indentBlock(snippet, "  "))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderRetrievalRepositoryContext 以受限格式渲染本轮命中的 targeted retrieval 结果。
+func renderRetrievalRepositoryContext(section *RepositoryRetrievalSection) string {
+	if section == nil || len(section.Hits) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		"### Targeted Retrieval",
+		fmt.Sprintf("- mode: `%s`", strings.TrimSpace(section.Mode)),
+		fmt.Sprintf("- query: `%s`", strings.TrimSpace(section.Query)),
+		fmt.Sprintf("- truncated: `%t`", section.Truncated),
+	}
+	for _, hit := range section.Hits {
+		lines = append(lines, fmt.Sprintf("- %s:%d", hit.Path, hit.LineHint))
+		if snippet := strings.TrimSpace(hit.Snippet); snippet != "" {
+			lines = append(lines, indentBlock(snippet, "  "))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// indentBlock 为多行片段统一添加缩进，避免 repository section 展开后破坏版式。
+func indentBlock(text string, prefix string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for index := range lines {
+		lines[index] = prefix + lines[index]
+	}
+	return strings.Join(lines, "\n")
+}

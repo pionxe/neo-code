@@ -4,6 +4,7 @@ import (
 	"context"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	agentsession "neo-code/internal/session"
 )
 
@@ -43,7 +44,8 @@ func newPromptSources(memoSource SectionSource) []promptSectionSource {
 	if memoSource != nil {
 		sources = append(sources, memoSource)
 	}
-	return append(sources, &systemStateSource{gitRunner: runGitCommand})
+	sources = append(sources, repositoryContextSource{})
+	return append(sources, &systemStateSource{summary: repository.NewService().Summary})
 }
 
 // NewBuilder returns the default context builder implementation.

@@ -249,6 +249,25 @@ func TestSanitizeGitReadOnlyEnv(t *testing.T) {
 	}
 }
 
+func TestSanitizeGitReadOnlyEnvIgnoresWindowsPseudoEntries(t *testing.T) {
+	t.Parallel()
+
+	env, err := sanitizeGitReadOnlyEnv([]string{
+		"=::=::\\",
+		"=C:=C:\\workspace",
+		"PATH=/usr/bin",
+	})
+	if err != nil {
+		t.Fatalf("sanitizeGitReadOnlyEnv() error = %v", err)
+	}
+
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "=") {
+			t.Fatalf("expected pseudo env entry to be dropped, got %q", entry)
+		}
+	}
+}
+
 func TestShellCommand(t *testing.T) {
 	t.Parallel()
 

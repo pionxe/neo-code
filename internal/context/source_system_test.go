@@ -5,13 +5,15 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"neo-code/internal/repository"
 )
 
 func TestCollectSystemStateHandlesGitUnavailable(t *testing.T) {
 	t.Parallel()
 
-	state, err := collectSystemState(context.Background(), testMetadata("/workspace"), func(ctx context.Context, workdir string, args ...string) (string, error) {
-		return "", errors.New("git unavailable")
+	state, err := collectSystemState(context.Background(), testMetadata("/workspace"), func(ctx context.Context, workdir string) (repository.Summary, error) {
+		return repository.Summary{}, errors.New("git unavailable")
 	})
 	if err != nil {
 		t.Fatalf("collectSystemState() error = %v", err)
@@ -27,25 +29,31 @@ func TestCollectSystemStateHandlesGitUnavailable(t *testing.T) {
 	}
 }
 
-func TestCollectSystemStateIncludesGitSummaryFromSingleCall(t *testing.T) {
+func TestCollectSystemStateIncludesRepositorySummary(t *testing.T) {
 	t.Parallel()
 
 	callCount := 0
-	runner := func(ctx context.Context, workdir string, args ...string) (string, error) {
+	provider := func(ctx context.Context, workdir string) (repository.Summary, error) {
 		callCount++
-		if strings.Join(args, " ") != "status --short --branch" {
-			return "", errors.New("unexpected git command")
+		if workdir != "/workspace" {
+			return repository.Summary{}, errors.New("unexpected workdir")
 		}
-		return "## feature/context...origin/feature/context [ahead 2, behind 1]\n M internal/context/builder.go\n", nil
+		return repository.Summary{
+			InGitRepo: true,
+			Branch:    "feature/context",
+			Dirty:     true,
+			Ahead:     2,
+			Behind:    1,
+		}, nil
 	}
 
-	state, err := collectSystemState(context.Background(), testMetadata("/workspace"), runner)
+	state, err := collectSystemState(context.Background(), testMetadata("/workspace"), provider)
 	if err != nil {
 		t.Fatalf("collectSystemState() error = %v", err)
 	}
 
 	if callCount != 1 {
-		t.Fatalf("expected a single git call, got %d", callCount)
+		t.Fatalf("expected a single repository summary call, got %d", callCount)
 	}
 	if !state.Git.Available {
 		t.Fatalf("expected git to be available")
@@ -70,9 +78,6 @@ func TestCollectSystemStateIncludesGitSummaryFromSingleCall(t *testing.T) {
 	if !strings.Contains(section, "ahead=`2`, behind=`1`") {
 		t.Fatalf("expected ahead/behind counters in system section, got %q", section)
 	}
-	if strings.Contains(section, "internal/context/builder.go") {
-		t.Fatalf("did not expect full git status output in system section, got %q", section)
-	}
 }
 
 func TestCollectSystemStateReturnsContextError(t *testing.T) {
@@ -81,20 +86,18 @@ func TestCollectSystemStateReturnsContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := collectSystemState(ctx, testMetadata("/workspace"), func(ctx context.Context, workdir string, args ...string) (string, error) {
-		return "", ctx.Err()
-	})
+	_, err := collectSystemState(ctx, testMetadata("/workspace"), nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled error, got %v", err)
 	}
 }
 
-func TestSystemStateSourceSectionsReturnsRunnerContextError(t *testing.T) {
+func TestSystemStateSourceSectionsReturnsRepositoryContextError(t *testing.T) {
 	t.Parallel()
 
 	source := &systemStateSource{
-		gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-			return "", context.DeadlineExceeded
+		summary: func(ctx context.Context, workdir string) (repository.Summary, error) {
+			return repository.Summary{}, context.DeadlineExceeded
 		},
 	}
 
@@ -106,7 +109,7 @@ func TestSystemStateSourceSectionsReturnsRunnerContextError(t *testing.T) {
 	}
 }
 
-func TestCollectSystemStateSkipsGitSummaryWhenRunnerUnavailableOrWorkdirBlank(t *testing.T) {
+func TestCollectSystemStateSkipsSummaryWhenProviderUnavailableOrWorkdirBlank(t *testing.T) {
 	t.Parallel()
 
 	state, err := collectSystemState(context.Background(), Metadata{
@@ -119,7 +122,7 @@ func TestCollectSystemStateSkipsGitSummaryWhenRunnerUnavailableOrWorkdirBlank(t 
 		t.Fatalf("collectSystemState() error = %v", err)
 	}
 	if state.Git.Available {
-		t.Fatalf("expected git to stay unavailable without runner")
+		t.Fatalf("expected git to stay unavailable without provider")
 	}
 	if state.Workdir != "/workspace" {
 		t.Fatalf("expected trimmed workdir, got %q", state.Workdir)
@@ -130,9 +133,9 @@ func TestCollectSystemStateSkipsGitSummaryWhenRunnerUnavailableOrWorkdirBlank(t 
 		Shell:    " bash ",
 		Provider: " local ",
 		Model:    " mini ",
-	}, func(ctx context.Context, workdir string, args ...string) (string, error) {
-		t.Fatalf("runner should not be called for blank workdir")
-		return "", nil
+	}, func(ctx context.Context, workdir string) (repository.Summary, error) {
+		t.Fatalf("summary provider should not be called for blank workdir")
+		return repository.Summary{}, nil
 	})
 	if err != nil {
 		t.Fatalf("collectSystemState() blank workdir error = %v", err)
@@ -142,36 +145,24 @@ func TestCollectSystemStateSkipsGitSummaryWhenRunnerUnavailableOrWorkdirBlank(t 
 	}
 }
 
-func TestParseGitStatusSummaryHandlesCleanDetachedAndBranchlessOutput(t *testing.T) {
+func TestToGitStateMapsRepositorySummary(t *testing.T) {
 	t.Parallel()
 
-	cleanState := parseGitStatusSummary("## main...origin/main\n")
-	if !cleanState.Available || cleanState.Branch != "main" || cleanState.Dirty {
-		t.Fatalf("unexpected clean state: %+v", cleanState)
+	state := toGitState(repository.Summary{
+		InGitRepo: true,
+		Branch:    "main",
+		Ahead:     2,
+		Behind:    3,
+	})
+	if !state.Available || state.Branch != "main" || state.Dirty {
+		t.Fatalf("unexpected mapped state: %+v", state)
+	}
+	if state.Ahead != 2 || state.Behind != 3 {
+		t.Fatalf("unexpected ahead/behind mapping: %+v", state)
 	}
 
-	dirtyWithoutBranch := parseGitStatusSummary(" M internal/context/builder.go\n")
-	if !dirtyWithoutBranch.Available || dirtyWithoutBranch.Branch != "" || !dirtyWithoutBranch.Dirty {
-		t.Fatalf("unexpected dirty state without branch header: %+v", dirtyWithoutBranch)
-	}
-
-	branch, ahead, behind := parseGitBranchLine("No commits yet on feature/bootstrap")
-	if branch != "feature/bootstrap" {
-		t.Fatalf("expected unborn branch name, got %q", branch)
-	}
-	if ahead != 0 || behind != 0 {
-		t.Fatalf("expected unborn branch counters to be zero, got ahead=%d behind=%d", ahead, behind)
-	}
-	branch, ahead, behind = parseGitBranchLine("HEAD detached at abc123")
-	if branch != "detached" {
-		t.Fatalf("expected detached HEAD marker, got %q", branch)
-	}
-	if ahead != 0 || behind != 0 {
-		t.Fatalf("expected detached counters to be zero, got ahead=%d behind=%d", ahead, behind)
-	}
-
-	branch, ahead, behind = parseGitBranchLine("main...origin/main [ahead 2, behind 3]")
-	if branch != "main" || ahead != 2 || behind != 3 {
-		t.Fatalf("expected ahead/behind parsed, got branch=%q ahead=%d behind=%d", branch, ahead, behind)
+	unavailable := toGitState(repository.Summary{})
+	if unavailable.Available {
+		t.Fatalf("expected unavailable state for empty summary, got %+v", unavailable)
 	}
 }

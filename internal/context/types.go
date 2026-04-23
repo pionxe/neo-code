@@ -4,6 +4,7 @@ import (
 	"context"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
@@ -20,6 +21,7 @@ type BuildInput struct {
 	TaskState    agentsession.TaskState
 	Todos        []agentsession.TodoItem
 	ActiveSkills []skills.Skill
+	Repository   RepositoryContext
 	Metadata     Metadata
 	Compact      CompactOptions
 }
@@ -28,6 +30,28 @@ type BuildInput struct {
 type BuildResult struct {
 	SystemPrompt string
 	Messages     []providertypes.Message
+}
+
+// RepositoryContext 承载 runtime 已决策好的 repository 事实投影，供 context 只读渲染。
+type RepositoryContext struct {
+	ChangedFiles *RepositoryChangedFilesSection
+	Retrieval    *RepositoryRetrievalSection
+}
+
+// RepositoryChangedFilesSection 描述当前轮允许注入的变更文件摘要。
+type RepositoryChangedFilesSection struct {
+	Files         []repository.ChangedFile
+	Truncated     bool
+	ReturnedCount int
+	TotalCount    int
+}
+
+// RepositoryRetrievalSection 描述当前轮允许注入的定向检索结果。
+type RepositoryRetrievalSection struct {
+	Hits      []repository.RetrievalHit
+	Truncated bool
+	Mode      string
+	Query     string
 }
 
 // MicroCompactPolicySource 定义 context 读取工具 micro compact 策略的最小依赖。

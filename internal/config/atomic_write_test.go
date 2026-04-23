@@ -1,7 +1,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -41,5 +43,19 @@ func TestFsyncDirectoryNonWindowsSucceedsForExistingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := fsyncDirectory(dir); err != nil {
 		t.Fatalf("fsyncDirectory() error = %v", err)
+	}
+}
+
+func TestIsBestEffortDirectorySyncError(t *testing.T) {
+	t.Parallel()
+
+	if !isBestEffortDirectorySyncError(syscall.EINVAL) {
+		t.Fatalf("expected EINVAL to be treated as best-effort")
+	}
+	if !isBestEffortDirectorySyncError(syscall.EACCES) {
+		t.Fatalf("expected EACCES to be treated as best-effort")
+	}
+	if !isBestEffortDirectorySyncError(&os.PathError{Op: "sync", Path: "/tmp", Err: syscall.EPERM}) {
+		t.Fatalf("expected wrapped EPERM to be treated as best-effort")
 	}
 }
