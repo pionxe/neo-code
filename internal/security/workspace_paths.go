@@ -57,11 +57,31 @@ func ResolveWorkspaceWalkPathFromRoot(root string, target string, entry fs.DirEn
 	if !isWithinWorkspace(root, absoluteTarget) {
 		return "", fmt.Errorf("security: path %q escapes workspace root", target)
 	}
-	if entry != nil && entry.Type().IsRegular() {
+	if isVerifiedRegularWalkEntry(entry) {
 		return absoluteTarget, nil
 	}
 	if _, err := ensureNoSymlinkEscape(root, absoluteTarget, target); err != nil {
 		return "", err
 	}
 	return absoluteTarget, nil
+}
+
+// isVerifiedRegularWalkEntry 判断 WalkDir 条目是否可安全走普通文件快速路径。
+// 对 Type()==0 的条目会再调用 Info 二次确认，避免“未知类型”误判为普通文件而绕过符号链接校验。
+func isVerifiedRegularWalkEntry(entry fs.DirEntry) bool {
+	if entry == nil {
+		return false
+	}
+	entryType := entry.Type()
+	if !entryType.IsRegular() {
+		return false
+	}
+	if entryType != 0 {
+		return true
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return false
+	}
+	return info.Mode().IsRegular()
 }
