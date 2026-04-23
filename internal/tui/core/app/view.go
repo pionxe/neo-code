@@ -160,9 +160,20 @@ func composeHeaderLine(left string, right string, width int) string {
 	}
 
 	leftText := tuiutils.TrimMiddle(left, leftMax)
-	spaceCount := width - lipgloss.Width(leftText) - rightWidth
+	leftWidth := lipgloss.Width(leftText)
+	spaceCount := width - leftWidth - rightWidth
 	if spaceCount < gap {
-		spaceCount = gap
+		// 终端过窄时继续收缩左侧，优先保证右侧信息与最小间隔不溢出。
+		targetLeft := max(0, width-rightWidth-gap)
+		leftText = tuiutils.TrimMiddle(left, targetLeft)
+		leftWidth = lipgloss.Width(leftText)
+		spaceCount = width - leftWidth - rightWidth
+	}
+	if spaceCount < 1 {
+		spaceCount = 1
+	}
+	if leftWidth+spaceCount+rightWidth > width {
+		return tuiutils.TrimMiddle(right, max(8, width))
 	}
 	return leftText + strings.Repeat(" ", spaceCount) + right
 }

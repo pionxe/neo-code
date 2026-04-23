@@ -153,6 +153,7 @@ type appRuntimeState struct {
 	footerErrorLast    string
 	footerErrorText    string
 	footerErrorUntil   time.Time
+	deferredFooterTick tea.Cmd
 	startupVisible     bool
 	startupTick        int
 	startupTypingIndex int

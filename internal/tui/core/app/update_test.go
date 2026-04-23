@@ -374,20 +374,22 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 	return app, runtime
 }
 
-func TestStartupKeyEscQuits(t *testing.T) {
+func TestStartupKeyEscFocusesInput(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupVisible = true
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	next := model.(App)
-	if !next.startupVisible {
-		t.Fatalf("expected startup to stay visible before quit command is consumed")
+	if next.startupVisible {
+		t.Fatalf("expected startup to be dismissed by Esc")
 	}
-	if cmd == nil {
-		t.Fatalf("expected quit command")
+	if next.focus != panelInput {
+		t.Fatalf("expected Esc to focus input panel from startup")
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("expected tea.QuitMsg from quit command")
+	if cmd != nil {
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Fatalf("expected Esc not to quit from startup")
+		}
 	}
 }
 
@@ -720,7 +722,9 @@ func TestAppUpdateBasic(t *testing.T) {
 	}
 	app = model.(App)
 	if cmd != nil {
-		t.Error("Update returned non-nil cmd for runFinishedMsg with error")
+		if _, ok := cmd().(tickMsg); !ok {
+			t.Errorf("expected optional tick cmd for footer toast, got %T", cmd())
+		}
 	}
 
 	canceledMsg := runFinishedMsg{Err: context.Canceled}
@@ -730,7 +734,9 @@ func TestAppUpdateBasic(t *testing.T) {
 	}
 	app = model.(App)
 	if cmd != nil {
-		t.Error("Update returned non-nil cmd for runFinishedMsg with canceled error")
+		if _, ok := cmd().(tickMsg); !ok {
+			t.Errorf("expected optional tick cmd for footer toast, got %T", cmd())
+		}
 	}
 }
 
@@ -3909,9 +3915,10 @@ func TestSetActiveSessionIDTogglesStartupScreenLock(t *testing.T) {
 		t.Fatalf("expected switching to session to unlock startup screen")
 	}
 
+	app.startupScreenLocked = false
 	app.setActiveSessionID("")
-	if !app.startupScreenLocked {
-		t.Fatalf("expected returning to draft to relock startup screen")
+	if app.startupScreenLocked {
+		t.Fatalf("expected returning to draft to keep startup unlocked")
 	}
 }
 
@@ -4027,6 +4034,9 @@ func TestFooterErrorToastSyncBranches(t *testing.T) {
 	if !app.footerErrorUntil.Equal(base.Add(footerErrorFlashDuration)) {
 		t.Fatalf("unexpected footer toast expiration: %v", app.footerErrorUntil)
 	}
+	if app.deferredFooterTick == nil {
+		t.Fatalf("expected footer toast to schedule tick command")
+	}
 
 	app.state.ExecutionError = "Runtime failed"
 	app.syncFooterErrorToast()
@@ -4046,6 +4056,26 @@ func TestFooterErrorToastSyncBranches(t *testing.T) {
 	app.syncFooterErrorToast()
 	if app.footerErrorLast != "" {
 		t.Fatalf("expected empty execution error to clear footerErrorLast")
+	}
+}
+
+func TestDeferredFooterTickDispatchedOnce(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.showFooterError("permission denied")
+	if app.deferredFooterTick == nil {
+		t.Fatal("expected deferred footer tick to be prepared")
+	}
+
+	model, cmd := app.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	app = model.(App)
+	if app.deferredFooterTick != nil {
+		t.Fatal("expected deferred footer tick to be cleared after dispatch")
+	}
+	if cmd == nil {
+		t.Fatal("expected update to include deferred footer tick command")
+	}
+	if _, ok := cmd().(tickMsg); !ok {
+		t.Fatalf("expected tick command, got %T", cmd())
 	}
 }
 
@@ -4357,14 +4387,14 @@ func TestUpdateFocusInputNewSessionAndTodoScroll(t *testing.T) {
 	if len(runtime.listSessions) != 0 && strings.TrimSpace(app.state.ActiveSessionID) == "" {
 		t.Fatalf("expected Ctrl+N to create or activate draft session")
 	}
-	if !app.startupScreenLocked {
-		t.Fatalf("expected Ctrl+N to relock startup screen")
+	if app.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to keep startup unlocked")
 	}
 	if len(app.activeMessages) != 0 {
 		t.Fatalf("expected Ctrl+N to clear transcript messages")
 	}
-	if view := app.renderWaterfall(100, 24); !strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
-		t.Fatalf("expected startup screen after Ctrl+N, got %q", view)
+	if view := app.renderWaterfall(100, 24); strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected main view after Ctrl+N, got startup content %q", view)
 	}
 
 	app.focus = panelTodo

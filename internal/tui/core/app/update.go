@@ -81,6 +81,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.deferredLogPersistCmd)
 		a.deferredLogPersistCmd = nil
 	}
+	if a.deferredFooterTick != nil {
+		cmds = append(cmds, a.deferredFooterTick)
+		a.deferredFooterTick = nil
+	}
 
 	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -758,7 +762,8 @@ func (a App) handleStartupKey(typed tea.KeyMsg, cmds []tea.Cmd) (tea.Model, tea.
 		a.applyComponentLayout(false)
 		return a, tea.Batch(cmds...), true
 	case key.Matches(typed, a.keys.FocusInput):
-		return a, tea.Quit, true
+		a.dismissStartup()
+		return a, tea.Batch(cmds...), true
 	case key.Matches(typed, a.keys.Quit):
 		return a, tea.Quit, true
 	case isStartupRegularInput(typed):
@@ -1890,6 +1895,8 @@ func (a *App) showFooterError(message string) {
 	}
 	a.footerErrorText = message
 	a.footerErrorUntil = a.now().Add(footerErrorFlashDuration)
+	// 新错误出现时主动补发一次 tick，确保空闲状态下也能驱动自动消失。
+	a.deferredFooterTick = appTickCmd()
 }
 
 func (a *App) clearActivities() {
@@ -2782,7 +2789,7 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 func (a *App) startDraftSession() {
 	a.dismissStartup()
 	a.setActiveSessionID("")
-	a.startupScreenLocked = true
+	a.startupScreenLocked = false
 	a.startupIntroActive = false
 	a.startupIntroFrame = 0
 	a.startupLoopFrame = 0
@@ -2873,7 +2880,6 @@ func (a *App) setActiveSessionID(sessionID string) {
 	next := strings.TrimSpace(sessionID)
 	current := strings.TrimSpace(a.state.ActiveSessionID)
 	if next == "" {
-		a.startupScreenLocked = true
 		a.startupIntroActive = false
 		a.startupIntroFrame = 0
 		if current != "" {

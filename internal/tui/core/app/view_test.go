@@ -589,6 +589,18 @@ func TestComposeHeaderLineKeepsRightSectionVisible(t *testing.T) {
 	}
 }
 
+func TestComposeHeaderLineDoesNotOverflowTightWidth(t *testing.T) {
+	right := "cwd: /tmp/workdir"
+	width := lipgloss.Width(right)
+	line := composeHeaderLine("NeoCode / model / status", right, width)
+	if got := lipgloss.Width(line); got > width {
+		t.Fatalf("expected composed header width <= %d, got %d (%q)", width, got, line)
+	}
+	if !strings.Contains(line, right) {
+		t.Fatalf("expected right section preserved, got %q", line)
+	}
+}
+
 func TestRenderPanelAndActivityPreview(t *testing.T) {
 	app, _ := newTestApp(t)
 	panel := app.renderPanel("Title", "Sub", "Body", 60, 8, true)
