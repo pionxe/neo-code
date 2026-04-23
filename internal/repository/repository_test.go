@@ -98,6 +98,8 @@ func TestChangedFilesRespectsStatusNormalizationAndSnippetRules(t *testing.T) {
 				"D  pkg/deleted.go",
 				"R  pkg/renamed.go",
 				"pkg/old.go",
+				"C  pkg/copied.go",
+				"pkg/source.go",
 				"UU pkg/conflicted.go",
 			), nil
 		case "diff --unified=3 HEAD -- pkg/changed.go":
@@ -117,7 +119,7 @@ func TestChangedFilesRespectsStatusNormalizationAndSnippetRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChangedFiles() error = %v", err)
 	}
-	if ctx.TotalCount != 6 || ctx.ReturnedCount != 6 {
+	if ctx.TotalCount != 7 || ctx.ReturnedCount != 7 {
 		t.Fatalf("unexpected count summary: %+v", ctx)
 	}
 	assertChangedFile(t, ctx.Files[0], filepath.Clean("pkg/changed.go"), "", StatusModified, "Changed")
@@ -125,7 +127,8 @@ func TestChangedFilesRespectsStatusNormalizationAndSnippetRules(t *testing.T) {
 	assertChangedFile(t, ctx.Files[2], filepath.Clean("pkg/untracked.go"), "", StatusUntracked, "Untracked")
 	assertChangedFile(t, ctx.Files[3], filepath.Clean("pkg/deleted.go"), "", StatusDeleted, "")
 	assertChangedFile(t, ctx.Files[4], filepath.Clean("pkg/renamed.go"), filepath.Clean("pkg/old.go"), StatusRenamed, "")
-	assertChangedFile(t, ctx.Files[5], filepath.Clean("pkg/conflicted.go"), "", StatusConflicted, "")
+	assertChangedFile(t, ctx.Files[5], filepath.Clean("pkg/copied.go"), filepath.Clean("pkg/source.go"), StatusCopied, "")
+	assertChangedFile(t, ctx.Files[6], filepath.Clean("pkg/conflicted.go"), "", StatusConflicted, "")
 }
 
 func TestChangedFilesAppliesLimitAndTruncation(t *testing.T) {
@@ -230,10 +233,13 @@ func TestChangedFilesBlocksSensitiveLargeAndBinarySnippets(t *testing.T) {
 
 	workdir := t.TempDir()
 	mustWriteFile(t, filepath.Join(workdir, ".env"), "API_KEY=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, ".envrc"), "export API_KEY=secret\n")
 	mustWriteFile(t, filepath.Join(workdir, ".npmrc"), "token=secret\n")
 	mustWriteFile(t, filepath.Join(workdir, ".aws", "credentials"), "[default]\naws_access_key_id=secret\n")
 	mustWriteFile(t, filepath.Join(workdir, ".ssh", "id_rsa"), "PRIVATE KEY\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "cert.pem"), "-----BEGIN PRIVATE KEY-----\nsecret\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "issuer.p8"), "PRIVATE KEY\n")
+	mustWriteFile(t, filepath.Join(workdir, "config", "secrets.yml"), "token: secret\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02}))
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "large.txt"), strings.Repeat("x", maxRepositorySnippetFileBytes+1))
 
@@ -242,10 +248,13 @@ func TestChangedFilesBlocksSensitiveLargeAndBinarySnippets(t *testing.T) {
 			return nulJoin(
 				"## main",
 				"?? .env",
+				"?? .envrc",
 				"?? .npmrc",
 				"?? .aws/credentials",
 				"?? .ssh/id_rsa",
 				"?? pkg/cert.pem",
+				"?? pkg/issuer.p8",
+				"?? config/secrets.yml",
 				"?? pkg/bin.dat",
 				"?? pkg/large.txt",
 			), nil
@@ -271,13 +280,16 @@ func TestChangedFilesBlocksModifiedSensitiveDiffSnippet(t *testing.T) {
 
 	workdir := t.TempDir()
 	mustWriteFile(t, filepath.Join(workdir, ".env"), "API_KEY=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, "config", "secrets.yaml"), "token: secret\n")
 
 	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
 		switch strings.Join(args, " ") {
 		case "status --porcelain=v1 -z --branch --untracked-files=normal":
-			return nulJoin("## main", " M .env"), nil
+			return nulJoin("## main", " M .env", " M config/secrets.yaml"), nil
 		case "diff --unified=3 HEAD -- .env":
 			return "@@ -1,1 +1,1 @@\n-API_KEY=old\n+API_KEY=new\n", nil
+		case "diff --unified=3 HEAD -- config/secrets.yaml":
+			return "@@ -1,1 +1,1 @@\n-token: old\n+token: new\n", nil
 		default:
 			return "", nil
 		}
@@ -289,11 +301,13 @@ func TestChangedFilesBlocksModifiedSensitiveDiffSnippet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChangedFiles() error = %v", err)
 	}
-	if len(result.Files) != 1 {
-		t.Fatalf("expected single changed file, got %+v", result.Files)
+	if len(result.Files) != 2 {
+		t.Fatalf("expected two changed files, got %+v", result.Files)
 	}
-	if result.Files[0].Snippet != "" {
-		t.Fatalf("expected sensitive modified file to have empty snippet, got %+v", result.Files[0])
+	for _, file := range result.Files {
+		if file.Snippet != "" {
+			t.Fatalf("expected sensitive modified file to have empty snippet, got %+v", file)
+		}
 	}
 }
 
@@ -464,8 +478,11 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 
 	workdir := t.TempDir()
 	mustWriteFile(t, filepath.Join(workdir, ".env"), "API_KEY=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, ".envrc"), "export TOKEN=secret\n")
 	mustWriteFile(t, filepath.Join(workdir, ".npmrc"), "token=secret\n")
 	mustWriteFile(t, filepath.Join(workdir, ".aws", "credentials"), "[default]\naws_access_key_id=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, "config", "secrets.yml"), "token: secret\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "issuer.p8"), "PRIVATE KEY\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "notes.key"), "private")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02, 0x03}))
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "target.txt"), "match line\n")
@@ -505,6 +522,36 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 	if len(pathHits) != 0 {
 		t.Fatalf("expected aws credentials retrieval to be filtered, got %+v", pathHits)
 	}
+	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModePath,
+		Value: ".envrc",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(path envrc) error = %v", err)
+	}
+	if len(pathHits) != 0 {
+		t.Fatalf("expected .envrc retrieval to be filtered, got %+v", pathHits)
+	}
+	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModePath,
+		Value: "config/secrets.yml",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(path secrets) error = %v", err)
+	}
+	if len(pathHits) != 0 {
+		t.Fatalf("expected secrets.yml retrieval to be filtered, got %+v", pathHits)
+	}
+	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModePath,
+		Value: "pkg/issuer.p8",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(path p8) error = %v", err)
+	}
+	if len(pathHits) != 0 {
+		t.Fatalf("expected .p8 retrieval to be filtered, got %+v", pathHits)
+	}
 
 	textHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModeText,
@@ -527,7 +574,10 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 		t.Fatalf("Retrieve(glob) error = %v", err)
 	}
 	for _, hit := range globHits {
-		if hit.Path == filepath.Clean("pkg/large.txt") || hit.Path == filepath.Clean("pkg/notes.key") || hit.Path == filepath.Clean("pkg/bin.dat") {
+		if hit.Path == filepath.Clean("pkg/large.txt") ||
+			hit.Path == filepath.Clean("pkg/notes.key") ||
+			hit.Path == filepath.Clean("pkg/bin.dat") ||
+			hit.Path == filepath.Clean("pkg/issuer.p8") {
 			t.Fatalf("expected filtered file to be excluded, got %+v", globHits)
 		}
 	}

@@ -1535,6 +1535,21 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantFPPrefix: "bash.git|read_only|log",
 		},
 		{
+			name: "git diff output file maps unknown semantic resource",
+			input: ToolCallInput{
+				Name:      "bash",
+				Arguments: []byte(`{"command":"git diff --output=out.txt origin/main...HEAD"}`),
+			},
+			wantType:     security.ActionTypeBash,
+			wantResource: "bash_git_unknown",
+			wantOp:       "git_diff",
+			wantTarget:   "git diff --output=out.txt origin/main...HEAD",
+			wantSandbox:  ".",
+			wantSemantic: "git",
+			wantClass:    BashIntentClassificationUnknown,
+			wantFPPrefix: "bash.git|unknown|diff",
+		},
+		{
 			name: "git remote bash maps semantic resource",
 			input: ToolCallInput{
 				Name:      "bash",

@@ -64,7 +64,7 @@ func (s *Service) changedFileSnippet(ctx context.Context, workdir string, entry 
 	switch entry.Status {
 	case StatusDeleted, StatusConflicted:
 		return snippetResult{}, nil
-	case StatusModified, StatusRenamed:
+	case StatusModified, StatusRenamed, StatusCopied:
 		return s.readDiffSnippet(ctx, workdir, entry.Path)
 	case StatusAdded:
 		snippet, err := s.readDiffSnippet(ctx, workdir, entry.Path)
@@ -137,7 +137,7 @@ func (s *Service) readFileHeadSnippet(workdir string, relativePath string) (snip
 	return trimSnippetText(string(content), maxChangedSnippetLinesPerFile), nil
 }
 
-// parseGitSnapshot 将 porcelain=v1 --branch 输出归一化为内部快照。
+// parseGitSnapshot 将 porcelain v1 -z 输出归一化为内部快照。
 func parseGitSnapshot(output string) gitSnapshot {
 	records := splitNulRecords(output)
 	if len(records) == 0 {
@@ -216,7 +216,6 @@ func parseTrackingCounters(line string) (int, int) {
 	return ahead, behind
 }
 
-// parseChangedEntry 将 porcelain 行归一化为单个变更条目。
 // splitNulRecords 按 NUL record 拆分 -z 输出，并忽略尾部空 record。
 func splitNulRecords(output string) []string {
 	records := strings.Split(output, "\x00")
@@ -248,7 +247,7 @@ func parseChangedRecord(records []string) (gitChangedEntry, int, bool) {
 	}
 
 	entry := gitChangedEntry{Status: status}
-	if status == StatusRenamed {
+	if status == StatusRenamed || status == StatusCopied {
 		if len(records) < 2 {
 			return gitChangedEntry{}, 1, false
 		}
@@ -275,13 +274,16 @@ func normalizeStatus(x byte, y byte) ChangedFileStatus {
 	if x == 'R' || y == 'R' {
 		return StatusRenamed
 	}
+	if x == 'C' || y == 'C' {
+		return StatusCopied
+	}
 	if x == 'D' || y == 'D' {
 		return StatusDeleted
 	}
 	if x == 'A' || y == 'A' {
 		return StatusAdded
 	}
-	if x == 'M' || y == 'M' || x == 'T' || y == 'T' || x == 'C' || y == 'C' {
+	if x == 'M' || y == 'M' || x == 'T' || y == 'T' {
 		return StatusModified
 	}
 	return ""

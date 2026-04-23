@@ -3,6 +3,7 @@ package repository
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	pathpkg "path"
@@ -23,6 +24,7 @@ const (
 )
 
 var blockedRepositorySnippetExtensions = map[string]struct{}{
+	".p8":  {},
 	".key": {},
 	".pem": {},
 	".p12": {},
@@ -34,6 +36,7 @@ var blockedRepositorySnippetExtensions = map[string]struct{}{
 }
 
 var blockedRepositorySnippetBaseNames = map[string]struct{}{
+	".envrc":           {},
 	".npmrc":           {},
 	".pypirc":          {},
 	".netrc":           {},
@@ -58,6 +61,25 @@ var blockedRepositorySnippetPathSuffixes = []string{
 	"/.config/gcloud/credentials.db",
 	"/.config/gcloud/access_tokens.db",
 }
+
+var blockedRepositorySnippetConfigExtensions = map[string]struct{}{
+	".conf": {},
+	".env":  {},
+	".ini":  {},
+	".json": {},
+	".toml": {},
+	".yaml": {},
+	".yml":  {},
+}
+
+var blockedRepositorySnippetConfigKeywords = []string{
+	"credential",
+	"credentials",
+	"secret",
+	"secrets",
+}
+
+var errRetrievalLimitReached = errors.New("repository: retrieval limit reached")
 
 // retrieveByPath 按路径读取目标文件的受限片段。
 func (s *Service) retrieveByPath(ctx context.Context, root string, query RetrievalQuery) ([]RetrievalHit, error) {
@@ -105,7 +127,7 @@ func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string,
 			return ctxErr
 		}
 		if len(hits) >= query.Limit {
-			return nil
+			return errRetrievalLimitReached
 		}
 		match, matchErr := filepath.Match(query.Value, filepath.Base(path))
 		if matchErr != nil {
@@ -133,8 +155,16 @@ func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string,
 			return hitErr
 		}
 		hits = append(hits, hit)
+		if len(hits) >= query.Limit {
+			return errRetrievalLimitReached
+		}
 		return nil
 	})
+	if err != nil {
+		if errors.Is(err, errRetrievalLimitReached) {
+			err = nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +192,7 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 			return ctxErr
 		}
 		if len(hits) >= query.Limit {
-			return nil
+			return errRetrievalLimitReached
 		}
 		content, ok := s.readRetrievalText(path, entry)
 		if !ok {
@@ -189,9 +219,17 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 				return hitErr
 			}
 			hits = append(hits, hit)
+			if len(hits) >= query.Limit {
+				return errRetrievalLimitReached
+			}
 		}
 		return nil
 	})
+	if err != nil {
+		if errors.Is(err, errRetrievalLimitReached) {
+			err = nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +250,7 @@ func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope strin
 			return ctxErr
 		}
 		if len(hits) >= query.Limit {
-			return nil
+			return errRetrievalLimitReached
 		}
 		if filepath.Ext(path) != ".go" {
 			return nil
@@ -234,9 +272,17 @@ func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope strin
 				return hitErr
 			}
 			hits = append(hits, hit)
+			if len(hits) >= query.Limit {
+				return errRetrievalLimitReached
+			}
 		}
 		return nil
 	})
+	if err != nil {
+		if errors.Is(err, errRetrievalLimitReached) {
+			err = nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +443,25 @@ func allowRepositorySnippetByPathAndSize(path string, size int64) bool {
 			return false
 		}
 	}
+	if isSensitiveRepositoryConfigPath(baseName, pathWithSentinel) {
+		return false
+	}
 	return true
+}
+
+// isSensitiveRepositoryConfigPath 识别常见明文凭据或 secrets 配置文件命名。
+func isSensitiveRepositoryConfigPath(baseName string, normalizedPath string) bool {
+	extension := filepath.Ext(baseName)
+	if _, ok := blockedRepositorySnippetConfigExtensions[extension]; !ok {
+		return false
+	}
+	nameWithoutExt := strings.TrimSuffix(baseName, extension)
+	for _, keyword := range blockedRepositorySnippetConfigKeywords {
+		if strings.Contains(nameWithoutExt, keyword) || strings.Contains(normalizedPath, "/"+keyword+".") || strings.Contains(normalizedPath, "/"+keyword+"s.") {
+			return true
+		}
+	}
+	return false
 }
 
 // isBinaryContent 通过前缀字节判断文件是否为二进制内容。

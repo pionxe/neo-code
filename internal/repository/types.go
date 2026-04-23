@@ -10,6 +10,7 @@ const (
 	StatusModified   ChangedFileStatus = "modified"
 	StatusDeleted    ChangedFileStatus = "deleted"
 	StatusRenamed    ChangedFileStatus = "renamed"
+	StatusCopied     ChangedFileStatus = "copied"
 	StatusUntracked  ChangedFileStatus = "untracked"
 	StatusConflicted ChangedFileStatus = "conflicted"
 )

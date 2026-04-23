@@ -232,6 +232,7 @@ func TestGitParsingHelpers(t *testing.T) {
 		{records: []string{"?? "}, ok: false, consumed: 1},
 		{records: []string{"?? pkg/new.go"}, ok: true, consumed: 1, status: StatusUntracked, path: filepath.Clean("pkg/new.go")},
 		{records: []string{"R  new.go", "old.go"}, ok: true, consumed: 2, status: StatusRenamed, path: filepath.Clean("new.go"), oldPath: filepath.Clean("old.go")},
+		{records: []string{"C  copied.go", "source.go"}, ok: true, consumed: 2, status: StatusCopied, path: filepath.Clean("copied.go"), oldPath: filepath.Clean("source.go")},
 		{records: []string{" M pkg/mod.go"}, ok: true, consumed: 1, status: StatusModified, path: filepath.Clean("pkg/mod.go")},
 		{records: []string{" D pkg/deleted.go"}, ok: true, consumed: 1, status: StatusDeleted, path: filepath.Clean("pkg/deleted.go")},
 		{records: []string{"XY file.txt"}, ok: false, consumed: 1},
@@ -254,6 +255,7 @@ func TestGitParsingHelpers(t *testing.T) {
 
 	if normalizeStatus('U', 'A') != StatusConflicted ||
 		normalizeStatus('R', ' ') != StatusRenamed ||
+		normalizeStatus('C', ' ') != StatusCopied ||
 		normalizeStatus('D', ' ') != StatusDeleted ||
 		normalizeStatus('A', ' ') != StatusAdded ||
 		normalizeStatus('M', ' ') != StatusModified ||
@@ -564,6 +566,16 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		if !snapshot.InGitRepo || len(snapshot.Entries) != 2 {
 			t.Fatalf("parseGitSnapshot(without branch line) = %+v", snapshot)
 		}
+		copied := parseGitSnapshot(nulJoin("## main", "C  copied.go", "source.go", "?? tail.go"))
+		if len(copied.Entries) != 2 {
+			t.Fatalf("expected copy snapshot entries, got %+v", copied)
+		}
+		if copied.Entries[0].Status != StatusCopied || copied.Entries[0].Path != filepath.Clean("copied.go") || copied.Entries[0].OldPath != filepath.Clean("source.go") {
+			t.Fatalf("expected copied entry to parse cleanly, got %+v", copied.Entries[0])
+		}
+		if copied.Entries[1].Path != filepath.Clean("tail.go") {
+			t.Fatalf("expected following record to stay aligned, got %+v", copied.Entries[1])
+		}
 		quoted := parseGitSnapshot(nulJoin(
 			` M dir with space/file name.txt`,
 			`R  dir with space/new name.txt`,
@@ -744,6 +756,33 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		})
 		if err != nil || len(symbolHits) != 1 {
 			t.Fatalf("retrieveBySymbol(limit=1) = (%+v, %v)", symbolHits, err)
+		}
+
+		visitedCount := 0
+		limitRoot := t.TempDir()
+		mustWriteFile(t, filepath.Join(limitRoot, "a.txt"), "hit\n")
+		mustWriteFile(t, filepath.Join(limitRoot, "b.txt"), "hit\n")
+		mustWriteFile(t, filepath.Join(limitRoot, "c.txt"), "hit\n")
+		limitSvc := &Service{
+			readFile: func(path string) ([]byte, error) {
+				visitedCount++
+				return readFile(path)
+			},
+		}
+		limitedHits, err := limitSvc.retrieveByText(context.Background(), limitRoot, limitRoot, RetrievalQuery{
+			Mode:         RetrievalModeText,
+			Value:        "hit",
+			Limit:        1,
+			ContextLines: 1,
+		}, false)
+		if err != nil {
+			t.Fatalf("retrieveByText(early stop) err = %v", err)
+		}
+		if len(limitedHits) != 1 {
+			t.Fatalf("expected one limited hit, got %+v", limitedHits)
+		}
+		if visitedCount != 1 {
+			t.Fatalf("expected retrieval walk to stop after first hit, visited %d files", visitedCount)
 		}
 		_, err = svc.retrieveByText(context.Background(), root, filepath.Join(root, "missing"), RetrievalQuery{
 			Mode:  RetrievalModeText,

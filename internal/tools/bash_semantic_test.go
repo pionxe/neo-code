@@ -49,6 +49,20 @@ func TestAnalyzeBashCommandClassifiesGitCommand(t *testing.T) {
 			wantSubCmd: "diff",
 		},
 		{
+			name:       "git diff output file is not read only",
+			command:    "git diff --output=out.txt HEAD~1",
+			wantIsGit:  true,
+			wantClass:  BashIntentClassificationUnknown,
+			wantSubCmd: "diff",
+		},
+		{
+			name:       "git show output file is not read only",
+			command:    "git show --output out.txt HEAD~1",
+			wantIsGit:  true,
+			wantClass:  BashIntentClassificationUnknown,
+			wantSubCmd: "show",
+		},
+		{
 			name:       "git cat-file is unknown and must require approval",
 			command:    "git cat-file -p HEAD:.env",
 			wantIsGit:  true,
