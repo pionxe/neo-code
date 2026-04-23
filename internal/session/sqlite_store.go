@@ -202,7 +202,7 @@ func (s *SQLiteStore) LoadSession(ctx context.Context, id string) (Session, erro
 		return Session{}, err
 	}
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return Session{}, fmt.Errorf("session: begin load session tx: %w", err)
 	}
@@ -216,9 +216,16 @@ func (s *SQLiteStore) LoadSession(ctx context.Context, id string) (Session, erro
 	if err != nil {
 		return Session{}, err
 	}
-	session, err := buildSessionFromRow(row, messages)
+	session, migratedTodoCount, err := buildSessionFromRow(row, messages)
 	if err != nil {
 		return Session{}, err
+	}
+	if migratedTodoCount > 0 {
+		updatedAt := time.Now().UTC()
+		if err := persistMigratedTodos(ctx, tx, row.ID, session.Todos, migratedTodoCount, updatedAt); err != nil {
+			return Session{}, err
+		}
+		session.UpdatedAt = updatedAt
 	}
 	if err := tx.Commit(); err != nil {
 		return Session{}, fmt.Errorf("session: commit load session %s: %w", id, err)
@@ -1032,23 +1039,24 @@ ORDER BY seq ASC
 	return messages, nil
 }
 
-// buildSessionFromRow 由数据库行构建完整会话对象。
-func buildSessionFromRow(row sqliteSessionRow, messages []sqliteMessageRow) (Session, error) {
+// buildSessionFromRow 由数据库行构建完整会话对象，并返回 legacy 迁移条目数量。
+func buildSessionFromRow(row sqliteSessionRow, messages []sqliteMessageRow) (Session, int, error) {
 	var taskState TaskState
 	if err := json.Unmarshal([]byte(row.TaskStateJSON), &taskState); err != nil {
-		return Session{}, fmt.Errorf("session: decode task_state for %s: %w", row.ID, err)
+		return Session{}, 0, fmt.Errorf("session: decode task_state for %s: %w", row.ID, err)
 	}
 	var activated []SkillActivation
 	if err := json.Unmarshal([]byte(row.ActivatedJSON), &activated); err != nil {
-		return Session{}, fmt.Errorf("session: decode activated_skills for %s: %w", row.ID, err)
+		return Session{}, 0, fmt.Errorf("session: decode activated_skills for %s: %w", row.ID, err)
 	}
 	var todos []TodoItem
 	if err := json.Unmarshal([]byte(row.TodosJSON), &todos); err != nil {
-		return Session{}, fmt.Errorf("session: decode todos for %s: %w", row.ID, err)
+		return Session{}, 0, fmt.Errorf("session: decode todos for %s: %w", row.ID, err)
 	}
-	normalizedTodos, err := normalizeAndValidateTodos(todos)
+	migratedTodos, migratedTodoCount := migrateLegacyTodoExecutors(todos)
+	normalizedTodos, err := normalizeAndValidateTodos(migratedTodos)
 	if err != nil {
-		return Session{}, err
+		return Session{}, 0, err
 	}
 
 	result := Session{
@@ -1070,17 +1078,74 @@ func buildSessionFromRow(row sqliteSessionRow, messages []sqliteMessageRow) (Ses
 	}
 
 	if len(messages) == 0 {
-		return result, nil
+		return result, migratedTodoCount, nil
 	}
 	result.Messages = make([]providertypes.Message, 0, len(messages))
 	for _, messageRow := range messages {
 		message, err := buildMessageFromRow(messageRow)
 		if err != nil {
-			return Session{}, err
+			return Session{}, 0, err
 		}
 		result.Messages = append(result.Messages, message)
 	}
-	return result, nil
+	return result, migratedTodoCount, nil
+}
+
+// migrateLegacyTodoExecutors 将缺失 executor 的历史 Todo 修复为显式 executor，避免调度语义漂移。
+func migrateLegacyTodoExecutors(items []TodoItem) ([]TodoItem, int) {
+	if len(items) == 0 {
+		return nil, 0
+	}
+
+	migrated := make([]TodoItem, 0, len(items))
+	migratedCount := 0
+	for _, item := range items {
+		next := item.Clone()
+		if strings.TrimSpace(next.Executor) == "" {
+			if normalizeTodoOwnerType(next.OwnerType) == TodoOwnerTypeSubAgent {
+				next.Executor = TodoExecutorSubAgent
+			} else {
+				next.Executor = TodoExecutorAgent
+			}
+			migratedCount++
+		}
+		migrated = append(migrated, next)
+	}
+	return migrated, migratedCount
+}
+
+// persistMigratedTodos 将 legacy executor 迁移结果写回存储，避免会话重复迁移。
+func persistMigratedTodos(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	todos []TodoItem,
+	migratedTodoCount int,
+	updatedAt time.Time,
+) error {
+	payload, err := json.Marshal(todos)
+	if err != nil {
+		return fmt.Errorf("session: encode migrated todos for %s: %w", sessionID, err)
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE sessions
+SET todos_json = ?,
+	updated_at_ms = ?
+WHERE id = ?
+`,
+		string(payload),
+		toUnixMillis(updatedAt),
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"session: persist migrated todos for %s (%d items): %w; please recreate or repair the session",
+			sessionID,
+			migratedTodoCount,
+			err,
+		)
+	}
+	return expectRowsAffected(result, sessionID)
 }
 
 // buildMessageFromRow 由数据库消息行恢复 provider 消息结构。
