@@ -1341,27 +1341,12 @@ func TestNewWithBootstrapMissingDependencies(t *testing.T) {
 	}
 }
 
-func TestStartupScreenIsStaticByDefault(t *testing.T) {
-	app, _ := newTestApp(t)
-	if app.startupIntroActive {
-		t.Fatalf("expected startup intro animation to be disabled by default")
-	}
-}
-
 func TestStartupScreenTickDoesNotAnimateLogo(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
-	app.startupIntroFrame = 7
-	app.startupLoopFrame = 11
 
 	model, cmd := app.Update(tickMsg(time.Unix(1_700_000_000, 0)))
 	app = model.(App)
-	if app.startupIntroFrame != 7 {
-		t.Fatalf("expected static startup intro frame, got %d", app.startupIntroFrame)
-	}
-	if app.startupLoopFrame != 11 {
-		t.Fatalf("expected static startup loop frame, got %d", app.startupLoopFrame)
-	}
 	if cmd != nil {
 		t.Fatalf("expected no follow-up tick when only startup screen is visible")
 	}
@@ -1706,8 +1691,11 @@ func TestUpdatePickerSessionEnterWhileBusyRejectsSwitch(t *testing.T) {
 	app.sessionPicker.Select(1)
 
 	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatalf("expected nil cmd for rejected session switch")
+	if cmd == nil {
+		t.Fatalf("expected tick cmd for rejected session switch footer toast")
+	}
+	if _, ok := cmd().(tickMsg); !ok {
+		t.Fatalf("expected tick cmd for rejected session switch footer toast, got %T", cmd())
 	}
 	app = model.(App)
 	if app.state.ActiveSessionID != "s1" {
@@ -3244,8 +3232,11 @@ func TestUpdatePickerEnterInvalidSelectionsAndSessionActivationError(t *testing.
 	app.openPicker(pickerSession, statusChooseSession, &app.sessionPicker, "")
 	model, cmd = app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
 	app = model.(App)
-	if cmd != nil {
-		t.Fatalf("expected nil cmd for session picker enter")
+	if cmd == nil {
+		t.Fatalf("expected tick cmd for session activation error footer toast")
+	}
+	if _, ok := cmd().(tickMsg); !ok {
+		t.Fatalf("expected tick cmd for session activation error footer toast, got %T", cmd())
 	}
 	if app.state.ExecutionError == "" {
 		t.Fatalf("expected session activation error to be recorded")

@@ -137,9 +137,6 @@ type appRuntimeState struct {
 	transcriptContent       string
 	transcriptScrollbarDrag bool
 	startupScreenLocked     bool
-	startupIntroActive      bool
-	startupIntroFrame       int
-	startupLoopFrame        int
 
 	textSelection struct {
 		active    bool
@@ -344,7 +341,6 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			cachedHeight: 40,
 			// 初始进入草稿态时锁定启动页，直到发送或切换 session 才退出。
 			startupScreenLocked: true,
-			startupIntroActive:  false,
 		},
 		width:  128,
 		height: 40,
