@@ -40,9 +40,9 @@ type failingStore struct {
 	ignoreContextErr bool
 }
 
-type autoCompactThresholdResolverFunc func(ctx context.Context, cfg config.Config) (int, error)
+type budgetResolverFunc func(ctx context.Context, cfg config.Config) (int, string, error)
 
-func (f autoCompactThresholdResolverFunc) ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error) {
+func (f budgetResolverFunc) ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error) {
 	return f(ctx, cfg)
 }
 
@@ -70,7 +70,7 @@ func (s *memoryStore) CreateSession(ctx context.Context, input agentsession.Crea
 	if err := ctx.Err(); err != nil {
 		return agentsession.Session{}, err
 	}
-	session := agentsession.NewWithWorkdir(input.Title, input.Workdir)
+	session := agentsession.NewWithWorkdir(input.Title, input.Head.Workdir)
 	if strings.TrimSpace(input.ID) != "" {
 		session.ID = input.ID
 	}
@@ -80,13 +80,15 @@ func (s *memoryStore) CreateSession(ctx context.Context, input agentsession.Crea
 	if !input.UpdatedAt.IsZero() {
 		session.UpdatedAt = input.UpdatedAt
 	}
-	session.Provider = input.Provider
-	session.Model = input.Model
-	session.TaskState = input.TaskState.Clone()
-	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
-	session.Todos = cloneTodosForPersistence(input.Todos)
-	session.TokenInputTotal = input.TokenInputTotal
-	session.TokenOutputTotal = input.TokenOutputTotal
+	head := input.Head
+	session.Provider = head.Provider
+	session.Model = head.Model
+	session.TaskState = head.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(head.Todos)
+	session.TokenInputTotal = head.TokenInputTotal
+	session.TokenOutputTotal = head.TokenOutputTotal
+	session.HasUnknownUsage = head.HasUnknownUsage
 	session.Messages = []providertypes.Message{}
 
 	s.mu.Lock()
@@ -155,6 +157,7 @@ func (s *memoryStore) AppendMessages(ctx context.Context, input agentsession.App
 	session.Workdir = input.Workdir
 	session.TokenInputTotal += input.TokenInputDelta
 	session.TokenOutputTotal += input.TokenOutputDelta
+	session.HasUnknownUsage = session.HasUnknownUsage || input.HasUnknownUsage
 	s.saves++
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
@@ -197,14 +200,16 @@ func (s *memoryStore) UpdateSessionState(ctx context.Context, input agentsession
 	if !input.UpdatedAt.IsZero() {
 		session.UpdatedAt = input.UpdatedAt
 	}
-	session.Provider = input.Provider
-	session.Model = input.Model
-	session.Workdir = input.Workdir
-	session.TaskState = input.TaskState.Clone()
-	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
-	session.Todos = cloneTodosForPersistence(input.Todos)
-	session.TokenInputTotal = input.TokenInputTotal
-	session.TokenOutputTotal = input.TokenOutputTotal
+	head := input.Head
+	session.Provider = head.Provider
+	session.Model = head.Model
+	session.Workdir = head.Workdir
+	session.TaskState = head.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(head.Todos)
+	session.TokenInputTotal = head.TokenInputTotal
+	session.TokenOutputTotal = head.TokenOutputTotal
+	session.HasUnknownUsage = head.HasUnknownUsage
 	s.saves++
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
@@ -226,14 +231,16 @@ func (s *memoryStore) ReplaceTranscript(ctx context.Context, input agentsession.
 	if !input.UpdatedAt.IsZero() {
 		session.UpdatedAt = input.UpdatedAt
 	}
-	session.Provider = input.Provider
-	session.Model = input.Model
-	session.Workdir = input.Workdir
-	session.TaskState = input.TaskState.Clone()
-	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
-	session.Todos = cloneTodosForPersistence(input.Todos)
-	session.TokenInputTotal = input.TokenInputTotal
-	session.TokenOutputTotal = input.TokenOutputTotal
+	head := input.Head
+	session.Provider = head.Provider
+	session.Model = head.Model
+	session.Workdir = head.Workdir
+	session.TaskState = head.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(head.Todos)
+	session.TokenInputTotal = head.TokenInputTotal
+	session.TokenOutputTotal = head.TokenOutputTotal
+	session.HasUnknownUsage = head.HasUnknownUsage
 	s.saves++
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
@@ -243,7 +250,7 @@ func (s *memoryStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Du
 	return 0, nil
 }
 
-// CreateSession 转发到底层 Store，并按旧 save 计数规则注入失败。
+// CreateSession 转发到底层 Store，并按当前 save 计数规则注入失败。
 func (s *failingStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
 	if err := s.nextSaveError(ctx); err != nil {
 		return agentsession.Session{}, err
@@ -337,7 +344,7 @@ func (s *blockingLoadStore) CreateSession(ctx context.Context, input agentsessio
 	if err := ctx.Err(); err != nil {
 		return agentsession.Session{}, err
 	}
-	session := agentsession.NewWithWorkdir(input.Title, input.Workdir)
+	session := agentsession.NewWithWorkdir(input.Title, input.Head.Workdir)
 	if strings.TrimSpace(input.ID) != "" {
 		session.ID = input.ID
 	}
@@ -347,13 +354,15 @@ func (s *blockingLoadStore) CreateSession(ctx context.Context, input agentsessio
 	if !input.UpdatedAt.IsZero() {
 		session.UpdatedAt = input.UpdatedAt
 	}
-	session.Provider = input.Provider
-	session.Model = input.Model
-	session.TaskState = input.TaskState.Clone()
-	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
-	session.Todos = cloneTodosForPersistence(input.Todos)
-	session.TokenInputTotal = input.TokenInputTotal
-	session.TokenOutputTotal = input.TokenOutputTotal
+	head := input.Head
+	session.Provider = head.Provider
+	session.Model = head.Model
+	session.TaskState = head.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(head.Todos)
+	session.TokenInputTotal = head.TokenInputTotal
+	session.TokenOutputTotal = head.TokenOutputTotal
+	session.HasUnknownUsage = head.HasUnknownUsage
 	s.mu.Lock()
 	s.sessions[session.ID] = cloneSession(session)
 	s.mu.Unlock()
@@ -407,6 +416,7 @@ func (s *blockingLoadStore) AppendMessages(ctx context.Context, input agentsessi
 	session.Workdir = input.Workdir
 	session.TokenInputTotal += input.TokenInputDelta
 	session.TokenOutputTotal += input.TokenOutputDelta
+	session.HasUnknownUsage = session.HasUnknownUsage || input.HasUnknownUsage
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
 }
@@ -445,14 +455,16 @@ func (s *blockingLoadStore) UpdateSessionState(ctx context.Context, input agents
 	if !input.UpdatedAt.IsZero() {
 		session.UpdatedAt = input.UpdatedAt
 	}
-	session.Provider = input.Provider
-	session.Model = input.Model
-	session.Workdir = input.Workdir
-	session.TaskState = input.TaskState.Clone()
-	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
-	session.Todos = cloneTodosForPersistence(input.Todos)
-	session.TokenInputTotal = input.TokenInputTotal
-	session.TokenOutputTotal = input.TokenOutputTotal
+	head := input.Head
+	session.Provider = head.Provider
+	session.Model = head.Model
+	session.Workdir = head.Workdir
+	session.TaskState = head.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(head.Todos)
+	session.TokenInputTotal = head.TokenInputTotal
+	session.TokenOutputTotal = head.TokenOutputTotal
+	session.HasUnknownUsage = head.HasUnknownUsage
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
 }
@@ -472,14 +484,16 @@ func (s *blockingLoadStore) ReplaceTranscript(ctx context.Context, input agentse
 	if !input.UpdatedAt.IsZero() {
 		session.UpdatedAt = input.UpdatedAt
 	}
-	session.Provider = input.Provider
-	session.Model = input.Model
-	session.Workdir = input.Workdir
-	session.TaskState = input.TaskState.Clone()
-	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
-	session.Todos = cloneTodosForPersistence(input.Todos)
-	session.TokenInputTotal = input.TokenInputTotal
-	session.TokenOutputTotal = input.TokenOutputTotal
+	head := input.Head
+	session.Provider = head.Provider
+	session.Model = head.Model
+	session.Workdir = head.Workdir
+	session.TaskState = head.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(head.Todos)
+	session.TokenInputTotal = head.TokenInputTotal
+	session.TokenOutputTotal = head.TokenOutputTotal
+	session.HasUnknownUsage = head.HasUnknownUsage
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
 }
@@ -507,12 +521,28 @@ func (s *blockingLoadStore) CleanupExpiredSessions(ctx context.Context, maxAge t
 }
 
 type scriptedProvider struct {
-	name      string
-	streams   [][]providertypes.StreamEvent
-	responses []scriptedResponse
-	requests  []providertypes.GenerateRequest
-	callCount int
-	chatFn    func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
+	name       string
+	streams    [][]providertypes.StreamEvent
+	responses  []scriptedResponse
+	requests   []providertypes.GenerateRequest
+	callCount  int
+	estimateFn func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error)
+	chatFn     func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
+}
+
+func (p *scriptedProvider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	if p.estimateFn != nil {
+		return p.estimateFn(ctx, req)
+	}
+	_ = ctx
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: provider.EstimateTextTokens(req.SystemPrompt + renderMessagesForEstimate(req.Messages)),
+		EstimateSource:       provider.EstimateSourceLocal,
+		GatePolicy:           provider.EstimateGateGateable,
+	}, nil
 }
 
 type scriptedResponse struct {
@@ -585,6 +615,14 @@ func streamContainsMessageDone(events []providertypes.StreamEvent) bool {
 		}
 	}
 	return false
+}
+
+func renderMessagesForEstimate(messages []providertypes.Message) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		builder.WriteString(provider.RenderMessageText(message.Parts))
+	}
+	return builder.String()
 }
 
 type scriptedProviderFactory struct {
@@ -984,8 +1022,9 @@ func TestServiceRun(t *testing.T) {
 				t.Fatalf("Run() error = %v", err)
 			}
 
-			if factory.calls != tt.expectProviderCalls {
-				t.Fatalf("expected %d provider builds, got %d", tt.expectProviderCalls, factory.calls)
+			expectedProviderBuilds := tt.expectProviderCalls
+			if factory.calls != expectedProviderBuilds {
+				t.Fatalf("expected %d provider builds, got %d", expectedProviderBuilds, factory.calls)
 			}
 			if registeredTool != nil && registeredTool.callCount != tt.expectToolCalls {
 				t.Fatalf("expected %d tool executes, got %d", tt.expectToolCalls, registeredTool.callCount)
@@ -3154,7 +3193,7 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 		t.Fatalf("expected loaded session %q, got %q", session.ID, loaded.ID)
 	}
 
-	sessionStore := agentsession.NewStore(t.TempDir(), t.TempDir())
+	sessionStore := agentsession.NewSQLiteStore(t.TempDir(), t.TempDir())
 	if sessionStore == nil {
 		t.Fatalf("expected JSON session store")
 	}
@@ -3385,7 +3424,7 @@ func collectRuntimeEvents(events <-chan RuntimeEvent) []RuntimeEvent {
 	}
 }
 
-// isPermissionRequestEvent 判断是否为权限请求类事件（含 1A 主事件与兼容旧名）。
+// isPermissionRequestEvent 判断是否为权限请求类事件。
 func isPermissionRequestEvent(typ EventType) bool {
 	return typ == EventPermissionRequested
 }
@@ -3745,9 +3784,9 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 
 	state := newRunState("run-forward-error", agentsession.Session{ID: "session-forward-error"})
-	snapshot := turnSnapshot{
-		providerConfig: provider.RuntimeConfig{},
-		request: providertypes.GenerateRequest{
+	snapshot := TurnBudgetSnapshot{
+		ProviderConfig: provider.RuntimeConfig{},
+		Request: providertypes.GenerateRequest{
 			Model:        "test-model",
 			SystemPrompt: "prompt",
 			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
@@ -3758,6 +3797,7 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 		context.Background(),
 		&state,
 		snapshot,
+		scripted,
 	)
 	if err == nil || !containsError(err, "provider stream handling failed after provider error") {
 		t.Fatalf("expected combined forward/provider error, got %v", err)
@@ -3783,6 +3823,8 @@ func TestServiceRunPersistsAndRestoresTokenUsage(t *testing.T) {
 			usage.InputTokens = 25
 			usage.OutputTokens = 10
 		}
+		usage.InputObserved = true
+		usage.OutputObserved = true
 
 		select {
 		case events <- providertypes.NewTextDeltaStreamEvent("assistant reply"):
@@ -3900,286 +3942,6 @@ func TestServiceRunPersistsAndRestoresTokenUsage(t *testing.T) {
 	}
 }
 
-func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Context.AutoCompact.Enabled = true
-		cfg.Context.AutoCompact.InputTokenThreshold = 100
-		return nil
-	}); err != nil {
-		t.Fatalf("update config: %v", err)
-	}
-
-	store := newMemoryStore()
-	session := agentsession.New("auto-compact")
-	session.ID = "session-auto-compact"
-	session.TokenInputTotal = 100
-	session.TokenOutputTotal = 40
-	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older request")}},
-		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
-	}
-	store.sessions[session.ID] = cloneSession(session)
-
-	registry := tools.NewRegistry()
-	tool := &stubTool{name: "filesystem_read_file", content: "file content"}
-	registry.Register(tool)
-
-	builder := &stubContextBuilder{
-		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
-			return agentcontext.BuildResult{
-				SystemPrompt:         "auto compact prompt",
-				Messages:             append([]providertypes.Message(nil), input.Messages...),
-				AutoCompactSuggested: input.Metadata.SessionInputTokens >= input.Compact.AutoCompactThreshold,
-			}, nil
-		},
-	}
-	scripted := &scriptedProvider{
-		responses: []scriptedResponse{
-			{
-				Message: providertypes.Message{
-					ToolCalls: []providertypes.ToolCall{
-						{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"main.go"}`},
-					},
-				},
-				FinishReason: "tool_calls",
-			},
-			{
-				Message:      providertypes.Message{Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
-				FinishReason: "stop",
-			},
-		},
-	}
-
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
-	compactRunner := &stubCompactRunner{
-		result: contextcompact.Result{
-			Messages: []providertypes.Message{
-				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
-				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
-			},
-			Applied: true,
-			Metrics: contextcompact.Metrics{
-				BeforeChars: 60,
-				AfterChars:  24,
-				SavedRatio:  0.6,
-				TriggerMode: string(contextcompact.ModeAuto),
-			},
-			TranscriptID:   "transcript_auto",
-			TranscriptPath: "/tmp/auto.jsonl",
-		},
-	}
-	service.compactRunner = compactRunner
-
-	if err := service.Run(context.Background(), UserInput{
-		SessionID: session.ID,
-		RunID:     "run-auto-compact",
-		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
-	}); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-
-	if len(compactRunner.calls) != 1 {
-		t.Fatalf("expected auto compact to run once, got %d", len(compactRunner.calls))
-	}
-	if compactRunner.calls[0].Mode != contextcompact.ModeAuto {
-		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeAuto, compactRunner.calls[0].Mode)
-	}
-	if len(builder.builds) != 3 {
-		t.Fatalf("expected 3 build attempts, got %d", len(builder.builds))
-	}
-	if builder.builds[0].Metadata.SessionInputTokens != 100 {
-		t.Fatalf("expected first build to see pre-compact tokens, got %d", builder.builds[0].Metadata.SessionInputTokens)
-	}
-	if builder.builds[0].Metadata.SessionOutputTokens != 40 {
-		t.Fatalf("expected first build to see pre-compact output tokens, got %d", builder.builds[0].Metadata.SessionOutputTokens)
-	}
-	if builder.builds[0].Compact.AutoCompactThreshold != 100 {
-		t.Fatalf("expected auto compact threshold 100, got %d", builder.builds[0].Compact.AutoCompactThreshold)
-	}
-	if builder.builds[1].Metadata.SessionInputTokens != 0 {
-		t.Fatalf("expected second build to see reset input tokens, got %d", builder.builds[1].Metadata.SessionInputTokens)
-	}
-	if builder.builds[1].Metadata.SessionOutputTokens != 0 {
-		t.Fatalf("expected second build to see reset output tokens, got %d", builder.builds[1].Metadata.SessionOutputTokens)
-	}
-	if len(scripted.requests) != 2 {
-		t.Fatalf("expected 2 provider requests after tool follow-up, got %d", len(scripted.requests))
-	}
-	if len(scripted.requests[0].Messages) != 2 {
-		t.Fatalf("expected rebuilt compacted context to be sent, got %+v", scripted.requests[0].Messages)
-	}
-	if renderPartsForTest(scripted.requests[0].Messages[0].Parts) != "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue" {
-		t.Fatalf("expected first provider request to use compact summary, got %+v", scripted.requests[0].Messages)
-	}
-	if renderPartsForTest(scripted.requests[0].Messages[1].Parts) != "latest answer" {
-		t.Fatalf("expected first provider request to use compacted latest answer, got %+v", scripted.requests[0].Messages)
-	}
-
-	saved, err := store.Load(context.Background(), session.ID)
-	if err != nil {
-		t.Fatalf("load compacted session: %v", err)
-	}
-	if saved.TokenInputTotal != 0 {
-		t.Fatalf("expected persisted input tokens to reset, got %d", saved.TokenInputTotal)
-	}
-	if saved.TokenOutputTotal != 0 {
-		t.Fatalf("expected persisted output tokens to reset, got %d", saved.TokenOutputTotal)
-	}
-	if tool.callCount != 1 {
-		t.Fatalf("expected tool to execute once, got %d", tool.callCount)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertEventSequence(t, events, []EventType{
-		EventUserMessage,
-		EventCompactStart,
-		EventCompactApplied,
-		EventToolStart,
-		EventToolResult,
-		EventAgentDone,
-	})
-	assertNoEventType(t, events, EventCompactError)
-
-	foundAutoDone := false
-	for _, event := range events {
-		if event.Type != EventCompactApplied {
-			continue
-		}
-		payload, ok := event.Payload.(CompactResult)
-		if !ok {
-			t.Fatalf("expected CompactResult, got %T", event.Payload)
-		}
-		if payload.TriggerMode != string(contextcompact.ModeAuto) {
-			t.Fatalf("expected trigger mode %q, got %q", contextcompact.ModeAuto, payload.TriggerMode)
-		}
-		foundAutoDone = true
-	}
-	if !foundAutoDone {
-		t.Fatalf("expected auto compact_done event in %+v", events)
-	}
-}
-
-func TestServiceRunAutoCompactNoopDoesNotDisableReactiveRetry(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Context.AutoCompact.Enabled = true
-		cfg.Context.AutoCompact.InputTokenThreshold = 100
-		return nil
-	}); err != nil {
-		t.Fatalf("update config: %v", err)
-	}
-
-	store := newMemoryStore()
-	session := agentsession.New("auto-noop-reactive")
-	session.ID = "session-auto-noop-reactive"
-	session.TokenInputTotal = 100
-	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older request")}},
-		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
-	}
-	store.sessions[session.ID] = cloneSession(session)
-
-	registry := tools.NewRegistry()
-	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
-
-	builder := &stubContextBuilder{
-		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
-			return agentcontext.BuildResult{
-				SystemPrompt:         "auto compact prompt",
-				Messages:             append([]providertypes.Message(nil), input.Messages...),
-				AutoCompactSuggested: input.Metadata.SessionInputTokens >= input.Compact.AutoCompactThreshold,
-			}, nil
-		},
-	}
-
-	callCount := 0
-	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-			callCount++
-			if callCount == 1 {
-				return &provider.ProviderError{
-					StatusCode: 400,
-					Code:       provider.ErrorCodeContextTooLong,
-					Message:    "maximum context length exceeded",
-				}
-			}
-			select {
-			case events <- providertypes.NewTextDeltaStreamEvent("recovered after reactive compact"):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			select {
-			case events <- providertypes.NewMessageDoneStreamEvent("stop", nil):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			return nil
-		},
-	}
-
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
-	compactRunner := &stubCompactRunner{
-		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
-			switch input.Mode {
-			case contextcompact.ModeAuto:
-				return contextcompact.Result{
-					Messages: append([]providertypes.Message(nil), input.Messages...),
-					Applied:  false,
-					Metrics: contextcompact.Metrics{
-						BeforeChars: 40,
-						AfterChars:  40,
-						TriggerMode: string(contextcompact.ModeAuto),
-					},
-				}, nil
-			case contextcompact.ModeReactive:
-				return contextcompact.Result{
-					Messages: []providertypes.Message{
-						{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
-						{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")}},
-					},
-					Applied: true,
-					Metrics: contextcompact.Metrics{
-						BeforeChars: 80,
-						AfterChars:  30,
-						SavedRatio:  0.625,
-						TriggerMode: string(contextcompact.ModeReactive),
-					},
-				}, nil
-			default:
-				t.Fatalf("unexpected compact mode %q", input.Mode)
-				return contextcompact.Result{}, nil
-			}
-		},
-	}
-	service.compactRunner = compactRunner
-
-	if err := service.Run(context.Background(), UserInput{
-		SessionID: session.ID,
-		RunID:     "run-auto-noop-reactive",
-		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
-	}); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-
-	if len(compactRunner.calls) != 2 {
-		t.Fatalf("expected auto noop then reactive compact, got %d calls", len(compactRunner.calls))
-	}
-	if compactRunner.calls[0].Mode != contextcompact.ModeAuto {
-		t.Fatalf("expected first compact mode %q, got %q", contextcompact.ModeAuto, compactRunner.calls[0].Mode)
-	}
-	if compactRunner.calls[1].Mode != contextcompact.ModeReactive {
-		t.Fatalf("expected second compact mode %q, got %q", contextcompact.ModeReactive, compactRunner.calls[1].Mode)
-	}
-	if scripted.callCount != 2 {
-		t.Fatalf("expected provider to be called twice, got %d", scripted.callCount)
-	}
-}
-
 func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	t.Parallel()
 
@@ -4284,8 +4046,11 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load compacted session: %v", err)
 	}
-	if saved.TokenInputTotal != 0 || saved.TokenOutputTotal != 0 {
-		t.Fatalf("expected persisted token totals to reset, got input=%d output=%d", saved.TokenInputTotal, saved.TokenOutputTotal)
+	if saved.TokenInputTotal == 0 || saved.TokenOutputTotal != 0 {
+		t.Fatalf("expected post-compact run to persist estimated input and zero output, got input=%d output=%d", saved.TokenInputTotal, saved.TokenOutputTotal)
+	}
+	if !saved.HasUnknownUsage {
+		t.Fatalf("expected missing post-compact usage to mark HasUnknownUsage")
 	}
 	if len(saved.Messages) != 3 {
 		t.Fatalf("expected compacted transcript plus final assistant reply, got %+v", saved.Messages)
@@ -4400,6 +4165,95 @@ func TestServiceRunReactiveCompactRetriesWithinSameRun(t *testing.T) {
 		EventAgentDone,
 	})
 	assertNoEventType(t, events, EventError)
+}
+
+func TestServiceRunReactiveCompactLimitAppliesAcrossTurns(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.MaxReactiveCompacts = 1
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := agentsession.New("reactive-run-limit")
+	session.ID = "session-reactive-run-limit"
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "tool output"})
+
+	callCount := 0
+	contextTooLongErr := &provider.ProviderError{
+		StatusCode: 400,
+		Code:       provider.ErrorCodeContextTooLong,
+		Message:    "maximum context length exceeded",
+	}
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			callCount++
+			switch callCount {
+			case 1:
+				return contextTooLongErr
+			case 2:
+				toolCall := providertypes.ToolCall{
+					ID:        "call-read",
+					Name:      "filesystem_read_file",
+					Arguments: `{}`,
+				}
+				select {
+				case events <- providertypes.NewToolCallStartStreamEvent(0, toolCall.ID, toolCall.Name):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				select {
+				case events <- providertypes.NewToolCallDeltaStreamEvent(0, toolCall.ID, toolCall.Arguments):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				select {
+				case events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				return nil
+			default:
+				return contextTooLongErr
+			}
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Applied: true,
+			Messages: []providertypes.Message{
+				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
+				{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")}},
+			},
+			Metrics: contextcompact.Metrics{TriggerMode: string(contextcompact.ModeReactive)},
+		},
+	}
+
+	err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-reactive-run-limit",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	})
+	if !provider.IsContextTooLong(err) {
+		t.Fatalf("expected second turn context-too-long error after run-level limit, got %v", err)
+	}
+
+	compactRunner := service.compactRunner.(*stubCompactRunner)
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected reactive compact limit to allow one compact for the whole run, got %d", len(compactRunner.calls))
+	}
+	if callCount != 3 {
+		t.Fatalf("expected provider to stop on second context-too-long turn, got %d calls", callCount)
+	}
 }
 
 func TestServiceRunReactiveCompactDegradesUpToMaxAttempts(t *testing.T) {
@@ -4550,302 +4404,550 @@ func TestRestoreSessionTokensNewSession(t *testing.T) {
 	}
 }
 
-func TestAutoCompactThresholdEnabled(t *testing.T) {
+func TestResolvePromptBudgetUsesExplicitConfig(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{}
 	cfg := config.Config{
 		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:             true,
-				InputTokenThreshold: 50000,
+			Budget: config.BudgetConfig{
+				PromptBudget:         50000,
+				ReserveTokens:        13000,
+				FallbackPromptBudget: 88000,
+				MaxReactiveCompacts:  3,
 			},
 		},
 	}
 
-	threshold := service.autoCompactThreshold(context.Background(), cfg)
-	if threshold != 50000 {
-		t.Fatalf("expected threshold == 50000, got %d", threshold)
+	promptBudget, source := service.resolvePromptBudget(context.Background(), cfg)
+	if promptBudget != 50000 || source != "explicit" {
+		t.Fatalf("expected prompt budget 50000/explicit, got %d/%s", promptBudget, source)
 	}
 }
 
-func TestAutoCompactThresholdDisabled(t *testing.T) {
+func TestResolvePromptBudgetUsesResolver(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{}
-	cfg := config.Config{
-		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:             false,
-				InputTokenThreshold: 50000,
-			},
-		},
-	}
-
-	threshold := service.autoCompactThreshold(context.Background(), cfg)
-	if threshold != 0 {
-		t.Fatalf("expected threshold == 0, got %d", threshold)
-	}
-}
-
-func TestAutoCompactThresholdZeroValue(t *testing.T) {
-	t.Parallel()
-
-	service := &Service{}
-	cfg := config.Config{
-		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:             true,
-				InputTokenThreshold: 0,
-			},
-		},
-	}
-
-	threshold := service.autoCompactThreshold(context.Background(), cfg)
-	if threshold != 0 {
-		t.Fatalf("expected threshold == 0, got %d", threshold)
-	}
-}
-
-func TestAutoCompactThresholdUsesResolver(t *testing.T) {
-	t.Parallel()
-
-	service := &Service{}
-	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, error) {
-			return 88000, nil
+	service.SetBudgetResolver(budgetResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, string, error) {
+			return 88000, "derived", nil
 		},
 	))
 
 	cfg := config.Config{
 		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:             true,
-				InputTokenThreshold: 0,
+			Budget: config.BudgetConfig{
+				PromptBudget:         0,
+				ReserveTokens:        13000,
+				FallbackPromptBudget: 76000,
+				MaxReactiveCompacts:  3,
 			},
 		},
 	}
 
-	threshold := service.autoCompactThreshold(context.Background(), cfg)
-	if threshold != 88000 {
-		t.Fatalf("expected resolver threshold == 88000, got %d", threshold)
+	promptBudget, source := service.resolvePromptBudget(context.Background(), cfg)
+	if promptBudget != 88000 || source != "derived" {
+		t.Fatalf("expected prompt budget 88000/derived, got %d/%s", promptBudget, source)
 	}
 }
 
-func TestAutoCompactThresholdFallsBackWhenResolverErrors(t *testing.T) {
+func TestResolvePromptBudgetFallsBackWhenResolverErrors(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{}
-	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, error) {
-			return 0, errors.New("resolver failed")
+	service.SetBudgetResolver(budgetResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, string, error) {
+			return 0, "", errors.New("resolver failed")
 		},
 	))
 
 	cfg := config.Config{
 		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:                     true,
-				InputTokenThreshold:         0,
-				FallbackInputTokenThreshold: 88000,
+			Budget: config.BudgetConfig{
+				PromptBudget:         0,
+				ReserveTokens:        13000,
+				FallbackPromptBudget: 88000,
+				MaxReactiveCompacts:  3,
 			},
 		},
 	}
 
-	threshold := service.autoCompactThreshold(context.Background(), cfg)
-	if threshold != 88000 {
-		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	promptBudget, source := service.resolvePromptBudget(context.Background(), cfg)
+	if promptBudget != 88000 || source != "fallback" {
+		t.Fatalf("expected prompt budget 88000/fallback, got %d/%s", promptBudget, source)
 	}
 }
 
-func TestAutoCompactThresholdFallsBackWhenResolverReturnsZeroWithoutError(t *testing.T) {
+func TestServiceRunStopsAfterProactiveCompactWhenEstimateGateable(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{}
-	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, error) {
-			return 0, nil
-		},
-	))
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 10
+		cfg.Context.Budget.FallbackPromptBudget = 10
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
 
-	cfg := config.Config{
-		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:                     true,
-				InputTokenThreshold:         0,
-				FallbackInputTokenThreshold: 88000,
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{
+				EstimatedInputTokens: 99,
+				EstimateSource:       provider.EstimateSourceLocal,
+				GatePolicy:           provider.EstimateGateGateable,
+			}, nil
+		},
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("继续执行")},
+				},
+				FinishReason: "stop",
 			},
 		},
 	}
 
-	threshold := service.autoCompactThreshold(context.Background(), cfg)
-	if threshold != 88000 {
-		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
-	}
-}
-
-func TestAutoCompactThresholdFallsBackWhenResolverReturnsNegativeWithoutError(t *testing.T) {
-	t.Parallel()
-
-	service := &Service{}
-	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, error) {
-			return -1, nil
-		},
-	))
-
-	cfg := config.Config{
-		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:                     true,
-				InputTokenThreshold:         0,
-				FallbackInputTokenThreshold: 88000,
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Applied: true,
+			Messages: []providertypes.Message{
+				{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")},
+				},
+				{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+				},
+			},
+			Metrics: contextcompact.Metrics{
+				TriggerMode: string(contextcompact.ModeProactive),
 			},
 		},
 	}
 
-	threshold := service.autoCompactThreshold(context.Background(), cfg)
-	if threshold != 88000 {
-		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
-	}
-}
-
-func TestAutoCompactThresholdImplicitModeWithoutResolverUsesFallback(t *testing.T) {
-	t.Parallel()
-
-	service := &Service{}
-	cfg := config.Config{
-		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:                     true,
-				InputTokenThreshold:         0,
-				FallbackInputTokenThreshold: 88000,
-			},
-		},
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-gateable-stop",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
 	}
 
-	threshold := service.autoCompactThreshold(context.Background(), cfg)
-	if threshold != 88000 {
-		t.Fatalf("expected implicit mode fallback threshold == 88000, got %d", threshold)
+	compactRunner := service.compactRunner.(*stubCompactRunner)
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected one proactive compact, got %d", len(compactRunner.calls))
 	}
-}
-
-func TestAutoCompactThresholdForStateCachesResolverResultWithinRun(t *testing.T) {
-	t.Parallel()
-
-	service := &Service{}
-	resolveCalls := 0
-	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, error) {
-			resolveCalls++
-			return 88000, nil
-		},
-	))
-
-	cfg := config.Config{
-		SelectedProvider: "openai",
-		CurrentModel:     "gpt-5",
-		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:                     true,
-				InputTokenThreshold:         0,
-				ReserveTokens:               10000,
-				FallbackInputTokenThreshold: 76000,
-			},
-		},
+	if compactRunner.calls[0].Mode != contextcompact.ModeProactive {
+		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeProactive, compactRunner.calls[0].Mode)
 	}
-	state := newRunState("run-cache-hit", newRuntimeSession("session-cache-hit"))
-
-	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
-	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
-
-	if threshold1 != 88000 || threshold2 != 88000 {
-		t.Fatalf("expected cached resolver threshold == 88000, got %d and %d", threshold1, threshold2)
+	if scripted.callCount != 0 {
+		t.Fatalf("expected provider Generate to be skipped after budget stop, got %d calls", scripted.callCount)
 	}
-	if resolveCalls != 1 {
-		t.Fatalf("expected resolver to be called once, got %d", resolveCalls)
-	}
-}
 
-func TestAutoCompactThresholdForStateRecomputesWhenCacheKeyChanges(t *testing.T) {
-	t.Parallel()
-
-	service := &Service{}
-	resolveCalls := 0
-	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, error) {
-			resolveCalls++
-			if strings.TrimSpace(cfg.CurrentModel) == "gpt-5.1" {
-				return 99000, nil
+	events := collectRuntimeEvents(service.Events())
+	var budgetActions []string
+	var budgetReasons []string
+	var budgetGatePolicies []string
+	var stopPayload StopReasonDecidedPayload
+	for _, event := range events {
+		switch event.Type {
+		case EventBudgetChecked:
+			payload, ok := event.Payload.(BudgetCheckedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetCheckedPayload, got %T", event.Payload)
 			}
-			return 88000, nil
-		},
-	))
-
-	cfg := config.Config{
-		SelectedProvider: "openai",
-		CurrentModel:     "gpt-5",
-		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:                     true,
-				InputTokenThreshold:         0,
-				ReserveTokens:               10000,
-				FallbackInputTokenThreshold: 76000,
-			},
-		},
+			budgetActions = append(budgetActions, payload.Action)
+			budgetReasons = append(budgetReasons, payload.Reason)
+			budgetGatePolicies = append(budgetGatePolicies, payload.EstimateGatePolicy)
+		case EventStopReasonDecided:
+			payload, ok := event.Payload.(StopReasonDecidedPayload)
+			if !ok {
+				t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
+			}
+			stopPayload = payload
+		}
 	}
-	state := newRunState("run-cache-miss", newRuntimeSession("session-cache-miss"))
 
-	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
-	cfg.CurrentModel = "gpt-5.1"
-	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
-
-	if threshold1 != 88000 || threshold2 != 99000 {
-		t.Fatalf("expected thresholds [88000, 99000], got [%d, %d]", threshold1, threshold2)
+	if len(budgetActions) != 2 || budgetActions[0] != "compact" || budgetActions[1] != "stop" {
+		t.Fatalf("expected budget actions [compact stop], got %v", budgetActions)
 	}
-	if resolveCalls != 2 {
-		t.Fatalf("expected resolver to be called twice after key change, got %d", resolveCalls)
+	if len(budgetReasons) != 2 ||
+		budgetReasons[0] != controlplane.BudgetDecisionReasonExceedsBudgetFirstTime ||
+		budgetReasons[1] != controlplane.BudgetDecisionReasonExceedsBudgetAfterCompactStop {
+		t.Fatalf("unexpected budget reasons %v", budgetReasons)
+	}
+	if len(budgetGatePolicies) != 2 ||
+		budgetGatePolicies[0] != provider.EstimateGateGateable ||
+		budgetGatePolicies[1] != provider.EstimateGateGateable {
+		t.Fatalf("expected gateable estimates, got %v", budgetGatePolicies)
+	}
+	if stopPayload.Reason != controlplane.StopReasonBudgetExceeded {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonBudgetExceeded, stopPayload.Reason)
 	}
 }
 
-func TestAutoCompactThresholdForStateDoesNotCacheResolverErrorFallback(t *testing.T) {
+func TestServiceRunAllowsAfterProactiveCompactWhenEstimateAdvisory(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{}
-	resolveCalls := 0
-	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, error) {
-			resolveCalls++
-			if resolveCalls == 1 {
-				return 0, errors.New("snapshot unavailable")
-			}
-			return 91000, nil
-		},
-	))
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 10
+		cfg.Context.Budget.FallbackPromptBudget = 10
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
 
-	cfg := config.Config{
-		SelectedProvider: "openai",
-		CurrentModel:     "gpt-5",
-		Context: config.ContextConfig{
-			AutoCompact: config.AutoCompactConfig{
-				Enabled:                     true,
-				InputTokenThreshold:         0,
-				ReserveTokens:               10000,
-				FallbackInputTokenThreshold: 76000,
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{
+				EstimatedInputTokens: 99,
+				EstimateSource:       provider.EstimateSourceLocal,
+				GatePolicy:           provider.EstimateGateAdvisory,
+			}, nil
+		},
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("继续执行")},
+				},
+				FinishReason: "stop",
 			},
 		},
 	}
-	state := newRunState("run-cache-error", newRuntimeSession("session-cache-error"))
 
-	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
-	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
-	threshold3 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
-
-	if threshold1 != 76000 || threshold2 != 91000 || threshold3 != 91000 {
-		t.Fatalf("expected thresholds [76000, 91000, 91000], got [%d, %d, %d]", threshold1, threshold2, threshold3)
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Applied: true,
+			Messages: []providertypes.Message{
+				{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")},
+				},
+				{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+				},
+			},
+			Metrics: contextcompact.Metrics{
+				TriggerMode: string(contextcompact.ModeProactive),
+			},
+		},
 	}
-	if resolveCalls != 2 {
-		t.Fatalf("expected resolver to be called twice, got %d", resolveCalls)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-advisory-allow",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	compactRunner := service.compactRunner.(*stubCompactRunner)
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected one proactive compact, got %d", len(compactRunner.calls))
+	}
+	if compactRunner.calls[0].Mode != contextcompact.ModeProactive {
+		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeProactive, compactRunner.calls[0].Mode)
+	}
+	if scripted.callCount != 1 {
+		t.Fatalf("expected provider Generate to be called once, got %d calls", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	var budgetActions []string
+	var budgetReasons []string
+	var budgetGatePolicies []string
+	var stopPayload StopReasonDecidedPayload
+	for _, event := range events {
+		switch event.Type {
+		case EventBudgetChecked:
+			payload, ok := event.Payload.(BudgetCheckedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetCheckedPayload, got %T", event.Payload)
+			}
+			budgetActions = append(budgetActions, payload.Action)
+			budgetReasons = append(budgetReasons, payload.Reason)
+			budgetGatePolicies = append(budgetGatePolicies, payload.EstimateGatePolicy)
+		case EventStopReasonDecided:
+			payload, ok := event.Payload.(StopReasonDecidedPayload)
+			if !ok {
+				t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
+			}
+			stopPayload = payload
+		}
+	}
+
+	if len(budgetActions) != 2 || budgetActions[0] != "compact" || budgetActions[1] != "allow" {
+		t.Fatalf("expected budget actions [compact allow], got %v", budgetActions)
+	}
+	if len(budgetReasons) != 2 ||
+		budgetReasons[0] != controlplane.BudgetDecisionReasonExceedsBudgetFirstTime ||
+		budgetReasons[1] != controlplane.BudgetDecisionReasonExceedsBudgetAfterCompactAllowAdvisory {
+		t.Fatalf("unexpected budget reasons %v", budgetReasons)
+	}
+	if len(budgetGatePolicies) != 2 ||
+		budgetGatePolicies[0] != provider.EstimateGateAdvisory ||
+		budgetGatePolicies[1] != provider.EstimateGateAdvisory {
+		t.Fatalf("expected advisory estimates, got %v", budgetGatePolicies)
+	}
+	if stopPayload.Reason != controlplane.StopReasonCompleted {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)
+	}
+}
+
+func TestServiceRunBypassesBudgetGateWhenEstimateFails(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 10
+		cfg.Context.Budget.FallbackPromptBudget = 10
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{}, &provider.ProviderError{
+				StatusCode: 503,
+				Code:       provider.ErrorCodeServer,
+				Message:    "estimate unavailable",
+				Retryable:  true,
+			}
+		},
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("继续执行")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-estimate-failed-bypass",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if scripted.callCount != 1 {
+		t.Fatalf("expected provider Generate to be called once, got %d calls", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	foundDiagnostic := false
+	foundBudgetChecked := false
+	var stopPayload StopReasonDecidedPayload
+	for _, event := range events {
+		switch event.Type {
+		case EventBudgetEstimateFailed:
+			payload, ok := event.Payload.(BudgetEstimateFailedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetEstimateFailedPayload, got %T", event.Payload)
+			}
+			if payload.Message == "" {
+				t.Fatalf("expected non-empty estimate failure message")
+			}
+			foundDiagnostic = true
+		case EventBudgetChecked:
+			payload, ok := event.Payload.(BudgetCheckedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetCheckedPayload, got %T", event.Payload)
+			}
+			if payload.Action != string(controlplane.TurnBudgetActionAllow) {
+				t.Fatalf("expected budget action allow, got %q", payload.Action)
+			}
+			if payload.Reason != controlplane.BudgetDecisionReasonEstimateFailedBypass {
+				t.Fatalf("expected reason %q, got %q", controlplane.BudgetDecisionReasonEstimateFailedBypass, payload.Reason)
+			}
+			foundBudgetChecked = true
+		case EventStopReasonDecided:
+			payload, ok := event.Payload.(StopReasonDecidedPayload)
+			if !ok {
+				t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
+			}
+			stopPayload = payload
+		}
+	}
+	if !foundDiagnostic {
+		t.Fatalf("expected budget_estimate_failed event")
+	}
+	if !foundBudgetChecked {
+		t.Fatalf("expected budget_checked event")
+	}
+	if stopPayload.Reason != controlplane.StopReasonCompleted {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)
+	}
+	assertNoEventType(t, events, EventError)
+}
+
+func TestServiceRunFailsWhenEstimateFailsWithDeterministicError(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 10
+		cfg.Context.Budget.FallbackPromptBudget = 10
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{}, errors.New("invalid provider config")
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-estimate-failed-hard-stop",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	})
+	if err == nil || !containsError(err, "estimate input tokens") {
+		t.Fatalf("expected estimate input tokens error, got %v", err)
+	}
+	if scripted.callCount != 0 {
+		t.Fatalf("expected provider Generate not to be called, got %d calls", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertNoEventType(t, events, EventBudgetEstimateFailed)
+	assertNoEventType(t, events, EventBudgetChecked)
+}
+
+func TestServiceRunFailsWhenEstimateContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{}, context.Canceled
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-estimate-canceled",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertNoEventType(t, events, EventBudgetEstimateFailed)
+}
+
+func TestServiceRunReconcilesUnknownOutputUsage(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{
+				EstimatedInputTokens: 17,
+				EstimateSource:       provider.EstimateSourceLocal,
+				GatePolicy:           provider.EstimateGateGateable,
+			}, nil
+		},
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-unknown-usage",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.TokenInputTotal != 17 || saved.TokenOutputTotal != 0 {
+		t.Fatalf("expected estimated input / zero persisted output, got in=%d out=%d", saved.TokenInputTotal, saved.TokenOutputTotal)
+	}
+	if !saved.HasUnknownUsage {
+		t.Fatalf("expected session HasUnknownUsage to be persisted")
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	var ledgerPayload LedgerReconciledPayload
+	var tokenPayload TokenUsagePayload
+	foundLedger := false
+	foundUsage := false
+	for _, event := range events {
+		switch event.Type {
+		case EventLedgerReconciled:
+			payload, ok := event.Payload.(LedgerReconciledPayload)
+			if !ok {
+				t.Fatalf("expected LedgerReconciledPayload, got %T", event.Payload)
+			}
+			ledgerPayload = payload
+			foundLedger = true
+		case EventTokenUsage:
+			payload, ok := event.Payload.(TokenUsagePayload)
+			if !ok {
+				t.Fatalf("expected TokenUsagePayload, got %T", event.Payload)
+			}
+			tokenPayload = payload
+			foundUsage = true
+		}
+	}
+
+	if !foundLedger {
+		t.Fatalf("expected ledger_reconciled event")
+	}
+	if ledgerPayload.InputSource != usageSourceEstimated || ledgerPayload.OutputSource != usageSourceUnknown || !ledgerPayload.HasUnknownUsage {
+		t.Fatalf("unexpected ledger payload: %+v", ledgerPayload)
+	}
+	if !foundUsage {
+		t.Fatalf("expected token_usage event")
+	}
+	if tokenPayload.InputSource != usageSourceEstimated || tokenPayload.OutputSource != usageSourceUnknown || !tokenPayload.HasUnknownUsage {
+		t.Fatalf("unexpected token payload: %+v", tokenPayload)
 	}
 }
 
@@ -4861,8 +4963,10 @@ func TestTokenUsageRecordedOnMessageDone(t *testing.T) {
 
 	// Create a MessageDone stream event with token usage
 	messageDoneEvent := providertypes.NewMessageDoneStreamEvent("stop", &providertypes.Usage{
-		InputTokens:  100,
-		OutputTokens: 50,
+		InputTokens:    100,
+		OutputTokens:   50,
+		InputObserved:  true,
+		OutputObserved: true,
 	})
 
 	// 使用与运行时相同的流式事件处理器验证 usage 累积行为。

@@ -31,7 +31,8 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 		Driver:                DriverName,
 		BaseURL:               server.URL,
 		DefaultModel:          "gpt-4.1",
-		APIKey:                "test-key",
+		APIKeyEnv:             "OPENAI_TEST_KEY",
+		APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
 		DiscoveryEndpointPath: "/models",
 	}
 	driver := Driver()
@@ -101,7 +102,8 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 			Name:                  DriverName,
 			Driver:                DriverName,
 			BaseURL:               "://bad",
-			APIKey:                "test-key",
+			APIKeyEnv:             "OPENAI_TEST_KEY",
+			APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
 			DiscoveryEndpointPath: "/models",
 		},
 		client: &http.Client{},
@@ -116,7 +118,8 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 			Name:                  DriverName,
 			Driver:                DriverName,
 			BaseURL:               "https://api.example.com/v1",
-			APIKey:                "test-key",
+			APIKeyEnv:             "OPENAI_TEST_KEY",
+			APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
 			DiscoveryEndpointPath: "https://api.example.com/models",
 		},
 		client: &http.Client{},
@@ -139,7 +142,8 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 			Name:                  DriverName,
 			Driver:                DriverName,
 			BaseURL:               server.URL,
-			APIKey:                "test-key",
+			APIKeyEnv:             "OPENAI_TEST_KEY",
+			APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
 			DiscoveryEndpointPath: "/models",
 		},
 		client: server.Client(),
@@ -154,11 +158,12 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	}
 
 	p2, err := New(provider.RuntimeConfig{
-		Name:         DriverName,
-		Driver:       provider.DriverAnthropic,
-		BaseURL:      "https://api.example.com/v1",
-		DefaultModel: "gpt-4.1",
-		APIKey:       "test-key",
+		Name:           DriverName,
+		Driver:         provider.DriverAnthropic,
+		BaseURL:        "https://api.example.com/v1",
+		DefaultModel:   "gpt-4.1",
+		APIKeyEnv:      "OPENAI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

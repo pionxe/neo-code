@@ -1086,6 +1086,7 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventPermissionResolved:                       runtimeEventPermissionResolvedHandler,
 	tuiservices.EventCompactApplied:                           runtimeEventCompactDoneHandler,
 	tuiservices.EventCompactError:                             runtimeEventCompactErrorHandler,
+	tuiservices.EventTokenUsage:                               runtimeEventTokenUsageHandler,
 	tuiservices.EventPhaseChanged:                             runtimeEventPhaseChangedHandler,
 	tuiservices.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
 	tuiservices.EventTodoUpdated:                              runtimeEventTodoUpdatedHandler,
@@ -1126,19 +1127,32 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 
 	reason := strings.ToLower(strings.TrimSpace(string(payload.Reason)))
 	switch reason {
-	case "success":
+	case strings.ToLower(string(tuiservices.StopReasonCompleted)):
 		if strings.TrimSpace(a.state.ExecutionError) == "" {
 			a.state.StatusText = statusReady
 		}
-	case "canceled":
+	case strings.ToLower(string(tuiservices.StopReasonUserInterrupt)):
 		a.state.ExecutionError = ""
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
-	default:
+	case strings.ToLower(string(tuiservices.StopReasonBudgetExceeded)):
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "Context budget exceeded"
+		}
+		a.state.ExecutionError = ""
+		a.state.StatusText = detail
+		a.appendActivity("run", "Context budget exceeded", detail, false)
+	case strings.ToLower(string(tuiservices.StopReasonFatalError)):
 		detail := strings.TrimSpace(payload.Detail)
 		if detail == "" {
 			detail = "runtime stopped"
 		}
+		a.state.ExecutionError = detail
+		a.state.StatusText = detail
+		a.appendActivity("run", "Runtime stopped", detail, true)
+	default:
+		detail := "unknown stop reason: " + strings.TrimSpace(string(payload.Reason))
 		a.state.ExecutionError = detail
 		a.state.StatusText = detail
 		a.appendActivity("run", "Runtime stopped", detail, true)
@@ -1441,6 +1455,15 @@ func runtimeEventUsageHandler(a *App, event tuiservices.RuntimeEvent) bool {
 		return false
 	}
 	a.state.TokenUsage = tuiservices.MapUsagePayload(payload)
+	return false
+}
+
+func runtimeEventTokenUsageHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.TokenUsagePayload)
+	if !ok {
+		return false
+	}
+	a.state.TokenUsage = tuiservices.MapTokenUsagePayload(payload, a.state.TokenUsage)
 	return false
 }
 

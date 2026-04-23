@@ -15,6 +15,18 @@ type stubTextGenProvider struct {
 	generate func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
 }
 
+func (s *stubTextGenProvider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	_ = ctx
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: provider.EstimateTextTokens(req.SystemPrompt + renderEstimateMessages(req.Messages)),
+		EstimateSource:       provider.EstimateSourceLocal,
+		GatePolicy:           provider.EstimateGateGateable,
+	}, nil
+}
+
 func (s *stubTextGenProvider) Generate(
 	ctx context.Context,
 	req providertypes.GenerateRequest,
@@ -25,6 +37,14 @@ func (s *stubTextGenProvider) Generate(
 		return s.generate(ctx, req, events)
 	}
 	return nil
+}
+
+func renderEstimateMessages(messages []providertypes.Message) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		builder.WriteString(provider.RenderMessageText(message.Parts))
+	}
+	return builder.String()
 }
 
 func TestGenerateTextSuccess(t *testing.T) {

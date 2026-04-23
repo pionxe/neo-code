@@ -16,6 +16,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/streaming"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
@@ -170,7 +171,15 @@ func TestResolveCompactProviderSelectionResolveErrorBranch(t *testing.T) {
 	_ = os.Unsetenv(apiEnv)
 
 	session := agentsession.Session{Provider: cfg.SelectedProvider, Model: "m1"}
-	if _, _, err := resolveCompactProviderSelection(session, cfg); err == nil {
+	resolved, _, err := resolveCompactProviderSelection(session, cfg)
+	if err != nil {
+		t.Fatalf("resolveCompactProviderSelection() error = %v", err)
+	}
+	runtimeConfig, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if _, err := runtimeConfig.ResolveAPIKeyValue(); err == nil {
 		t.Fatalf("expected resolve API key error")
 	}
 }
@@ -281,7 +290,7 @@ func TestGenerateStreamingMessageDrainEventsAfterContextCanceled(t *testing.T) {
 	}
 }
 
-func TestPrepareTurnSnapshotErrorBranches(t *testing.T) {
+func TestPrepareTurnBudgetSnapshotErrorBranches(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -293,7 +302,7 @@ func TestPrepareTurnSnapshotErrorBranches(t *testing.T) {
 		toolManager: &stubToolManager{},
 	}
 	state := newRunState("run-snapshot", newRuntimeSession("session-snapshot"))
-	if _, _, err := service.prepareTurnSnapshot(context.Background(), &state); err == nil {
+	if _, _, err := service.prepareTurnBudgetSnapshot(context.Background(), &state); err == nil {
 		t.Fatalf("expected build error")
 	}
 
@@ -306,7 +315,7 @@ func TestPrepareTurnSnapshotErrorBranches(t *testing.T) {
 	service.contextBuilder = &stubContextBuilder{buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
 		return agentcontext.BuildResult{Messages: input.Messages}, nil
 	}}
-	if _, _, err := service.prepareTurnSnapshot(context.Background(), &state); err == nil {
+	if _, _, err := service.prepareTurnBudgetSnapshot(context.Background(), &state); err == nil {
 		t.Fatalf("expected resolve selected provider error")
 	}
 }
@@ -318,6 +327,35 @@ func TestApplyCompactForStateStrictErrorBranch(t *testing.T) {
 	state := newRunState("run-apply-compact", newRuntimeSession("session-apply-compact"))
 	if _, err := service.applyCompactForState(context.Background(), &state, config.Config{}, contextcompact.ModeManual, compactErrorStrict); err == nil {
 		t.Fatalf("expected strict compact error")
+	}
+}
+
+func TestApplyCompactForStateDoesNotIncreaseCompactCountWhenNotApplied(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 8),
+		compactRunner: &stubCompactRunner{
+			result: contextcompact.Result{
+				Applied: false,
+			},
+		},
+	}
+	state := newRunState("run-apply-compact-not-applied", newRuntimeSession("session-apply-compact-not-applied"))
+	state.compactCount = 1
+	if err := service.setBaseRunState(context.Background(), &state, controlplane.RunStatePlan); err != nil {
+		t.Fatalf("set base run state: %v", err)
+	}
+
+	applied, err := service.applyCompactForState(context.Background(), &state, config.Config{}, contextcompact.ModeProactive, compactErrorStrict)
+	if err != nil {
+		t.Fatalf("applyCompactForState() error = %v", err)
+	}
+	if applied {
+		t.Fatalf("expected applied=false when compact runner result is not applied")
+	}
+	if state.compactCount != 1 {
+		t.Fatalf("expected compactCount to stay 1 when compact not applied, got %d", state.compactCount)
 	}
 }
 
@@ -481,7 +519,7 @@ func TestExecuteAssistantToolCallsRemainingBranches(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		state := newRunState("run", newRuntimeSession("session-top-cancel"))
-		_, err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
+		_, err := service.executeAssistantToolCalls(ctx, &state, TurnBudgetSnapshot{}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -499,7 +537,7 @@ func TestExecuteAssistantToolCallsRemainingBranches(t *testing.T) {
 		store.sessions[session.ID] = cloneSession(session)
 		service := &Service{events: make(chan RuntimeEvent, 8), approvalBroker: approvalflow.NewBroker(), toolManager: manager, sessionStore: store}
 		state := newRunState("run", session)
-		_, err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
+		_, err := service.executeAssistantToolCalls(ctx, &state, TurnBudgetSnapshot{ToolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -518,7 +556,7 @@ func TestExecuteAssistantToolCallsRemainingBranches(t *testing.T) {
 		service := &Service{events: make(chan RuntimeEvent, 8), approvalBroker: approvalflow.NewBroker(), toolManager: manager, sessionStore: store}
 
 		state := newRunState("run", session)
-		_, err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
+		_, err := service.executeAssistantToolCalls(ctx, &state, TurnBudgetSnapshot{ToolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -537,7 +575,7 @@ func TestExecuteAssistantToolCallsRemainingBranches(t *testing.T) {
 		service := &Service{events: make(chan RuntimeEvent, 8), approvalBroker: approvalflow.NewBroker(), toolManager: manager, sessionStore: store}
 
 		state := newRunState("run", session)
-		_, err := service.executeAssistantToolCalls(ctx, &state, turnSnapshot{toolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
+		_, err := service.executeAssistantToolCalls(ctx, &state, TurnBudgetSnapshot{ToolTimeout: time.Second}, providertypes.Message{ToolCalls: []providertypes.ToolCall{{ID: "c", Name: "filesystem_read_file"}}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -598,7 +636,12 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		}()
 		service := &Service{providerFactory: &scriptedProviderFactory{provider: providerRetry}, events: make(chan RuntimeEvent, 8)}
 		state := newRunState("run-retry-backoff", newRuntimeSession("session-retry-backoff"))
-		_, err := service.callProviderWithRetry(ctx, &state, turnSnapshot{providerConfig: provider.RuntimeConfig{Name: "x"}})
+		_, err := service.callProviderWithRetry(
+			ctx,
+			&state,
+			TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}},
+			providerRetry,
+		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -613,7 +656,12 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		}}
 		service := &Service{providerFactory: &scriptedProviderFactory{provider: providerRetry}, events: make(chan RuntimeEvent, 8)}
 		state := newRunState("run-retry-ctx-check", newRuntimeSession("session-retry-ctx-check"))
-		_, err := service.callProviderWithRetry(ctx, &state, turnSnapshot{providerConfig: provider.RuntimeConfig{Name: "x"}})
+		_, err := service.callProviderWithRetry(
+			ctx,
+			&state,
+			TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}},
+			providerRetry,
+		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}

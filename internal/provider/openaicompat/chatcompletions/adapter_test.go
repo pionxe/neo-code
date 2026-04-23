@@ -43,6 +43,36 @@ func TestConsumeStreamSupportsWeakSSEFormat(t *testing.T) {
 	if done.Usage == nil || done.Usage.TotalTokens != 3 {
 		t.Fatalf("unexpected usage: %+v", done.Usage)
 	}
+	if !done.Usage.InputObserved || !done.Usage.OutputObserved {
+		t.Fatalf("expected usage observed flags to be true, got %+v", done.Usage)
+	}
+}
+
+func TestConsumeStreamEmitsNilUsageWhenProviderDidNotReturnUsage(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	events := make(chan providertypes.StreamEvent, 4)
+	if err := ConsumeStream(context.Background(), strings.NewReader(body), events); err != nil {
+		t.Fatalf("ConsumeStream() error = %v", err)
+	}
+
+	drained := drainEvents(events)
+	if len(drained) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(drained))
+	}
+	done, err := drained[1].MessageDoneValue()
+	if err != nil {
+		t.Fatalf("expected message done, got err=%v", err)
+	}
+	if done.Usage != nil {
+		t.Fatalf("expected nil usage when stream carries no usage, got %+v", done.Usage)
+	}
 }
 
 func TestConsumeStreamParsesMultilineDataEvent(t *testing.T) {
@@ -196,6 +226,9 @@ func TestEmitFromSDKStream(t *testing.T) {
 	}
 	if done.Usage == nil || done.Usage.TotalTokens != 3 {
 		t.Fatalf("expected usage total tokens 3, got %+v", done.Usage)
+	}
+	if !done.Usage.InputObserved || !done.Usage.OutputObserved {
+		t.Fatalf("expected usage observed flags to be true, got %+v", done.Usage)
 	}
 }
 

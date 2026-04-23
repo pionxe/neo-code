@@ -2,7 +2,7 @@
 
 ## Runtime 事件类型
 
-当前 runtime 对外暴露一组小而稳定的事件（1A 硬切后不再保留旧事件镜像）：
+当前 runtime 对外暴露一组稳定事件：
 
 - `user_message`
 - `agent_chunk`
@@ -17,6 +17,8 @@
 - `provider_retry`
 - `permission_requested`
 - `permission_resolved`
+- `budget_checked`
+- `ledger_reconciled`
 - `token_usage`
 - `skill_activated`
 - `skill_deactivated`
@@ -25,124 +27,125 @@
 - `compact_applied`
 - `compact_error`
 
-这三类 compact 事件同时用于 `manual`、`auto` 与 `reactive` 三种来源，调用方可通过 payload 中的 `trigger_mode` 区分。
+当前事件 envelope 的唯一有效 `payload_version` 为 `4`。
 
 ## ReAct 主循环
 
-1. 加载目标会话或创建新会话。
-2. 追加最新的用户消息。
-3. 读取最新配置快照。
-4. 调用 `context.Builder` 生成本轮请求使用的 `system prompt` 和消息上下文。
-5. 如命中 token 阈值自动压缩建议，则先执行一次 compact，再在同一轮内重建请求。
-6. 冻结当前 turn 的 `provider / model / tools / workdir / request` 快照。
-7. 调用 `Provider.Generate`，并把流式事件桥接给 TUI。
-8. 如 provider 返回“上下文过长”错误，则触发 `reactive` compact，并在同一 run 内最多做 3 次逐步降级的恢复尝试。
-9. 保存 assistant 完整回复。
-10. 执行返回的工具调用，并保存每一个工具结果。
-11. 如果最终 assistant 回复后没有后续工具调用，则在 runtime 收口处安排一次后台 memo 自动提取。
-12. 如果仍需继续推理，则进入下一轮；否则结束。
+单次 run 的主链路为：
 
-补充说明：
-- runtime 不再设置内部 `max_loops` 停止条件；单次 run 仅在拿到最终 assistant 回复、遇到错误或收到外部取消时结束。
-- 由于 session 锁覆盖整个 run 生命周期，同一会话如果持续陷入工具调用循环，会一直占用该会话直到模型自行收口、报错或被取消。
+1. 加载或创建会话
+2. 追加最新用户消息
+3. 读取当前配置快照
+4. 调用 `context.Builder` 构建 provider-facing request
+5. 冻结当前 turn 的 `provider / model / tools / workdir / request / prompt_budget`
+6. 调用 provider 的 `EstimateInputTokens`
+7. 由 budget control plane 输出 `allow | compact | stop`
+8. 若为 `compact`，先执行 `proactive` compact，再在同一 run 内重建 request
+9. 若为 `allow`，调用 `Provider.Generate`
+10. 若 provider 返回 `context_too_long`，触发 `reactive` compact，并重新进入预算闭环
+11. 正常返回后，对 usage 做 reconcile
+12. 追加 assistant 消息
+13. 执行工具调用并写回 tool result
+14. 如仍需继续推理，进入下一轮；否则结束
 
-### Memo 自动提取调度
+## Budget 控制面
 
-- 自动提取只在最终 assistant 回复完成且当前轮没有后续工具调用时调度。
-- 如果本次 `Run` 已成功调用 `memo_remember`，则不再安排自动提取，避免与显式写入重复。
-- runtime 只负责在结束点调度，不直接执行提取逻辑；实际 debounce、尾随执行与持久化去重由 `internal/memo` 内部处理。
-- 调度时会绑定当次 provider/model 快照，后台任务不会重新读取全局当前配置，避免把历史会话消息发送到后续切换后的 provider。
-- 自动提取失败只记日志，不额外发出 TUI 事件，也不影响主链路完成。
-- `memo` 的最近消息窗口会复用 `internal/context` 的只读投影规则，只保留 provider-safe 的消息序列。
-- assistant 含 `tool_calls` 时，只有在窗口内能同时保留对应 `tool` 响应时才会注入；缺响应、空内容或已被 micro compact 清空的 assistant/tool 片段会整组丢弃，保留项会先投影为模型可消费的结构化文本。
-- recent window 的总消息数有硬预算：`min(limit*2, 24)`；超过预算的整段 tool span 会被跳过，避免窗口体积失控。
-- 进入 `memo` 提取前，tool 文本会二次收敛为 `content_excerpt`，并按 `600` rune 上限截断。
+runtime 不再消费旧的 builder 压缩建议，而是使用冻结快照上的显式预算决策。
 
-补充约束：
-- 同一 turn 内的 provider retry 只重放冻结后的 turn 快照，不会重新读取配置。
-- `auto compact` 与 `reactive compact` 都不额外消耗 reasoning turn。
-- 权限审批等待由 `internal/runtime/approval` 负责 request 生命周期，runtime 自己负责事件发射与 tool 重试编排。
+### `budget_checked`
 
-### Context Builder 输入与职责
+每次发送前预算判定都会发出 `budget_checked`：
 
-- `runtime` 只向 `context.Builder` 传递本轮所需元数据：
-  - 历史消息
-  - `workdir`
-  - `shell`
-  - 当前 `provider`
-  - 当前 `model`
-  - 会话累计输入 token 数（`SessionInputTokens`）
-  - 会话累计输出 token 数（`SessionOutputTokens`）
-  - 自动压缩阈值（`AutoCompactThreshold`）
-- `context.Builder` 负责统一组装：
-  - 固定核心 system prompt sections（静态模板由 `internal/promptasset` 通过 `go:embed` 提供）
-  - 从 `workdir` 向上发现的 `AGENTS.md`
-  - `Task State`
-  - `Todo State`
-  - `Skills`
-  - 可选 `Memo`
-  - 系统状态摘要（`workdir` / `shell` / `provider` / `model` / git branch / git dirty）
-  - 裁剪后的历史消息
-  - 自动压缩决策（`BuildResult.AutoCompactSuggested`）
-- `runtime` 不直接读取规则文件，也不直接查询 git 状态。
-- `provider` 只消费最终生成的 `SystemPrompt`、消息列表和工具 schema，不感知上下文来源。
+- `attempt_seq`
+- `request_hash`
+- `action`
+- `reason`
+- `estimated_input_tokens`
+- `prompt_budget`
+- `estimate_source`
+- `estimate_gate_policy`
 
-### 静态模板与动态拼装边界
+语义：
 
-- `internal/promptasset` 负责承载受版本管理的静态 prompt 模板资产，并通过 `go:embed` 编译进程序。
-- `context` 继续负责主会话 system prompt 的 section 顺序、动态 section 注入与最终渲染。
-- `runtime` 继续负责在特定条件下注入 reminder，但静态 reminder 文案本身来自模板资产。
-- `subagent` 继续负责角色策略、工具约束与输出契约，只有角色基础 prompt 抽离为模板资产。
+- `allow`：本轮请求在预算内
+- `compact`：首次超预算，需要先压缩
+- `stop` + `reason=exceeds_budget_after_compact_stop`：压缩后仍超预算且估算可门禁（`gateable`），停止当前 run
+- `allow` + `reason=exceeds_budget_after_compact_allow_advisory`：压缩后仍超预算但估算仅 advisory，继续放行
 
-### System Prompt 注入顺序
+## Context Builder 职责
 
-当前 `system prompt` 按以下顺序拼装：
+`runtime` 向 `context.Builder` 传入：
 
-1. 固定核心 sections
-2. `Project Rules` section
-3. `Task State` section
-4. `Todo State` section
-5. `Skills` section
-6. 可选 `Memo` section
-7. `System State` section
+- 历史消息
+- `workdir`
+- `shell`
+- 当前 `provider`
+- 当前 `model`
+- 会话累计输入 token
+- 会话累计输出 token
 
-其中：
+`context.Builder` 只负责：
 
-- 规则文件只支持大写文件名 `AGENTS.md`
-- 多份命中结果按“从全局到局部”的顺序注入
-- git 只注入摘要，不注入完整 `git status`
-- 各 section 统一由 `internal/context` 内部的 `renderPromptSection` 和 `composeSystemPrompt` 渲染，`runtime` 仍只消费最终字符串
+- 组装 `system prompt`
+- 读取 `AGENTS.md`
+- 注入 `Task State` / `Todo State` / `Skills` / `Memo`
+- 执行 read-time trim 和 micro compact
+- 输出最终 `SystemPrompt` 与消息列表
+
+`context.Builder` 不再负责：
+
+- token budget 判断
+- proactive compact 触发
+- 旧的 builder 压缩建议布尔值
 
 ## 流式桥接
 
-- Provider 发出 `StreamEvent`
-- `internal/provider` 根包仅保留最小事件发送 helper；协议流解析留在各自 driver 子包
+- provider 发出 `StreamEvent`
+- `internal/provider` 只处理协议差异
 - `internal/runtime/streaming` 统一累积文本、tool call 增量和 `message_done`
-- runtime 将累积过程映射成 `RuntimeEvent`
-- TUI 使用 Bubble Tea `Cmd` 监听事件，并在处理完成后继续订阅
-- `provider.GenerateText` 只在上游 `Generate` 成功返回时，才把缺失 `message_done` 视为流式中断。
-- 如果 provider 在真正开始流式输出前直接返回 HTTP/ProviderError，则优先保留原始错误，不再额外包装成 `message_done` 缺失。
+- runtime 将结果映射成 `RuntimeEvent`
+- TUI 通过 Bubble Tea `Cmd` 监听这些事件
 
-同一套流式累积逻辑同时复用于：
-- 普通 `Run()` 的 assistant 回复收敛
-- compact summary 生成阶段的 provider 输出消费
+## Usage 对账
 
-## Token 计量
+provider 返回后，runtime 会执行显式的账本调和。
 
-runtime 在转发 provider 流式事件时，从 `MessageDone` 事件中提取 `Usage`（`InputTokens`、`OutputTokens`），累积到会话级计数器，并发出 `token_usage` 事件供 TUI 消费。
+### `ledger_reconciled`
 
-`token_usage` payload 包含：
+每轮 provider 调用完成后都会发出：
 
-- `input_tokens`：本次调用输入 token
-- `output_tokens`：本次调用输出 token
-- `session_input_tokens`：会话累计输入 token
-- `session_output_tokens`：会话累计输出 token
+- `attempt_seq`
+- `request_hash`
+- `input_tokens`
+- `input_source`
+- `output_tokens`
+- `output_source`
+- `has_unknown_usage`
+
+规则：
+
+- provider 返回 usage 时，`input_source=observed`，`output_source=observed`
+- provider usage 缺失时，输入侧回退到发送前 estimate，因此 `input_source=estimated`
+- provider usage 缺失时，输出侧不伪装成观测值，因此 `output_source=unknown`
+- 只要出现过未知 output usage，会话级 `HasUnknownUsage` 会被置为 `true`
+
+### `token_usage`
+
+`token_usage` 继续面向 TUI 提供单轮和会话累计数据，并新增来源标签：
+
+- `input_tokens`
+- `output_tokens`
+- `input_source`
+- `output_source`
+- `has_unknown_usage`
+- `session_input_tokens`
+- `session_output_tokens`
 
 ## 持久化时机
 
-- 用户消息提交后保存
-- assistant 完整回复后保存
-- 每个工具结果完成后保存
-- 避免在高频 UI 刷新路径中做磁盘 I/O
+- 用户消息提交后立即持久化
+- assistant 完整回复后立即持久化
+- 每个工具结果完成后立即持久化
+- compact 成功后通过 `ReplaceTranscript` 原子重写 transcript
 
-会话 JSON 结构、工作区分桶以及 token 计数持久化约束统一见 [Session 持久化设计](./session-persistence-design.md)。
+会话级 token totals 和 `HasUnknownUsage` 由 `runtime` 统一维护，并在持久化层落盘。

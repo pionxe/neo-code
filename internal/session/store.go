@@ -14,7 +14,7 @@ import (
 const (
 	sessionDatabaseFileName = "session.db"
 	assetsDirName           = "assets"
-	sqliteSchemaVersion     = 1
+	sqliteSchemaVersion     = 2
 
 	// MaxSessionMessages 定义单个会话允许持久化的最大消息数，超出时自动裁剪最旧消息。
 	MaxSessionMessages = 8192
@@ -47,6 +47,20 @@ type Session struct {
 	Messages         []providertypes.Message
 	TokenInputTotal  int
 	TokenOutputTotal int
+	HasUnknownUsage  bool
+}
+
+// SessionHead 表示可独立持久化、可整体替换的会话头状态快照。
+type SessionHead struct {
+	Provider         string
+	Model            string
+	Workdir          string
+	TaskState        TaskState
+	ActivatedSkills  []SkillActivation
+	Todos            []TodoItem
+	TokenInputTotal  int
+	TokenOutputTotal int
+	HasUnknownUsage  bool
 }
 
 // Summary 表示会话列表视图需要的轻量摘要。
@@ -59,18 +73,11 @@ type Summary struct {
 
 // CreateSessionInput 描述新建空会话头时需要写入的字段。
 type CreateSessionInput struct {
-	ID               string
-	Title            string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	Provider         string
-	Model            string
-	Workdir          string
-	TaskState        TaskState
-	ActivatedSkills  []SkillActivation
-	Todos            []TodoItem
-	TokenInputTotal  int
-	TokenOutputTotal int
+	ID        string
+	Title     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Head      SessionHead
 }
 
 // AppendMessagesInput 描述一次原子追加消息及会话头增量更新。
@@ -83,21 +90,15 @@ type AppendMessagesInput struct {
 	Workdir          string
 	TokenInputDelta  int
 	TokenOutputDelta int
+	HasUnknownUsage  bool
 }
 
 // UpdateSessionStateInput 描述一次只更新会话头状态的写入。
 type UpdateSessionStateInput struct {
-	SessionID        string
-	Title            string
-	UpdatedAt        time.Time
-	Provider         string
-	Model            string
-	Workdir          string
-	TaskState        TaskState
-	ActivatedSkills  []SkillActivation
-	Todos            []TodoItem
-	TokenInputTotal  int
-	TokenOutputTotal int
+	SessionID string
+	Title     string
+	UpdatedAt time.Time
+	Head      SessionHead
 }
 
 // UpdateSessionWorkdirInput 描述一次仅更新会话 workdir 的最小粒度写入。
@@ -109,17 +110,10 @@ type UpdateSessionWorkdirInput struct {
 
 // ReplaceTranscriptInput 描述 compact 后整段 transcript 的原子替换。
 type ReplaceTranscriptInput struct {
-	SessionID        string
-	Messages         []providertypes.Message
-	UpdatedAt        time.Time
-	Provider         string
-	Model            string
-	Workdir          string
-	TaskState        TaskState
-	ActivatedSkills  []SkillActivation
-	Todos            []TodoItem
-	TokenInputTotal  int
-	TokenOutputTotal int
+	SessionID string
+	Messages  []providertypes.Message
+	UpdatedAt time.Time
+	Head      SessionHead
 }
 
 // Store 定义会话持久化的意图型接口。
@@ -145,11 +139,6 @@ func NewSQLiteStore(baseDir string, workspaceRoot string) *SQLiteStore {
 	}
 }
 
-// NewStore 返回默认会话存储实现。
-func NewStore(baseDir string, workspaceRoot string) *SQLiteStore {
-	return NewSQLiteStore(baseDir, workspaceRoot)
-}
-
 // New 创建一个默认标题策略的新会话对象。
 func New(title string) Session {
 	return NewWithWorkdir(title, "")
@@ -169,6 +158,65 @@ func NewWithWorkdir(title string, workdir string) Session {
 		Todos:           []TodoItem{},
 		Messages:        []providertypes.Message{},
 	}
+}
+
+// HeadSnapshot 返回当前会话头状态的深拷贝，用于持久化输入与跨层传递。
+func (s Session) HeadSnapshot() SessionHead {
+	return SessionHead{
+		Provider:         strings.TrimSpace(s.Provider),
+		Model:            strings.TrimSpace(s.Model),
+		Workdir:          strings.TrimSpace(s.Workdir),
+		TaskState:        s.TaskState.Clone(),
+		ActivatedSkills:  cloneSkillActivations(s.ActivatedSkills),
+		Todos:            cloneTodoItems(s.Todos),
+		TokenInputTotal:  s.TokenInputTotal,
+		TokenOutputTotal: s.TokenOutputTotal,
+		HasUnknownUsage:  s.HasUnknownUsage,
+	}
+}
+
+// clone 返回会话头状态的深拷贝，避免跨层共享底层切片。
+func (h SessionHead) clone() SessionHead {
+	return SessionHead{
+		Provider:         strings.TrimSpace(h.Provider),
+		Model:            strings.TrimSpace(h.Model),
+		Workdir:          strings.TrimSpace(h.Workdir),
+		TaskState:        h.TaskState.Clone(),
+		ActivatedSkills:  cloneSkillActivations(h.ActivatedSkills),
+		Todos:            cloneTodoItems(h.Todos),
+		TokenInputTotal:  h.TokenInputTotal,
+		TokenOutputTotal: h.TokenOutputTotal,
+		HasUnknownUsage:  h.HasUnknownUsage,
+	}
+}
+
+// applyToSession 将会话头状态整体写回会话对象，避免调用方逐字段手动拼装。
+func (h SessionHead) applyToSession(session *Session) {
+	if session == nil {
+		return
+	}
+	cloned := h.clone()
+	session.Provider = cloned.Provider
+	session.Model = cloned.Model
+	session.Workdir = cloned.Workdir
+	session.TaskState = cloned.TaskState
+	session.ActivatedSkills = cloned.ActivatedSkills
+	session.Todos = cloned.Todos
+	session.TokenInputTotal = cloned.TokenInputTotal
+	session.TokenOutputTotal = cloned.TokenOutputTotal
+	session.HasUnknownUsage = cloned.HasUnknownUsage
+}
+
+// cloneTodoItems 深拷贝 Todo 列表，避免会话头快照共享底层切片。
+func cloneTodoItems(items []TodoItem) []TodoItem {
+	if len(items) == 0 {
+		return nil
+	}
+	cloned := make([]TodoItem, len(items))
+	for idx, item := range items {
+		cloned[idx] = item.Clone()
+	}
+	return cloned
 }
 
 // sanitizeTitle 规范化会话标题，保证空标题和超长标题都有稳定表现。

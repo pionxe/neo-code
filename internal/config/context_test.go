@@ -15,52 +15,43 @@ func TestContextConfigCloneIndependence(t *testing.T) {
 			MaxSummaryChars:          1200,
 			ReadTimeMaxMessageSpans:  24,
 		},
-		AutoCompact: AutoCompactConfig{
-			Enabled:             true,
-			InputTokenThreshold: 50000,
+		Budget: BudgetConfig{
+			PromptBudget:         50000,
+			ReserveTokens:        9000,
+			FallbackPromptBudget: 88000,
+			MaxReactiveCompacts:  2,
 		},
 	}
 	cloned := original.Clone()
 
 	cloned.Compact.ManualStrategy = CompactManualStrategyFullReplace
 	cloned.Compact.ManualKeepRecentMessages = 5
-	cloned.AutoCompact.Enabled = false
-	cloned.AutoCompact.InputTokenThreshold = 100000
+	cloned.Budget.PromptBudget = 100000
+	cloned.Budget.MaxReactiveCompacts = 4
 
 	if original.Compact.ManualStrategy == cloned.Compact.ManualStrategy {
-		t.Fatal("expected Compact Clone to be independent")
+		t.Fatal("expected Compact clone to be independent")
 	}
 	if original.Compact.ManualKeepRecentMessages == cloned.Compact.ManualKeepRecentMessages {
-		t.Fatal("expected ManualKeepRecentMessages Clone to be independent")
+		t.Fatal("expected ManualKeepRecentMessages clone to be independent")
 	}
-	if original.AutoCompact.Enabled == cloned.AutoCompact.Enabled {
-		t.Fatal("expected AutoCompact Enabled clone to be independent")
+	if original.Budget.PromptBudget == cloned.Budget.PromptBudget {
+		t.Fatal("expected Budget PromptBudget clone to be independent")
 	}
-	if original.AutoCompact.InputTokenThreshold == cloned.AutoCompact.InputTokenThreshold {
-		t.Fatal("expected AutoCompact InputTokenThreshold clone to be independent")
-	}
-}
-
-func TestCompactConfigCloneValueSemantics(t *testing.T) {
-	t.Parallel()
-
-	original := CompactConfig{
-		ManualStrategy:           CompactManualStrategyFullReplace,
-		ManualKeepRecentMessages: 5,
-		MaxSummaryChars:          800,
-		MicroCompactDisabled:     true,
-		ReadTimeMaxMessageSpans:  24,
-	}
-	cloned := original.Clone()
-	if original != cloned {
-		t.Fatalf("expected equal configs, got %+v vs %+v", original, cloned)
+	if original.Budget.MaxReactiveCompacts == cloned.Budget.MaxReactiveCompacts {
+		t.Fatal("expected Budget MaxReactiveCompacts clone to be independent")
 	}
 }
 
-func TestAutoCompactConfigCloneValueSemantics(t *testing.T) {
+func TestBudgetConfigCloneValueSemantics(t *testing.T) {
 	t.Parallel()
 
-	original := AutoCompactConfig{Enabled: true, InputTokenThreshold: 75000}
+	original := BudgetConfig{
+		PromptBudget:         75000,
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  3,
+	}
 	cloned := original.Clone()
 	if original != cloned {
 		t.Fatalf("expected equal configs, got %+v vs %+v", original, cloned)
@@ -87,8 +78,12 @@ func TestContextConfigApplyDefaultsNilReceiver(t *testing.T) {
 
 	var ctxCfg *ContextConfig
 	ctxCfg.ApplyDefaults(ContextConfig{
-		Compact:     CompactConfig{ManualStrategy: CompactManualStrategyFullReplace},
-		AutoCompact: AutoCompactConfig{InputTokenThreshold: 50000},
+		Compact: CompactConfig{ManualStrategy: CompactManualStrategyFullReplace},
+		Budget: BudgetConfig{
+			ReserveTokens:        13000,
+			FallbackPromptBudget: 100000,
+			MaxReactiveCompacts:  3,
+		},
 	})
 }
 

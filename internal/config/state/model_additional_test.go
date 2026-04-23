@@ -325,7 +325,7 @@ func TestSelectionServiceEnsureSelectionBootstrapInitialWhenNoSelection(t *testi
 		t.Fatal("expected non-empty ProviderID after bootstrap")
 	}
 
-	reloaded, _ := manager.Reload(context.Background())
+	reloaded, _ := manager.Load(context.Background())
 	if reloaded.SelectedProvider == "" {
 		t.Fatal("expected persisted selection after bootstrap")
 	}

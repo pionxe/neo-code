@@ -301,8 +301,8 @@ func TestSessionReplaceTodosAndUpdateTodoStatusCompatibility(t *testing.T) {
 		t.Fatalf("unexpected session after replace: %+v", session)
 	}
 
-	if err := session.UpdateTodoStatus("b", TodoStatusInProgress); err != nil {
-		t.Fatalf("UpdateTodoStatus(b,in_progress) error = %v", err)
+	if err := session.SetTodoStatus("b", TodoStatusInProgress, 0); err != nil {
+		t.Fatalf("SetTodoStatus(b,in_progress,0) error = %v", err)
 	}
 	b, _ := session.FindTodo("b")
 	if b.Status != TodoStatusInProgress {
@@ -393,32 +393,16 @@ func TestTodoInternalHelpers(t *testing.T) {
 		t.Fatalf("negative retry fields should be normalized to 0, got count=%d limit=%d", normalized.RetryCount, normalized.RetryLimit)
 	}
 
-	legacySubAgent, err := normalizeTodoItem(TodoItem{
-		ID:        "legacy-subagent",
-		Content:   "legacy",
+	normalizedDefaultExecutor, err := normalizeTodoItem(TodoItem{
+		ID:        "missing-executor",
+		Content:   "legacy payload",
 		OwnerType: TodoOwnerTypeSubAgent,
 	})
 	if err != nil {
-		t.Fatalf("normalizeTodoItem(legacy-subagent) error = %v", err)
+		t.Fatalf("expected missing executor to default to agent, got %v", err)
 	}
-	if legacySubAgent.Executor != TodoExecutorAgent {
-		t.Fatalf("legacy executor = %q, want %q", legacySubAgent.Executor, TodoExecutorAgent)
-	}
-
-	legacyRetrySubAgent, err := normalizeTodoItem(TodoItem{
-		ID:          "legacy-retry-subagent",
-		Content:     "legacy retry",
-		Status:      TodoStatusBlocked,
-		RetryCount:  1,
-		OwnerType:   "",
-		OwnerID:     "",
-		NextRetryAt: time.Now().UTC().Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("normalizeTodoItem(legacy-retry-subagent) error = %v", err)
-	}
-	if legacyRetrySubAgent.Executor != TodoExecutorAgent {
-		t.Fatalf("legacy retry executor = %q, want %q", legacyRetrySubAgent.Executor, TodoExecutorAgent)
+	if normalizedDefaultExecutor.Executor != TodoExecutorAgent {
+		t.Fatalf("default executor = %q, want %q", normalizedDefaultExecutor.Executor, TodoExecutorAgent)
 	}
 }
 

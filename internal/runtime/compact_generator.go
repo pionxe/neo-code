@@ -60,9 +60,7 @@ func (g *compactSummaryGenerator) Generate(
 	if g.providerFactory == nil {
 		return contextcompact.SummaryOutput{}, errors.New("runtime: compact summary generator provider factory is nil")
 	}
-	if strings.TrimSpace(g.providerConfig.Driver) == "" ||
-		strings.TrimSpace(g.providerConfig.BaseURL) == "" ||
-		strings.TrimSpace(g.providerConfig.APIKey) == "" {
+	if strings.TrimSpace(g.providerConfig.Driver) == "" {
 		return contextcompact.SummaryOutput{}, errors.New("runtime: compact summary generator provider config is incomplete")
 	}
 

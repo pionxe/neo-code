@@ -207,11 +207,6 @@ func (s *Session) AddTodo(item TodoItem) error {
 	return nil
 }
 
-// UpdateTodoStatus 按 ID 更新 Todo 状态（兼容旧调用，无 revision 约束）。
-func (s *Session) UpdateTodoStatus(id string, status TodoStatus) error {
-	return s.SetTodoStatus(id, status, 0)
-}
-
 // SetTodoStatus 按 ID 更新 Todo 状态并执行 revision 检查。
 func (s *Session) SetTodoStatus(id string, status TodoStatus, expectedRevision int64) error {
 	patch := TodoPatch{
@@ -601,7 +596,11 @@ func normalizeTodoOwnerType(ownerType string) string {
 
 // normalizeTodoExecutor 规范化 executor 字段。
 func normalizeTodoExecutor(executor string) string {
-	return strings.ToLower(strings.TrimSpace(executor))
+	normalized := strings.ToLower(strings.TrimSpace(executor))
+	if normalized == "" {
+		return TodoExecutorAgent
+	}
+	return normalized
 }
 
 // isValidTodoExecutor 判断 executor 是否受支持。

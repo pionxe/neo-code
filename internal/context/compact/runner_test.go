@@ -258,7 +258,7 @@ func TestReactiveCompactUsesKeepRecentAndReportsReactiveMode(t *testing.T) {
 	}
 }
 
-func TestAutoCompactUsesManualStrategyAndReportsAutoMode(t *testing.T) {
+func TestProactiveCompactUsesManualStrategyAndReportsProactiveMode(t *testing.T) {
 	t.Parallel()
 
 	generator := &stubSummaryGenerator{output: validSummaryOutput()}
@@ -276,7 +276,7 @@ func TestAutoCompactUsesManualStrategyAndReportsAutoMode(t *testing.T) {
 	}
 
 	result, err := runner.Run(context.Background(), Input{
-		Mode:      ModeAuto,
+		Mode:      ModeProactive,
 		SessionID: "session-auto",
 		Workdir:   t.TempDir(),
 		Messages:  messages,
@@ -292,14 +292,14 @@ func TestAutoCompactUsesManualStrategyAndReportsAutoMode(t *testing.T) {
 	if !result.Applied {
 		t.Fatalf("expected auto compact applied")
 	}
-	if result.Metrics.TriggerMode != string(ModeAuto) {
-		t.Fatalf("expected trigger mode %q, got %q", ModeAuto, result.Metrics.TriggerMode)
+	if result.Metrics.TriggerMode != string(ModeProactive) {
+		t.Fatalf("expected trigger mode %q, got %q", ModeProactive, result.Metrics.TriggerMode)
 	}
 	if len(generator.calls) != 1 {
 		t.Fatalf("expected generator to run once, got %d", len(generator.calls))
 	}
-	if generator.calls[0].Mode != ModeAuto {
-		t.Fatalf("expected summary input mode %q, got %q", ModeAuto, generator.calls[0].Mode)
+	if generator.calls[0].Mode != ModeProactive {
+		t.Fatalf("expected summary input mode %q, got %q", ModeProactive, generator.calls[0].Mode)
 	}
 	if generator.calls[0].Config.ManualStrategy != config.CompactManualStrategyKeepRecent {
 		t.Fatalf("expected auto compact to retain manual strategy, got %q", generator.calls[0].Config.ManualStrategy)

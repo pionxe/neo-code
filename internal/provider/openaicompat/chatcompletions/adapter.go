@@ -72,6 +72,9 @@ func EmitFromSDKStream(
 		return fmt.Errorf("SDK stream error: %w", err)
 	}
 
+	if !usage.InputObserved && !usage.OutputObserved {
+		return provider.EmitMessageDone(ctx, events, finishReason, nil)
+	}
 	return provider.EmitMessageDone(ctx, events, finishReason, &usage)
 }
 
@@ -183,13 +186,13 @@ func ConsumeStream(
 				if flushErr := flushDataLines(); flushErr != nil {
 					return flushErr
 				}
-				return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+				return provider.EmitMessageDone(ctx, events, finishReason, doneUsagePtr(usage))
 			}
 			if flushErr := flushDataLines(); flushErr != nil {
 				return flushErr
 			}
 			if strings.TrimSpace(finishReason) != "" {
-				return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+				return provider.EmitMessageDone(ctx, events, finishReason, doneUsagePtr(usage))
 			}
 			return fmt.Errorf("%w: %w", provider.ErrStreamInterrupted, err)
 		}
@@ -206,7 +209,7 @@ func ConsumeStream(
 					return flushErr
 				}
 				done = true
-				return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+				return provider.EmitMessageDone(ctx, events, finishReason, doneUsagePtr(usage))
 			} else {
 				dataLines = append(dataLines, data)
 			}
@@ -215,7 +218,7 @@ func ConsumeStream(
 				return flushErr
 			}
 			if done {
-				return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+				return provider.EmitMessageDone(ctx, events, finishReason, doneUsagePtr(usage))
 			}
 		default:
 			if len(dataLines) == 0 {
@@ -225,7 +228,7 @@ func ConsumeStream(
 				return flushErr
 			}
 			if done {
-				return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+				return provider.EmitMessageDone(ctx, events, finishReason, doneUsagePtr(usage))
 			}
 		}
 
@@ -234,7 +237,7 @@ func ConsumeStream(
 				return flushErr
 			}
 			if done || strings.TrimSpace(finishReason) != "" {
-				return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+				return provider.EmitMessageDone(ctx, events, finishReason, doneUsagePtr(usage))
 			}
 			return fmt.Errorf("%w: missing [DONE] marker before EOF", provider.ErrStreamInterrupted)
 		}
@@ -247,19 +250,32 @@ func extractLegacyStreamUsage(usage *providertypes.Usage, raw *streamUsage) {
 		return
 	}
 	*usage = providertypes.Usage{
-		InputTokens:  raw.PromptTokens,
-		OutputTokens: raw.CompletionTokens,
-		TotalTokens:  raw.TotalTokens,
+		InputTokens:    raw.PromptTokens,
+		OutputTokens:   raw.CompletionTokens,
+		TotalTokens:    raw.TotalTokens,
+		InputObserved:  true,
+		OutputObserved: true,
 	}
 }
 
 // extractStreamUsage 将 OpenAI usage 覆盖到统一 token 统计。
 func extractStreamUsage(usage *providertypes.Usage, raw openai.CompletionUsage) {
 	*usage = providertypes.Usage{
-		InputTokens:  int(raw.PromptTokens),
-		OutputTokens: int(raw.CompletionTokens),
-		TotalTokens:  int(raw.TotalTokens),
+		InputTokens:    int(raw.PromptTokens),
+		OutputTokens:   int(raw.CompletionTokens),
+		TotalTokens:    int(raw.TotalTokens),
+		InputObserved:  true,
+		OutputObserved: true,
 	}
+}
+
+// doneUsagePtr 在 message_done 事件中按 usage 观测状态返回 payload，未观测时返回 nil。
+func doneUsagePtr(usage providertypes.Usage) *providertypes.Usage {
+	if !usage.InputObserved && !usage.OutputObserved {
+		return nil
+	}
+	copy := usage
+	return &copy
 }
 
 // mergeToolCallDeltaFromSDK 将单个 SDK tool call 增量合并到累积状态，并在必要时发出起始/增量事件。

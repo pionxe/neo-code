@@ -122,6 +122,7 @@ func (s *Service) runCompactForSession(
 	originalTaskState := session.TaskState.Clone()
 	originalTokenInputTotal := session.TokenInputTotal
 	originalTokenOutputTotal := session.TokenOutputTotal
+	originalHasUnknownUsage := session.HasUnknownUsage
 	originalUpdatedAt := session.UpdatedAt
 	s.emit(ctx, EventCompactStart, runID, session.ID, string(mode))
 
@@ -143,12 +144,14 @@ func (s *Service) runCompactForSession(
 		session.TaskState = result.TaskState.Clone()
 		session.TokenInputTotal = 0
 		session.TokenOutputTotal = 0
+		session.HasUnknownUsage = false
 		session.UpdatedAt = time.Now()
 		if err := s.sessionStore.ReplaceTranscript(ctx, replaceTranscriptInputFromSession(session)); err != nil {
 			session.Messages = originalMessages
 			session.TaskState = originalTaskState
 			session.TokenInputTotal = originalTokenInputTotal
 			session.TokenOutputTotal = originalTokenOutputTotal
+			session.HasUnknownUsage = originalHasUnknownUsage
 			session.UpdatedAt = originalUpdatedAt
 			return failCompact(err)
 		}

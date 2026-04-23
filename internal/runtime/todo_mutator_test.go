@@ -22,7 +22,7 @@ func (s *mutatorStore) CreateSession(ctx context.Context, input agentsession.Cre
 	if s.err != nil {
 		return agentsession.Session{}, s.err
 	}
-	session := agentsession.NewWithWorkdir(input.Title, input.Workdir)
+	session := agentsession.NewWithWorkdir(input.Title, input.Head.Workdir)
 	if input.ID != "" {
 		session.ID = input.ID
 	}
@@ -97,14 +97,15 @@ func (s *mutatorStore) UpdateSessionState(ctx context.Context, input agentsessio
 	s.last.ID = input.SessionID
 	s.last.Title = input.Title
 	s.last.UpdatedAt = input.UpdatedAt
-	s.last.Provider = input.Provider
-	s.last.Model = input.Model
-	s.last.Workdir = input.Workdir
-	s.last.TaskState = input.TaskState.Clone()
-	s.last.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
-	s.last.Todos = cloneTodosForPersistence(input.Todos)
-	s.last.TokenInputTotal = input.TokenInputTotal
-	s.last.TokenOutputTotal = input.TokenOutputTotal
+	head := input.Head
+	s.last.Provider = head.Provider
+	s.last.Model = head.Model
+	s.last.Workdir = head.Workdir
+	s.last.TaskState = head.TaskState.Clone()
+	s.last.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
+	s.last.Todos = cloneTodosForPersistence(head.Todos)
+	s.last.TokenInputTotal = head.TokenInputTotal
+	s.last.TokenOutputTotal = head.TokenOutputTotal
 	return nil
 }
 
@@ -121,14 +122,15 @@ func (s *mutatorStore) ReplaceTranscript(ctx context.Context, input agentsession
 	s.last.ID = input.SessionID
 	s.last.Messages = cloneMessagesForPersistence(input.Messages)
 	s.last.UpdatedAt = input.UpdatedAt
-	s.last.Provider = input.Provider
-	s.last.Model = input.Model
-	s.last.Workdir = input.Workdir
-	s.last.TaskState = input.TaskState.Clone()
-	s.last.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
-	s.last.Todos = cloneTodosForPersistence(input.Todos)
-	s.last.TokenInputTotal = input.TokenInputTotal
-	s.last.TokenOutputTotal = input.TokenOutputTotal
+	head := input.Head
+	s.last.Provider = head.Provider
+	s.last.Model = head.Model
+	s.last.Workdir = head.Workdir
+	s.last.TaskState = head.TaskState.Clone()
+	s.last.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
+	s.last.Todos = cloneTodosForPersistence(head.Todos)
+	s.last.TokenInputTotal = head.TokenInputTotal
+	s.last.TokenOutputTotal = head.TokenOutputTotal
 	return nil
 }
 

@@ -1,42 +1,29 @@
 # 配置指南
 
-本文说明 NeoCode 当前真实生效的配置规则。
-
-## 总原则
-
-- `config.yaml` 只保存最小运行时状态
-- provider 元数据来自代码内置定义或 custom provider 文件
-- API Key 只从环境变量读取
-- YAML 采用严格解析，未知字段直接报错
-
-这意味着 NeoCode 当前不会：
-
-- 自动清理旧版 `providers` / `provider_overrides`
-- 自动兼容 `workdir`、`default_workdir` 等旧字段
+本文说明 NeoCode 当前真实生效的配置结构与约束。
 
 ## 配置文件位置
 
-主配置文件路径：
+主配置文件：
 
 ```text
 ~/.neocode/config.yaml
 ```
 
-custom provider 目录：
+自定义 provider 目录：
 
 ```text
 ~/.neocode/providers/<provider-name>/provider.yaml
 ```
 
-## `config.yaml` 可写字段
-
-当前支持的主配置示例：
+## `config.yaml` 示例
 
 ```yaml
 selected_provider: openai
 current_model: gpt-5.4
 shell: bash
 tool_timeout_sec: 20
+
 runtime:
   max_no_progress_streak: 5
   max_repeat_cycle_streak: 3
@@ -61,40 +48,45 @@ context:
     read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
-  auto_compact:
-    enabled: false
-    input_token_threshold: 0
+  budget:
+    prompt_budget: 0
     reserve_tokens: 13000
-    fallback_input_token_threshold: 100000
+    fallback_prompt_budget: 100000
+    max_reactive_compacts: 3
 ```
 
-### 基础字段
+## 基础字段
 
 | 字段 | 说明 |
 |------|------|
 | `selected_provider` | 当前选中的 provider 名称 |
 | `current_model` | 当前选中的模型 ID |
-| `shell` | 默认 shell，Windows 默认 `powershell`，其他平台默认 `bash` |
-| `tool_timeout_sec` | 工具执行超时（秒） |
+| `shell` | 默认 shell；Windows 默认 `powershell`，其他平台默认 `bash` |
+| `tool_timeout_sec` | 工具执行超时秒数 |
 
-### `context` 字段
+## `context` 字段
+
+### `context.compact`
 
 | 字段 | 说明 |
 |------|------|
 | `context.compact.manual_strategy` | `/compact` 手动压缩策略，支持 `keep_recent` / `full_replace` |
-| `context.compact.manual_keep_recent_messages` | `keep_recent` 策略下保留的最近消息数 |
-| `context.compact.micro_compact_retained_tool_spans` | read-time micro compact 默认保留原始内容的最近可压缩工具块数量，默认 `6` |
-| `context.compact.read_time_max_message_spans` | context 读时保留的 message span 上限，用于降低“继续”时较早文件读取结果被过早裁掉的风险 |
+| `context.compact.manual_keep_recent_messages` | `keep_recent` 下保留的最近消息数 |
+| `context.compact.micro_compact_retained_tool_spans` | read-time micro compact 默认保留原始内容的最近工具块数量 |
+| `context.compact.read_time_max_message_spans` | context 构建时保留的 message span 上限 |
 | `context.compact.max_summary_chars` | compact summary 最大字符数 |
 | `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
-| `context.auto_compact.enabled` | 是否启用自动压缩 |
-| `context.auto_compact.input_token_threshold` | 自动压缩输入 token 阈值 |
-| `context.auto_compact.reserve_tokens` | 自动阈值推导时预留 token 缓冲（`resolved_threshold = context_window - reserve_tokens`） |
-| `context.auto_compact.fallback_input_token_threshold` | 自动推导失败时使用的保底阈值 |
 
-默认 pin 仅对 `filesystem_write_file` 与 `filesystem_edit` 这类文件修改工具生效，用于保留关键产物文件的最近结果；`.env*` 不参与默认 pin，避免敏感内容在上下文中保留更久。
+### `context.budget`
 
-### `runtime` 字段
+| 字段 | 说明 |
+|------|------|
+| `context.budget.prompt_budget` | 显式输入预算；`> 0` 时直接使用，`0` 表示自动推导 |
+| `context.budget.reserve_tokens` | 自动推导输入预算时，从模型窗口中预留给输出、tool call、system prompt 的缓冲 |
+| `context.budget.fallback_prompt_budget` | 模型窗口不可用或推导失败时使用的保底输入预算 |
+| `context.budget.max_reactive_compacts` | 单次 `Run()` 内允许的 reactive compact 最大次数 |
+
+## `runtime` 字段
 
 | 字段 | 说明 |
 |------|------|
@@ -104,36 +96,57 @@ context:
 | `runtime.assets.max_session_asset_bytes` | 单个 `session_asset` 最大原始字节数，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 | `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 `session_asset` 原始总字节上限，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 
-### `tools` 字段
+## Budget 解析规则
 
-| 字段 | 说明 |
-|------|------|
-| `tools.webfetch.max_response_bytes` | WebFetch 最大响应字节数 |
-| `tools.webfetch.supported_content_types` | WebFetch 允许的内容类型 |
-| `tools.mcp.servers` | MCP server 列表 |
+NeoCode 已不再使用旧的 `auto_compact` 阈值语义，当前统一使用 `context.budget`：
 
-## 不写入 `config.yaml` 的字段
+1. `context.budget.prompt_budget > 0` 时，直接使用显式预算。
+2. `context.budget.prompt_budget <= 0` 时，系统尝试基于当前 provider/model 的 `ContextWindow` 自动推导。
+3. 自动推导公式为：
 
-以下内容不允许写入主配置文件：
+```text
+prompt_budget = context_window - reserve_tokens
+```
 
-- `providers`
-- `provider_overrides`
-- `workdir`
-- `default_workdir`
-- `base_url`
-- `api_key_env`
-- `models`
-- `memo.max_index_lines`（已移除，请改用 `memo.max_entries`）
+4. 如果当前 provider 选择无效、catalog snapshot 查询失败、模型缺少可用 `ContextWindow`，或 `ContextWindow <= reserve_tokens`，则回退到 `fallback_prompt_budget`。
 
-如果这些字段出现在 `config.yaml` 中，加载会直接失败，而不是被“自动迁移”或“悄悄清理”。
+## 配置结构升级
+
+启动装配阶段会在严格解析 `config.yaml` 前执行一次 preflight 结构升级：
+
+- 仅当检测到 `context.auto_compact` 时，自动迁移为 `context.budget`。
+- 迁移前会写入 `config.yaml.bak`，原配置内容保留在备份中。
+- 如果旧配置显式 `context.auto_compact.enabled: false`，迁移仍会执行，并记录说明：
+  `旧 context.auto_compact.enabled 已废弃，新预算门禁不可关闭`。
+- 如果 `context.auto_compact` 与 `context.budget` 同时存在，程序会直接报错，避免猜测覆盖用户配置。
+- 主解析器仍只接受当前结构；迁移完成后不会在运行时兼容旧字段。
+
+打包用户不需要额外执行迁移命令。`neocode migrate context-budget` 仅用于提前检查或手动修复配置文件。
+
+## 预算闭环
+
+当前发送链路采用固定闭环：
+
+```text
+BuildRequest -> FreezeSnapshot -> EstimateInput -> DecideBudget -> (allow | compact | stop)
+```
+
+规则如下：
+
+- provider 发送前一定先做输入 token estimate。
+- 如果 estimate 没超过 `prompt_budget`，本轮允许发送。
+- 如果 estimate 首次超预算，先执行一次 `proactive` compact，然后重建请求并重新估算。
+- 如果 compact 后仍超预算且 `gate_policy=gateable`，停止当前 run，并产出 `STOP_BUDGET_EXCEEDED`。
+- 如果 compact 后仍超预算但 `gate_policy=advisory`，不直接硬停，继续发送请求。
+- 如果 provider 返回 `context_too_long`，runtime 会进入 `reactive` compact 恢复链路，并重新进入同一预算闭环。
 
 ## provider 策略
 
-NeoCode 采用“builtin provider + custom provider”双来源模型。
+NeoCode 采用 “builtin provider + custom provider” 双来源模型。
 
 ### builtin provider
 
-builtin provider 由代码内置，集中定义在：
+内置 provider 定义于：
 
 ```text
 internal/config/builtin_providers.go
@@ -148,7 +161,7 @@ internal/config/builtin_providers.go
 
 ### custom provider
 
-custom provider 通过单独文件声明，而不是写进 `config.yaml`：
+自定义 provider 通过单独文件声明，而不是写入 `config.yaml`：
 
 ```yaml
 name: company-gateway
@@ -161,51 +174,19 @@ chat_endpoint_path: /chat/completions
 discovery_endpoint_path: /models
 ```
 
-`model_source` 语义如下：
+## 不写入 `config.yaml` 的字段
 
-- `discover`（默认）：通过 discovery（如 `/models`）拉取模型列表。
-- `manual`：不触发 discovery，优先使用 `models` 中声明的模型列表。
+以下内容不允许写入主配置文件：
 
-`chat_api_mode`（仅 `openaicompat` 生效）语义如下：
+- `providers`
+- `provider_overrides`
+- `workdir`
+- `default_workdir`
+- `base_url`
+- `api_key_env`
+- `models`
 
-- `chat_completions`：按 Chat Completions 协议发送请求。
-- `responses`：按 Responses 协议发送请求。
-- 省略时按默认 `chat_completions` 处理；`chat_endpoint_path` 仅负责路由，不再决定协议模式。
-
-`manual` 模式示例：
-
-```yaml
-name: company-gateway-manual
-driver: openaicompat
-api_key_env: COMPANY_GATEWAY_API_KEY
-model_source: manual
-base_url: https://llm.example.com/v1
-chat_endpoint_path: /chat/completions
-models:
-  - id: gpt-4o-mini
-    name: GPT-4o Mini
-    context_window: 128000
-```
-
-迁移与兼容性说明：
-
-- 老配置未声明 `model_source` 时，默认按 `discover` 处理。
-- `manual` 模式下必须提供 `models`，否则会在加载/创建阶段报错。
-- `manual` 模式会忽略 discovery 相关字段（如 `discovery_endpoint_path`）。
-- `provider.yaml` 仅支持平铺字段：`name/driver/base_url/api_key_env/model_source/chat_api_mode/chat_endpoint_path/discovery_endpoint_path/models`。
-
-## Auto Compact 失败与校验补充
-
-- 当 `context.auto_compact.input_token_threshold <= 0` 时，如果当前 provider 选择无效、catalog snapshot 查询失败、模型缺少可用的 `ContextWindow`，或 `ContextWindow <= reserve_tokens`，系统会回退到 `fallback_input_token_threshold`，不会静默关闭 auto compact。
-- `~/.neocode/providers/<provider-name>/provider.yaml` 中的 `models[].id` 必须非空。
-- `models[].context_window` 和 `models[].max_output_tokens` 如果显式配置，必须大于 `0`。
-- `models` 中重复的模型 `id` 会在加载 `provider.yaml` 时直接报错。
-
-文件路径：
-
-```text
-~/.neocode/providers/company-gateway/provider.yaml
-```
+如果这些字段出现在 `config.yaml` 中，加载会直接失败，不会自动迁移或清理。
 
 ## 环境变量
 
@@ -234,19 +215,6 @@ $env:OPENAI_API_KEY = "sk-..."
 $env:GEMINI_API_KEY = "AI..."
 ```
 
-## 启动时的选择修正
-
-`config.yaml` 里的 `selected_provider/current_model` 表达的是“用户上次保存的选择状态”。
-
-启动时系统还会进行选择校验与必要修正；若 driver 不受支持会报错并中止。因此需要区分两件事：
-
-- 配置快照结构合法
-- 当前选择已经可直接运行
-
-前者由 `config.ValidateSnapshot()` 保证，后者由 `internal/config/state.Service.EnsureSelection()` 保证。
-
-不要把这两层职责混在一起理解。
-
 ## CLI 运行参数覆盖
 
 工作目录不写入 `config.yaml`，只通过启动参数覆盖：
@@ -257,12 +225,9 @@ go run ./cmd/neocode --workdir /path/to/workspace
 
 说明：
 
-- `--workdir` 只影响本次进程
+- `--workdir` 只影响当前进程
 - 不会回写到 `config.yaml`
 - 工具根目录与 session 隔离都会使用该工作区
-- TUI 默认通过本地 Gateway（优先 IPC）转发 runtime 请求
-- 启动时会先探测本地网关；若未运行会自动后台拉起并等待就绪
-- 若自动拉起后仍连接或握手失败会直接退出（Fail Fast）
 
 ## 常见错误
 
@@ -275,7 +240,9 @@ go run ./cmd/neocode --workdir /path/to/workspace
 - `providers`
 - `provider_overrides`
 
-当前版本会直接报未知字段错误。处理方式是手动删除这些字段，而不是等待程序自动迁移。
+当前版本会直接报未知字段或结构不匹配错误。处理方式是手动删除旧字段，而不是等待程序自动兼容。
+
+`context.auto_compact` 是例外：如果配置中只存在旧预算块，启动 preflight 会自动迁移为 `context.budget`；如果新旧预算块同时存在，则需要手动合并后再启动。
 
 ### API Key 未设置
 
@@ -285,10 +252,4 @@ go run ./cmd/neocode --workdir /path/to/workspace
 config: environment variable OPENAI_API_KEY is empty
 ```
 
-处理方式：先在当前 shell 中设置对应环境变量，再启动 NeoCode。
-
-## 相关文档
-
-- [添加 Provider](./adding-providers.md)
-- [配置管理详细设计](../config-management-detail-design.md)
-- [Context Compact](../context-compact.md)
+先在当前 shell 中设置对应环境变量，再启动 NeoCode。

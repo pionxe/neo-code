@@ -29,7 +29,21 @@ type PhaseChangedPayload struct {
 
 // BudgetCheckedPayload 为预算检查预留负载。
 type BudgetCheckedPayload struct {
-	Note string `json:"note,omitempty"`
+	AttemptSeq           int    `json:"attempt_seq"`
+	RequestHash          string `json:"request_hash"`
+	Action               string `json:"action"`
+	Reason               string `json:"reason,omitempty"`
+	EstimatedInputTokens int    `json:"estimated_input_tokens"`
+	PromptBudget         int    `json:"prompt_budget"`
+	EstimateSource       string `json:"estimate_source,omitempty"`
+	EstimateGatePolicy   string `json:"estimate_gate_policy,omitempty"`
+}
+
+// BudgetEstimateFailedPayload 描述预算估算失败时的降级诊断信息。
+type BudgetEstimateFailedPayload struct {
+	AttemptSeq  int    `json:"attempt_seq"`
+	RequestHash string `json:"request_hash"`
+	Message     string `json:"message"`
 }
 
 // ProgressEvaluatedPayload 汇总 progress 控制面的评估结果。
@@ -45,7 +59,55 @@ type StopReasonDecidedPayload struct {
 
 // LedgerReconciledPayload 为账本对账预留负载。
 type LedgerReconciledPayload struct {
-	Note string `json:"note,omitempty"`
+	AttemptSeq      int    `json:"attempt_seq"`
+	RequestHash     string `json:"request_hash"`
+	InputTokens     int    `json:"input_tokens"`
+	InputSource     string `json:"input_source"`
+	OutputTokens    int    `json:"output_tokens"`
+	OutputSource    string `json:"output_source"`
+	HasUnknownUsage bool   `json:"has_unknown_usage"`
+}
+
+// newBudgetCheckedPayload 将预算决策对象展开为对外事件 payload，保持可观测字段稳定。
+func newBudgetCheckedPayload(decision controlplane.TurnBudgetDecision) BudgetCheckedPayload {
+	return BudgetCheckedPayload{
+		AttemptSeq:           decision.ID.AttemptSeq,
+		RequestHash:          decision.ID.RequestHash,
+		Action:               string(decision.Action),
+		Reason:               decision.Reason,
+		EstimatedInputTokens: decision.EstimatedInputTokens,
+		PromptBudget:         decision.PromptBudget,
+		EstimateSource:       decision.EstimateSource,
+		EstimateGatePolicy:   decision.EstimateGatePolicy,
+	}
+}
+
+// newBudgetEstimateFailedPayload 将估算失败错误转换为 runtime 诊断事件 payload。
+func newBudgetEstimateFailedPayload(id controlplane.TurnBudgetID, err error) BudgetEstimateFailedPayload {
+	payload := BudgetEstimateFailedPayload{
+		AttemptSeq:  id.AttemptSeq,
+		RequestHash: id.RequestHash,
+	}
+	if err != nil {
+		payload.Message = err.Error()
+	}
+	return payload
+}
+
+// newLedgerReconciledPayload 将 usage observation 与调和结果拼装为对外事件 payload。
+func newLedgerReconciledPayload(
+	observation TurnBudgetUsageObservation,
+	result ledgerReconcileResult,
+) LedgerReconciledPayload {
+	return LedgerReconciledPayload{
+		AttemptSeq:      observation.ID.AttemptSeq,
+		RequestHash:     observation.ID.RequestHash,
+		InputTokens:     result.inputTokens,
+		InputSource:     result.inputSource,
+		OutputTokens:    result.outputTokens,
+		OutputSource:    result.outputSource,
+		HasUnknownUsage: result.hasUnknownUsage,
+	}
 }
 
 // PermissionRequestPayload 描述一次权限请求。
@@ -155,10 +217,16 @@ const (
 	EventSkillMissing EventType = "skill_missing"
 	// EventPhaseChanged 表示运行 phase 迁移。
 	EventPhaseChanged EventType = "phase_changed"
+	// EventBudgetChecked 表示预算控制面对冻结请求完成一次预算决策。
+	EventBudgetChecked EventType = "budget_checked"
+	// EventBudgetEstimateFailed 表示预算估算失败并进入降级放行。
+	EventBudgetEstimateFailed EventType = "budget_estimate_failed"
 	// EventProgressEvaluated 表示 progress 评估完成。
 	EventProgressEvaluated EventType = "progress_evaluated"
 	// EventStopReasonDecided 表示 stop reason 已决议。
 	EventStopReasonDecided EventType = "stop_reason_decided"
+	// EventLedgerReconciled 表示本轮 usage 已按新账本语义完成调和。
+	EventLedgerReconciled EventType = "ledger_reconciled"
 	// EventTodoUpdated 表示 todo_write 成功更新。
 	EventTodoUpdated EventType = "todo_updated"
 	// EventTodoConflict 表示 todo_write 触发冲突类错误。
@@ -175,8 +243,11 @@ const (
 
 // TokenUsagePayload 承载单轮 token 用量统计。
 type TokenUsagePayload struct {
-	InputTokens         int `json:"input_tokens"`
-	OutputTokens        int `json:"output_tokens"`
-	SessionInputTokens  int `json:"session_input_tokens"`
-	SessionOutputTokens int `json:"session_output_tokens"`
+	InputTokens         int    `json:"input_tokens"`
+	OutputTokens        int    `json:"output_tokens"`
+	InputSource         string `json:"input_source,omitempty"`
+	OutputSource        string `json:"output_source,omitempty"`
+	HasUnknownUsage     bool   `json:"has_unknown_usage,omitempty"`
+	SessionInputTokens  int    `json:"session_input_tokens"`
+	SessionOutputTokens int    `json:"session_output_tokens"`
 }

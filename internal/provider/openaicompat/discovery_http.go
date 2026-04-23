@@ -46,11 +46,16 @@ func RequestConfigFromRuntime(cfg provider.RuntimeConfig) (RequestConfig, error)
 		return RequestConfig{}, provider.NewDiscoveryConfigError(err.Error())
 	}
 
+	apiKey, err := cfg.ResolveAPIKeyValue()
+	if err != nil {
+		return RequestConfig{}, err
+	}
+
 	return RequestConfig{
 		Driver:       cfg.Driver,
 		BaseURL:      cfg.BaseURL,
 		EndpointPath: discoveryEndpointPath,
-		APIKey:       cfg.APIKey,
+		APIKey:       apiKey,
 	}, nil
 }
 

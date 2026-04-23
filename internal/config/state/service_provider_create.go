@@ -123,7 +123,7 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		if providerSaved {
 			reloadCtx, cancel := context.WithTimeout(context.Background(), providerCreateRollbackReloadTimeout)
 			defer cancel()
-			if _, reloadErr := s.manager.Reload(reloadCtx); reloadErr != nil {
+			if _, reloadErr := s.manager.Load(reloadCtx); reloadErr != nil {
 				return fmt.Errorf("%w (post-rollback reload failed: %v)", rolledErr, reloadErr)
 			}
 		}
@@ -156,7 +156,7 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 	}
 	processEnvApplied = true
 
-	if _, err := s.manager.Reload(ctx); err != nil {
+	if _, err := s.manager.Load(ctx); err != nil {
 		return Selection{}, rollback(fmt.Errorf("selection: reload config snapshot: %w", err))
 	}
 

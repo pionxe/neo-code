@@ -9,6 +9,7 @@ import (
 // StopInput 汇总最终 stop 决议所需的信号。
 type StopInput struct {
 	UserInterrupted bool
+	BudgetExceeded  bool
 	FatalError      error
 	Completed       bool
 }
@@ -17,6 +18,9 @@ type StopInput struct {
 func DecideStopReason(in StopInput) (StopReason, string) {
 	if in.UserInterrupted {
 		return StopReasonUserInterrupt, ""
+	}
+	if in.BudgetExceeded {
+		return StopReasonBudgetExceeded, ""
 	}
 	if in.FatalError != nil {
 		if errors.Is(in.FatalError, context.Canceled) {

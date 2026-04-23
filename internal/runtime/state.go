@@ -4,35 +4,31 @@ import (
 	"sync"
 	"time"
 
-	"neo-code/internal/config"
-	"neo-code/internal/provider"
-	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 )
-
-// maxReactiveCompactAttempts 限制 reactive compact 最大尝试次数，超出后放弃降级并返回错误。
-const maxReactiveCompactAttempts = 3
 
 // runState 汇总单次 Run 生命周期内会变化的会话与计量状态。
 type runState struct {
 	mu                      sync.Mutex
 	runID                   string
 	session                 agentsession.Session
-	compactApplied          bool
+	compactCount            int
 	reactiveCompactAttempts int
-	autoCompactCache        autoCompactThresholdCache
 	rememberedThisRun       bool
 	taskID                  string
 	agentID                 string
 	capabilityToken         *security.CapabilityToken
+	nextAttemptSeq          int
 	turn                    int
 	baseLifecycle           controlplane.RunState
 	lifecycle               controlplane.RunState
 	waitingPermissionCount  int
 	compactingCount         int
 	stopEmitted             bool
+	budgetExceeded          bool
+	hasUnknownUsage         bool
 	completion              controlplane.CompletionState
 	progress                controlplane.ProgressState
 	reportedMissingSkills   map[string]struct{}
@@ -43,6 +39,7 @@ func newRunState(runID string, session agentsession.Session) runState {
 	return runState{
 		runID:                 runID,
 		session:               session,
+		nextAttemptSeq:        1,
 		reportedMissingSkills: make(map[string]struct{}),
 	}
 }
@@ -63,6 +60,8 @@ func (s *runState) resetTokenTotals() {
 	}
 	s.session.TokenInputTotal = 0
 	s.session.TokenOutputTotal = 0
+	s.session.HasUnknownUsage = false
+	s.hasUnknownUsage = false
 }
 
 // touchSession 更新会话修改时间。
@@ -89,42 +88,4 @@ func (s *runState) markSkillMissingReported(skillID string) bool {
 	}
 	s.reportedMissingSkills[normalized] = struct{}{}
 	return true
-}
-
-// turnSnapshot 冻结单轮推理所需的配置、上下文与 provider 请求。
-// noProgressStreakLimit 由 prepareTurnSnapshot 一次性解析并存储，确保同一轮的
-// 提示词纠偏阈值来自同一配置快照，避免并发 reload 导致注入行为不一致。
-type turnSnapshot struct {
-	config                 config.Config
-	providerConfig         provider.RuntimeConfig
-	model                  string
-	workdir                string
-	toolTimeout            time.Duration
-	noProgressStreakLimit  int
-	repeatCycleStreakLimit int
-	request                providertypes.GenerateRequest
-}
-
-// providerTurnResult 表示单轮 provider 调用成功后的结构化结果。
-type providerTurnResult struct {
-	assistant    providertypes.Message
-	inputTokens  int
-	outputTokens int
-}
-
-// autoCompactThresholdCache 保存当前 run 已解析过的自动压缩阈值，避免热路径重复解析。
-type autoCompactThresholdCache struct {
-	key       autoCompactThresholdCacheKey
-	threshold int
-	valid     bool
-}
-
-// autoCompactThresholdCacheKey 描述自动压缩阈值解析输入的关键维度。
-type autoCompactThresholdCacheKey struct {
-	provider                  string
-	model                     string
-	autoCompactEnabled        bool
-	autoCompactInputThreshold int
-	autoCompactReserveTokens  int
-	autoCompactFallback       int
 }

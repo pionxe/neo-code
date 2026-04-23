@@ -66,7 +66,7 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	}
 
 	handled := runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason(" success ")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason(" STOP_COMPLETED ")},
 	})
 	if handled {
 		t.Fatalf("expected handler to return false")
@@ -87,40 +87,54 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	app.state.ExecutionError = ""
 	app.state.StatusText = "not-ready"
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("success")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompleted},
 	})
 	if app.state.StatusText != statusReady {
-		t.Fatalf("expected success with empty execution error to set ready status")
+		t.Fatalf("expected completed with empty execution error to set ready status")
 	}
 
 	app.state.ExecutionError = "boom"
 	app.state.StatusText = ""
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("success")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompleted},
 	})
 	if app.state.StatusText == statusReady {
-		t.Fatalf("expected success branch to keep status unchanged when execution error exists")
+		t.Fatalf("expected completed branch to keep status unchanged when execution error exists")
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("canceled")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonUserInterrupt},
 	})
 	if app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
 		t.Fatalf("expected canceled state to clear error and set canceled status")
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("error"), Detail: "  "},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonBudgetExceeded},
 	})
-	if app.state.StatusText != "runtime stopped" || app.state.ExecutionError != "runtime stopped" {
-		t.Fatalf("expected default stop detail, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
+	if app.state.ExecutionError != "" || app.state.StatusText != "Context budget exceeded" {
+		t.Fatalf("expected budget stop without execution error, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("error"), Detail: "explicit failure"},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonFatalError, Detail: "  "},
+	})
+	if app.state.StatusText != "runtime stopped" || app.state.ExecutionError != "runtime stopped" {
+		t.Fatalf("expected fatal stop default detail, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
+	}
+
+	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonFatalError, Detail: "explicit failure"},
 	})
 	if app.state.StatusText != "explicit failure" || app.state.ExecutionError != "explicit failure" {
-		t.Fatalf("expected explicit stop detail to be surfaced")
+		t.Fatalf("expected explicit fatal stop detail to be surfaced")
+	}
+
+	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("STOP_UNKNOWN")},
+	})
+	if !strings.Contains(app.state.ExecutionError, "unknown stop reason") {
+		t.Fatalf("expected unknown stop reason error, got %q", app.state.ExecutionError)
 	}
 }
 

@@ -184,10 +184,32 @@ type PhaseChangedPayload struct {
 // StopReason 表示运行终止原因。
 type StopReason string
 
+const (
+	// StopReasonCompleted 表示 runtime 当前协议中的正常完成原因。
+	StopReasonCompleted StopReason = "STOP_COMPLETED"
+	// StopReasonUserInterrupt 表示 runtime 当前协议中的用户中断原因。
+	StopReasonUserInterrupt StopReason = "STOP_USER_INTERRUPT"
+	// StopReasonFatalError 表示 runtime 当前协议中的不可恢复错误原因。
+	StopReasonFatalError StopReason = "STOP_FATAL_ERROR"
+	// StopReasonBudgetExceeded 表示 runtime 当前协议中的预算超限停止原因。
+	StopReasonBudgetExceeded StopReason = "STOP_BUDGET_EXCEEDED"
+)
+
 // StopReasonDecidedPayload 描述停止原因决策结果。
 type StopReasonDecidedPayload struct {
 	Reason StopReason `json:"reason"`
 	Detail string     `json:"detail,omitempty"`
+}
+
+// TokenUsagePayload 描述 runtime 当前 token_usage 事件载荷。
+type TokenUsagePayload struct {
+	InputTokens         int    `json:"input_tokens"`
+	OutputTokens        int    `json:"output_tokens"`
+	InputSource         string `json:"input_source,omitempty"`
+	OutputSource        string `json:"output_source,omitempty"`
+	HasUnknownUsage     bool   `json:"has_unknown_usage,omitempty"`
+	SessionInputTokens  int    `json:"session_input_tokens"`
+	SessionOutputTokens int    `json:"session_output_tokens"`
 }
 
 // TodoEventPayload 描述 todo 相关事件载荷。

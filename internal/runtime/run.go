@@ -26,6 +26,12 @@ var selfHealingReminder = promptasset.NoProgressReminder()
 
 var selfHealingRepeatReminder = promptasset.RepeatCycleReminder()
 
+const (
+	usageSourceObserved  = "observed"
+	usageSourceEstimated = "estimated"
+	usageSourceUnknown   = "unknown"
+)
+
 // computeToolSignature 计算单轮执行的工具签名，用于循环检测。
 func computeToolSignature(calls []providertypes.ToolCall) string {
 	if len(calls) == 0 {
@@ -130,6 +136,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			)
 		}
 		state.turn = turn
+		state.compactCount = 0
+		state.nextAttemptSeq = 1
 		if err := s.setBaseRunState(ctx, &state, controlplane.RunStatePlan); err != nil {
 			return s.handleRunError(ctx, state.runID, state.session.ID, err)
 		}
@@ -139,7 +147,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
 
-			snapshot, rebuilt, err := s.prepareTurnSnapshot(ctx, &state)
+			snapshot, rebuilt, err := s.prepareTurnBudgetSnapshot(ctx, &state)
 			if err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
@@ -147,13 +155,40 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				continue
 			}
 
-			turnResult, err := s.callProviderWithRetry(ctx, &state, snapshot)
+			modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
 			if err != nil {
-				if provider.IsContextTooLong(err) && state.reactiveCompactAttempts < maxReactiveCompactAttempts {
+				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+			}
+
+			decision, err := s.evaluateTurnBudget(ctx, &state, snapshot, modelProvider)
+			if err != nil {
+				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+			}
+			switch decision.Action {
+			case controlplane.TurnBudgetActionCompact:
+				if _, err := s.applyCompactForState(
+					ctx,
+					&state,
+					snapshot.Config,
+					contextcompact.ModeProactive,
+					compactErrorBestEffort,
+				); err != nil {
+					return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				}
+				continue
+			case controlplane.TurnBudgetActionStop:
+				state.budgetExceeded = true
+				return nil
+			}
+
+			turnOutput, err := s.callProviderWithRetry(ctx, &state, snapshot, modelProvider)
+			if err != nil {
+				if provider.IsContextTooLong(err) &&
+					state.reactiveCompactAttempts < snapshot.Config.Context.Budget.MaxReactiveCompacts {
 					state.reactiveCompactAttempts++
-					degradedCfg := snapshot.config
+					degradedCfg := snapshot.Config
 					degradedCfg.Context.Compact.ManualKeepRecentMessages = degradeKeepRecentMessages(
-						snapshot.config.Context.Compact.ManualKeepRecentMessages,
+						snapshot.Config.Context.Compact.ManualKeepRecentMessages,
 						state.reactiveCompactAttempts,
 					)
 					_, _ = s.applyCompactForState(ctx, &state, degradedCfg, contextcompact.ModeReactive, compactErrorBestEffort)
@@ -162,37 +197,42 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
 
-			if strings.TrimSpace(turnResult.assistant.Role) == "" {
-				turnResult.assistant.Role = providertypes.RoleAssistant
+			if strings.TrimSpace(turnOutput.assistant.Role) == "" {
+				turnOutput.assistant.Role = providertypes.RoleAssistant
+			}
+			reconciled, err := s.reconcileLedger(&state, decision, turnOutput.usageObservation)
+			if err != nil {
+				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
 			if err := s.appendAssistantMessageAndSave(
 				ctx,
 				&state,
 				snapshot,
-				turnResult.assistant,
-				turnResult.inputTokens,
-				turnResult.outputTokens,
+				turnOutput.assistant,
+				reconciled.inputTokens,
+				reconciled.outputTokens,
 			); err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
-			s.emitTokenUsage(ctx, &state, turnResult)
+			s.emitLedgerReconciled(ctx, &state, turnOutput.usageObservation, reconciled)
+			s.emitTokenUsage(ctx, &state, reconciled)
 
 			state.mu.Lock()
 			state.completion = collectCompletionState(
 				&state,
-				turnResult.assistant,
-				len(turnResult.assistant.ToolCalls) > 0,
+				turnOutput.assistant,
+				len(turnOutput.assistant.ToolCalls) > 0,
 			)
 			completionState, completed := controlplane.EvaluateCompletion(
 				state.completion,
-				len(turnResult.assistant.ToolCalls) > 0,
+				len(turnOutput.assistant.ToolCalls) > 0,
 			)
 			state.completion = completionState
 			state.mu.Unlock()
 
-			if len(turnResult.assistant.ToolCalls) == 0 {
+			if len(turnOutput.assistant.ToolCalls) == 0 {
 				if completed {
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnResult.assistant)
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 					return nil
 				}
@@ -204,8 +244,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					cloneTodosForPersistence(state.session.Todos),
 					cloneTodosForPersistence(state.session.Todos),
 					toolExecutionSummary{},
-					snapshot.noProgressStreakLimit,
-					snapshot.repeatCycleStreakLimit,
+					snapshot.NoProgressStreakLimit,
+					snapshot.RepeatCycleStreakLimit,
 				)
 				state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 				currentScore := state.progress.LastScore
@@ -220,7 +260,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
-			summary, err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnResult.assistant)
+			summary, err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnOutput.assistant)
 			if err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
@@ -236,8 +276,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				beforeTodos,
 				afterTodos,
 				summary,
-				snapshot.noProgressStreakLimit,
-				snapshot.repeatCycleStreakLimit,
+				snapshot.NoProgressStreakLimit,
+				snapshot.RepeatCycleStreakLimit,
 			)
 			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 			currentScore := state.progress.LastScore
@@ -252,13 +292,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 }
 
-// prepareTurnSnapshot 基于当前会话状态冻结一轮推理所需的请求快照。
-func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (turnSnapshot, bool, error) {
+// prepareTurnBudgetSnapshot 基于当前会话状态冻结一次预算尝试所需的 request 与预算事实。
+func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState) (TurnBudgetSnapshot, bool, error) {
 	cfg := s.configManager.Get()
 	activeWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, cfg.Workdir)
 	activeSkills, err := s.resolveActiveSkills(ctx, state)
 	if err != nil {
-		return turnSnapshot{}, false, err
+		return TurnBudgetSnapshot{}, false, err
 	}
 
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
@@ -276,43 +316,32 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		},
 		Compact: agentcontext.CompactOptions{
 			DisableMicroCompact:           cfg.Context.Compact.MicroCompactDisabled,
-			AutoCompactThreshold:          s.autoCompactThresholdForState(ctx, cfg, state),
 			MicroCompactRetainedToolSpans: cfg.Context.Compact.MicroCompactRetainedToolSpans,
 			ReadTimeMaxMessageSpans:       cfg.Context.Compact.ReadTimeMaxMessageSpans,
 		},
 	})
 	if err != nil {
-		return turnSnapshot{}, false, err
+		return TurnBudgetSnapshot{}, false, err
 	}
 	if strings.Contains(builtContext.SystemPrompt, "## Todo State") {
 		s.emitRunScoped(ctx, EventTodoSummaryInjected, state, TodoEventPayload{})
-	}
-
-	if builtContext.AutoCompactSuggested && !state.compactApplied {
-		applied, err := s.applyCompactForState(ctx, state, cfg, contextcompact.ModeAuto, compactErrorBestEffort)
-		if err != nil {
-			return turnSnapshot{}, false, err
-		}
-		if applied {
-			return turnSnapshot{}, true, nil
-		}
 	}
 
 	toolSpecs, err := s.toolManager.ListAvailableSpecs(ctx, tools.SpecListInput{
 		SessionID: state.session.ID,
 	})
 	if err != nil {
-		return turnSnapshot{}, false, err
+		return TurnBudgetSnapshot{}, false, err
 	}
 	toolSpecs = prioritizeToolSpecsBySkillHints(toolSpecs, activeSkills)
 
 	resolvedProvider, err := config.ResolveSelectedProvider(cfg)
 	if err != nil {
-		return turnSnapshot{}, false, err
+		return TurnBudgetSnapshot{}, false, err
 	}
 	providerRuntimeCfg, err := resolvedProvider.ToRuntimeConfig()
 	if err != nil {
-		return turnSnapshot{}, false, err
+		return TurnBudgetSnapshot{}, false, err
 	}
 
 	state.mu.Lock()
@@ -322,24 +351,33 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	limit := resolveNoProgressStreakLimit(cfg.Runtime)
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
 	systemPrompt := withProgressReminder(builtContext.SystemPrompt, score)
-
+	promptBudget, budgetSource := s.resolvePromptBudget(ctx, cfg)
 	model := strings.TrimSpace(cfg.CurrentModel)
-	return turnSnapshot{
-		config:                 cfg,
-		providerConfig:         providerRuntimeCfg,
-		model:                  model,
-		workdir:                activeWorkdir,
-		toolTimeout:            time.Duration(cfg.ToolTimeoutSec) * time.Second,
-		noProgressStreakLimit:  limit,
-		repeatCycleStreakLimit: repeatLimit,
-		request: providertypes.GenerateRequest{
-			Model:              model,
-			SystemPrompt:       systemPrompt,
-			Messages:           builtContext.Messages,
-			Tools:              toolSpecs,
-			SessionAssetReader: s.buildSessionAssetReader(ctx, state.session.ID),
-		},
-	}, false, nil
+	request := providertypes.GenerateRequest{
+		Model:              model,
+		SystemPrompt:       systemPrompt,
+		Messages:           builtContext.Messages,
+		Tools:              toolSpecs,
+		SessionAssetReader: s.buildSessionAssetReader(ctx, state.session.ID),
+	}
+	attemptSeq := state.nextAttemptSeq
+	if attemptSeq <= 0 {
+		attemptSeq = 1
+	}
+	return newTurnBudgetSnapshot(
+		attemptSeq,
+		cfg,
+		providerRuntimeCfg,
+		model,
+		activeWorkdir,
+		time.Duration(cfg.ToolTimeoutSec)*time.Second,
+		promptBudget,
+		budgetSource,
+		state.compactCount,
+		limit,
+		repeatLimit,
+		request,
+	), false, nil
 }
 
 // resolveNoProgressStreakLimit 统一解析熔断阈值，避免运行期出现无效值导致分支行为不一致。
@@ -366,12 +404,13 @@ func resolveRuntimeMaxTurns(rc config.RuntimeConfig) int {
 	return rc.MaxTurns
 }
 
-// callProviderWithRetry 使用冻结后的 turnSnapshot 执行 provider 调用与必要重试。
+// callProviderWithRetry 使用冻结后的 TurnBudgetSnapshot 执行 provider 调用与必要重试。
 func (s *Service) callProviderWithRetry(
 	ctx context.Context,
 	state *runState,
-	snapshot turnSnapshot,
-) (providerTurnResult, error) {
+	snapshot TurnBudgetSnapshot,
+	initialProvider provider.Provider,
+) (turnProviderOutput, error) {
 	var lastErr error
 
 	for retryAttempt := 0; retryAttempt <= defaultProviderRetryMax; retryAttempt++ {
@@ -383,17 +422,21 @@ func (s *Service) callProviderWithRetry(
 
 			select {
 			case <-ctx.Done():
-				return providerTurnResult{}, ctx.Err()
+				return turnProviderOutput{}, ctx.Err()
 			case <-time.After(wait):
 			}
 		}
 
-		modelProvider, err := s.providerFactory.Build(ctx, snapshot.providerConfig)
-		if err != nil {
-			return providerTurnResult{}, err
+		modelProvider := initialProvider
+		if retryAttempt > 0 {
+			var err error
+			modelProvider, err = s.providerFactory.Build(ctx, snapshot.ProviderConfig)
+			if err != nil {
+				return turnProviderOutput{}, err
+			}
 		}
 
-		streamOutcome := generateStreamingMessage(ctx, modelProvider, snapshot.request, streaming.Hooks{
+		streamOutcome := generateStreamingMessage(ctx, modelProvider, snapshot.Request, streaming.Hooks{
 			OnTextDelta: func(text string) {
 				s.emitRunScoped(ctx, EventAgentChunk, state, text)
 			},
@@ -404,35 +447,43 @@ func (s *Service) callProviderWithRetry(
 		if streamOutcome.err != nil {
 			lastErr = streamOutcome.err
 			if !isRetryableProviderError(lastErr) {
-				return providerTurnResult{}, lastErr
+				return turnProviderOutput{}, lastErr
 			}
 			if ctx.Err() != nil {
-				return providerTurnResult{}, ctx.Err()
+				return turnProviderOutput{}, ctx.Err()
 			}
 			continue
 		}
 
-		return providerTurnResult{
-			assistant:    streamOutcome.message,
-			inputTokens:  streamOutcome.inputTokens,
-			outputTokens: streamOutcome.outputTokens,
+		return turnProviderOutput{
+			assistant: streamOutcome.message,
+			usageObservation: newTurnBudgetUsageObservation(
+				snapshot.ID,
+				streamOutcome.inputTokens,
+				streamOutcome.outputTokens,
+				streamOutcome.inputObserved,
+				streamOutcome.outputObserved,
+			),
 		}, nil
 	}
 
 	if lastErr == nil {
 		lastErr = errors.New("max retries exceeded")
 	}
-	return providerTurnResult{}, fmt.Errorf("runtime: max retries exhausted, last error: %w", lastErr)
+	return turnProviderOutput{}, fmt.Errorf("runtime: max retries exhausted, last error: %w", lastErr)
 }
 
 // emitTokenUsage 在单轮 provider 调用成功后发出 token_usage 事件。
-func (s *Service) emitTokenUsage(ctx context.Context, state *runState, result providerTurnResult) {
-	if result.inputTokens == 0 && result.outputTokens == 0 {
+func (s *Service) emitTokenUsage(ctx context.Context, state *runState, result ledgerReconcileResult) {
+	if result.inputTokens == 0 && result.outputTokens == 0 && !result.hasUnknownUsage {
 		return
 	}
 	s.emitRunScoped(ctx, EventTokenUsage, state, TokenUsagePayload{
 		InputTokens:         result.inputTokens,
 		OutputTokens:        result.outputTokens,
+		InputSource:         result.inputSource,
+		OutputSource:        result.outputSource,
+		HasUnknownUsage:     result.hasUnknownUsage,
 		SessionInputTokens:  state.session.TokenInputTotal,
 		SessionOutputTokens: state.session.TokenOutputTotal,
 	})
@@ -461,8 +512,11 @@ func (s *Service) applyCompactForState(
 		}
 		state.session = session
 		if result.Applied {
+			if mode == contextcompact.ModeProactive || mode == contextcompact.ModeReactive {
+				state.compactCount++
+			}
 			state.resetTokenTotals()
-			state.compactApplied = true
+			state.nextAttemptSeq++
 			applied = true
 		}
 		return nil
@@ -473,43 +527,110 @@ func (s *Service) applyCompactForState(
 	return applied, nil
 }
 
-// autoCompactThreshold 返回当前配置下的自动 compact 触发阈值。
-func (s *Service) autoCompactThreshold(ctx context.Context, cfg config.Config) int {
-	return s.autoCompactThresholdForState(ctx, cfg, nil)
+// resolvePromptBudget 解析当前请求链路使用的 prompt budget 与来源标签。
+func (s *Service) resolvePromptBudget(ctx context.Context, cfg config.Config) (int, string) {
+	if cfg.Context.Budget.PromptBudget > 0 {
+		return cfg.Context.Budget.PromptBudget, "explicit"
+	}
+	promptBudget := cfg.Context.Budget.FallbackPromptBudget
+	source := "fallback"
+	if s != nil && s.budgetResolver != nil {
+		resolvedBudget, resolvedSource, err := s.budgetResolver.ResolvePromptBudget(ctx, cfg)
+		if err == nil && resolvedBudget > 0 {
+			promptBudget = resolvedBudget
+			if strings.TrimSpace(resolvedSource) != "" {
+				source = resolvedSource
+			}
+		}
+	}
+	return promptBudget, source
 }
 
-// autoCompactThresholdForState 返回当前配置下的自动 compact 触发阈值，并在单次 run 内按关键输入缓存结果。
-func (s *Service) autoCompactThresholdForState(ctx context.Context, cfg config.Config, state *runState) int {
-	if !cfg.Context.AutoCompact.Enabled {
-		return 0
-	}
-	if cfg.Context.AutoCompact.InputTokenThreshold > 0 {
-		return cfg.Context.AutoCompact.InputTokenThreshold
-	}
-
-	key := autoCompactCacheKeyFromConfig(cfg)
-	if state != nil && state.autoCompactCache.valid && state.autoCompactCache.key == key {
-		return state.autoCompactCache.threshold
-	}
-
-	threshold := fallbackAutoCompactThreshold(cfg)
-	cacheable := true
-	if s != nil && s.autoCompactThresholdResolver != nil {
-		resolvedThreshold, err := s.autoCompactThresholdResolver.ResolveAutoCompactThreshold(ctx, cfg)
-		if err != nil {
-			cacheable = false
-		} else if resolvedThreshold > 0 {
-			threshold = resolvedThreshold
+// evaluateTurnBudget 对冻结请求执行发送前输入 token 估算，并产出唯一预算动作。
+func (s *Service) evaluateTurnBudget(
+	ctx context.Context,
+	state *runState,
+	snapshot TurnBudgetSnapshot,
+	modelProvider provider.Provider,
+) (controlplane.TurnBudgetDecision, error) {
+	providerEstimate, err := modelProvider.EstimateInputTokens(ctx, snapshot.Request)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return controlplane.TurnBudgetDecision{}, err
 		}
-	}
-	if state != nil && cacheable {
-		state.autoCompactCache = autoCompactThresholdCache{
-			key:       key,
-			threshold: threshold,
-			valid:     true,
+		if !shouldBypassEstimateFailure(err) {
+			return controlplane.TurnBudgetDecision{}, fmt.Errorf("runtime: estimate input tokens: %w", err)
 		}
+		s.emitRunScoped(ctx, EventBudgetEstimateFailed, state, newBudgetEstimateFailedPayload(snapshot.ID, err))
+		decision := controlplane.TurnBudgetDecision{
+			ID:                 snapshot.ID,
+			Action:             controlplane.TurnBudgetActionAllow,
+			Reason:             controlplane.BudgetDecisionReasonEstimateFailedBypass,
+			PromptBudget:       snapshot.PromptBudget,
+			EstimateGatePolicy: provider.EstimateGateAdvisory,
+		}
+		s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
+		return decision, nil
 	}
-	return threshold
+	estimate := newTurnBudgetEstimate(snapshot.ID, providerEstimate)
+	decision := controlplane.DecideTurnBudget(
+		estimate,
+		snapshot.PromptBudget,
+		snapshot.CompactCount,
+	)
+	s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
+	return decision, nil
+}
+
+// shouldBypassEstimateFailure 判断估算失败是否允许降级放行，仅对可恢复 provider 错误放行。
+func shouldBypassEstimateFailure(err error) bool {
+	var providerErr *provider.ProviderError
+	return errors.As(err, &providerErr) && providerErr.Retryable
+}
+
+// reconcileLedger 根据 observed usage 或发送前 estimate 生成本轮账本写入结果。
+func (s *Service) reconcileLedger(
+	state *runState,
+	decision controlplane.TurnBudgetDecision,
+	observation TurnBudgetUsageObservation,
+) (ledgerReconcileResult, error) {
+	if decision.ID != observation.ID {
+		return ledgerReconcileResult{}, fmt.Errorf("runtime: turn budget id mismatch between decision and usage observation")
+	}
+	reconciled := ledgerReconcileResult{
+		inputSource:  usageSourceUnknown,
+		outputSource: usageSourceUnknown,
+	}
+	if observation.InputObserved {
+		reconciled.inputTokens = observation.InputTokens
+		reconciled.inputSource = usageSourceObserved
+	} else {
+		reconciled.inputTokens = decision.EstimatedInputTokens
+		reconciled.inputSource = usageSourceEstimated
+	}
+	if observation.OutputObserved {
+		reconciled.outputTokens = observation.OutputTokens
+		reconciled.outputSource = usageSourceObserved
+	}
+	if observation.InputObserved && observation.OutputObserved {
+		return reconciled, nil
+	}
+	reconciled.hasUnknownUsage = true
+	if state != nil {
+		state.session.HasUnknownUsage = true
+		state.hasUnknownUsage = true
+	}
+	return reconciled, nil
+}
+
+// emitLedgerReconciled 发出本轮 usage 调和结果，便于区分 observed 与估算值。
+func (s *Service) emitLedgerReconciled(
+	ctx context.Context,
+	state *runState,
+	observation TurnBudgetUsageObservation,
+	result ledgerReconcileResult,
+) {
+	s.emitRunScoped(ctx, EventLedgerReconciled, state, newLedgerReconciledPayload(observation, result))
 }
 
 // degradeKeepRecentMessages 根据 reactive compact 尝试次数逐步减少保留消息数。
@@ -564,14 +685,6 @@ func sessionTitleFromParts(parts []providertypes.ContentPart) string {
 	return "Image Message"
 }
 
-// fallbackAutoCompactThreshold 返回自动推导失败时仍可继续使用的保底阈值。
-func fallbackAutoCompactThreshold(cfg config.Config) int {
-	if cfg.Context.AutoCompact.FallbackInputTokenThreshold > 0 {
-		return cfg.Context.AutoCompact.FallbackInputTokenThreshold
-	}
-	return 0
-}
-
 // bindSessionLock 获取并持有指定会话锁，返回对应的释放函数。
 func (s *Service) bindSessionLock(sessionID string) func() {
 	id := strings.TrimSpace(sessionID)
@@ -605,14 +718,23 @@ func withProgressReminder(systemPrompt string, score controlplane.ProgressScore)
 	return trimmed + "\n\n" + reminder
 }
 
-// autoCompactCacheKeyFromConfig 提取会影响自动压缩阈值解析的配置维度，用于 run 内缓存命中判断。
-func autoCompactCacheKeyFromConfig(cfg config.Config) autoCompactThresholdCacheKey {
-	return autoCompactThresholdCacheKey{
-		provider:                  strings.TrimSpace(cfg.SelectedProvider),
-		model:                     strings.TrimSpace(cfg.CurrentModel),
-		autoCompactEnabled:        cfg.Context.AutoCompact.Enabled,
-		autoCompactInputThreshold: cfg.Context.AutoCompact.InputTokenThreshold,
-		autoCompactReserveTokens:  cfg.Context.AutoCompact.ReserveTokens,
-		autoCompactFallback:       cfg.Context.AutoCompact.FallbackInputTokenThreshold,
+// computeRequestHash 计算冻结请求的稳定指纹，避免 compact 前后的估算结果串用。
+func computeRequestHash(req providertypes.GenerateRequest) string {
+	hashInput := struct {
+		Model        string                  `json:"model"`
+		SystemPrompt string                  `json:"system_prompt"`
+		Messages     []providertypes.Message `json:"messages"`
+		Tools        []tools.ToolSpec        `json:"tools"`
+	}{
+		Model:        req.Model,
+		SystemPrompt: req.SystemPrompt,
+		Messages:     cloneMessages(req.Messages),
+		Tools:        append([]tools.ToolSpec(nil), req.Tools...),
 	}
+	encoded, err := json.Marshal(hashInput)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
 }

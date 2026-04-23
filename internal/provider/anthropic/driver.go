@@ -25,7 +25,10 @@ func Driver() provider.DriverDefinition {
 			return New(cfg)
 		},
 		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			client := newSDKClient(cfg)
+			client, err := newSDKClient(cfg)
+			if err != nil {
+				return nil, err
+			}
 
 			descriptors := make([]providertypes.ModelDescriptor, 0, 64)
 			pager := client.Models.ListAutoPaging(ctx, anthropic.ModelListParams{})
@@ -56,8 +59,11 @@ func Driver() provider.DriverDefinition {
 }
 
 // newSDKClient 构造 Anthropic SDK 客户端，供生成与模型发现链路共享连接配置。
-func newSDKClient(cfg provider.RuntimeConfig) anthropic.Client {
-	apiKey := strings.TrimSpace(cfg.APIKey)
+func newSDKClient(cfg provider.RuntimeConfig) (anthropic.Client, error) {
+	apiKey, err := cfg.ResolveAPIKeyValue()
+	if err != nil {
+		return anthropic.Client{}, err
+	}
 
 	httpClient := &http.Client{
 		Timeout: 90 * time.Second,
@@ -69,7 +75,7 @@ func newSDKClient(cfg provider.RuntimeConfig) anthropic.Client {
 	if strings.TrimSpace(cfg.BaseURL) != "" {
 		options = append(options, anthroption.WithBaseURL(strings.TrimSpace(cfg.BaseURL)))
 	}
-	return anthropic.NewClient(options...)
+	return anthropic.NewClient(options...), nil
 }
 
 // validateCatalogIdentity 在 SDK 模式下不再限制 endpoint 相关字段。

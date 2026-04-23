@@ -19,7 +19,6 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/adapters/urlscheme"
-	gatewayauth "neo-code/internal/gateway/auth"
 	"neo-code/internal/updater"
 )
 
@@ -295,8 +294,15 @@ func TestMustReadInheritedWorkdirBranches(t *testing.T) {
 func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
 	originalNewGatewayNetwork := newGatewayNetwork
+	originalBuildGatewayRuntimePort := buildGatewayRuntimePort
+	originalNewAuthManager := newAuthManager
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
 	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+	t.Cleanup(func() { buildGatewayRuntimePort = originalBuildGatewayRuntimePort })
+	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+	prepareGatewayCommandRunnerTestEnv(t)
+	buildGatewayRuntimePort = stubGatewayRuntimePortBuilder()
+	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	server := &stubGatewayServer{listenAddress: "stub://gateway"}
 	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
@@ -328,7 +334,11 @@ func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 
 func TestDefaultGatewayCommandRunnerReturnsBuildRuntimePortError(t *testing.T) {
 	originalBuildGatewayRuntimePort := buildGatewayRuntimePort
+	originalNewAuthManager := newAuthManager
 	t.Cleanup(func() { buildGatewayRuntimePort = originalBuildGatewayRuntimePort })
+	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+	prepareGatewayCommandRunnerTestEnv(t)
+	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	buildGatewayRuntimePort = func(context.Context, string) (gateway.RuntimePort, func() error, error) {
 		return nil, nil, errors.New("build runtime port failed")
@@ -350,8 +360,15 @@ func TestDefaultGatewayCommandRunnerReturnsBuildRuntimePortError(t *testing.T) {
 func TestDefaultGatewayCommandRunnerReturnsConstructorError(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
 	originalNewGatewayNetwork := newGatewayNetwork
+	originalBuildGatewayRuntimePort := buildGatewayRuntimePort
+	originalNewAuthManager := newAuthManager
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
 	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+	t.Cleanup(func() { buildGatewayRuntimePort = originalBuildGatewayRuntimePort })
+	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+	prepareGatewayCommandRunnerTestEnv(t)
+	buildGatewayRuntimePort = stubGatewayRuntimePortBuilder()
+	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	expected := errors.New("new gateway server failed")
 	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
@@ -372,6 +389,7 @@ func TestDefaultGatewayCommandRunnerReturnsConstructorError(t *testing.T) {
 }
 
 func TestDefaultGatewayCommandRunnerReturnsLoadConfigError(t *testing.T) {
+	prepareGatewayCommandRunnerTestEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := defaultGatewayCommandRunner(ctx, gatewayCommandOptions{
@@ -388,11 +406,15 @@ func TestDefaultGatewayCommandRunnerReturnsAuthManagerError(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
 	originalNewGatewayNetwork := newGatewayNetwork
 	originalNewAuthManager := newAuthManager
+	originalBuildGatewayRuntimePort := buildGatewayRuntimePort
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
 	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
 	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+	t.Cleanup(func() { buildGatewayRuntimePort = originalBuildGatewayRuntimePort })
+	prepareGatewayCommandRunnerTestEnv(t)
+	buildGatewayRuntimePort = stubGatewayRuntimePortBuilder()
 
-	newAuthManager = func(string) (*gatewayauth.Manager, error) {
+	newAuthManager = func(string) (gateway.TokenAuthenticator, error) {
 		return nil, errors.New("auth manager failed")
 	}
 	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
@@ -415,8 +437,15 @@ func TestDefaultGatewayCommandRunnerReturnsAuthManagerError(t *testing.T) {
 func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
 	originalNewGatewayNetwork := newGatewayNetwork
+	originalBuildGatewayRuntimePort := buildGatewayRuntimePort
+	originalNewAuthManager := newAuthManager
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
 	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+	t.Cleanup(func() { buildGatewayRuntimePort = originalBuildGatewayRuntimePort })
+	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+	prepareGatewayCommandRunnerTestEnv(t)
+	buildGatewayRuntimePort = stubGatewayRuntimePortBuilder()
+	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	expected := errors.New("serve failed")
 	server := &stubGatewayServer{
@@ -450,8 +479,15 @@ func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 func TestDefaultGatewayCommandRunnerDegradesWhenNetworkServeFails(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
 	originalNewGatewayNetwork := newGatewayNetwork
+	originalBuildGatewayRuntimePort := buildGatewayRuntimePort
+	originalNewAuthManager := newAuthManager
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
 	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+	t.Cleanup(func() { buildGatewayRuntimePort = originalBuildGatewayRuntimePort })
+	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+	prepareGatewayCommandRunnerTestEnv(t)
+	buildGatewayRuntimePort = stubGatewayRuntimePortBuilder()
+	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
 	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
@@ -487,8 +523,15 @@ func TestDefaultGatewayCommandRunnerDegradesWhenNetworkServeFails(t *testing.T) 
 func TestDefaultGatewayCommandRunnerReturnsNetworkConstructorError(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
 	originalNewGatewayNetwork := newGatewayNetwork
+	originalBuildGatewayRuntimePort := buildGatewayRuntimePort
+	originalNewAuthManager := newAuthManager
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
 	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+	t.Cleanup(func() { buildGatewayRuntimePort = originalBuildGatewayRuntimePort })
+	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+	prepareGatewayCommandRunnerTestEnv(t)
+	buildGatewayRuntimePort = stubGatewayRuntimePortBuilder()
+	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	networkErr := errors.New("new network server failed")
 	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
@@ -513,6 +556,10 @@ func TestDefaultGatewayCommandRunnerReturnsNetworkConstructorError(t *testing.T)
 }
 
 func TestDefaultGatewayCommandRunnerRejectsInvalidACLMode(t *testing.T) {
+	originalNewAuthManager := newAuthManager
+	t.Cleanup(func() { newAuthManager = originalNewAuthManager })
+	prepareGatewayCommandRunnerTestEnv(t)
+	newAuthManager = stubGatewayAuthManagerBuilder()
 	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
 		ListenAddress: "stub://gateway",
 		HTTPAddress:   "127.0.0.1:8080",
@@ -1555,6 +1602,45 @@ type stubGatewayServer struct {
 	closeCalled   bool
 }
 
+type stubRuntimePort struct{}
+
+type stubGatewayAuthenticator struct{}
+
+func (stubGatewayAuthenticator) ValidateToken(token string) bool {
+	return strings.TrimSpace(token) == "test-token"
+}
+
+func (stubGatewayAuthenticator) ResolveSubjectID(token string) (string, bool) {
+	if strings.TrimSpace(token) != "test-token" {
+		return "", false
+	}
+	return "local_admin", true
+}
+
+func (stubRuntimePort) Run(context.Context, gateway.RunInput) error { return nil }
+
+func (stubRuntimePort) Compact(context.Context, gateway.CompactInput) (gateway.CompactResult, error) {
+	return gateway.CompactResult{}, nil
+}
+
+func (stubRuntimePort) ResolvePermission(context.Context, gateway.PermissionResolutionInput) error {
+	return nil
+}
+
+func (stubRuntimePort) CancelRun(context.Context, gateway.CancelInput) (bool, error) {
+	return false, nil
+}
+
+func (stubRuntimePort) Events() <-chan gateway.RuntimeEvent { return nil }
+
+func (stubRuntimePort) ListSessions(context.Context) ([]gateway.SessionSummary, error) {
+	return nil, nil
+}
+
+func (stubRuntimePort) LoadSession(context.Context, gateway.LoadSessionInput) (gateway.Session, error) {
+	return gateway.Session{}, nil
+}
+
 func (s *stubGatewayServer) ListenAddress() string {
 	return s.listenAddress
 }
@@ -1590,5 +1676,25 @@ func captureEnvForRootTest(t *testing.T, key string) func() {
 			return
 		}
 		_ = os.Unsetenv(key)
+	}
+}
+
+func prepareGatewayCommandRunnerTestEnv(t *testing.T) {
+	t.Helper()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", homeDir)
+}
+
+func stubGatewayRuntimePortBuilder() func(context.Context, string) (gateway.RuntimePort, func() error, error) {
+	return func(context.Context, string) (gateway.RuntimePort, func() error, error) {
+		return stubRuntimePort{}, func() error { return nil }, nil
+	}
+}
+
+func stubGatewayAuthManagerBuilder() func(string) (gateway.TokenAuthenticator, error) {
+	return func(string) (gateway.TokenAuthenticator, error) {
+		return stubGatewayAuthenticator{}, nil
 	}
 }

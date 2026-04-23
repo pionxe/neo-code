@@ -15,9 +15,10 @@ func TestDriverBuild(t *testing.T) {
 
 	driver := Driver()
 	p, err := driver.Build(context.Background(), provider.RuntimeConfig{
-		Driver:  DriverName,
-		BaseURL: "https://api.anthropic.com/v1",
-		APIKey:  "test-key",
+		Driver:         DriverName,
+		BaseURL:        "https://api.anthropic.com/v1",
+		APIKeyEnv:      "TEST_ANTHROPIC_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -56,7 +57,8 @@ func TestDriverDiscover(t *testing.T) {
 	models, err := driver.Discover(context.Background(), provider.RuntimeConfig{
 		Driver:                DriverName,
 		BaseURL:               server.URL,
-		APIKey:                "test-key",
+		APIKeyEnv:             "TEST_ANTHROPIC_KEY",
+		APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
 		DiscoveryEndpointPath: "/models",
 	})
 	if err != nil {

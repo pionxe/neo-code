@@ -26,8 +26,10 @@ var checkLatestRelease = updater.CheckLatest
 
 const silentUpdateCheckTimeout = 3 * time.Second
 const silentUpdateCheckDrainTimeout = 300 * time.Millisecond
+const commandAnnotationSkipGlobalPreload = "neocode.skip_global_preload"
+const commandAnnotationSkipSilentUpdateCheck = "neocode.skip_silent_update_check"
 
-var ansiEscapeSequencePattern = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
+var ansiEscapeSequencePattern = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|][^\x07]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
 
 var (
 	silentUpdateCheckMu   sync.Mutex
@@ -83,6 +85,7 @@ func NewRootCommand() *cobra.Command {
 	_ = settings.BindPFlag("workdir", cmd.PersistentFlags().Lookup("workdir"))
 	cmd.AddCommand(
 		newGatewayCommand(),
+		newMigrateCommand(),
 		newURLDispatchCommand(),
 		newUpdateCommand(),
 	)
@@ -156,7 +159,7 @@ func defaultSilentUpdateCheck(ctx context.Context) {
 
 // shouldSkipGlobalPreload 判断当前子命令是否跳过全局预加载。
 func shouldSkipGlobalPreload(cmd *cobra.Command) bool {
-	return normalizedCommandName(cmd) == "url-dispatch"
+	return normalizedCommandName(cmd) == "url-dispatch" || commandAnnotationEnabled(cmd, commandAnnotationSkipGlobalPreload)
 }
 
 // shouldSkipSilentUpdateCheck 判断当前子命令是否跳过静默更新检查。
@@ -165,7 +168,7 @@ func shouldSkipSilentUpdateCheck(cmd *cobra.Command) bool {
 	case "url-dispatch", "update":
 		return true
 	default:
-		return false
+		return commandAnnotationEnabled(cmd, commandAnnotationSkipSilentUpdateCheck)
 	}
 }
 
@@ -188,6 +191,16 @@ func normalizedCommandName(cmd *cobra.Command) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(cmd.Name()))
+}
+
+// commandAnnotationEnabled 沿当前命令链查找布尔注解，供轻量命令跳过全局启动副作用。
+func commandAnnotationEnabled(cmd *cobra.Command, key string) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if strings.EqualFold(strings.TrimSpace(current.Annotations[key]), "true") {
+			return true
+		}
+	}
+	return false
 }
 
 // setSilentUpdateCheckDone 原子地更新静默检查完成信号通道。

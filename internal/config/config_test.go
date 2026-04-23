@@ -264,13 +264,21 @@ func TestConfigMethodErrorPaths(t *testing.T) {
 		restoreEnv(t, "MISSING_PROVIDER_KEY")
 		_ = os.Unsetenv("MISSING_PROVIDER_KEY")
 
-		_, err := (ProviderConfig{
+		resolved, err := (ProviderConfig{
 			Name:      "custom",
 			Driver:    "custom",
 			BaseURL:   "https://example.com",
 			Model:     "custom-model",
 			APIKeyEnv: "MISSING_PROVIDER_KEY",
 		}).Resolve()
+		if err != nil {
+			t.Fatalf("Resolve() error = %v", err)
+		}
+		runtimeConfig, err := resolved.ToRuntimeConfig()
+		if err != nil {
+			t.Fatalf("ToRuntimeConfig() error = %v", err)
+		}
+		_, err = runtimeConfig.ResolveAPIKeyValue()
 		if err == nil || !strings.Contains(err.Error(), "MISSING_PROVIDER_KEY") {
 			t.Fatalf("expected missing env resolve error, got %v", err)
 		}
@@ -739,8 +747,16 @@ func TestProviderLookupAndResolveSelectedProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if resolved.APIKey != "lookup-key" {
-		t.Fatalf("expected resolved key %q, got %q", "lookup-key", resolved.APIKey)
+	runtimeConfig, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	apiKey, err := runtimeConfig.ResolveAPIKeyValue()
+	if err != nil {
+		t.Fatalf("ResolveAPIKeyValue() error = %v", err)
+	}
+	if apiKey != "lookup-key" {
+		t.Fatalf("expected resolved key %q, got %q", "lookup-key", apiKey)
 	}
 }
 
@@ -1029,8 +1045,8 @@ func TestManagerHelperMethodsAndReloads(t *testing.T) {
 	if err := manager.Save(context.Background()); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if _, err := manager.Reload(context.Background()); err != nil {
-		t.Fatalf("Reload() error = %v", err)
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
 	if got := manager.ConfigPath(); got != filepath.Join(tempDir, configName) {
 		t.Fatalf("expected config path %q, got %q", filepath.Join(tempDir, configName), got)
@@ -1141,7 +1157,7 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 
 	reloaded, err := loader.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.Context.Compact.ManualStrategy != CompactManualStrategyFullReplace {
 		t.Fatalf("expected manual strategy to persist, got %q", reloaded.Context.Compact.ManualStrategy)
@@ -1243,93 +1259,101 @@ func restoreEnv(t *testing.T, key string) {
 	})
 }
 
-func TestAutoCompactConfigDefaults(t *testing.T) {
+func TestBudgetConfigDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg := StaticDefaults()
 
-	if cfg.Context.AutoCompact.InputTokenThreshold != DefaultAutoCompactInputTokenThreshold {
-		t.Fatalf("expected input_token_threshold=%d, got %d",
-			DefaultAutoCompactInputTokenThreshold, cfg.Context.AutoCompact.InputTokenThreshold)
+	if cfg.Context.Budget.PromptBudget != DefaultBudgetPromptBudget {
+		t.Fatalf("expected prompt_budget=%d, got %d", DefaultBudgetPromptBudget, cfg.Context.Budget.PromptBudget)
 	}
-	if cfg.Context.AutoCompact.ReserveTokens != DefaultAutoCompactReserveTokens {
-		t.Fatalf("expected reserve_tokens=%d, got %d",
-			DefaultAutoCompactReserveTokens, cfg.Context.AutoCompact.ReserveTokens)
+	if cfg.Context.Budget.ReserveTokens != DefaultBudgetReserveTokens {
+		t.Fatalf("expected reserve_tokens=%d, got %d", DefaultBudgetReserveTokens, cfg.Context.Budget.ReserveTokens)
 	}
-	if cfg.Context.AutoCompact.FallbackInputTokenThreshold != DefaultAutoCompactFallbackInputTokenThreshold {
-		t.Fatalf("expected fallback_input_token_threshold=%d, got %d",
-			DefaultAutoCompactFallbackInputTokenThreshold, cfg.Context.AutoCompact.FallbackInputTokenThreshold)
+	if cfg.Context.Budget.FallbackPromptBudget != DefaultBudgetFallbackPromptBudget {
+		t.Fatalf("expected fallback_prompt_budget=%d, got %d",
+			DefaultBudgetFallbackPromptBudget, cfg.Context.Budget.FallbackPromptBudget)
 	}
-
-	if cfg.Context.AutoCompact.Enabled != false {
-		t.Fatalf("expected enabled=false, got %v", cfg.Context.AutoCompact.Enabled)
+	if cfg.Context.Budget.MaxReactiveCompacts != DefaultBudgetMaxReactiveCompacts {
+		t.Fatalf("expected max_reactive_compacts=%d, got %d",
+			DefaultBudgetMaxReactiveCompacts, cfg.Context.Budget.MaxReactiveCompacts)
 	}
 }
 
-func TestAutoCompactConfigApplyDefaults(t *testing.T) {
+func TestBudgetConfigApplyDefaults(t *testing.T) {
 	t.Parallel()
 
-	cfg := AutoCompactConfig{}
-	defaults := AutoCompactConfig{
-		ReserveTokens:               13000,
-		FallbackInputTokenThreshold: 100000,
+	cfg := BudgetConfig{}
+	defaults := BudgetConfig{
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  3,
 	}
 
 	cfg.ApplyDefaults(defaults)
 
-	if cfg.InputTokenThreshold != 0 {
-		t.Fatalf("expected threshold to remain implicit 0, got %d", cfg.InputTokenThreshold)
+	if cfg.PromptBudget != 0 {
+		t.Fatalf("expected prompt budget to remain implicit 0, got %d", cfg.PromptBudget)
 	}
 	if cfg.ReserveTokens != 13000 {
 		t.Fatalf("expected reserve_tokens=13000, got %d", cfg.ReserveTokens)
 	}
-	if cfg.FallbackInputTokenThreshold != 100000 {
-		t.Fatalf("expected fallback_input_token_threshold=100000, got %d", cfg.FallbackInputTokenThreshold)
+	if cfg.FallbackPromptBudget != 100000 {
+		t.Fatalf("expected fallback_prompt_budget=100000, got %d", cfg.FallbackPromptBudget)
+	}
+	if cfg.MaxReactiveCompacts != 3 {
+		t.Fatalf("expected max_reactive_compacts=3, got %d", cfg.MaxReactiveCompacts)
 	}
 }
 
-func TestAutoCompactConfigApplyDefaultsPreservesExplicit(t *testing.T) {
+func TestBudgetConfigApplyDefaultsPreservesExplicit(t *testing.T) {
 	t.Parallel()
 
-	cfg := AutoCompactConfig{
-		InputTokenThreshold:         200000,
-		ReserveTokens:               5000,
-		FallbackInputTokenThreshold: 80000,
+	cfg := BudgetConfig{
+		PromptBudget:         200000,
+		ReserveTokens:        5000,
+		FallbackPromptBudget: 80000,
+		MaxReactiveCompacts:  5,
 	}
-	defaults := AutoCompactConfig{
-		InputTokenThreshold:         50000,
-		ReserveTokens:               13000,
-		FallbackInputTokenThreshold: 100000,
+	defaults := BudgetConfig{
+		PromptBudget:         50000,
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  3,
 	}
 
 	cfg.ApplyDefaults(defaults)
 
-	if cfg.InputTokenThreshold != 200000 {
-		t.Fatalf("expected explicit threshold=200000 to be preserved, got %d", cfg.InputTokenThreshold)
+	if cfg.PromptBudget != 200000 {
+		t.Fatalf("expected explicit prompt_budget=200000 to be preserved, got %d", cfg.PromptBudget)
 	}
 	if cfg.ReserveTokens != 5000 {
 		t.Fatalf("expected explicit reserve_tokens=5000 to be preserved, got %d", cfg.ReserveTokens)
 	}
-	if cfg.FallbackInputTokenThreshold != 80000 {
-		t.Fatalf("expected explicit fallback_input_token_threshold=80000 to be preserved, got %d", cfg.FallbackInputTokenThreshold)
+	if cfg.FallbackPromptBudget != 80000 {
+		t.Fatalf("expected explicit fallback_prompt_budget=80000 to be preserved, got %d", cfg.FallbackPromptBudget)
+	}
+	if cfg.MaxReactiveCompacts != 5 {
+		t.Fatalf("expected explicit max_reactive_compacts=5 to be preserved, got %d", cfg.MaxReactiveCompacts)
 	}
 }
 
-func TestAutoCompactConfigApplyDefaultsNilReceiver(t *testing.T) {
+func TestBudgetConfigApplyDefaultsNilReceiver(t *testing.T) {
 	t.Parallel()
 
-	var cfg *AutoCompactConfig
-	cfg.ApplyDefaults(AutoCompactConfig{ReserveTokens: 13000, FallbackInputTokenThreshold: 100000})
+	var cfg *BudgetConfig
+	cfg.ApplyDefaults(BudgetConfig{ReserveTokens: 13000, FallbackPromptBudget: 100000, MaxReactiveCompacts: 3})
 }
 
-func TestContextConfigApplyDefaultsPropagatesAutoCompactDefaults(t *testing.T) {
+func TestContextConfigApplyDefaultsPropagatesBudgetDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg := ContextConfig{}
 	cfg.ApplyDefaults(ContextConfig{
-		AutoCompact: AutoCompactConfig{
-			ReserveTokens:               13000,
-			FallbackInputTokenThreshold: 100000,
+		Budget: BudgetConfig{
+			ReserveTokens:        13000,
+			FallbackPromptBudget: 100000,
+			MaxReactiveCompacts:  3,
 		},
 		Compact: CompactConfig{
 			ManualStrategy:           CompactManualStrategyKeepRecent,
@@ -1339,73 +1363,76 @@ func TestContextConfigApplyDefaultsPropagatesAutoCompactDefaults(t *testing.T) {
 		},
 	})
 
-	if cfg.AutoCompact.InputTokenThreshold != 0 {
-		t.Fatalf("expected auto compact threshold to remain implicit 0, got %d", cfg.AutoCompact.InputTokenThreshold)
+	if cfg.Budget.PromptBudget != 0 {
+		t.Fatalf("expected prompt budget to remain implicit 0, got %d", cfg.Budget.PromptBudget)
 	}
-	if cfg.AutoCompact.ReserveTokens != 13000 {
-		t.Fatalf("expected reserve_tokens=13000, got %d", cfg.AutoCompact.ReserveTokens)
+	if cfg.Budget.ReserveTokens != 13000 {
+		t.Fatalf("expected reserve_tokens=13000, got %d", cfg.Budget.ReserveTokens)
 	}
-	if cfg.AutoCompact.FallbackInputTokenThreshold != 100000 {
-		t.Fatalf("expected fallback_input_token_threshold=100000, got %d", cfg.AutoCompact.FallbackInputTokenThreshold)
+	if cfg.Budget.FallbackPromptBudget != 100000 {
+		t.Fatalf("expected fallback_prompt_budget=100000, got %d", cfg.Budget.FallbackPromptBudget)
+	}
+	if cfg.Budget.MaxReactiveCompacts != 3 {
+		t.Fatalf("expected max_reactive_compacts=3, got %d", cfg.Budget.MaxReactiveCompacts)
 	}
 }
 
-func TestAutoCompactConfigValidateEnabledWithoutThreshold(t *testing.T) {
+func TestBudgetConfigValidateAllowsImplicitPromptBudget(t *testing.T) {
 	t.Parallel()
 
-	cfg := AutoCompactConfig{
-		Enabled:                     true,
-		InputTokenThreshold:         0,
-		ReserveTokens:               13000,
-		FallbackInputTokenThreshold: 100000,
+	cfg := BudgetConfig{
+		PromptBudget:         0,
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  3,
 	}
 
 	err := cfg.Validate()
 	if err != nil {
-		t.Fatalf("expected validation to allow implicit threshold, got %v", err)
+		t.Fatalf("expected validation to allow implicit prompt budget, got %v", err)
 	}
 }
 
-func TestAutoCompactConfigValidateDisabledWithoutThreshold(t *testing.T) {
+func TestBudgetConfigValidateRejectsNegativePromptBudget(t *testing.T) {
 	t.Parallel()
 
-	cfg := AutoCompactConfig{
-		Enabled:                     false,
-		InputTokenThreshold:         0,
-		ReserveTokens:               0,
-		FallbackInputTokenThreshold: 0,
+	cfg := BudgetConfig{
+		PromptBudget:         -1,
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  3,
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "prompt_budget") {
+		t.Fatalf("expected prompt_budget validation error, got %v", err)
+	}
+}
+
+func TestBudgetConfigValidateWithExplicitPromptBudget(t *testing.T) {
+	t.Parallel()
+
+	cfg := BudgetConfig{
+		PromptBudget:         50000,
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  3,
 	}
 
 	err := cfg.Validate()
 	if err != nil {
-		t.Fatalf("expected no error for disabled auto compact, got %v", err)
+		t.Fatalf("expected budget validation to pass, got %v", err)
 	}
 }
 
-func TestAutoCompactConfigValidateEnabledWithThreshold(t *testing.T) {
+func TestBudgetConfigValidateRejectsNonPositiveReserveTokens(t *testing.T) {
 	t.Parallel()
 
-	cfg := AutoCompactConfig{
-		Enabled:                     true,
-		InputTokenThreshold:         50000,
-		ReserveTokens:               13000,
-		FallbackInputTokenThreshold: 100000,
-	}
-
-	err := cfg.Validate()
-	if err != nil {
-		t.Fatalf("expected validation to pass, got %v", err)
-	}
-}
-
-func TestAutoCompactConfigValidateRejectsNonPositiveReserveTokens(t *testing.T) {
-	t.Parallel()
-
-	cfg := AutoCompactConfig{
-		Enabled:                     true,
-		InputTokenThreshold:         0,
-		ReserveTokens:               0,
-		FallbackInputTokenThreshold: 100000,
+	cfg := BudgetConfig{
+		PromptBudget:         0,
+		ReserveTokens:        0,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  3,
 	}
 
 	err := cfg.Validate()
@@ -1414,76 +1441,49 @@ func TestAutoCompactConfigValidateRejectsNonPositiveReserveTokens(t *testing.T) 
 	}
 }
 
-func TestAutoCompactConfigValidateRejectsNonPositiveFallbackThreshold(t *testing.T) {
+func TestBudgetConfigValidateRejectsNonPositiveFallbackPromptBudget(t *testing.T) {
 	t.Parallel()
 
-	cfg := AutoCompactConfig{
-		Enabled:                     true,
-		InputTokenThreshold:         0,
-		ReserveTokens:               13000,
-		FallbackInputTokenThreshold: 0,
+	cfg := BudgetConfig{
+		PromptBudget:         0,
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 0,
+		MaxReactiveCompacts:  3,
 	}
 
 	err := cfg.Validate()
-	if err == nil || !strings.Contains(err.Error(), "fallback_input_token_threshold") {
-		t.Fatalf("expected fallback_input_token_threshold validation error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "fallback_prompt_budget") {
+		t.Fatalf("expected fallback_prompt_budget validation error, got %v", err)
 	}
 }
 
-func TestAutoCompactConfigClone(t *testing.T) {
+func TestBudgetConfigValidateRejectsNonPositiveMaxReactiveCompacts(t *testing.T) {
 	t.Parallel()
 
-	cfg := AutoCompactConfig{
-		Enabled:                     true,
-		InputTokenThreshold:         75000,
-		ReserveTokens:               13000,
-		FallbackInputTokenThreshold: 100000,
+	cfg := BudgetConfig{
+		PromptBudget:         0,
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  0,
 	}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "max_reactive_compacts") {
+		t.Fatalf("expected max_reactive_compacts validation error, got %v", err)
+	}
+}
 
+func TestBudgetConfigClone(t *testing.T) {
+	t.Parallel()
+
+	cfg := BudgetConfig{
+		PromptBudget:         75000,
+		ReserveTokens:        13000,
+		FallbackPromptBudget: 100000,
+		MaxReactiveCompacts:  3,
+	}
 	cloned := cfg.Clone()
-
-	if cfg.Enabled != cloned.Enabled {
-		t.Fatalf("expected enabled=%v to be cloned, got %v", cfg.Enabled, cloned.Enabled)
-	}
-	if cfg.InputTokenThreshold != cloned.InputTokenThreshold {
-		t.Fatalf("expected threshold=%d to be cloned, got %d",
-			cfg.InputTokenThreshold, cloned.InputTokenThreshold)
-	}
-	if cfg.ReserveTokens != cloned.ReserveTokens {
-		t.Fatalf("expected reserve_tokens=%d to be cloned, got %d", cfg.ReserveTokens, cloned.ReserveTokens)
-	}
-	if cfg.FallbackInputTokenThreshold != cloned.FallbackInputTokenThreshold {
-		t.Fatalf("expected fallback_input_token_threshold=%d to be cloned, got %d",
-			cfg.FallbackInputTokenThreshold, cloned.FallbackInputTokenThreshold)
-	}
-
-	cloned.InputTokenThreshold = 100000
-	if cfg.InputTokenThreshold == cloned.InputTokenThreshold {
-		t.Fatalf("clone should be independent from source")
-	}
-}
-
-func TestAutoCompactConfigContextConfigValidate(t *testing.T) {
-	t.Parallel()
-
-	ctx := ContextConfig{
-		AutoCompact: AutoCompactConfig{
-			Enabled:                     true,
-			InputTokenThreshold:         0,
-			ReserveTokens:               13000,
-			FallbackInputTokenThreshold: 100000,
-		},
-		Compact: CompactConfig{
-			ManualStrategy:           CompactManualStrategyKeepRecent,
-			ManualKeepRecentMessages: 10,
-			MaxSummaryChars:          1200,
-			ReadTimeMaxMessageSpans:  24,
-		},
-	}
-
-	err := ctx.Validate()
-	if err != nil {
-		t.Fatalf("expected context validation to allow implicit threshold, got %v", err)
+	if cfg != cloned {
+		t.Fatalf("expected equal config clone, got %+v vs %+v", cfg, cloned)
 	}
 }
 
@@ -1918,7 +1918,6 @@ func TestToRuntimeConfigMapsAllFields(t *testing.T) {
 			Model:     "gemini-2.5-flash",
 			APIKeyEnv: "TEST_ENV_KEY",
 		},
-		APIKey: "resolved-secret-key",
 	}
 
 	got, err := resolved.ToRuntimeConfig()
@@ -1934,8 +1933,11 @@ func TestToRuntimeConfigMapsAllFields(t *testing.T) {
 	if got.DefaultModel != "gemini-2.5-flash" {
 		t.Fatalf("expected DefaultModel=gemini-2.5-flash, got %q", got.DefaultModel)
 	}
-	if got.APIKey != "resolved-secret-key" {
-		t.Fatalf("expected APIKey=resolved-secret-key, got %q", got.APIKey)
+	if got.APIKeyEnv != "TEST_ENV_KEY" {
+		t.Fatalf("expected APIKeyEnv=TEST_ENV_KEY, got %q", got.APIKeyEnv)
+	}
+	if got.APIKeyResolver == nil {
+		t.Fatal("expected APIKeyResolver to be set")
 	}
 }
 

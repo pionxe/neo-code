@@ -13,6 +13,17 @@ import (
 
 type stubProvider struct{}
 
+func (stubProvider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	_ = ctx
+	_ = req
+	return providertypes.BudgetEstimate{
+		EstimateSource: provider.EstimateSourceLocal,
+	}, nil
+}
+
 func (stubProvider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	return nil
 }
@@ -44,11 +55,12 @@ func TestRegistryBuildsRegisteredDriverCaseInsensitively(t *testing.T) {
 
 	registry := newTestRegistry(t)
 	got, err := registry.Build(context.Background(), provider.RuntimeConfig{
-		Name:         "openai-main",
-		Driver:       "OPENAICOMPAT",
-		BaseURL:      config.OpenAIDefaultBaseURL,
-		DefaultModel: config.OpenAIDefaultModel,
-		APIKey:       "test-key",
+		Name:           "openai-main",
+		Driver:         "OPENAICOMPAT",
+		BaseURL:        config.OpenAIDefaultBaseURL,
+		DefaultModel:   config.OpenAIDefaultModel,
+		APIKeyEnv:      "TEST_OPENAI_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)

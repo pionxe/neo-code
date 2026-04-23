@@ -186,6 +186,9 @@ func TestListProviderModelsReturnsDiscoveryErrorOnCacheMiss(t *testing.T) {
 	t.Setenv(testAPIKeyEnv, "")
 
 	service := NewService("", newRegistry(t, "openaicompat", func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+		if _, err := cfg.ResolveAPIKeyValue(); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}), newMemoryStore())
 
@@ -433,6 +436,9 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 
 	t.Run("resolve provider config failure", func(t *testing.T) {
 		service := NewService("", newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+			if _, err := cfg.ResolveAPIKeyValue(); err != nil {
+				return nil, err
+			}
 			return nil, nil
 		}), newMemoryStore())
 
@@ -700,6 +706,17 @@ func containsModelDescriptorID(models []providertypes.ModelDescriptor, modelID s
 }
 
 type catalogTestProvider struct{}
+
+func (catalogTestProvider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	_ = ctx
+	_ = req
+	return providertypes.BudgetEstimate{
+		EstimateSource: provider.EstimateSourceLocal,
+	}, nil
+}
 
 func (catalogTestProvider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	return nil

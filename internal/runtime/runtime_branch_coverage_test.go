@@ -16,7 +16,7 @@ func TestExecuteAssistantToolCallsReturnsNilForEmptyCalls(t *testing.T) {
 
 	service := &Service{}
 	state := &runState{}
-	_, err := service.executeAssistantToolCalls(context.Background(), state, turnSnapshot{}, providertypes.Message{})
+	_, err := service.executeAssistantToolCalls(context.Background(), state, TurnBudgetSnapshot{}, providertypes.Message{})
 	if err != nil {
 		t.Fatalf("executeAssistantToolCalls() error = %v", err)
 	}
@@ -32,7 +32,7 @@ func TestExecuteOneToolCallStopsWhenContextCheckReturnsTrue(t *testing.T) {
 	_, _, _ = service.executeOneToolCall(
 		context.Background(),
 		&state,
-		turnSnapshot{},
+		TurnBudgetSnapshot{},
 		providertypes.ToolCall{ID: "call-1", Name: "noop"},
 		&sync.Mutex{},
 		func() bool { return true },
@@ -90,11 +90,11 @@ func TestTransitionRunPhaseNoopBranches(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{events: make(chan RuntimeEvent, 4)}
-	service.transitionRunState(context.Background(), nil, controlplane.RunStatePlan)
+	service.setBaseRunState(context.Background(), nil, controlplane.RunStatePlan)
 
 	state := newRunState("run-phase", newRuntimeSession("session-phase"))
 	state.lifecycle = controlplane.RunStatePlan
-	service.transitionRunState(context.Background(), &state, controlplane.RunStatePlan)
+	service.setBaseRunState(context.Background(), &state, controlplane.RunStatePlan)
 
 	events := collectRuntimeEvents(service.Events())
 	if len(events) != 0 {

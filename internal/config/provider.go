@@ -35,12 +35,11 @@ type ProviderConfig struct {
 
 type ResolvedProviderConfig struct {
 	ProviderConfig
-	APIKey             string                      `yaml:"-"`
 	SessionAssetPolicy session.AssetPolicy         `yaml:"-"`
 	RequestAssetBudget provider.RequestAssetBudget `yaml:"-"`
 }
 
-// ResolveSelectedProvider 解析当前配置中选中的 provider，并补全运行时所需的密钥信息。
+// ResolveSelectedProvider 解析当前配置中选中的 provider，并补全运行时所需的运行时策略。
 func ResolveSelectedProvider(cfg Config) (ResolvedProviderConfig, error) {
 	providerName := strings.TrimSpace(cfg.SelectedProvider)
 	if providerName == "" {
@@ -51,10 +50,7 @@ func ResolveSelectedProvider(cfg Config) (ResolvedProviderConfig, error) {
 	if err != nil {
 		return ResolvedProviderConfig{}, err
 	}
-	resolved, err := providerCfg.Resolve()
-	if err != nil {
-		return ResolvedProviderConfig{}, err
-	}
+	resolved := ResolvedProviderConfig{ProviderConfig: providerCfg}
 	resolved.SessionAssetPolicy = cfg.Runtime.ResolveSessionAssetPolicy()
 	resolved.RequestAssetBudget = cfg.Runtime.ResolveRequestAssetBudget()
 	return resolved, nil
@@ -117,42 +113,15 @@ func (p ProviderConfig) Identity() (provider.ProviderIdentity, error) {
 }
 
 func (p ProviderConfig) ResolveAPIKey() (string, error) {
-	envName := strings.TrimSpace(p.APIKeyEnv)
-	if envName == "" {
+	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return "", fmt.Errorf("config: provider %q api_key_env is empty", p.Name)
 	}
-
-	value := strings.TrimSpace(os.Getenv(envName))
-	if value != "" {
-		return value, nil
-	}
-
-	// 进程环境未命中时回退读取用户级环境变量（Windows 为注册表持久化），
-	// 并回填到当前进程环境，避免后续链路重复出现“变量为空”的假阴性。
-	userValue, exists, err := LookupUserEnvVar(envName)
-	if err != nil {
-		return "", fmt.Errorf("config: lookup user environment variable %s: %w", envName, err)
-	}
-	if exists {
-		trimmedUserValue := strings.TrimSpace(userValue)
-		if trimmedUserValue != "" {
-			_ = os.Setenv(envName, trimmedUserValue)
-			return trimmedUserValue, nil
-		}
-	}
-
-	return "", fmt.Errorf("config: environment variable %s is empty", envName)
+	return resolveRuntimeAPIKey(p.APIKeyEnv)
 }
 
 func (p ProviderConfig) Resolve() (ResolvedProviderConfig, error) {
-	apiKey, err := p.ResolveAPIKey()
-	if err != nil {
-		return ResolvedProviderConfig{}, err
-	}
-
 	return ResolvedProviderConfig{
 		ProviderConfig: p,
-		APIKey:         apiKey,
 	}, nil
 }
 
@@ -263,13 +232,41 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		Driver:                p.Driver,
 		BaseURL:               baseURL,
 		DefaultModel:          p.Model,
-		APIKey:                p.APIKey,
+		APIKeyEnv:             p.APIKeyEnv,
+		APIKeyResolver:        resolveRuntimeAPIKey,
 		SessionAssetPolicy:    p.SessionAssetPolicy,
 		RequestAssetBudget:    p.RequestAssetBudget,
 		ChatAPIMode:           chatAPIMode,
 		ChatEndpointPath:      chatEndpointPath,
 		DiscoveryEndpointPath: discoveryEndpointPath,
 	}, nil
+}
+
+// resolveRuntimeAPIKey 在 provider 真正发起请求前解析 API Key，并在需要时补回当前进程环境。
+func resolveRuntimeAPIKey(envName string) (string, error) {
+	envName = strings.TrimSpace(envName)
+	if envName == "" {
+		return "", errors.New("config: provider api_key_env is empty")
+	}
+
+	value := strings.TrimSpace(os.Getenv(envName))
+	if value != "" {
+		return value, nil
+	}
+
+	userValue, exists, err := LookupUserEnvVar(envName)
+	if err != nil {
+		return "", fmt.Errorf("config: lookup user environment variable %s: %w", envName, err)
+	}
+	if exists {
+		trimmedUserValue := strings.TrimSpace(userValue)
+		if trimmedUserValue != "" {
+			_ = os.Setenv(envName, trimmedUserValue)
+			return trimmedUserValue, nil
+		}
+	}
+
+	return "", fmt.Errorf("config: environment variable %s is empty", envName)
 }
 
 // normalizeProviderDiscoverySettingsFromConfig 归一化 discovery 所需的最小路径配置。

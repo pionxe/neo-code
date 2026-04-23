@@ -107,24 +107,24 @@ type MemoExtractor interface {
 	Schedule(sessionID string, messages []providertypes.Message)
 }
 
-// Service 是 runtime 的默认实现，负责组织一次完整的 agent 运行闭环。
-type AutoCompactThresholdResolver interface {
-	ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error)
+// BudgetResolver 定义 prompt budget 解析能力，避免 runtime 直接处理模型目录细节。
+type BudgetResolver interface {
+	ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error)
 }
 
 type Service struct {
-	configManager                *config.Manager
-	sessionStore                 agentsession.Store
-	sessionAssetStore            agentsession.AssetStore
-	userInputPreparer            UserInputPreparer
-	toolManager                  tools.Manager
-	providerFactory              ProviderFactory
-	contextBuilder               agentcontext.Builder
-	compactRunner                contextcompact.Runner
-	approvalBroker               *approval.Broker
-	memoExtractor                MemoExtractor
-	skillsRegistry               skills.Registry
-	autoCompactThresholdResolver AutoCompactThresholdResolver
+	configManager     *config.Manager
+	sessionStore      agentsession.Store
+	sessionAssetStore agentsession.AssetStore
+	userInputPreparer UserInputPreparer
+	toolManager       tools.Manager
+	providerFactory   ProviderFactory
+	contextBuilder    agentcontext.Builder
+	compactRunner     contextcompact.Runner
+	approvalBroker    *approval.Broker
+	memoExtractor     MemoExtractor
+	skillsRegistry    skills.Registry
+	budgetResolver    BudgetResolver
 
 	events             chan RuntimeEvent
 	sessionMu          sync.Mutex
@@ -321,7 +321,7 @@ func isRuntimeSessionAlreadyExistsError(err error) bool {
 	return errors.Is(err, agentsession.ErrSessionAlreadyExists) || errors.Is(err, os.ErrExist)
 }
 
-// SetAutoCompactThresholdResolver 注入自动压缩阈值解析能力，避免 runtime 直接处理模型目录细节。
-func (s *Service) SetAutoCompactThresholdResolver(resolver AutoCompactThresholdResolver) {
-	s.autoCompactThresholdResolver = resolver
+// SetBudgetResolver 注入 prompt budget 解析能力，避免 runtime 直接感知模型目录细节。
+func (s *Service) SetBudgetResolver(resolver BudgetResolver) {
+	s.budgetResolver = resolver
 }

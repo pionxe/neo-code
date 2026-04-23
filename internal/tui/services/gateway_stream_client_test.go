@@ -22,7 +22,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresStringPayload(t *testi
 			"turn":               2,
 			"phase":              "thinking",
 			"timestamp":          timestamp.Format(time.RFC3339Nano),
-			"payload_version":    1,
+			"payload_version":    runtimeEventPayloadVersion,
 			"payload":            "hello",
 		},
 	})
@@ -57,6 +57,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresToolResultPayload(t *t
 		RunID:     "run-2",
 		Payload: map[string]any{
 			"runtime_event_type": string(EventToolResult),
+			"payload_version":    runtimeEventPayloadVersion,
 			"payload": map[string]any{
 				"ToolCallID": "call-1",
 				"Name":       "bash",
@@ -89,6 +90,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationSupportsNestedEnvelope(t *test
 			"type": "run_progress",
 			"payload": map[string]any{
 				"runtime_event_type": string(EventError),
+				"payload_version":    runtimeEventPayloadVersion,
 				"payload":            "boom",
 			},
 		},

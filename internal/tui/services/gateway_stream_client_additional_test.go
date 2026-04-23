@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationUsesCurrentTimeWhenTimestampMi
 		Action: gateway.FrameActionRun,
 		Payload: map[string]any{
 			"runtime_event_type": string(EventError),
+			"payload_version":    runtimeEventPayloadVersion,
 			"payload":            "boom",
 		},
 	})
@@ -64,6 +66,28 @@ func TestDecodeRuntimeEventFromGatewayNotificationUsesCurrentTimeWhenTimestampMi
 	}
 	if event.Timestamp.Before(before) {
 		t.Fatalf("event timestamp should fallback to now, got %v", event.Timestamp)
+	}
+}
+
+func TestDecodeRuntimeEventFromGatewayNotificationRejectsPayloadVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:   gateway.FrameTypeEvent,
+		Action: gateway.FrameActionRun,
+		Payload: map[string]any{
+			"runtime_event_type": string(EventError),
+			"payload_version":    runtimeEventPayloadVersion - 1,
+			"payload":            "boom",
+		},
+	})
+
+	_, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err == nil {
+		t.Fatalf("expected payload version mismatch error")
+	}
+	if got := err.Error(); got == "" || !containsAll(got, "payload_version", "want") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -123,14 +147,14 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 		{
 			name:      "stop reason",
 			eventType: EventStopReasonDecided,
-			payload:   map[string]any{"reason": "  max_rounds  "},
+			payload:   map[string]any{"reason": "  STOP_COMPLETED  "},
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
 				value, ok := got.(StopReasonDecidedPayload)
 				if !ok {
 					t.Fatalf("payload type = %T", got)
 				}
-				if value.Reason != StopReason("max_rounds") {
+				if value.Reason != StopReasonCompleted {
 					t.Fatalf("reason = %q", value.Reason)
 				}
 			},
@@ -143,6 +167,28 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 				t.Helper()
 				if _, ok := got.(RuntimeUsagePayload); !ok {
 					t.Fatalf("payload type = %T", got)
+				}
+			},
+		},
+		{
+			name:      "token usage payload",
+			eventType: EventTokenUsage,
+			payload: map[string]any{
+				"input_tokens":          3,
+				"output_tokens":         5,
+				"session_input_tokens":  13,
+				"session_output_tokens": 21,
+				"has_unknown_usage":     true,
+			},
+			assertFn: func(t *testing.T, got any) {
+				t.Helper()
+				value, ok := got.(TokenUsagePayload)
+				if !ok {
+					t.Fatalf("payload type = %T", got)
+				}
+				if value.InputTokens != 3 || value.OutputTokens != 5 ||
+					value.SessionInputTokens != 13 || value.SessionOutputTokens != 21 || !value.HasUnknownUsage {
+					t.Fatalf("payload = %#v", value)
 				}
 			},
 		},
@@ -249,6 +295,7 @@ func TestGatewayStreamClientRunSkipsNonGatewayEventsAndStopsOnClose(t *testing.T
 		Action: gateway.FrameActionRun,
 		Payload: map[string]any{
 			"runtime_event_type": string(EventAgentChunk),
+			"payload_version":    runtimeEventPayloadVersion,
 			"payload":            "ok",
 		},
 	})
@@ -268,6 +315,66 @@ func TestGatewayStreamClientRunSkipsNonGatewayEventsAndStopsOnClose(t *testing.T
 	if err := client.Close(); err != nil {
 		t.Fatalf("Close() second call error = %v", err)
 	}
+}
+
+func TestGatewayStreamClientRunStopsOnPayloadVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	source := make(chan gatewayRPCNotification, 3)
+	client := NewGatewayStreamClient(source)
+
+	source <- buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:   gateway.FrameTypeEvent,
+		Action: gateway.FrameActionRun,
+		Payload: map[string]any{
+			"runtime_event_type": string(EventAgentChunk),
+			"payload_version":    runtimeEventPayloadVersion - 1,
+			"payload":            "legacy",
+		},
+	})
+	source <- buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:   gateway.FrameTypeEvent,
+		Action: gateway.FrameActionRun,
+		Payload: map[string]any{
+			"runtime_event_type": string(EventAgentChunk),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload":            "ok",
+		},
+	})
+
+	select {
+	case event, ok := <-client.Events():
+		if !ok {
+			t.Fatalf("events channel closed before decode error event")
+		}
+		if event.Type != EventError {
+			t.Fatalf("event.Type = %q, want %q", event.Type, EventError)
+		}
+		payload, payloadOK := event.Payload.(string)
+		if !payloadOK || !containsAll(payload, "payload_version", "want") {
+			t.Fatalf("event.Payload = %#v", event.Payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for decode error event")
+	}
+
+	select {
+	case _, ok := <-client.Events():
+		if ok {
+			t.Fatalf("expected stream to stop after payload version mismatch")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for events channel close")
+	}
+}
+
+func containsAll(input string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(input, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestGatewayStreamClientRunStopsWhenSourceClosed(t *testing.T) {
@@ -414,6 +521,7 @@ func TestGatewayStreamDecodeAndEnvelopeExtraBranches(t *testing.T) {
 		Action: gateway.FrameActionRun,
 		Payload: map[string]any{
 			"runtime_event_type": string(EventToolResult),
+			"payload_version":    runtimeEventPayloadVersion,
 			"payload":            "not-an-object",
 		},
 	})

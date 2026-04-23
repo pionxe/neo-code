@@ -362,7 +362,8 @@ func TestRequestConfigFromRuntime(t *testing.T) {
 	cfg, err := RequestConfigFromRuntime(provider.RuntimeConfig{
 		Driver:                provider.DriverOpenAICompat,
 		BaseURL:               "https://api.openai.com/v1",
-		APIKey:                "test-key",
+		APIKeyEnv:             "OPENAI_TEST_KEY",
+		APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
 		DiscoveryEndpointPath: "/models",
 	})
 	if err != nil {
@@ -399,8 +400,10 @@ func TestRequestConfigFromRuntimeDefaultsEmptyDiscoveryPath(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := RequestConfigFromRuntime(provider.RuntimeConfig{
-		Driver:  provider.DriverOpenAICompat,
-		BaseURL: "https://api.example.com/v1",
+		Driver:         provider.DriverOpenAICompat,
+		BaseURL:        "https://api.example.com/v1",
+		APIKeyEnv:      "OPENAI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	})
 	if err != nil {
 		t.Fatalf("RequestConfigFromRuntime() error = %v", err)

@@ -37,15 +37,20 @@ func (s *Service) appendUserMessageAndSave(ctx context.Context, state *runState,
 func (s *Service) appendAssistantMessageAndSave(
 	ctx context.Context,
 	state *runState,
-	snapshot turnSnapshot,
+	snapshot TurnBudgetSnapshot,
 	assistant providertypes.Message,
 	inputTokens int,
 	outputTokens int,
 ) error {
-	metadataChanged := state.session.Provider != snapshot.providerConfig.Name || state.session.Model != snapshot.model
-	state.session.Provider = snapshot.providerConfig.Name
-	state.session.Model = snapshot.model
+	metadataChanged := state.session.Provider != snapshot.ProviderConfig.Name || state.session.Model != snapshot.Model
+	unknownUsageChanged := false
+	state.session.Provider = snapshot.ProviderConfig.Name
+	state.session.Model = snapshot.Model
+	previousUnknownUsage := state.session.HasUnknownUsage
 	state.recordUsage(inputTokens, outputTokens)
+	if state.session.HasUnknownUsage != previousUnknownUsage {
+		unknownUsageChanged = true
+	}
 
 	if !assistant.IsEmpty() {
 		state.session.Messages = append(state.session.Messages, assistant)
@@ -59,10 +64,11 @@ func (s *Service) appendAssistantMessageAndSave(
 			Workdir:          state.session.Workdir,
 			TokenInputDelta:  inputTokens,
 			TokenOutputDelta: outputTokens,
+			HasUnknownUsage:  state.session.HasUnknownUsage,
 		})
 	}
 
-	if metadataChanged || inputTokens != 0 || outputTokens != 0 {
+	if metadataChanged || unknownUsageChanged || inputTokens != 0 || outputTokens != 0 {
 		state.touchSession()
 		return s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session))
 	}
@@ -81,12 +87,13 @@ func (s *Service) appendToolMessageAndSave(
 	state.session.Messages = append(state.session.Messages, toolMessage)
 	state.touchSession()
 	input := agentsession.AppendMessagesInput{
-		SessionID: state.session.ID,
-		Messages:  []providertypes.Message{toolMessage},
-		UpdatedAt: state.session.UpdatedAt,
-		Provider:  state.session.Provider,
-		Model:     state.session.Model,
-		Workdir:   state.session.Workdir,
+		SessionID:       state.session.ID,
+		Messages:        []providertypes.Message{toolMessage},
+		UpdatedAt:       state.session.UpdatedAt,
+		Provider:        state.session.Provider,
+		Model:           state.session.Model,
+		Workdir:         state.session.Workdir,
+		HasUnknownUsage: state.session.HasUnknownUsage,
 	}
 	state.mu.Unlock()
 	return s.sessionStore.AppendMessages(ctx, input)
@@ -136,52 +143,31 @@ func toolResultMarkedFailed(metadata map[string]any) bool {
 // createSessionInputFromSession 将运行态 session 转为建库时使用的会话头输入。
 func createSessionInputFromSession(session agentsession.Session) agentsession.CreateSessionInput {
 	return agentsession.CreateSessionInput{
-		ID:               session.ID,
-		Title:            session.Title,
-		CreatedAt:        session.CreatedAt,
-		UpdatedAt:        session.UpdatedAt,
-		Provider:         session.Provider,
-		Model:            session.Model,
-		Workdir:          session.Workdir,
-		TaskState:        session.TaskState.Clone(),
-		ActivatedSkills:  agentsessionCloneSkillActivations(session.ActivatedSkills),
-		Todos:            cloneTodosForPersistence(session.Todos),
-		TokenInputTotal:  session.TokenInputTotal,
-		TokenOutputTotal: session.TokenOutputTotal,
+		ID:        session.ID,
+		Title:     session.Title,
+		CreatedAt: session.CreatedAt,
+		UpdatedAt: session.UpdatedAt,
+		Head:      session.HeadSnapshot(),
 	}
 }
 
 // sessionStateInputFromSession 将运行态 session 映射为只更新会话头的持久化输入。
 func sessionStateInputFromSession(session agentsession.Session) agentsession.UpdateSessionStateInput {
 	return agentsession.UpdateSessionStateInput{
-		SessionID:        session.ID,
-		Title:            session.Title,
-		UpdatedAt:        session.UpdatedAt,
-		Provider:         session.Provider,
-		Model:            session.Model,
-		Workdir:          session.Workdir,
-		TaskState:        session.TaskState.Clone(),
-		ActivatedSkills:  agentsessionCloneSkillActivations(session.ActivatedSkills),
-		Todos:            cloneTodosForPersistence(session.Todos),
-		TokenInputTotal:  session.TokenInputTotal,
-		TokenOutputTotal: session.TokenOutputTotal,
+		SessionID: session.ID,
+		Title:     session.Title,
+		UpdatedAt: session.UpdatedAt,
+		Head:      session.HeadSnapshot(),
 	}
 }
 
 // replaceTranscriptInputFromSession 将完整 session 映射为 transcript 原子替换输入。
 func replaceTranscriptInputFromSession(session agentsession.Session) agentsession.ReplaceTranscriptInput {
 	return agentsession.ReplaceTranscriptInput{
-		SessionID:        session.ID,
-		Messages:         cloneMessagesForPersistence(session.Messages),
-		UpdatedAt:        session.UpdatedAt,
-		Provider:         session.Provider,
-		Model:            session.Model,
-		Workdir:          session.Workdir,
-		TaskState:        session.TaskState.Clone(),
-		ActivatedSkills:  agentsessionCloneSkillActivations(session.ActivatedSkills),
-		Todos:            cloneTodosForPersistence(session.Todos),
-		TokenInputTotal:  session.TokenInputTotal,
-		TokenOutputTotal: session.TokenOutputTotal,
+		SessionID: session.ID,
+		Messages:  cloneMessagesForPersistence(session.Messages),
+		UpdatedAt: session.UpdatedAt,
+		Head:      session.HeadSnapshot(),
 	}
 }
 

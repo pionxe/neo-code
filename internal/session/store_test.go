@@ -24,19 +24,21 @@ func TestSQLiteStoreLifecycleRoundTrip(t *testing.T) {
 		Title:     "  Session Roundtrip  ",
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
-		Provider:  "openai",
-		Model:     "gpt-5",
-		Workdir:   "/repo",
-		TaskState: TaskState{
-			Goal:     "ship sqlite migration",
-			Progress: []string{"draft plan"},
+		Head: SessionHead{
+			Provider: "openai",
+			Model:    "gpt-5",
+			Workdir:  "/repo",
+			TaskState: TaskState{
+				Goal:     "ship sqlite migration",
+				Progress: []string{"draft plan"},
+			},
+			ActivatedSkills: []SkillActivation{{SkillID: "go_review"}, {SkillID: "go-review"}},
+			Todos: []TodoItem{
+				{ID: "todo-1", Content: "implement store"},
+			},
+			TokenInputTotal:  11,
+			TokenOutputTotal: 7,
 		},
-		ActivatedSkills: []SkillActivation{{SkillID: "go_review"}, {SkillID: "go-review"}},
-		Todos: []TodoItem{
-			{ID: "todo-1", Content: "implement store"},
-		},
-		TokenInputTotal:  11,
-		TokenOutputTotal: 7,
 	})
 	if err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
@@ -74,20 +76,23 @@ func TestSQLiteStoreLifecycleRoundTrip(t *testing.T) {
 		SessionID: session.ID,
 		Title:     "SQLite Ready",
 		UpdatedAt: updatedAt.Add(2 * time.Minute),
-		Provider:  "openai",
-		Model:     "gpt-5.1",
-		Workdir:   "/repo/final",
-		TaskState: TaskState{
-			Goal:            "ship sqlite migration",
-			Progress:        []string{"draft plan", "replace store"},
-			UserConstraints: []string{"no legacy compatibility"},
+		Head: SessionHead{
+			Provider: "openai",
+			Model:    "gpt-5.1",
+			Workdir:  "/repo/final",
+			TaskState: TaskState{
+				Goal:            "ship sqlite migration",
+				Progress:        []string{"draft plan", "replace store"},
+				UserConstraints: []string{"no legacy compatibility"},
+			},
+			ActivatedSkills: []SkillActivation{{SkillID: "go-review"}},
+			Todos: []TodoItem{
+				{ID: "todo-1", Content: "implement store", Status: TodoStatusInProgress},
+			},
+			TokenInputTotal:  99,
+			TokenOutputTotal: 42,
+			HasUnknownUsage:  true,
 		},
-		ActivatedSkills: []SkillActivation{{SkillID: "go-review"}},
-		Todos: []TodoItem{
-			{ID: "todo-1", Content: "implement store", Status: TodoStatusInProgress},
-		},
-		TokenInputTotal:  99,
-		TokenOutputTotal: 42,
 	}); err != nil {
 		t.Fatalf("UpdateSessionState() error = %v", err)
 	}
@@ -104,6 +109,9 @@ func TestSQLiteStoreLifecycleRoundTrip(t *testing.T) {
 	}
 	if loaded.TokenInputTotal != 99 || loaded.TokenOutputTotal != 42 {
 		t.Fatalf("unexpected token totals: in=%d out=%d", loaded.TokenInputTotal, loaded.TokenOutputTotal)
+	}
+	if !loaded.HasUnknownUsage {
+		t.Fatalf("expected HasUnknownUsage to round-trip")
 	}
 	if got := loaded.ActiveSkillIDs(); len(got) != 1 || got[0] != "go-review" {
 		t.Fatalf("unexpected active skills: %+v", got)
@@ -154,7 +162,7 @@ func TestSQLiteStoreListSummariesSortedAndLegacyJSONIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MkdirTemp() workspaceRoot error = %v", err)
 	}
-	store := NewStore(baseDir, workspaceRoot)
+	store := NewSQLiteStore(baseDir, workspaceRoot)
 	t.Cleanup(func() {
 		_ = store.Close()
 		_ = os.RemoveAll(baseDir)
@@ -210,18 +218,21 @@ func TestSQLiteStoreReplaceTranscriptAndPragmas(t *testing.T) {
 	if err := store.ReplaceTranscript(ctx, ReplaceTranscriptInput{
 		SessionID: session.ID,
 		UpdatedAt: time.Now().UTC(),
-		Provider:  "openai",
-		Model:     "gpt-5.2",
-		Workdir:   "/repo",
-		TaskState: TaskState{Goal: "after compact"},
-		Todos: []TodoItem{
-			{ID: "todo-1", Content: "after compact"},
-		},
 		Messages: []providertypes.Message{
 			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after")}},
 		},
-		TokenInputTotal:  0,
-		TokenOutputTotal: 0,
+		Head: SessionHead{
+			Provider:  "openai",
+			Model:     "gpt-5.2",
+			Workdir:   "/repo",
+			TaskState: TaskState{Goal: "after compact"},
+			Todos: []TodoItem{
+				{ID: "todo-1", Content: "after compact"},
+			},
+			TokenInputTotal:  0,
+			TokenOutputTotal: 0,
+			HasUnknownUsage:  false,
+		},
 	}); err != nil {
 		t.Fatalf("ReplaceTranscript() error = %v", err)
 	}
@@ -238,6 +249,9 @@ func TestSQLiteStoreReplaceTranscriptAndPragmas(t *testing.T) {
 	}
 	if loaded.TaskState.Goal != "after compact" {
 		t.Fatalf("unexpected task state after replace: %+v", loaded.TaskState)
+	}
+	if loaded.HasUnknownUsage {
+		t.Fatalf("expected replace transcript to clear HasUnknownUsage")
 	}
 
 	db, err := store.ensureDB(ctx)
@@ -414,9 +428,11 @@ func TestSQLiteStoreAppendReplaceAndSchemaErrors(t *testing.T) {
 	if err := store.UpdateSessionState(ctx, UpdateSessionStateInput{
 		SessionID: session.ID,
 		Title:     "x",
-		Todos: []TodoItem{
-			{ID: "dup", Content: "a"},
-			{ID: "dup", Content: "b"},
+		Head: SessionHead{
+			Todos: []TodoItem{
+				{ID: "dup", Content: "a"},
+				{ID: "dup", Content: "b"},
+			},
 		},
 	}); err == nil {
 		t.Fatalf("expected invalid todos error")
@@ -449,7 +465,7 @@ func TestSQLiteStoreInitializationRejectsUnsupportedSchemaVersion(t *testing.T) 
 	if err != nil {
 		t.Fatalf("MkdirTemp() workspaceRoot error = %v", err)
 	}
-	store := NewStore(baseDir, workspaceRoot)
+	store := NewSQLiteStore(baseDir, workspaceRoot)
 	t.Cleanup(func() {
 		_ = store.Close()
 		_ = os.RemoveAll(baseDir)
@@ -476,6 +492,51 @@ func TestSQLiteStoreInitializationRejectsUnsupportedSchemaVersion(t *testing.T) 
 	}
 }
 
+func TestSQLiteStoreMigratesSchemaV1ToV2(t *testing.T) {
+	ctx := context.Background()
+	baseDir, workspaceRoot, store := newMigrationTestStore(t)
+
+	createLegacyV1SessionDB(t, ctx, baseDir, workspaceRoot, false)
+	loaded, err := store.LoadSession(ctx, "session_v1")
+	if err != nil {
+		t.Fatalf("LoadSession() after migration error = %v", err)
+	}
+	if loaded.ID != "session_v1" || loaded.Title != "Legacy V1" {
+		t.Fatalf("unexpected migrated session: %+v", loaded)
+	}
+	if loaded.HasUnknownUsage {
+		t.Fatalf("expected migrated HasUnknownUsage to default false")
+	}
+
+	db, err := store.ensureDB(ctx)
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+	assertPragmaInt(t, db, "user_version", sqliteSchemaVersion)
+	assertSQLiteColumnExists(t, db, "sessions", "has_unknown_usage")
+}
+
+func TestSQLiteStoreMigratesSchemaV1ToV2WhenColumnAlreadyExists(t *testing.T) {
+	ctx := context.Background()
+	baseDir, workspaceRoot, store := newMigrationTestStore(t)
+
+	createLegacyV1SessionDB(t, ctx, baseDir, workspaceRoot, true)
+	summaries, err := store.ListSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListSummaries() after migration error = %v", err)
+	}
+	if len(summaries) != 1 || summaries[0].ID != "session_v1" {
+		t.Fatalf("unexpected summaries after migration: %+v", summaries)
+	}
+
+	db, err := store.ensureDB(ctx)
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+	assertPragmaInt(t, db, "user_version", sqliteSchemaVersion)
+	assertSQLiteColumnExists(t, db, "sessions", "has_unknown_usage")
+}
+
 func assertPragmaString(t *testing.T, db *sql.DB, name string, want string) {
 	t.Helper()
 	var got string
@@ -495,6 +556,138 @@ func assertPragmaInt(t *testing.T, db *sql.DB, name string, want int) {
 	}
 	if got != want {
 		t.Fatalf("PRAGMA %s = %d, want %d", name, got, want)
+	}
+}
+
+func assertSQLiteColumnExists(t *testing.T, db *sql.DB, table string, column string) {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatalf("PRAGMA table_info(%s) error = %v", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &primaryKey); err != nil {
+			t.Fatalf("scan table info: %v", err)
+		}
+		if name == column {
+			return
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate table info: %v", err)
+	}
+	t.Fatalf("expected column %s.%s to exist", table, column)
+}
+
+func newMigrationTestStore(t *testing.T) (string, string, *SQLiteStore) {
+	t.Helper()
+	baseDir, err := os.MkdirTemp("", "session-base-")
+	if err != nil {
+		t.Fatalf("MkdirTemp() baseDir error = %v", err)
+	}
+	workspaceRoot, err := os.MkdirTemp("", "session-workspace-")
+	if err != nil {
+		t.Fatalf("MkdirTemp() workspaceRoot error = %v", err)
+	}
+	store := NewSQLiteStore(baseDir, workspaceRoot)
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.RemoveAll(baseDir)
+		_ = os.RemoveAll(workspaceRoot)
+	})
+	return baseDir, workspaceRoot, store
+}
+
+func createLegacyV1SessionDB(
+	t *testing.T,
+	ctx context.Context,
+	baseDir string,
+	workspaceRoot string,
+	includeUnknownUsageColumn bool,
+) {
+	t.Helper()
+	projectDir := projectDirectory(baseDir, workspaceRoot)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDir) error = %v", err)
+	}
+	db, err := sql.Open("sqlite", databasePath(baseDir, workspaceRoot))
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	unknownUsageColumn := ""
+	unknownUsageInsertColumn := ""
+	unknownUsageInsertValue := ""
+	if includeUnknownUsageColumn {
+		unknownUsageColumn = ", has_unknown_usage INTEGER NOT NULL DEFAULT 0"
+		unknownUsageInsertColumn = ", has_unknown_usage"
+		unknownUsageInsertValue = ", 0"
+	}
+	statements := []string{
+		`CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			created_at_ms INTEGER NOT NULL,
+			updated_at_ms INTEGER NOT NULL,
+			provider TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			workdir TEXT NOT NULL DEFAULT '',
+			task_state_json TEXT NOT NULL,
+			todos_json TEXT NOT NULL,
+			activated_skills_json TEXT NOT NULL,
+			token_input_total INTEGER NOT NULL DEFAULT 0,
+			token_output_total INTEGER NOT NULL DEFAULT 0` + unknownUsageColumn + `,
+			last_seq INTEGER NOT NULL DEFAULT 0,
+			message_count INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE messages (
+			session_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			parts_json TEXT NOT NULL,
+			tool_calls_json TEXT NOT NULL DEFAULT '',
+			tool_call_id TEXT NOT NULL DEFAULT '',
+			is_error INTEGER NOT NULL DEFAULT 0,
+			tool_metadata_json TEXT NOT NULL DEFAULT '',
+			created_at_ms INTEGER NOT NULL,
+			PRIMARY KEY(session_id, seq),
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE session_assets (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			mime_type TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			relative_path TEXT NOT NULL,
+			created_at_ms INTEGER NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`INSERT INTO sessions (
+			id, title, created_at_ms, updated_at_ms, provider, model, workdir,
+			task_state_json, todos_json, activated_skills_json,
+			token_input_total, token_output_total` + unknownUsageInsertColumn + `,
+			last_seq, message_count
+		) VALUES (
+			'session_v1', 'Legacy V1', 1000, 1000, 'openai', 'gpt-5', '/repo',
+			'{}', '[]', '[]', 11, 7` + unknownUsageInsertValue + `, 0, 0
+		)`,
+		`PRAGMA user_version=1`,
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("exec legacy schema statement: %v\n%s", err, statement)
+		}
 	}
 }
 

@@ -66,11 +66,15 @@ func Driver() provider.DriverDefinition {
 
 // newSDKClient 构造 Gemini SDK 客户端，供生成与模型发现链路共享连接配置。
 func newSDKClient(ctx context.Context, cfg provider.RuntimeConfig) (*genai.Client, error) {
+	apiKey, err := cfg.ResolveAPIKeyValue()
+	if err != nil {
+		return nil, err
+	}
 	httpClient := &http.Client{
 		Timeout: 90 * time.Second,
 	}
 	clientConfig := &genai.ClientConfig{
-		APIKey:     strings.TrimSpace(cfg.APIKey),
+		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
 		HTTPClient: httpClient,
 	}

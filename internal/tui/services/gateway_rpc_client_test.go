@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"neo-code/internal/gateway"
-	gatewayauth "neo-code/internal/gateway/auth"
 	"neo-code/internal/gateway/protocol"
 )
 
@@ -397,11 +397,30 @@ func TestGatewayRPCClientReadLoopSustainsBackpressureWhenNotificationsAreConsume
 func createTestAuthTokenFile(t *testing.T) (string, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "auth.json")
-	manager, err := gatewayauth.NewManager(path)
-	if err != nil {
-		t.Fatalf("gatewayauth.NewManager() error = %v", err)
+	token := "test-token"
+	writeTestAuthTokenFile(t, path, token)
+	return path, token
+}
+
+func writeTestAuthTokenFile(t *testing.T, path string, token string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create auth dir: %v", err)
 	}
-	return path, manager.Token()
+	payload := map[string]any{
+		"version":    1,
+		"token":      token,
+		"created_at": time.Now().UTC(),
+		"updated_at": time.Now().UTC(),
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal auth token: %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write auth token: %v", err)
+	}
 }
 
 func readRPCRequestOrFail(decoder *json.Decoder) protocol.JSONRPCRequest {

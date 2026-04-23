@@ -104,9 +104,9 @@ func TestSelectionServiceBuiltinUnsupportedAPIStyleNoLongerFailsAcrossSnapshotPa
 		t.Fatalf("expected EnsureSelection() to remain available, got %v", err)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.SelectedProvider != providerCfg.Name {
 		t.Fatalf("expected selected provider to stay on %q, got %q", providerCfg.Name, reloaded.SelectedProvider)
@@ -328,9 +328,9 @@ func TestSelectionServiceEnsureSelectionRepairsInvalidCurrentModel(t *testing.T)
 		t.Fatalf("unexpected normalized selection: %+v", selection)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.CurrentModel != OpenAIDefaultModel {
 		t.Fatalf("expected rewritten current model %q, got %q", OpenAIDefaultModel, reloaded.CurrentModel)
@@ -423,9 +423,9 @@ func TestSelectionServiceEnsureSelectionFallsBackToBuiltinDefaultModelWhenSnapsh
 		t.Fatalf("expected builtin ensure to use snapshot catalog only, got %+v", *tracker)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.CurrentModel != OpenAIDefaultModel {
 		t.Fatalf("expected builtin fallback to persist %q, got %q", OpenAIDefaultModel, reloaded.CurrentModel)
@@ -462,9 +462,9 @@ func TestSelectionServiceEnsureSelectionKeepsCustomSelectionWhenSnapshotMissing(
 		t.Fatalf("expected custom ensure to use snapshot catalog only, got %+v", *tracker)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.CurrentModel != "unknown-model" {
 		t.Fatalf("expected custom current model to stay unchanged, got %q", reloaded.CurrentModel)
@@ -507,9 +507,9 @@ func TestSelectionServiceEnsureSelectionBackfillsEmptyCustomModelFromSynchronous
 		t.Fatalf("expected custom ensure to try snapshot first and then sync discovery, got %+v", *tracker)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.CurrentModel != "server-coder" {
 		t.Fatalf("expected discovered current model to persist, got %q", reloaded.CurrentModel)
@@ -549,9 +549,9 @@ func TestSelectionServiceEnsureSelectionKeepsEmptyCustomModelWhenSynchronousDisc
 		t.Fatalf("expected custom ensure to attempt sync discovery once, got %+v", *tracker)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.CurrentModel != "" {
 		t.Fatalf("expected empty current model to stay unchanged after failed discovery, got %q", reloaded.CurrentModel)
@@ -593,9 +593,9 @@ func TestSelectionServiceEnsureSelectionReturnsBootstrappedSelectionWhenCustomDi
 		t.Fatalf("expected custom ensure to attempt snapshot and one sync discovery, got %+v", *tracker)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.SelectedProvider != "company-gateway" {
 		t.Fatalf("expected selected provider to persist as company-gateway, got %q", reloaded.SelectedProvider)
@@ -626,9 +626,9 @@ func TestSelectionServiceEnsureSelectionRetriesWhenProviderDriftsDuringUpdate(t 
 		t.Fatalf("expected retried selection to use drifted provider snapshot, got %+v", selection)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.SelectedProvider != QiniuName {
 		t.Fatalf("expected selected provider to persist as %q, got %q", QiniuName, reloaded.SelectedProvider)
@@ -659,9 +659,9 @@ func TestSelectionServiceEnsureSelectionRetriesWhenProviderDriftsBeforeEarlyRetu
 		t.Fatalf("expected drifted provider selection after retry, got %+v", selection)
 	}
 
-	reloaded, err := manager.Reload(context.Background())
+	reloaded, err := manager.Load(context.Background())
 	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if reloaded.SelectedProvider != QiniuName {
 		t.Fatalf("expected selected provider to persist as %q, got %q", QiniuName, reloaded.SelectedProvider)

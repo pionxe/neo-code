@@ -1670,6 +1670,38 @@ func TestRuntimeEventUsageHandler(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventTokenUsageHandler(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.TokenUsage.RunInputTokens = 2
+	app.state.TokenUsage.RunOutputTokens = 3
+	app.state.TokenUsage.RunTotalTokens = 5
+
+	payload := agentruntime.TokenUsagePayload{
+		InputTokens:         7,
+		OutputTokens:        11,
+		SessionInputTokens:  17,
+		SessionOutputTokens: 19,
+		HasUnknownUsage:     true,
+	}
+	handled := runtimeEventTokenUsageHandler(&app, agentruntime.RuntimeEvent{Payload: payload})
+	if handled {
+		t.Fatalf("expected false")
+	}
+	if app.state.TokenUsage.RunInputTokens != 9 ||
+		app.state.TokenUsage.RunOutputTokens != 14 ||
+		app.state.TokenUsage.RunTotalTokens != 23 {
+		t.Fatalf("unexpected run token usage: %+v", app.state.TokenUsage)
+	}
+	if app.state.TokenUsage.SessionInputTokens != 17 ||
+		app.state.TokenUsage.SessionOutputTokens != 19 ||
+		app.state.TokenUsage.SessionTotalTokens != 36 {
+		t.Fatalf("unexpected session token usage: %+v", app.state.TokenUsage)
+	}
+	if runtimeEventTokenUsageHandler(&app, agentruntime.RuntimeEvent{Payload: "invalid"}) {
+		t.Fatalf("invalid token usage payload should return false")
+	}
+}
+
 func TestRuntimeEventToolCallThinkingHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	handled := runtimeEventToolCallThinkingHandler(&app, agentruntime.RuntimeEvent{Payload: "bash"})

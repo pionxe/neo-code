@@ -106,7 +106,7 @@ func TestSQLiteStoreOpenReturnsFileErrorWhenPayloadMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MkdirTemp() workspaceRoot error = %v", err)
 	}
-	store := NewStore(baseDir, workspaceRoot)
+	store := NewSQLiteStore(baseDir, workspaceRoot)
 	t.Cleanup(func() {
 		_ = store.Close()
 		_ = os.RemoveAll(baseDir)

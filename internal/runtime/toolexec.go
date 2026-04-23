@@ -19,7 +19,7 @@ type indexedToolCall struct {
 func (s *Service) executeAssistantToolCalls(
 	ctx context.Context,
 	state *runState,
-	snapshot turnSnapshot,
+	snapshot TurnBudgetSnapshot,
 	assistant providertypes.Message,
 ) (toolExecutionSummary, error) {
 	if len(assistant.ToolCalls) == 0 {
@@ -98,7 +98,7 @@ func (s *Service) executeAssistantToolCalls(
 func (s *Service) executeOneToolCall(
 	ctx context.Context,
 	state *runState,
-	snapshot turnSnapshot,
+	snapshot TurnBudgetSnapshot,
 	call providertypes.ToolCall,
 	toolLock *sync.Mutex,
 	checkContext func() bool,
@@ -120,8 +120,8 @@ func (s *Service) executeOneToolCall(
 		Capability:  state.capabilityToken,
 		State:       state,
 		Call:        call,
-		Workdir:     snapshot.workdir,
-		ToolTimeout: snapshot.toolTimeout,
+		Workdir:     snapshot.Workdir,
+		ToolTimeout: snapshot.ToolTimeout,
 	})
 
 	if errors.Is(execErr, context.Canceled) {

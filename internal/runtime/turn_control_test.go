@@ -109,7 +109,7 @@ func TestTransitionRunPhaseInvalidTransitionReturnsError(t *testing.T) {
 	state := newRunState("run-invalid-phase", newRuntimeSession("session-invalid-phase"))
 	state.lifecycle = controlplane.RunStatePlan
 
-	err := service.transitionRunState(context.Background(), &state, controlplane.RunStateVerify)
+	err := service.setBaseRunState(context.Background(), &state, controlplane.RunStateVerify)
 	if err == nil {
 		t.Fatalf("expected invalid transition to return error")
 	}

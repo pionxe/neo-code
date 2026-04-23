@@ -34,7 +34,7 @@ var (
 	newGatewayServer        = defaultNewGatewayServer
 	newGatewayNetwork       = defaultNewGatewayNetworkServer
 	dispatchURLThroughIPC   = urlscheme.Dispatch
-	newAuthManager          = gatewayauth.NewManager
+	newAuthManager          = defaultNewAuthManager
 	loadAuthToken           = loadGatewayAuthToken
 	exitProcess             = os.Exit
 	writeDispatchError      = writeURLDispatchErrorOutput
@@ -95,6 +95,11 @@ type gatewayNetworkServer interface {
 	ListenAddress() string
 	Serve(ctx context.Context, runtimePort gateway.RuntimePort) error
 	Close(ctx context.Context) error
+}
+
+// defaultNewAuthManager 创建默认网关认证器，并把具体持久化实现收敛在 CLI 装配层内部。
+func defaultNewAuthManager(path string) (gateway.TokenAuthenticator, error) {
+	return gatewayauth.NewManager(path)
 }
 
 // newGatewayCommand 创建并返回网关子命令，负责启动本地 Gateway 进程。

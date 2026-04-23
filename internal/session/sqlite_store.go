@@ -32,6 +32,7 @@ type sqliteSessionRow struct {
 	TodosJSON        string
 	TokenInputTotal  int
 	TokenOutputTotal int
+	HasUnknownUsage  bool
 }
 
 type sqliteMessageRow struct {
@@ -160,8 +161,8 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, input CreateSessionInpu
 INSERT INTO sessions (
 	id, title, created_at_ms, updated_at_ms, provider, model, workdir,
 	task_state_json, todos_json, activated_skills_json,
-	token_input_total, token_output_total, last_seq, message_count
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+	token_input_total, token_output_total, has_unknown_usage, last_seq, message_count
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
 `,
 		session.ID,
 		session.Title,
@@ -175,6 +176,7 @@ INSERT INTO sessions (
 		mustJSONString(session.ActivatedSkills),
 		session.TokenInputTotal,
 		session.TokenOutputTotal,
+		session.HasUnknownUsage,
 	)
 	if err != nil {
 		if isSQLiteSessionUniqueConstraintError(err) {
@@ -325,6 +327,7 @@ SET updated_at_ms = ?,
 	workdir = ?,
 	token_input_total = token_input_total + ?,
 	token_output_total = token_output_total + ?,
+	has_unknown_usage = CASE WHEN ? THEN 1 ELSE has_unknown_usage END,
 	last_seq = ?,
 	message_count = message_count + ?
 WHERE id = ?
@@ -335,6 +338,7 @@ WHERE id = ?
 		stringsTrimSpace(input.Workdir),
 		input.TokenInputDelta,
 		input.TokenOutputDelta,
+		input.HasUnknownUsage,
 		lastSeq,
 		len(normalizedMessages),
 		input.SessionID,
@@ -405,7 +409,8 @@ SET title = ?,
 	todos_json = ?,
 	activated_skills_json = ?,
 	token_input_total = ?,
-	token_output_total = ?
+	token_output_total = ?,
+	has_unknown_usage = ?
 WHERE id = ?
 `,
 		row.Title,
@@ -418,6 +423,7 @@ WHERE id = ?
 		row.ActivatedJSON,
 		row.TokenInputTotal,
 		row.TokenOutputTotal,
+		row.HasUnknownUsage,
 		row.ID,
 	)
 	if err != nil {
@@ -472,6 +478,7 @@ SET updated_at_ms = ?,
 	activated_skills_json = ?,
 	token_input_total = ?,
 	token_output_total = ?,
+	has_unknown_usage = ?,
 	last_seq = ?,
 	message_count = ?
 WHERE id = ?
@@ -485,6 +492,7 @@ WHERE id = ?
 		row.ActivatedJSON,
 		row.TokenInputTotal,
 		row.TokenOutputTotal,
+		row.HasUnknownUsage,
 		lastSeq,
 		len(messages),
 		row.ID,
@@ -802,7 +810,13 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&userVersion); err != nil {
 		return fmt.Errorf("session: read sqlite user_version: %w", err)
 	}
-	if userVersion != 0 && userVersion != sqliteSchemaVersion {
+	switch userVersion {
+	case 0, sqliteSchemaVersion:
+	case 1:
+		if err := migrateSQLiteSchemaV1ToV2(ctx, db); err != nil {
+			return err
+		}
+	default:
 		return fmt.Errorf("session: unsupported sqlite schema version %d", userVersion)
 	}
 
@@ -826,6 +840,7 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 			activated_skills_json TEXT NOT NULL,
 			token_input_total INTEGER NOT NULL DEFAULT 0,
 			token_output_total INTEGER NOT NULL DEFAULT 0,
+			has_unknown_usage INTEGER NOT NULL DEFAULT 0,
 			last_seq INTEGER NOT NULL DEFAULT 0,
 			message_count INTEGER NOT NULL DEFAULT 0
 		)`,
@@ -867,20 +882,72 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// migrateSQLiteSchemaV1ToV2 将 v1 会话库升级到当前 v2 schema，仅补齐当前版本新增字段。
+func migrateSQLiteSchemaV1ToV2(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("session: begin schema migration tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	hasColumn, err := sqliteTableHasColumn(ctx, tx, "sessions", "has_unknown_usage")
+	if err != nil {
+		return err
+	}
+	if !hasColumn {
+		if _, err := tx.ExecContext(
+			ctx,
+			`ALTER TABLE sessions ADD COLUMN has_unknown_usage INTEGER NOT NULL DEFAULT 0`,
+		); err != nil {
+			return fmt.Errorf("session: migrate sqlite schema v1 to v2: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, sqliteSchemaVersion)); err != nil {
+		return fmt.Errorf("session: set migrated sqlite schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("session: commit schema migration tx: %w", err)
+	}
+	return nil
+}
+
+// sqliteTableHasColumn 检查指定表是否包含字段，供明确版本迁移保持幂等。
+func sqliteTableHasColumn(ctx context.Context, tx *sql.Tx, table string, column string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, fmt.Errorf("session: inspect sqlite table %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &primaryKey); err != nil {
+			return false, fmt.Errorf("session: scan sqlite table %s info: %w", table, err)
+		}
+		if stringsTrimSpace(name) == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("session: iterate sqlite table %s info: %w", table, err)
+	}
+	return false, nil
+}
+
 // normalizeCreateSessionInput 规范化创建会话输入并生成最终会话头。
 func normalizeCreateSessionInput(input CreateSessionInput) (Session, error) {
 	session := Session{
-		ID:               stringsTrimSpace(input.ID),
-		Title:            sanitizeTitle(input.Title),
-		Provider:         stringsTrimSpace(input.Provider),
-		Model:            stringsTrimSpace(input.Model),
-		CreatedAt:        input.CreatedAt,
-		UpdatedAt:        input.UpdatedAt,
-		Workdir:          stringsTrimSpace(input.Workdir),
-		TaskState:        normalizeAndClampTaskState(input.TaskState),
-		ActivatedSkills:  normalizeSkillActivations(input.ActivatedSkills),
-		TokenInputTotal:  input.TokenInputTotal,
-		TokenOutputTotal: input.TokenOutputTotal,
+		ID:        stringsTrimSpace(input.ID),
+		Title:     sanitizeTitle(input.Title),
+		CreatedAt: input.CreatedAt,
+		UpdatedAt: input.UpdatedAt,
 	}
 	if session.ID == "" {
 		session.ID = NewID("session")
@@ -895,7 +962,9 @@ func normalizeCreateSessionInput(input CreateSessionInput) (Session, error) {
 	if session.UpdatedAt.IsZero() {
 		session.UpdatedAt = session.CreatedAt
 	}
-	todos, err := normalizeAndValidateTodos(input.Todos)
+	head := input.Head.clone()
+	head.applyToSession(&session)
+	todos, err := normalizeAndValidateTodos(head.Todos)
 	if err != nil {
 		return Session{}, err
 	}
@@ -911,39 +980,34 @@ func normalizeUpdateSessionStateInput(input UpdateSessionStateInput) (sqliteSess
 	if err := validateStorageID("session id", input.SessionID); err != nil {
 		return sqliteSessionRow{}, fmt.Errorf("session: %w", err)
 	}
-	todos, err := normalizeAndValidateTodos(input.Todos)
+	head := input.Head.clone()
+	todos, err := normalizeAndValidateTodos(head.Todos)
 	if err != nil {
 		return sqliteSessionRow{}, err
 	}
 	return sqliteSessionRow{
 		ID:               stringsTrimSpace(input.SessionID),
 		Title:            sanitizeTitle(input.Title),
-		Provider:         stringsTrimSpace(input.Provider),
-		Model:            stringsTrimSpace(input.Model),
+		Provider:         stringsTrimSpace(head.Provider),
+		Model:            stringsTrimSpace(head.Model),
 		UpdatedAtMS:      toUnixMillis(resolveUpdatedAt(input.UpdatedAt)),
-		Workdir:          stringsTrimSpace(input.Workdir),
-		TaskStateJSON:    mustJSONString(normalizeAndClampTaskState(input.TaskState)),
+		Workdir:          stringsTrimSpace(head.Workdir),
+		TaskStateJSON:    mustJSONString(normalizeAndClampTaskState(head.TaskState)),
 		TodosJSON:        mustJSONString(todos),
-		ActivatedJSON:    mustJSONString(normalizeSkillActivations(input.ActivatedSkills)),
-		TokenInputTotal:  input.TokenInputTotal,
-		TokenOutputTotal: input.TokenOutputTotal,
+		ActivatedJSON:    mustJSONString(normalizeSkillActivations(head.ActivatedSkills)),
+		TokenInputTotal:  head.TokenInputTotal,
+		TokenOutputTotal: head.TokenOutputTotal,
+		HasUnknownUsage:  head.HasUnknownUsage,
 	}, nil
 }
 
 // normalizeReplaceTranscriptInput 规范化 compact 后的 transcript 替换输入。
 func normalizeReplaceTranscriptInput(input ReplaceTranscriptInput) (sqliteSessionRow, []providertypes.Message, error) {
 	row, err := normalizeUpdateSessionStateInput(UpdateSessionStateInput{
-		SessionID:        input.SessionID,
-		Title:            "",
-		UpdatedAt:        input.UpdatedAt,
-		Provider:         input.Provider,
-		Model:            input.Model,
-		Workdir:          input.Workdir,
-		TaskState:        input.TaskState,
-		ActivatedSkills:  input.ActivatedSkills,
-		Todos:            input.Todos,
-		TokenInputTotal:  input.TokenInputTotal,
-		TokenOutputTotal: input.TokenOutputTotal,
+		SessionID: input.SessionID,
+		Title:     "",
+		UpdatedAt: input.UpdatedAt,
+		Head:      input.Head,
 	})
 	if err != nil {
 		return sqliteSessionRow{}, nil, err
@@ -975,7 +1039,7 @@ func loadSessionRow(ctx context.Context, tx *sql.Tx, sessionID string) (sqliteSe
 	var row sqliteSessionRow
 	err := tx.QueryRowContext(ctx, `
 SELECT id, title, provider, model, created_at_ms, updated_at_ms, workdir,
-	task_state_json, activated_skills_json, todos_json, token_input_total, token_output_total
+	task_state_json, activated_skills_json, todos_json, token_input_total, token_output_total, has_unknown_usage
 FROM sessions
 WHERE id = ?
 `,
@@ -993,6 +1057,7 @@ WHERE id = ?
 		&row.TodosJSON,
 		&row.TokenInputTotal,
 		&row.TokenOutputTotal,
+		&row.HasUnknownUsage,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1072,6 +1137,7 @@ func buildSessionFromRow(row sqliteSessionRow, messages []sqliteMessageRow) (Ses
 		Todos:            normalizedTodos,
 		TokenInputTotal:  row.TokenInputTotal,
 		TokenOutputTotal: row.TokenOutputTotal,
+		HasUnknownUsage:  row.HasUnknownUsage,
 	}
 	if len(result.Todos) > 0 {
 		result.TodoVersion = CurrentTodoVersion

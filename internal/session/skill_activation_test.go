@@ -41,10 +41,12 @@ func TestSQLiteStoreRoundTripActivatedSkills(t *testing.T) {
 		Title:     "Skills Round Trip",
 		CreatedAt: time.Now().Add(-time.Minute),
 		UpdatedAt: time.Now(),
-		ActivatedSkills: []SkillActivation{
-			{SkillID: "  zeta "},
-			{SkillID: "go_review"},
-			{SkillID: "go-review"},
+		Head: SessionHead{
+			ActivatedSkills: []SkillActivation{
+				{SkillID: "  zeta "},
+				{SkillID: "go_review"},
+				{SkillID: "go-review"},
+			},
 		},
 	})
 	if err != nil {

@@ -14,6 +14,8 @@ import (
 	"neo-code/internal/tools"
 )
 
+const runtimeEventPayloadVersion = 4
+
 // GatewayStreamClient 负责消费 gateway.event 并恢复为 TUI 事件。
 type GatewayStreamClient struct {
 	source <-chan gatewayRPCNotification
@@ -69,14 +71,18 @@ func (c *GatewayStreamClient) run() {
 
 			event, err := decodeRuntimeEventFromGatewayNotification(notification)
 			if err != nil {
+				errMessage := fmt.Sprintf("gateway stream decode error: %v", err)
 				select {
 				case <-c.closeCh:
 					return
 				case c.events <- RuntimeEvent{
 					Type:      EventError,
 					Timestamp: time.Now().UTC(),
-					Payload:   fmt.Sprintf("gateway stream decode error: %v", err),
+					Payload:   errMessage,
 				}:
+				}
+				if isRuntimePayloadVersionMismatch(errMessage) {
+					return
 				}
 				continue
 			}
@@ -88,6 +94,13 @@ func (c *GatewayStreamClient) run() {
 			}
 		}
 	}
+}
+
+// isRuntimePayloadVersionMismatch 判断错误是否由 runtime 事件版本不匹配触发，用于快速停止消费避免噪声洪泛。
+func isRuntimePayloadVersionMismatch(errMessage string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(errMessage))
+	return strings.Contains(normalized, "payload_version") &&
+		strings.Contains(normalized, "unsupported")
 }
 
 // decodeRuntimeEventFromGatewayNotification 将 gateway.event 通知还原为事件。
@@ -121,6 +134,13 @@ func decodeRuntimeEventFromGatewayNotification(notification gatewayRPCNotificati
 	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
+	}
+	if event.PayloadVersion != runtimeEventPayloadVersion {
+		return RuntimeEvent{}, fmt.Errorf(
+			"unsupported runtime payload_version: got %d want %d",
+			event.PayloadVersion,
+			runtimeEventPayloadVersion,
+		)
 	}
 
 	rawPayload, _ := streamReadMapValue(envelope, "payload")
@@ -189,6 +209,8 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[CompactResult](payload)
 	case EventCompactError:
 		return decodeRuntimePayload[CompactErrorPayload](payload)
+	case EventTokenUsage:
+		return decodeRuntimePayload[TokenUsagePayload](payload)
 	case EventPhaseChanged:
 		return decodeRuntimePayload[PhaseChangedPayload](payload)
 	case EventStopReasonDecided:

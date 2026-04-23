@@ -9,13 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"neo-code/internal/config"
-	agentcontext "neo-code/internal/context"
-	contextcompact "neo-code/internal/context/compact"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
-	"neo-code/internal/tools"
 )
 
 type stubSkillsRegistry struct {
@@ -215,8 +211,8 @@ func TestPrepareTurnSnapshotPassesResolvedSkillsToContextBuilder(t *testing.T) {
 	})
 
 	state := newRunState("run-build-skill", session)
-	if _, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state); err != nil {
-		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+	if _, rebuilt, err := service.prepareTurnBudgetSnapshot(context.Background(), &state); err != nil {
+		t.Fatalf("prepareTurnBudgetSnapshot() error = %v", err)
 	} else if rebuilt {
 		t.Fatalf("did not expect snapshot rebuild")
 	}
@@ -225,7 +221,7 @@ func TestPrepareTurnSnapshotPassesResolvedSkillsToContextBuilder(t *testing.T) {
 	}
 }
 
-func TestPrepareTurnSnapshotEmitsSkillMissingAndContinues(t *testing.T) {
+func TestPrepareTurnBudgetSnapshotEmitsSkillMissingAndContinues(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -238,8 +234,8 @@ func TestPrepareTurnSnapshotEmitsSkillMissingAndContinues(t *testing.T) {
 	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, builder)
 
 	state := newRunState("run-missing-skill", session)
-	if _, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state); err != nil {
-		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+	if _, rebuilt, err := service.prepareTurnBudgetSnapshot(context.Background(), &state); err != nil {
+		t.Fatalf("prepareTurnBudgetSnapshot() error = %v", err)
 	} else if rebuilt {
 		t.Fatalf("did not expect snapshot rebuild")
 	}
@@ -253,7 +249,7 @@ func TestPrepareTurnSnapshotEmitsSkillMissingAndContinues(t *testing.T) {
 	}
 }
 
-func TestPrepareTurnSnapshotDeduplicatesSkillMissingPerRun(t *testing.T) {
+func TestPrepareTurnBudgetSnapshotDeduplicatesSkillMissingPerRun(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -266,13 +262,13 @@ func TestPrepareTurnSnapshotDeduplicatesSkillMissingPerRun(t *testing.T) {
 	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, builder)
 
 	state := newRunState("run-missing-skill-dedupe", session)
-	if _, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state); err != nil {
-		t.Fatalf("first prepareTurnSnapshot() error = %v", err)
+	if _, rebuilt, err := service.prepareTurnBudgetSnapshot(context.Background(), &state); err != nil {
+		t.Fatalf("first prepareTurnBudgetSnapshot() error = %v", err)
 	} else if rebuilt {
 		t.Fatalf("did not expect first snapshot rebuild")
 	}
-	if _, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state); err != nil {
-		t.Fatalf("second prepareTurnSnapshot() error = %v", err)
+	if _, rebuilt, err := service.prepareTurnBudgetSnapshot(context.Background(), &state); err != nil {
+		t.Fatalf("second prepareTurnBudgetSnapshot() error = %v", err)
 	} else if rebuilt {
 		t.Fatalf("did not expect second snapshot rebuild")
 	}
@@ -287,7 +283,7 @@ func TestPrepareTurnSnapshotDeduplicatesSkillMissingPerRun(t *testing.T) {
 	}
 }
 
-func TestPrepareTurnSnapshotPropagatesRegistryFailure(t *testing.T) {
+func TestPrepareTurnBudgetSnapshotPropagatesRegistryFailure(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -301,7 +297,7 @@ func TestPrepareTurnSnapshotPropagatesRegistryFailure(t *testing.T) {
 	service.SetSkillsRegistry(&stubSkillsRegistry{getErr: os.ErrPermission})
 
 	state := newRunState("run-skill-registry-failure", session)
-	if _, _, err := service.prepareTurnSnapshot(context.Background(), &state); !errors.Is(err, os.ErrPermission) {
+	if _, _, err := service.prepareTurnBudgetSnapshot(context.Background(), &state); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("expected registry failure to propagate, got %v", err)
 	}
 	if len(collectRuntimeEvents(service.Events())) != 0 {
@@ -568,18 +564,18 @@ func TestPrepareTurnSnapshotPrioritizesToolsByActiveSkillHints(t *testing.T) {
 	})
 
 	state := newRunState("run-skill-tool-priority", session)
-	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
+	snapshot, rebuilt, err := service.prepareTurnBudgetSnapshot(context.Background(), &state)
 	if err != nil {
-		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+		t.Fatalf("prepareTurnBudgetSnapshot() error = %v", err)
 	}
 	if rebuilt {
 		t.Fatalf("did not expect snapshot rebuild")
 	}
-	if len(snapshot.request.Tools) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(snapshot.request.Tools))
+	if len(snapshot.Request.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(snapshot.Request.Tools))
 	}
-	if snapshot.request.Tools[0].Name != "bash" {
-		t.Fatalf("expected hinted tool first, got %q", snapshot.request.Tools[0].Name)
+	if snapshot.Request.Tools[0].Name != "bash" {
+		t.Fatalf("expected hinted tool first, got %q", snapshot.Request.Tools[0].Name)
 	}
 }
 
@@ -750,76 +746,5 @@ func TestSkillHelperFunctionsBranches(t *testing.T) {
 	}
 	if collectSkillToolHints(nil) != nil {
 		t.Fatalf("expected nil for empty active skills")
-	}
-}
-
-func TestServiceRunReinjectsSkillsAfterAutoCompact(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Context.AutoCompact.Enabled = true
-		cfg.Context.AutoCompact.InputTokenThreshold = 1
-		return nil
-	}); err != nil {
-		t.Fatalf("update config: %v", err)
-	}
-
-	store := newMemoryStore()
-	session := newRuntimeSession("session-auto-compact-skills")
-	session.ActivateSkill("go-review")
-	session.TokenInputTotal = 3
-	store.sessions[session.ID] = cloneSession(session)
-
-	builder := &stubContextBuilder{
-		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
-			return agentcontext.BuildResult{
-				SystemPrompt:         "prompt",
-				Messages:             append([]providertypes.Message(nil), input.Messages...),
-				AutoCompactSuggested: input.Metadata.SessionInputTokens >= 1,
-			}, nil
-		},
-	}
-	compactRunner := &stubCompactRunner{
-		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
-			return contextcompact.Result{
-				Applied:   true,
-				Messages:  append([]providertypes.Message(nil), input.Messages...),
-				TaskState: input.TaskState.Clone(),
-				Metrics: contextcompact.Metrics{
-					TriggerMode: string(contextcompact.ModeAuto),
-				},
-			}, nil
-		},
-	}
-	scripted := &scriptedProvider{
-		streams: [][]providertypes.StreamEvent{
-			{providertypes.NewTextDeltaStreamEvent("done")},
-		},
-	}
-	registry := tools.NewRegistry()
-	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
-
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
-	service.compactRunner = compactRunner
-	service.SetSkillsRegistry(&stubSkillsRegistry{
-		skills: map[string]skills.Skill{
-			"go-review": {
-				Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
-				Content:    skills.Content{Instruction: "review code"},
-			},
-		},
-	})
-
-	if err := service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-auto-compact-skills", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if len(builder.builds) < 2 {
-		t.Fatalf("expected context builder to run before and after compact, got %d", len(builder.builds))
-	}
-	for idx, build := range builder.builds[:2] {
-		if len(build.ActiveSkills) != 1 || build.ActiveSkills[0].Descriptor.ID != "go-review" {
-			t.Fatalf("expected active skill on build %d, got %+v", idx, build.ActiveSkills)
-		}
 	}
 }

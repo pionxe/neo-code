@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"google.golang.org/genai"
 
@@ -18,35 +19,74 @@ const errorPrefix = "gemini provider: "
 
 // Provider 封装 Gemini native 协议的请求发送与流式响应解析。
 type Provider struct {
-	cfg    provider.RuntimeConfig
-	client *genai.Client
+	cfg provider.RuntimeConfig
+
+	mu       sync.Mutex
+	prepared *preparedRequest
+}
+
+type preparedRequest struct {
+	signature string
+	model     string
+	contents  []*genai.Content
+	config    *genai.GenerateContentConfig
+}
+
+// EstimateInputTokens 基于 Gemini 最终请求结构做本地输入 token 估算。
+func (p *Provider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	model, contents, genConfig, err := BuildRequest(ctx, p.cfg, req)
+	if err != nil {
+		return providertypes.BudgetEstimate{}, err
+	}
+	payload := struct {
+		Model    string                       `json:"model"`
+		Contents []*genai.Content             `json:"contents"`
+		Config   *genai.GenerateContentConfig `json:"config,omitempty"`
+	}{
+		Model:    model,
+		Contents: contents,
+		Config:   genConfig,
+	}
+	tokens, err := provider.EstimateSerializedPayloadTokens(payload)
+	if err != nil {
+		return providertypes.BudgetEstimate{}, err
+	}
+	p.storePreparedRequest(provider.BuildGenerateRequestSignature(req), model, contents, genConfig)
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: tokens,
+		EstimateSource:       provider.EstimateSourceLocal,
+		GatePolicy:           provider.EstimateGateAdvisory,
+	}, nil
 }
 
 // New 创建 Gemini native provider 实例，并初始化官方 SDK 客户端。
 func New(cfg provider.RuntimeConfig) (*Provider, error) {
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, errors.New(errorPrefix + "api key is empty")
+	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
+		return nil, errors.New(errorPrefix + "api_key_env is empty")
 	}
-	client, err := newSDKClient(context.Background(), cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Provider{
-		cfg:    cfg,
-		client: client,
-	}, nil
+	return &Provider{cfg: cfg}, nil
 }
 
 // Generate 发起 Gemini 流式请求，并将 SDK chunk 转为统一流式事件。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	model, contents, config, err := BuildRequest(ctx, p.cfg, req)
-	if err != nil {
-		return err
+	model, contents, config, ok := p.takePreparedRequest(provider.BuildGenerateRequestSignature(req))
+	if !ok {
+		var err error
+		model, contents, config, err = BuildRequest(ctx, p.cfg, req)
+		if err != nil {
+			return err
+		}
 	}
 	normalizedModel := normalizeGeminiModelName(model)
 	if normalizedModel == "" {
 		return errors.New(errorPrefix + "model is empty")
+	}
+	client, err := newSDKClient(ctx, p.cfg)
+	if err != nil {
+		return err
 	}
 
 	var (
@@ -55,7 +95,7 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 		hasPayload   bool
 		callSeq      int
 	)
-	for chunk, streamErr := range p.client.Models.GenerateContentStream(ctx, normalizedModel, contents, config) {
+	for chunk, streamErr := range client.Models.GenerateContentStream(ctx, normalizedModel, contents, config) {
 		if streamErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -117,7 +157,42 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 	if !hasPayload {
 		return fmt.Errorf("%w: empty gemini stream payload", provider.ErrStreamInterrupted)
 	}
+	if !usage.InputObserved && !usage.OutputObserved {
+		return provider.EmitMessageDone(ctx, events, finishReason, nil)
+	}
 	return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+}
+
+// storePreparedRequest 缓存估算阶段的 Gemini 构建结果，供同轮发送直接复用。
+func (p *Provider) storePreparedRequest(
+	signature string,
+	model string,
+	contents []*genai.Content,
+	config *genai.GenerateContentConfig,
+) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prepared = &preparedRequest{
+		signature: strings.TrimSpace(signature),
+		model:     model,
+		contents:  contents,
+		config:    config,
+	}
+}
+
+// takePreparedRequest 读取并消费签名匹配的预构建请求，避免跨请求误复用。
+func (p *Provider) takePreparedRequest(signature string) (string, []*genai.Content, *genai.GenerateContentConfig, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prepared == nil {
+		return "", nil, nil, false
+	}
+	current := p.prepared
+	p.prepared = nil
+	if strings.TrimSpace(signature) == "" || current.signature != strings.TrimSpace(signature) {
+		return "", nil, nil, false
+	}
+	return current.model, current.contents, current.config, true
 }
 
 // normalizeGeminiModelName 统一清洗 Gemini 模型名，兼容 discover 返回的 "models/{id}" 形式。
@@ -137,6 +212,8 @@ func extractUsage(usage *providertypes.Usage, raw *genai.GenerateContentResponse
 	usage.InputTokens = int(raw.PromptTokenCount)
 	usage.OutputTokens = int(raw.CandidatesTokenCount)
 	usage.TotalTokens = int(raw.TotalTokenCount)
+	usage.InputObserved = true
+	usage.OutputObserved = true
 }
 
 // encodeArguments 将函数参数对象编码为 JSON 字符串，供统一 tool_call_delta 事件复用。

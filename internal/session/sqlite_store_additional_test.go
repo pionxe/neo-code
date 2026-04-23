@@ -213,7 +213,9 @@ func TestNormalizeCreateSessionInputDefaultsGeneratedID(t *testing.T) {
 
 	session, err := normalizeCreateSessionInput(CreateSessionInput{
 		Title: "  test  ",
-		Todos: []TodoItem{{ID: "todo-1", Content: "a"}},
+		Head: SessionHead{
+			Todos: []TodoItem{{ID: "todo-1", Content: "a"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("normalizeCreateSessionInput() error = %v", err)
@@ -473,7 +475,7 @@ func TestSQLiteStoreInitializeTightensExistingDirectoryPermissions(t *testing.T)
 
 	baseDir := t.TempDir()
 	workspaceRoot := t.TempDir()
-	store := NewStore(baseDir, workspaceRoot)
+	store := NewSQLiteStore(baseDir, workspaceRoot)
 	t.Cleanup(func() { _ = store.Close() })
 
 	for _, dir := range []string{store.projectDir, store.assetsDir} {
@@ -755,7 +757,7 @@ func TestBuildSessionFromRowMigratesMissingExecutorFromOwnerType(t *testing.T) {
 
 	session, migratedCount, err := buildSessionFromRow(row, nil)
 	if err != nil {
-		t.Fatalf("buildSessionFromRow() error = %v", err)
+		t.Fatalf("expected missing executor to default, got session=%+v err=%v", session, err)
 	}
 	if migratedCount != 1 {
 		t.Fatalf("migrated count = %d, want 1", migratedCount)
@@ -771,7 +773,7 @@ func TestBuildSessionFromRowMigratesMissingExecutorFromOwnerType(t *testing.T) {
 	}
 }
 
-func TestBuildSessionFromRowRetrySignalsDoNotInferSubAgentExecutor(t *testing.T) {
+func TestBuildSessionFromRowDefaultsRetryTodoMissingExecutorToAgent(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
@@ -791,7 +793,7 @@ func TestBuildSessionFromRowRetrySignalsDoNotInferSubAgentExecutor(t *testing.T)
 
 	session, migratedCount, err := buildSessionFromRow(row, nil)
 	if err != nil {
-		t.Fatalf("buildSessionFromRow() error = %v", err)
+		t.Fatalf("expected retry todo missing executor to default, got session=%+v err=%v", session, err)
 	}
 	if migratedCount != 1 {
 		t.Fatalf("migrated count = %d, want 1", migratedCount)

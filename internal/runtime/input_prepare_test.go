@@ -193,7 +193,7 @@ func newPrepareTestServiceWithRuntimeConfig(
 		t.Fatalf("load config: %v", err)
 	}
 
-	store := agentsession.NewStore(t.TempDir(), workdir)
+	store := agentsession.NewSQLiteStore(t.TempDir(), workdir)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})

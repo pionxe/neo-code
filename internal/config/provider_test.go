@@ -293,7 +293,15 @@ func TestProviderConfigResolveWrapsAPIKeyError(t *testing.T) {
 		BaseURL:   "https://example.com",
 		APIKeyEnv: "UNRESOLVABLE_API_KEY_FOR_TEST",
 	}
-	_, err := cfg.Resolve()
+	resolved, err := cfg.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	runtimeConfig, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	_, err = runtimeConfig.ResolveAPIKeyValue()
 	if err == nil || !strings.Contains(err.Error(), "UNRESOLVABLE_API_KEY_FOR_TEST") {
 		t.Fatalf("expected unresolved API key error, got %v", err)
 	}
@@ -652,12 +660,12 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 
 	resolved := ResolvedProviderConfig{
 		ProviderConfig: ProviderConfig{
-			Name:    "company-gateway",
-			Driver:  "openaicompat",
-			BaseURL: "https://llm.example.com/v1",
-			Model:   "server-default",
+			Name:      "company-gateway",
+			Driver:    "openaicompat",
+			BaseURL:   "https://llm.example.com/v1",
+			Model:     "server-default",
+			APIKeyEnv: "COMPANY_GATEWAY_KEY",
 		},
-		APIKey: "secret-key",
 		SessionAssetPolicy: session.AssetPolicy{
 			MaxSessionAssetBytes: 1024,
 		},
@@ -675,7 +683,7 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 		Driver:       "openaicompat",
 		BaseURL:      "https://llm.example.com/v1",
 		DefaultModel: "server-default",
-		APIKey:       "secret-key",
+		APIKeyEnv:    "COMPANY_GATEWAY_KEY",
 		SessionAssetPolicy: session.AssetPolicy{
 			MaxSessionAssetBytes: 1024,
 		},
@@ -687,7 +695,20 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
 	}
 
-	if got != want {
+	if got.APIKeyResolver == nil {
+		t.Fatal("expected APIKeyResolver to be set")
+	}
+	got.APIKeyResolver = nil
+	if got.Name != want.Name ||
+		got.Driver != want.Driver ||
+		got.BaseURL != want.BaseURL ||
+		got.DefaultModel != want.DefaultModel ||
+		got.APIKeyEnv != want.APIKeyEnv ||
+		got.SessionAssetPolicy != want.SessionAssetPolicy ||
+		got.RequestAssetBudget != want.RequestAssetBudget ||
+		got.ChatAPIMode != want.ChatAPIMode ||
+		got.ChatEndpointPath != want.ChatEndpointPath ||
+		got.DiscoveryEndpointPath != want.DiscoveryEndpointPath {
 		t.Fatalf("ToRuntimeConfig() = %+v, want %+v", got, want)
 	}
 }
@@ -697,12 +718,12 @@ func TestResolvedProviderConfigToRuntimeConfigStripsBaseURLUserinfo(t *testing.T
 
 	resolved := ResolvedProviderConfig{
 		ProviderConfig: ProviderConfig{
-			Name:    "company-gateway",
-			Driver:  "openaicompat",
-			BaseURL: "https://token@llm.example.com/v1",
-			Model:   "server-default",
+			Name:      "company-gateway",
+			Driver:    "openaicompat",
+			BaseURL:   "https://token@llm.example.com/v1",
+			Model:     "server-default",
+			APIKeyEnv: "COMPANY_GATEWAY_KEY",
 		},
-		APIKey: "secret-key",
 	}
 
 	got, err := resolved.ToRuntimeConfig()
@@ -728,7 +749,6 @@ func TestResolvedProviderConfigToRuntimeConfigReturnsProtocolNormalizationError(
 			APIKeyEnv:        "TEST_KEY",
 			ChatEndpointPath: "https://llm.example.com/chat/completions",
 		},
-		APIKey: "secret-key",
 	}
 
 	_, err := resolved.ToRuntimeConfig()
@@ -749,10 +769,10 @@ func TestResolvedProviderConfigToRuntimeConfigUsesNormalizedOpenAICompatPaths(t 
 			Driver:           "openaicompat",
 			BaseURL:          "https://llm.example.com/v1",
 			Model:            "gpt-5.4",
+			APIKeyEnv:        "RESPONSES_GATEWAY_KEY",
 			ChatAPIMode:      providerpkg.ChatAPIModeResponses,
 			ChatEndpointPath: "/responses",
 		},
-		APIKey: "secret-key",
 	}
 
 	got, err := resolved.ToRuntimeConfig()
@@ -776,10 +796,10 @@ func TestResolvedProviderConfigToRuntimeConfigStripsSDKChatEndpointPath(t *testi
 			Driver:                providerpkg.DriverGemini,
 			BaseURL:               GeminiDefaultBaseURL,
 			Model:                 GeminiDefaultModel,
+			APIKeyEnv:             "GEMINI_KEY",
 			ChatEndpointPath:      "/models",
 			DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
 		},
-		APIKey: "secret-key",
 	}
 
 	got, err := resolved.ToRuntimeConfig()

@@ -96,13 +96,16 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 		pinChecker = NewDefaultPinChecker()
 	}
 
-	shouldAutoCompact := input.Compact.AutoCompactThreshold > 0 &&
-		input.Metadata.SessionInputTokens >= input.Compact.AutoCompactThreshold
-
 	return BuildResult{
-		SystemPrompt:         composeSystemPrompt(sections...),
-		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages, input.Compact), input.TaskState, input.Compact, b.microCompactPolicies, b.microCompactSummarizers, pinChecker),
-		AutoCompactSuggested: shouldAutoCompact,
+		SystemPrompt: composeSystemPrompt(sections...),
+		Messages: applyReadTimeContextProjection(
+			trimPolicy.Trim(input.Messages, input.Compact),
+			input.TaskState,
+			input.Compact,
+			b.microCompactPolicies,
+			b.microCompactSummarizers,
+			pinChecker,
+		),
 	}, nil
 }
 

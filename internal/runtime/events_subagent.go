@@ -2,12 +2,6 @@ package runtime
 
 import "neo-code/internal/subagent"
 
-// EventPermissionRequest 为兼容旧事件名保留，语义等同 EventPermissionRequested。
-const EventPermissionRequest EventType = EventPermissionRequested
-
-// EventCompactDone 为兼容旧事件名保留，语义等同 EventCompactApplied。
-const EventCompactDone EventType = EventCompactApplied
-
 // SubAgentEventPayload 描述子代理执行生命周期的事件载荷。
 type SubAgentEventPayload struct {
 	Role       subagent.Role       `json:"role"`

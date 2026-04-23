@@ -20,7 +20,7 @@ func newTestStore(t *testing.T) *SQLiteStore {
 	if err != nil {
 		t.Fatalf("MkdirTemp() error = %v", err)
 	}
-	store := NewStore(baseDir, workspaceRoot)
+	store := NewSQLiteStore(baseDir, workspaceRoot)
 	t.Cleanup(func() {
 		_ = store.Close()
 		_ = os.RemoveAll(baseDir)

@@ -1,12 +1,6 @@
 package tui
 
-import (
-	"testing"
-
-	"neo-code/internal/config"
-	"neo-code/internal/memo"
-	tuibootstrap "neo-code/internal/tui/bootstrap"
-)
+import "testing"
 
 func TestAppTypeAlias(t *testing.T) {
 	var _ App = App{}
@@ -14,31 +8,4 @@ func TestAppTypeAlias(t *testing.T) {
 
 func TestProviderControllerTypeAlias(t *testing.T) {
 	var _ ProviderController = ProviderController(nil)
-}
-
-func TestNewForwardsToCore(t *testing.T) {
-	t.Run("nil config", func(t *testing.T) {
-		_, err := New(nil, &config.Manager{}, nil, nil)
-		if err == nil {
-			t.Error("expected error for nil runtime")
-		}
-	})
-}
-
-func TestNewWithBootstrapForwardsToCore(t *testing.T) {
-	t.Run("empty options", func(t *testing.T) {
-		_, err := NewWithBootstrap(tuibootstrap.Options{})
-		if err == nil {
-			t.Error("expected error for empty options")
-		}
-	})
-}
-
-func TestNewWithMemoForwardsToCore(t *testing.T) {
-	t.Run("nil runtime", func(t *testing.T) {
-		_, err := NewWithMemo(nil, &config.Manager{}, nil, nil, &memo.Service{})
-		if err == nil {
-			t.Error("expected error for nil runtime")
-		}
-	})
 }

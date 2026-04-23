@@ -21,15 +21,13 @@ import (
 // generateSDKChatCompletions 走 SDK chat/completions 发送请求
 func (p *Provider) generateSDKChatCompletions(
 	ctx context.Context,
-	req providertypes.GenerateRequest,
+	payload chatcompletions.Request,
 	events chan<- providertypes.StreamEvent,
 ) error {
-	payload, err := chatcompletions.BuildRequest(ctx, p.cfg, req)
+	client, err := p.newSDKClient()
 	if err != nil {
 		return err
 	}
-
-	client := p.newSDKClient()
 	params := convertToChatCompletionParams(payload)
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
@@ -249,7 +247,10 @@ func (p *Provider) generateChatCompletionsWithCompatibleStream(
 		return fmt.Errorf("%sinvalid chat endpoint configuration: %w", errorPrefix, err)
 	}
 
-	client := p.newSDKClient()
+	client, err := p.newSDKClient()
+	if err != nil {
+		return err
+	}
 	var resp *http.Response
 	err = client.Post(
 		ctx,
@@ -274,19 +275,18 @@ func (p *Provider) generateChatCompletionsWithCompatibleStream(
 // generateSDKResponses 走 SDK responses 发送请求，复用本地流事件映射。
 func (p *Provider) generateSDKResponses(
 	ctx context.Context,
-	req providertypes.GenerateRequest,
+	payload responses.Request,
 	events chan<- providertypes.StreamEvent,
 ) error {
-	payload, err := responses.BuildRequest(ctx, p.cfg, req)
-	if err != nil {
-		return err
-	}
 	endpoint, err := resolveChatEndpoint(p.cfg)
 	if err != nil {
 		return err
 	}
 
-	client := p.newSDKClient()
+	client, err := p.newSDKClient()
+	if err != nil {
+		return err
+	}
 	var resp *http.Response
 	err = client.Post(
 		ctx,
@@ -316,12 +316,16 @@ func wrapSDKRequestError(err error, action string) error {
 	return fmt.Errorf("%s%s: %w", errorPrefix, strings.TrimSpace(action), err)
 }
 
-func (p *Provider) newSDKClient() openai.Client {
+func (p *Provider) newSDKClient() (openai.Client, error) {
+	apiKey, err := p.cfg.ResolveAPIKeyValue()
+	if err != nil {
+		return openai.Client{}, err
+	}
 	return openai.NewClient(
 		option.WithHTTPClient(p.client),
-		option.WithAPIKey(strings.TrimSpace(p.cfg.APIKey)),
+		option.WithAPIKey(apiKey),
 		option.WithBaseURL(strings.TrimRight(strings.TrimSpace(p.cfg.BaseURL), "/")),
-	)
+	), nil
 }
 
 func resolveChatEndpoint(cfg provider.RuntimeConfig) (string, error) {

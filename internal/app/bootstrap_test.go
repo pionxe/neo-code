@@ -60,6 +60,82 @@ func TestNewProgram(t *testing.T) {
 	}
 }
 
+func TestBuildSharedConfigDepsRunsConfigMigrationPreflight(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := strings.TrimSpace(`
+selected_provider: openai
+current_model: gpt-5.4
+shell: powershell
+context:
+  auto_compact:
+    enabled: false
+    reserve_tokens: 14000
+`) + "\n"
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	originalLogf := bootstrapLogf
+	t.Cleanup(func() { bootstrapLogf = originalLogf })
+	var logs []string
+	bootstrapLogf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	shared, _, _, err := BuildSharedConfigDeps(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildSharedConfigDeps() error = %v", err)
+	}
+	if shared.Config.Context.Budget.ReserveTokens != 14000 {
+		t.Fatalf("expected migrated reserve_tokens=14000, got %d", shared.Config.Context.Budget.ReserveTokens)
+	}
+
+	migrated, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read migrated config: %v", err)
+	}
+	text := string(migrated)
+	if strings.Contains(text, "auto_compact:") || !strings.Contains(text, "budget:") {
+		t.Fatalf("expected migrated budget block, got:\n%s", text)
+	}
+	if _, err := os.Stat(configPath + ".bak"); err != nil {
+		t.Fatalf("expected migration backup file: %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatalf("expected preflight migration logs")
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, config.ContextBudgetMigrationNoteEnabledDeprecated) {
+		t.Fatalf("expected migration note log, got:\n%s", joined)
+	}
+}
+
+func TestBuildSharedConfigDepsReturnsPreflightError(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	originalPreflight := runConfigMigrationPreflight
+	t.Cleanup(func() { runConfigMigrationPreflight = originalPreflight })
+	runConfigMigrationPreflight = func(context.Context, string) error {
+		return errors.New("preflight failed")
+	}
+
+	_, _, _, err := BuildSharedConfigDeps(context.Background(), BootstrapOptions{})
+	if err == nil || !strings.Contains(err.Error(), "preflight failed") {
+		t.Fatalf("expected preflight error, got %v", err)
+	}
+}
+
 func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 	originalFactory := newRemoteRuntimeAdapter
@@ -134,7 +210,7 @@ func TestBuildRuntimeRejectsUnsupportedSelectedProviderDriverOnStartup(t *testin
 		t.Fatalf("write provider config: %v", err)
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if !errors.Is(err, configstate.ErrDriverUnsupported) {
 		t.Fatalf("expected ErrDriverUnsupported, got %v", err)
 	}
@@ -762,9 +838,9 @@ func TestBuildRuntimeUsesWorkdirOverride(t *testing.T) {
 		t.Fatalf("mkdir override workdir: %v", err)
 	}
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{Workdir: override})
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{Workdir: override})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
 	}
 	if bundle.Config.Workdir != filepath.Clean(override) {
 		t.Fatalf("expected workdir %q, got %q", filepath.Clean(override), bundle.Config.Workdir)
@@ -786,9 +862,9 @@ func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
 	}
 	if bundle.Close != nil {
 		t.Cleanup(func() {
@@ -808,7 +884,7 @@ func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
 		t.Fatalf("expected runtime to expose ActivateSessionSkill")
 	}
 
-	store := agentsession.NewStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	store := agentsession.NewSQLiteStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
 			t.Fatalf("store.Close() error = %v", err)
@@ -820,7 +896,7 @@ func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
 		Title:     session.Title,
 		CreatedAt: session.CreatedAt,
 		UpdatedAt: session.UpdatedAt,
-		Workdir:   session.Workdir,
+		Head:      session.HeadSnapshot(),
 	})
 	if err != nil {
 		t.Fatalf("save session: %v", err)
@@ -856,9 +932,9 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
 	}
 	if bundle.Close != nil {
 		t.Cleanup(func() {
@@ -868,7 +944,7 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 		})
 	}
 
-	store := agentsession.NewStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	store := agentsession.NewSQLiteStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
 			t.Fatalf("store.Close() error = %v", err)
@@ -880,7 +956,7 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 		Title:     session.Title,
 		CreatedAt: session.CreatedAt,
 		UpdatedAt: session.UpdatedAt,
-		Workdir:   session.Workdir,
+		Head:      session.HeadSnapshot(),
 	})
 	if err != nil {
 		t.Fatalf("save session: %v", err)
@@ -930,7 +1006,7 @@ func TestBuildRuntimeRejectsInvalidWorkdirOverride(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 
 	invalid := filepath.Join(t.TempDir(), "missing", "中文")
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{Workdir: invalid})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{Workdir: invalid})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "resolve workdir") {
 		t.Fatalf("expected resolve workdir error, got %v", err)
 	}
@@ -952,7 +1028,7 @@ func TestBuildRuntimeRejectsInvalidConfigFile(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err == nil || !strings.Contains(err.Error(), "workdir not found") {
 		t.Fatalf("expected legacy config error, got %v", err)
 	}
@@ -985,7 +1061,7 @@ func TestBuildRuntimeRejectsUnsupportedMCPSource(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not supported") {
 		t.Fatalf("expected unsupported mcp source validation error, got %v", err)
 	}
@@ -1034,7 +1110,7 @@ func TestBuildRuntimeCleansResourcesWhenToolManagerBuildFails(t *testing.T) {
 		return nil, errors.New("build tool manager failed")
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err == nil || !strings.Contains(err.Error(), "build tool manager failed") {
 		t.Fatalf("expected tool manager build error, got %v", err)
 	}
@@ -1065,9 +1141,9 @@ func TestBuildRuntimeLogsSessionCleanupWarningAndContinues(t *testing.T) {
 	log.SetOutput(&logBuffer)
 	t.Cleanup(func() { log.SetOutput(originalLogWriter) })
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
 	}
 	if bundle.Close != nil {
 		defer bundle.Close()
@@ -1531,6 +1607,9 @@ func TestBuildTUIClientDepsSkipsLocalRuntimeStack(t *testing.T) {
 
 func TestNewProgramUsesRemoteRuntimeAdapter(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	originalFactory := newRemoteRuntimeAdapter
 	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
@@ -1562,6 +1641,9 @@ func TestNewProgramUsesRemoteRuntimeAdapter(t *testing.T) {
 
 func TestNewProgramFailsFastWhenRemoteAdapterInitFails(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	originalFactory := newRemoteRuntimeAdapter
 	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
@@ -1821,6 +1903,18 @@ func (s *stubMemoProviderFactory) Build(ctx context.Context, cfg provider.Runtim
 
 type stubMemoProvider struct {
 	generate func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
+}
+
+func (s *stubMemoProvider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	_ = ctx
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: provider.EstimateTextTokens(req.SystemPrompt),
+		EstimateSource:       provider.EstimateSourceLocal,
+		GatePolicy:           provider.EstimateGateGateable,
+	}, nil
 }
 
 func (s *stubMemoProvider) Generate(

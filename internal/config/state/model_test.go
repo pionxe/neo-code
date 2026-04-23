@@ -57,8 +57,15 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	if err != nil {
 		t.Fatalf("ResolveDiscoveryConfig() error = %v", err)
 	}
-	if runtimeConfig.DefaultModel != "server-default" || runtimeConfig.APIKey != "secret-key" {
+	if runtimeConfig.DefaultModel != "server-default" {
 		t.Fatalf("expected runtime config to resolve model and api key, got %+v", runtimeConfig)
+	}
+	apiKey, err := runtimeConfig.ResolveAPIKeyValue()
+	if err != nil {
+		t.Fatalf("ResolveAPIKeyValue() error = %v", err)
+	}
+	if apiKey != "secret-key" {
+		t.Fatalf("expected resolved api key secret-key, got %q", apiKey)
 	}
 }
 
@@ -137,7 +144,11 @@ func TestCatalogInputFromProviderResolveDiscoveryConfigPropagatesResolveError(t 
 		t.Fatalf("catalogInputFromProvider() error = %v", err)
 	}
 
-	_, err = input.ResolveDiscoveryConfig()
+	runtimeConfig, err := input.ResolveDiscoveryConfig()
+	if err != nil {
+		t.Fatalf("ResolveDiscoveryConfig() error = %v", err)
+	}
+	_, err = runtimeConfig.ResolveAPIKeyValue()
 	if err == nil || !strings.Contains(err.Error(), "environment variable MISSING_PROVIDER_API_KEY is empty") {
 		t.Fatalf("expected resolve api key error, got %v", err)
 	}

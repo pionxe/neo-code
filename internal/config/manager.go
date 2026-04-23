@@ -42,10 +42,6 @@ func (m *Manager) Load(ctx context.Context) (Config, error) {
 	return snapshot, nil
 }
 
-func (m *Manager) Reload(ctx context.Context) (Config, error) {
-	return m.Load(ctx)
-}
-
 func (m *Manager) Get() Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

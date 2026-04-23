@@ -533,22 +533,24 @@ func TestInputPreparerPrepareWorkdirUpdatePreservesConcurrentSessionHeadChanges(
 		SessionID: session.ID,
 		Title:     session.Title,
 		UpdatedAt: session.UpdatedAt.Add(time.Minute),
-		Provider:  "provider-after",
-		Model:     "model-after",
-		Workdir:   currentWorkdir,
-		TaskState: TaskState{
-			Goal:     "newer task state",
-			NextStep: "must survive workdir update",
+		Head: SessionHead{
+			Provider: "provider-after",
+			Model:    "model-after",
+			Workdir:  currentWorkdir,
+			TaskState: TaskState{
+				Goal:     "newer task state",
+				NextStep: "must survive workdir update",
+			},
+			Todos: []TodoItem{{
+				ID:        "todo-newer",
+				Content:   "written by concurrent run",
+				Status:    TodoStatusCompleted,
+				CreatedAt: session.CreatedAt,
+				UpdatedAt: session.UpdatedAt.Add(time.Minute),
+			}},
+			TokenInputTotal:  55,
+			TokenOutputTotal: 89,
 		},
-		Todos: []TodoItem{{
-			ID:        "todo-newer",
-			Content:   "written by concurrent run",
-			Status:    TodoStatusCompleted,
-			CreatedAt: session.CreatedAt,
-			UpdatedAt: session.UpdatedAt.Add(time.Minute),
-		}},
-		TokenInputTotal:  55,
-		TokenOutputTotal: 89,
 	}
 
 	preparerStore := &workdirRaceStore{
@@ -579,40 +581,33 @@ func TestInputPreparerPrepareWorkdirUpdatePreservesConcurrentSessionHeadChanges(
 	if loaded.Workdir != targetWorkdir {
 		t.Fatalf("expected persisted workdir %q, got %q", targetWorkdir, loaded.Workdir)
 	}
-	if loaded.Provider != concurrentState.Provider || loaded.Model != concurrentState.Model {
+	if loaded.Provider != concurrentState.Head.Provider || loaded.Model != concurrentState.Head.Model {
 		t.Fatalf("expected provider/model %q/%q, got %q/%q",
-			concurrentState.Provider, concurrentState.Model, loaded.Provider, loaded.Model)
+			concurrentState.Head.Provider, concurrentState.Head.Model, loaded.Provider, loaded.Model)
 	}
-	if loaded.TokenInputTotal != concurrentState.TokenInputTotal || loaded.TokenOutputTotal != concurrentState.TokenOutputTotal {
+	if loaded.TokenInputTotal != concurrentState.Head.TokenInputTotal || loaded.TokenOutputTotal != concurrentState.Head.TokenOutputTotal {
 		t.Fatalf("expected token totals %d/%d, got %d/%d",
-			concurrentState.TokenInputTotal,
-			concurrentState.TokenOutputTotal,
+			concurrentState.Head.TokenInputTotal,
+			concurrentState.Head.TokenOutputTotal,
 			loaded.TokenInputTotal,
 			loaded.TokenOutputTotal,
 		)
 	}
-	if loaded.TaskState.Goal != concurrentState.TaskState.Goal || loaded.TaskState.NextStep != concurrentState.TaskState.NextStep {
+	if loaded.TaskState.Goal != concurrentState.Head.TaskState.Goal || loaded.TaskState.NextStep != concurrentState.Head.TaskState.NextStep {
 		t.Fatalf("expected newer task state to survive, got %+v", loaded.TaskState)
 	}
-	if len(loaded.Todos) != 1 || loaded.Todos[0].ID != concurrentState.Todos[0].ID || loaded.Todos[0].Status != concurrentState.Todos[0].Status {
+	if len(loaded.Todos) != 1 || loaded.Todos[0].ID != concurrentState.Head.Todos[0].ID || loaded.Todos[0].Status != concurrentState.Head.Todos[0].Status {
 		t.Fatalf("expected newer todos to survive, got %+v", loaded.Todos)
 	}
 }
 
 func createSessionForPreparerTest(ctx context.Context, store *SQLiteStore, session Session) error {
 	_, err := store.CreateSession(ctx, CreateSessionInput{
-		ID:               session.ID,
-		Title:            session.Title,
-		CreatedAt:        session.CreatedAt,
-		UpdatedAt:        session.UpdatedAt,
-		Provider:         session.Provider,
-		Model:            session.Model,
-		Workdir:          session.Workdir,
-		TaskState:        session.TaskState,
-		ActivatedSkills:  session.ActivatedSkills,
-		Todos:            session.Todos,
-		TokenInputTotal:  session.TokenInputTotal,
-		TokenOutputTotal: session.TokenOutputTotal,
+		ID:        session.ID,
+		Title:     session.Title,
+		CreatedAt: session.CreatedAt,
+		UpdatedAt: session.UpdatedAt,
+		Head:      session.HeadSnapshot(),
 	})
 	return err
 }
@@ -620,7 +615,7 @@ func createSessionForPreparerTest(ctx context.Context, store *SQLiteStore, sessi
 func newInputPreparerTestStore(t *testing.T, workdir string) *SQLiteStore {
 	t.Helper()
 
-	store := NewStore(t.TempDir(), workdir)
+	store := NewSQLiteStore(t.TempDir(), workdir)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})

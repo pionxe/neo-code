@@ -426,19 +426,19 @@ func TestPrepareTurnSnapshotInjectRepeatReminderWithEmptyPrompt(t *testing.T) {
 	state.progress.LastScore.StalledProgressState = controlplane.StalledProgressStalled
 	state.progress.LastScore.ReminderKind = controlplane.ReminderKindRepeatCycle
 
-	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
+	snapshot, rebuilt, err := service.prepareTurnBudgetSnapshot(context.Background(), &state)
 	if err != nil {
-		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+		t.Fatalf("prepareTurnBudgetSnapshot() error = %v", err)
 	}
 	if rebuilt {
 		t.Fatal("expected rebuilt=false")
 	}
-	if snapshot.request.SystemPrompt != selfHealingRepeatReminder {
-		t.Fatalf("expected repeat reminder only, got %q", snapshot.request.SystemPrompt)
+	if snapshot.Request.SystemPrompt != selfHealingRepeatReminder {
+		t.Fatalf("expected repeat reminder only, got %q", snapshot.Request.SystemPrompt)
 	}
 }
 
-func TestPrepareTurnSnapshotRepeatReminderTakesPriority(t *testing.T) {
+func TestPrepareTurnBudgetSnapshotRepeatReminderTakesPriority(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.Runtime.MaxNoProgressStreak = 3
@@ -463,18 +463,18 @@ func TestPrepareTurnSnapshotRepeatReminderTakesPriority(t *testing.T) {
 	state.progress.LastScore.StalledProgressState = controlplane.StalledProgressStalled
 	state.progress.LastScore.ReminderKind = controlplane.ReminderKindRepeatCycle
 
-	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
+	snapshot, rebuilt, err := service.prepareTurnBudgetSnapshot(context.Background(), &state)
 	if err != nil {
-		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+		t.Fatalf("prepareTurnBudgetSnapshot() error = %v", err)
 	}
 	if rebuilt {
 		t.Fatal("expected rebuilt=false")
 	}
-	if !strings.Contains(snapshot.request.SystemPrompt, selfHealingRepeatReminder) {
-		t.Fatalf("expected prompt to contain repeat reminder, got %q", snapshot.request.SystemPrompt)
+	if !strings.Contains(snapshot.Request.SystemPrompt, selfHealingRepeatReminder) {
+		t.Fatalf("expected prompt to contain repeat reminder, got %q", snapshot.Request.SystemPrompt)
 	}
-	if strings.Contains(snapshot.request.SystemPrompt, selfHealingReminder) {
-		t.Fatalf("expected no-progress reminder to be skipped when repeat reminder is injected, got %q", snapshot.request.SystemPrompt)
+	if strings.Contains(snapshot.Request.SystemPrompt, selfHealingReminder) {
+		t.Fatalf("expected no-progress reminder to be skipped when repeat reminder is injected, got %q", snapshot.Request.SystemPrompt)
 	}
 }
 

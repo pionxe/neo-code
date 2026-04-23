@@ -7,21 +7,22 @@ import (
 )
 
 const (
-	DefaultCompactManualKeepRecentMessages        = 10
-	DefaultCompactMaxSummaryChars                 = 1200
-	DefaultAutoCompactInputTokenThreshold         = 0
-	DefaultAutoCompactReserveTokens               = 13000
-	DefaultAutoCompactFallbackInputTokenThreshold = 100000
-	DefaultMicroCompactRetainedToolSpans          = 6
-	DefaultCompactReadTimeMaxMessageSpans         = 24
+	DefaultCompactManualKeepRecentMessages = 10
+	DefaultCompactMaxSummaryChars          = 1200
+	DefaultBudgetPromptBudget              = 0
+	DefaultBudgetReserveTokens             = 13000
+	DefaultBudgetFallbackPromptBudget      = 100000
+	DefaultBudgetMaxReactiveCompacts       = 3
+	DefaultMicroCompactRetainedToolSpans   = 6
+	DefaultCompactReadTimeMaxMessageSpans  = 24
 
 	CompactManualStrategyKeepRecent  = "keep_recent"
 	CompactManualStrategyFullReplace = "full_replace"
 )
 
 type ContextConfig struct {
-	Compact     CompactConfig     `yaml:"compact,omitempty"`
-	AutoCompact AutoCompactConfig `yaml:"auto_compact,omitempty"`
+	Compact CompactConfig `yaml:"compact,omitempty"`
+	Budget  BudgetConfig  `yaml:"budget,omitempty"`
 }
 
 type CompactConfig struct {
@@ -34,27 +35,29 @@ type CompactConfig struct {
 	MaxArchivedPromptChars        int    `yaml:"max_archived_prompt_chars,omitempty"`
 }
 
-// AutoCompactConfig controls automatic context compression triggered by token thresholds.
-type AutoCompactConfig struct {
-	Enabled                     bool `yaml:"enabled"`
-	InputTokenThreshold         int  `yaml:"input_token_threshold,omitempty"`
-	ReserveTokens               int  `yaml:"reserve_tokens,omitempty"`
-	FallbackInputTokenThreshold int  `yaml:"fallback_input_token_threshold,omitempty"`
+// BudgetConfig 定义上下文预算控制面的配置。
+type BudgetConfig struct {
+	PromptBudget         int `yaml:"prompt_budget,omitempty"`
+	ReserveTokens        int `yaml:"reserve_tokens,omitempty"`
+	FallbackPromptBudget int `yaml:"fallback_prompt_budget,omitempty"`
+	MaxReactiveCompacts  int `yaml:"max_reactive_compacts,omitempty"`
 }
 
 // defaultContextConfig 返回上下文压缩相关配置的默认值。
 func defaultContextConfig() ContextConfig {
 	return ContextConfig{
-		Compact:     defaultCompactConfig(),
-		AutoCompact: defaultAutoCompactConfig(),
+		Compact: defaultCompactConfig(),
+		Budget:  defaultBudgetConfig(),
 	}
 }
 
-func defaultAutoCompactConfig() AutoCompactConfig {
-	return AutoCompactConfig{
-		InputTokenThreshold:         DefaultAutoCompactInputTokenThreshold,
-		ReserveTokens:               DefaultAutoCompactReserveTokens,
-		FallbackInputTokenThreshold: DefaultAutoCompactFallbackInputTokenThreshold,
+// defaultBudgetConfig 返回预算控制面的默认配置。
+func defaultBudgetConfig() BudgetConfig {
+	return BudgetConfig{
+		PromptBudget:         DefaultBudgetPromptBudget,
+		ReserveTokens:        DefaultBudgetReserveTokens,
+		FallbackPromptBudget: DefaultBudgetFallbackPromptBudget,
+		MaxReactiveCompacts:  DefaultBudgetMaxReactiveCompacts,
 	}
 }
 
@@ -72,8 +75,8 @@ func defaultCompactConfig() CompactConfig {
 // Clone 返回上下文配置的独立副本，避免后续修改污染原值。
 func (c ContextConfig) Clone() ContextConfig {
 	return ContextConfig{
-		Compact:     c.Compact.Clone(),
-		AutoCompact: c.AutoCompact.Clone(),
+		Compact: c.Compact.Clone(),
+		Budget:  c.Budget.Clone(),
 	}
 }
 
@@ -82,8 +85,8 @@ func (c CompactConfig) Clone() CompactConfig {
 	return c
 }
 
-// Clone 返回 auto_compact 配置的值副本。
-func (c AutoCompactConfig) Clone() AutoCompactConfig {
+// Clone 返回 budget 配置的值副本。
+func (c BudgetConfig) Clone() BudgetConfig {
 	return c
 }
 
@@ -94,7 +97,7 @@ func (c *ContextConfig) ApplyDefaults(defaults ContextConfig) {
 	}
 
 	c.Compact.ApplyDefaults(defaults.Compact)
-	c.AutoCompact.ApplyDefaults(defaults.AutoCompact)
+	c.Budget.ApplyDefaults(defaults.Budget)
 }
 
 // ApplyDefaults 为 compact 配置填充缺省策略和阈值。
@@ -120,16 +123,19 @@ func (c *CompactConfig) ApplyDefaults(defaults CompactConfig) {
 	}
 }
 
-// ApplyDefaults 为 auto_compact 配置填充缺省阈值。
-func (c *AutoCompactConfig) ApplyDefaults(defaults AutoCompactConfig) {
+// ApplyDefaults 为 budget 配置填充缺省值。
+func (c *BudgetConfig) ApplyDefaults(defaults BudgetConfig) {
 	if c == nil {
 		return
 	}
 	if c.ReserveTokens <= 0 {
 		c.ReserveTokens = defaults.ReserveTokens
 	}
-	if c.FallbackInputTokenThreshold <= 0 {
-		c.FallbackInputTokenThreshold = defaults.FallbackInputTokenThreshold
+	if c.FallbackPromptBudget <= 0 {
+		c.FallbackPromptBudget = defaults.FallbackPromptBudget
+	}
+	if c.MaxReactiveCompacts <= 0 {
+		c.MaxReactiveCompacts = defaults.MaxReactiveCompacts
 	}
 }
 
@@ -138,8 +144,8 @@ func (c ContextConfig) Validate() error {
 	if err := c.Compact.Validate(); err != nil {
 		return fmt.Errorf("compact: %w", err)
 	}
-	if err := c.AutoCompact.Validate(); err != nil {
-		return fmt.Errorf("auto_compact: %w", err)
+	if err := c.Budget.Validate(); err != nil {
+		return fmt.Errorf("budget: %w", err)
 	}
 	return nil
 }
@@ -164,16 +170,19 @@ func (c CompactConfig) Validate() error {
 	}
 }
 
-// Validate 校验 auto_compact 配置是否合法。
-func (c AutoCompactConfig) Validate() error {
-	if !c.Enabled {
-		return nil
+// Validate 校验 budget 配置是否合法。
+func (c BudgetConfig) Validate() error {
+	if c.PromptBudget < 0 {
+		return errors.New("prompt_budget must be greater than or equal to 0")
 	}
 	if c.ReserveTokens <= 0 {
-		return errors.New("reserve_tokens must be greater than 0 when enabled")
+		return errors.New("reserve_tokens must be greater than 0")
 	}
-	if c.FallbackInputTokenThreshold <= 0 {
-		return errors.New("fallback_input_token_threshold must be greater than 0 when enabled")
+	if c.FallbackPromptBudget <= 0 {
+		return errors.New("fallback_prompt_budget must be greater than 0")
+	}
+	if c.MaxReactiveCompacts <= 0 {
+		return errors.New("max_reactive_compacts must be greater than 0")
 	}
 	return nil
 }

@@ -330,6 +330,17 @@ func MapUsagePayload(payload RuntimeUsagePayload) TokenUsageVM {
 	}
 }
 
+// MapTokenUsagePayload 将当前 token_usage 事件累计进 TUI token 视图。
+func MapTokenUsagePayload(payload TokenUsagePayload, current TokenUsageVM) TokenUsageVM {
+	current.RunInputTokens += payload.InputTokens
+	current.RunOutputTokens += payload.OutputTokens
+	current.RunTotalTokens = current.RunInputTokens + current.RunOutputTokens
+	current.SessionInputTokens = payload.SessionInputTokens
+	current.SessionOutputTokens = payload.SessionOutputTokens
+	current.SessionTotalTokens = payload.SessionInputTokens + payload.SessionOutputTokens
+	return current
+}
+
 // MapUsageSnapshot 将 usage 快照映射为 TokenUsageVM（保留当前 run 统计不变）。
 func MapUsageSnapshot(snapshot RuntimeUsageSnapshot, current TokenUsageVM) TokenUsageVM {
 	current.SessionInputTokens = snapshot.InputTokens

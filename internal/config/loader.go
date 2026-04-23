@@ -34,8 +34,8 @@ type persistedConfig struct {
 }
 
 type persistedContextConfig struct {
-	Compact     persistedCompactConfig     `yaml:"compact,omitempty"`
-	AutoCompact persistedAutoCompactConfig `yaml:"auto_compact,omitempty"`
+	Compact persistedCompactConfig `yaml:"compact,omitempty"`
+	Budget  persistedBudgetConfig  `yaml:"budget,omitempty"`
 }
 
 type persistedCompactConfig struct {
@@ -48,11 +48,11 @@ type persistedCompactConfig struct {
 	MaxArchivedPromptChars        int    `yaml:"max_archived_prompt_chars,omitempty"`
 }
 
-type persistedAutoCompactConfig struct {
-	Enabled                     bool `yaml:"enabled"`
-	InputTokenThreshold         int  `yaml:"input_token_threshold,omitempty"`
-	ReserveTokens               int  `yaml:"reserve_tokens,omitempty"`
-	FallbackInputTokenThreshold int  `yaml:"fallback_input_token_threshold,omitempty"`
+type persistedBudgetConfig struct {
+	PromptBudget         int `yaml:"prompt_budget,omitempty"`
+	ReserveTokens        int `yaml:"reserve_tokens,omitempty"`
+	FallbackPromptBudget int `yaml:"fallback_prompt_budget,omitempty"`
+	MaxReactiveCompacts  int `yaml:"max_reactive_compacts,omitempty"`
 }
 
 type persistedMemoConfig struct {
@@ -114,6 +114,9 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 			return nil, err
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	data, err := os.ReadFile(l.ConfigPath())
 	if err != nil {
@@ -162,7 +165,7 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 		return err
 	}
 
-	if err := os.WriteFile(l.ConfigPath(), data, 0o644); err != nil {
+	if err := writeFileAtomically(l.ConfigPath(), data, 0o644); err != nil {
 		return fmt.Errorf("config: write config file: %w", err)
 	}
 
@@ -259,11 +262,11 @@ func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 			ReadTimeMaxMessageSpans:       cfg.Compact.ReadTimeMaxMessageSpans,
 			MaxArchivedPromptChars:        cfg.Compact.MaxArchivedPromptChars,
 		},
-		AutoCompact: persistedAutoCompactConfig{
-			Enabled:                     cfg.AutoCompact.Enabled,
-			InputTokenThreshold:         cfg.AutoCompact.InputTokenThreshold,
-			ReserveTokens:               cfg.AutoCompact.ReserveTokens,
-			FallbackInputTokenThreshold: cfg.AutoCompact.FallbackInputTokenThreshold,
+		Budget: persistedBudgetConfig{
+			PromptBudget:         cfg.Budget.PromptBudget,
+			ReserveTokens:        cfg.Budget.ReserveTokens,
+			FallbackPromptBudget: cfg.Budget.FallbackPromptBudget,
+			MaxReactiveCompacts:  cfg.Budget.MaxReactiveCompacts,
 		},
 	}
 }
@@ -280,15 +283,15 @@ func fromPersistedContextConfig(file persistedContextConfig, defaults ContextCon
 			ReadTimeMaxMessageSpans:       file.Compact.ReadTimeMaxMessageSpans,
 			MaxArchivedPromptChars:        file.Compact.MaxArchivedPromptChars,
 		},
-		AutoCompact: AutoCompactConfig{
-			Enabled:                     file.AutoCompact.Enabled,
-			InputTokenThreshold:         file.AutoCompact.InputTokenThreshold,
-			ReserveTokens:               file.AutoCompact.ReserveTokens,
-			FallbackInputTokenThreshold: file.AutoCompact.FallbackInputTokenThreshold,
+		Budget: BudgetConfig{
+			PromptBudget:         file.Budget.PromptBudget,
+			ReserveTokens:        file.Budget.ReserveTokens,
+			FallbackPromptBudget: file.Budget.FallbackPromptBudget,
+			MaxReactiveCompacts:  file.Budget.MaxReactiveCompacts,
 		},
 	}
 	out.Compact.ApplyDefaults(defaults.Compact)
-	out.AutoCompact.ApplyDefaults(defaults.AutoCompact)
+	out.Budget.ApplyDefaults(defaults.Budget)
 	return out
 }
 

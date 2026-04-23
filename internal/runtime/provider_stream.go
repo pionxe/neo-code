@@ -11,10 +11,12 @@ import (
 
 // streamGenerateResult 统一承载一次流式生成的消息、用量与消费错误。
 type streamGenerateResult struct {
-	message      providertypes.Message
-	inputTokens  int
-	outputTokens int
-	err          error
+	message        providertypes.Message
+	inputTokens    int
+	outputTokens   int
+	inputObserved  bool
+	outputObserved bool
+	err            error
 }
 
 // generateStreamingMessage 负责执行一次基于流式事件的生成调用，并收敛最终 assistant 消息与 usage。
@@ -40,6 +42,8 @@ func generateStreamingMessage(
 			if payload.Usage != nil {
 				outcome.inputTokens = payload.Usage.InputTokens
 				outcome.outputTokens = payload.Usage.OutputTokens
+				outcome.inputObserved = payload.Usage.InputObserved
+				outcome.outputObserved = payload.Usage.OutputObserved
 			}
 			if userOnMessageDone != nil {
 				userOnMessageDone(payload)

@@ -338,18 +338,11 @@ func (p *InputPreparer) loadOrCreateSession(
 		}
 		session := NewWithWorkdir(title, sessionWorkdir)
 		created, err := p.store.CreateSession(ctx, CreateSessionInput{
-			ID:               session.ID,
-			Title:            session.Title,
-			CreatedAt:        session.CreatedAt,
-			UpdatedAt:        session.UpdatedAt,
-			Provider:         session.Provider,
-			Model:            session.Model,
-			Workdir:          session.Workdir,
-			TaskState:        session.TaskState,
-			ActivatedSkills:  session.ActivatedSkills,
-			Todos:            session.Todos,
-			TokenInputTotal:  session.TokenInputTotal,
-			TokenOutputTotal: session.TokenOutputTotal,
+			ID:        session.ID,
+			Title:     session.Title,
+			CreatedAt: session.CreatedAt,
+			UpdatedAt: session.UpdatedAt,
+			Head:      session.HeadSnapshot(),
 		})
 		if err != nil {
 			return Session{}, false, sessionWorkdirUpdate{}, err
