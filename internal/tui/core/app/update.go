@@ -2693,7 +2693,7 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 
 func (a *App) startDraftSession() {
 	a.setActiveSessionID("")
-	a.startupScreenLocked = true
+	a.startupScreenLocked = false
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
 	a.clearActivities()

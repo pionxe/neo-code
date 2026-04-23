@@ -237,9 +237,10 @@ func (a App) renderTranscriptScrollbar(width int, height int) string {
 		return ""
 	}
 
-	track := strings.Repeat(" ", width)
-	trackStyle := lipgloss.NewStyle().UnsetBackground()
-	thumbStyle := lipgloss.NewStyle().UnsetBackground()
+	track := strings.Repeat("|", width)
+	thumb := strings.Repeat("#", width)
+	trackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(oliveGray))
+	thumbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(purpleAccent)).Bold(true)
 
 	maxOffset := a.transcriptMaxOffset()
 	thumbHeight := height
@@ -258,7 +259,7 @@ func (a App) renderTranscriptScrollbar(width int, height int) string {
 	lines := make([]string, 0, height)
 	for row := 0; row < height; row++ {
 		if row >= thumbTop && row < thumbTop+thumbHeight {
-			lines = append(lines, thumbStyle.Render(track))
+			lines = append(lines, thumbStyle.Render(thumb))
 			continue
 		}
 		lines = append(lines, trackStyle.Render(track))
