@@ -1691,11 +1691,8 @@ func TestUpdatePickerSessionEnterWhileBusyRejectsSwitch(t *testing.T) {
 	app.sessionPicker.Select(1)
 
 	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatalf("expected tick cmd for rejected session switch footer toast")
-	}
-	if _, ok := cmd().(tickMsg); !ok {
-		t.Fatalf("expected tick cmd for rejected session switch footer toast, got %T", cmd())
+	if cmd != nil {
+		t.Fatalf("expected nil cmd for rejected session switch")
 	}
 	app = model.(App)
 	if app.state.ActiveSessionID != "s1" {
@@ -3232,11 +3229,8 @@ func TestUpdatePickerEnterInvalidSelectionsAndSessionActivationError(t *testing.
 	app.openPicker(pickerSession, statusChooseSession, &app.sessionPicker, "")
 	model, cmd = app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
 	app = model.(App)
-	if cmd == nil {
-		t.Fatalf("expected tick cmd for session activation error footer toast")
-	}
-	if _, ok := cmd().(tickMsg); !ok {
-		t.Fatalf("expected tick cmd for session activation error footer toast, got %T", cmd())
+	if cmd != nil {
+		t.Fatalf("expected nil cmd for session picker enter")
 	}
 	if app.state.ExecutionError == "" {
 		t.Fatalf("expected session activation error to be recorded")
