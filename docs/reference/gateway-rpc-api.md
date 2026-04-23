@@ -1319,7 +1319,7 @@ Notification：
         "payload": {
           "delta": "正在分析请求..."
         },
-        "payload_version": 2,
+        "payload_version": 4,
         "phase": "reasoning",
         "runtime_event_type": "agent_chunk",
         "timestamp": "2026-04-22T09:01:02.123456789Z",
