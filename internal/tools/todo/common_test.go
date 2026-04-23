@@ -50,6 +50,21 @@ func TestParseInputAndLegacyBranches(t *testing.T) {
 	}
 }
 
+func TestEnsureNoLegacyTodoTitleFieldHandlesNilAndNonObjectItems(t *testing.T) {
+	t.Parallel()
+
+	if err := ensureNoLegacyTodoTitleField(nil); err != nil {
+		t.Fatalf("ensureNoLegacyTodoTitleField(nil) err = %v", err)
+	}
+
+	payload := map[string]any{
+		"items": []any{"not-an-object", 123, map[string]any{"id": "ok", "content": "keep"}},
+	}
+	if err := ensureNoLegacyTodoTitleField(payload); err != nil {
+		t.Fatalf("ensureNoLegacyTodoTitleField(non-object items) err = %v", err)
+	}
+}
+
 func TestParseInputNormalizesNumericIDsAndStatusAliases(t *testing.T) {
 	t.Parallel()
 
