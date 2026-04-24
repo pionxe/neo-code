@@ -27,6 +27,8 @@ jobs:
       - name: Install Dependencies
         run: pnpm install
         working-directory: ./www # 假设你的目录叫 www
+        env:
+          CF_PAGES: "1"
 
       - name: Build Docs
         run: pnpm run docs:build
