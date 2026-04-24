@@ -22,8 +22,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'pnpm'
-          cache-dependency-path: WWW/pnpm-lock.yaml
+          
 
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
