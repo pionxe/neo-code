@@ -14,20 +14,6 @@ type DefaultBuilder struct {
 	microCompactCfg MicroCompactConfig
 }
 
-// newDefaultBuilder 统一构建默认上下文构建器，避免多个构造函数重复装配相同依赖。
-func newDefaultBuilder(
-	policies MicroCompactPolicySource,
-	summarizers MicroCompactSummarizerSource,
-	memoSource SectionSource,
-) Builder {
-	cfg := MicroCompactConfig{
-		Policies:    policies,
-		Summarizers: summarizers,
-		PinChecker:  NewDefaultPinChecker(),
-	}
-	return NewConfiguredBuilder(cfg, memoSource)
-}
-
 // newPromptSources 组装系统提示词来源列表，将额外 SectionSource 插入到 systemState 之前。
 // nil 元素会被跳过，不会影响来源顺序。
 func newPromptSources(extra ...SectionSource) []promptSectionSource {
@@ -140,11 +126,17 @@ func applyReadTimeContextProjection(
 	summarizers MicroCompactSummarizerSource,
 	pinChecker MicroCompactPinChecker,
 ) []providertypes.Message {
+	projectedMessages := cloneContextMessages(messages)
 	if options.DisableMicroCompact || !taskState.Established() {
-		return ProjectToolMessagesForModel(cloneContextMessages(messages))
-	} else {
-		return ProjectToolMessagesForModel(
-			microCompactMessagesWithPolicies(messages, policies, options.MicroCompactRetainedToolSpans, summarizers, pinChecker),
-		)
+		return ProjectToolMessagesForModel(projectedMessages)
 	}
+
+	projectedMessages = microCompactMessagesWithPolicies(
+		messages,
+		policies,
+		options.MicroCompactRetainedToolSpans,
+		summarizers,
+		pinChecker,
+	)
+	return ProjectToolMessagesForModel(projectedMessages)
 }
