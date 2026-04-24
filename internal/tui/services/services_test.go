@@ -276,7 +276,7 @@ func TestFileServices(t *testing.T) {
 		t.Fatalf("expected 2 matches, got %d (%v)", len(matches), matches)
 	}
 	if matches[0] != "internal/tui/update.go" {
-		t.Fatalf("expected prefix match first, got %v", matches)
+		t.Fatalf("expected best fuzzy match first, got %v", matches)
 	}
 
 	root := t.TempDir()
@@ -311,13 +311,16 @@ func TestSuggestFileMatchesBranches(t *testing.T) {
 		t.Fatalf("expected contains-match branch, got %v", got)
 	}
 	if got := SuggestFileMatches("", candidates, 2); len(got) != 2 {
-		t.Fatalf("expected empty query to return prefix-priority items, got %v", got)
+		t.Fatalf("expected empty query to return first items, got %v", got)
 	}
 	if got := SuggestFileMatches("any", candidates, 0); got != nil {
 		t.Fatalf("expected zero limit to return nil, got %v", got)
 	}
 	if got := SuggestFileMatches("any", nil, 2); got != nil {
 		t.Fatalf("expected nil candidates to return nil, got %v", got)
+	}
+	if got := SuggestFileMatches("itup", candidates, 2); len(got) == 0 || got[0] != "internal/tui/update.go" {
+		t.Fatalf("expected fuzzy abbreviation match for itup, got %v", got)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sahilm/fuzzy"
+
 	tuiinfra "neo-code/internal/tui/infra"
 )
 
@@ -17,24 +19,31 @@ func SuggestFileMatches(query string, candidates []string, limit int) []string {
 	if len(candidates) == 0 || limit <= 0 {
 		return nil
 	}
-	prefixMatches := make([]string, 0, limit)
-	containsMatches := make([]string, 0, limit)
-	for _, candidate := range candidates {
-		lower := strings.ToLower(candidate)
-		switch {
-		case query == "" || strings.HasPrefix(lower, query):
-			prefixMatches = append(prefixMatches, candidate)
-		case strings.Contains(lower, query):
-			containsMatches = append(containsMatches, candidate)
-		}
-		if len(prefixMatches)+len(containsMatches) >= limit {
-			break
-		}
+
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		end := min(len(candidates), limit)
+		out := make([]string, 0, end)
+		out = append(out, candidates[:end]...)
+		return out
 	}
 
-	out := append(prefixMatches, containsMatches...)
-	if len(out) > limit {
-		out = out[:limit]
+	targets := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		targets = append(targets, strings.ToLower(candidate))
+	}
+
+	matches := fuzzy.Find(query, targets)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, min(limit, len(matches)))
+	for _, match := range matches {
+		out = append(out, candidates[match.Index])
+		if len(out) >= limit {
+			break
+		}
 	}
 	return out
 }

@@ -102,8 +102,8 @@ func TestCodeBlockHelpers(t *testing.T) {
 
 func TestRenderCommandMenuRow(t *testing.T) {
 	row := RenderCommandMenuRow(CommandMenuRowData{
-		Title:            "/status",
-		Description:      "show status",
+		Title:            "/help",
+		Description:      "show help",
 		Highlight:        true,
 		Selected:         false,
 		Width:            30,
@@ -111,7 +111,7 @@ func TestRenderCommandMenuRow(t *testing.T) {
 		UsageMatchStyle:  lipgloss.NewStyle().Bold(true),
 		DescriptionStyle: lipgloss.NewStyle(),
 	})
-	if !strings.Contains(row, "/status") || !strings.Contains(row, "show status") {
+	if !strings.Contains(row, "/help") || !strings.Contains(row, "show help") {
 		t.Fatalf("unexpected command menu row: %q", row)
 	}
 }

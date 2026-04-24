@@ -126,7 +126,6 @@ Gateway 转发与自动拉起说明：
 - `/provider`：打开 provider 选择器
 - `/model`：打开 model 选择器
 - `/compact`：压缩当前会话上下文
-- `/status`：查看当前会话与运行状态
 - `/cwd [path]`：查看或设置当前会话工作区
 - `/memo`：查看记忆索引
 - `/remember <text>`：保存记忆

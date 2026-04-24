@@ -1,6 +1,10 @@
 package commands
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/sahilm/fuzzy"
+)
 
 // SlashCommand 描述单个 slash 命令定义。
 type SlashCommand struct {
@@ -24,13 +28,47 @@ func MatchSlashCommands(input string, slashPrefix string, commands []SlashComman
 	if IsCompleteSlashCommand(query, commands) {
 		return nil
 	}
-	out := make([]CommandSuggestion, 0, len(commands))
-	for _, command := range commands {
-		normalized := strings.ToLower(command.Usage)
-		match := query == slashPrefix || strings.HasPrefix(normalized, query)
-		if query == slashPrefix || match || strings.Contains(normalized, query) {
-			out = append(out, CommandSuggestion{Command: command, Match: match})
+
+	if query == slashPrefix {
+		out := make([]CommandSuggestion, 0, len(commands))
+		for _, command := range commands {
+			out = append(out, CommandSuggestion{Command: command, Match: true})
 		}
+		return out
+	}
+
+	needle := strings.TrimPrefix(query, slashPrefix)
+	if needle == "" {
+		return nil
+	}
+
+	targets := make([]string, 0, len(commands))
+	indexes := make([]int, 0, len(commands))
+	for idx, command := range commands {
+		normalized := strings.ToLower(strings.TrimSpace(command.Usage))
+		if normalized == "" {
+			continue
+		}
+		targets = append(targets, strings.TrimPrefix(normalized, slashPrefix))
+		indexes = append(indexes, idx)
+	}
+
+	if len(targets) == 0 {
+		return nil
+	}
+
+	matches := fuzzy.Find(needle, targets)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	out := make([]CommandSuggestion, 0, len(matches))
+	for _, match := range matches {
+		command := commands[indexes[match.Index]]
+		out = append(out, CommandSuggestion{
+			Command: command,
+			Match:   true,
+		})
 	}
 	return out
 }

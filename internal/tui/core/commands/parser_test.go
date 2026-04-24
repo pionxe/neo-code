@@ -20,6 +20,14 @@ func TestMatchSlashCommands(t *testing.T) {
 	if complete := MatchSlashCommands("/help", "/", commands); complete != nil {
 		t.Fatalf("expected nil suggestion when command is complete, got %+v", complete)
 	}
+
+	fuzzy := MatchSlashCommands("/mdl", "/", commands)
+	if len(fuzzy) != 1 {
+		t.Fatalf("expected one fuzzy suggestion for /mdl, got %d", len(fuzzy))
+	}
+	if fuzzy[0].Command.Usage != "/model" {
+		t.Fatalf("expected /model for fuzzy query /mdl, got %+v", fuzzy[0])
+	}
 }
 
 func TestIsCompleteSlashCommand(t *testing.T) {

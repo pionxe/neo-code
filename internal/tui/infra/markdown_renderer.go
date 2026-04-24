@@ -47,6 +47,100 @@ func resolveStyleWithoutHeadingHashes(style string) (ansi.StyleConfig, bool) {
 	cfg.H5.StylePrimitive.Suffix = ""
 	cfg.H6.StylePrimitive.Prefix = ""
 	cfg.H6.StylePrimitive.Suffix = ""
+	stripNonCodeHighlightBackgrounds(&cfg)
 
 	return cfg, true
+}
+
+func stripNonCodeHighlightBackgrounds(cfg *ansi.StyleConfig) {
+	if cfg == nil {
+		return
+	}
+
+	clearBlockHighlights(&cfg.Document)
+	clearBlockHighlights(&cfg.BlockQuote)
+	clearBlockHighlights(&cfg.Paragraph)
+	clearBlockHighlights(&cfg.List.StyleBlock)
+	clearBlockHighlights(&cfg.Heading)
+	clearBlockHighlights(&cfg.H1)
+	clearBlockHighlights(&cfg.H2)
+	clearBlockHighlights(&cfg.H3)
+	clearBlockHighlights(&cfg.H4)
+	clearBlockHighlights(&cfg.H5)
+	clearBlockHighlights(&cfg.H6)
+	clearPrimitiveHighlights(&cfg.Text)
+	clearPrimitiveHighlights(&cfg.Strikethrough)
+	clearPrimitiveHighlights(&cfg.Emph)
+	clearPrimitiveHighlights(&cfg.Strong)
+	clearPrimitiveHighlights(&cfg.HorizontalRule)
+	clearPrimitiveHighlights(&cfg.Item)
+	clearPrimitiveHighlights(&cfg.Enumeration)
+	clearPrimitiveHighlights(&cfg.Task.StylePrimitive)
+	clearPrimitiveHighlights(&cfg.Link)
+	clearPrimitiveHighlights(&cfg.LinkText)
+	clearPrimitiveHighlights(&cfg.Image)
+	clearPrimitiveHighlights(&cfg.ImageText)
+	clearBlockHighlights(&cfg.DefinitionList)
+	clearPrimitiveHighlights(&cfg.DefinitionTerm)
+	clearPrimitiveHighlights(&cfg.DefinitionDescription)
+	clearBlockHighlights(&cfg.HTMLBlock)
+	clearBlockHighlights(&cfg.HTMLSpan)
+	clearBlockHighlights(&cfg.Table.StyleBlock)
+
+	// Keep neutral code backgrounds for readability, but drop token-level color blocks.
+	if cfg.CodeBlock.Chroma != nil {
+		clearChromaTokenHighlights(cfg.CodeBlock.Chroma)
+	}
+}
+
+func clearBlockHighlights(block *ansi.StyleBlock) {
+	if block == nil {
+		return
+	}
+	clearPrimitiveHighlights(&block.StylePrimitive)
+}
+
+func clearPrimitiveHighlights(primitive *ansi.StylePrimitive) {
+	if primitive == nil {
+		return
+	}
+	primitive.BackgroundColor = nil
+	primitive.Inverse = nil
+}
+
+func clearChromaTokenHighlights(chroma *ansi.Chroma) {
+	if chroma == nil {
+		return
+	}
+
+	clearPrimitiveHighlights(&chroma.Text)
+	clearPrimitiveHighlights(&chroma.Error)
+	clearPrimitiveHighlights(&chroma.Comment)
+	clearPrimitiveHighlights(&chroma.CommentPreproc)
+	clearPrimitiveHighlights(&chroma.Keyword)
+	clearPrimitiveHighlights(&chroma.KeywordReserved)
+	clearPrimitiveHighlights(&chroma.KeywordNamespace)
+	clearPrimitiveHighlights(&chroma.KeywordType)
+	clearPrimitiveHighlights(&chroma.Operator)
+	clearPrimitiveHighlights(&chroma.Punctuation)
+	clearPrimitiveHighlights(&chroma.Name)
+	clearPrimitiveHighlights(&chroma.NameBuiltin)
+	clearPrimitiveHighlights(&chroma.NameTag)
+	clearPrimitiveHighlights(&chroma.NameAttribute)
+	clearPrimitiveHighlights(&chroma.NameClass)
+	clearPrimitiveHighlights(&chroma.NameConstant)
+	clearPrimitiveHighlights(&chroma.NameDecorator)
+	clearPrimitiveHighlights(&chroma.NameException)
+	clearPrimitiveHighlights(&chroma.NameFunction)
+	clearPrimitiveHighlights(&chroma.NameOther)
+	clearPrimitiveHighlights(&chroma.Literal)
+	clearPrimitiveHighlights(&chroma.LiteralNumber)
+	clearPrimitiveHighlights(&chroma.LiteralDate)
+	clearPrimitiveHighlights(&chroma.LiteralString)
+	clearPrimitiveHighlights(&chroma.LiteralStringEscape)
+	clearPrimitiveHighlights(&chroma.GenericDeleted)
+	clearPrimitiveHighlights(&chroma.GenericEmph)
+	clearPrimitiveHighlights(&chroma.GenericInserted)
+	clearPrimitiveHighlights(&chroma.GenericStrong)
+	clearPrimitiveHighlights(&chroma.GenericSubheading)
 }

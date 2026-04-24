@@ -1148,6 +1148,9 @@ func TestViewSmallWindow(t *testing.T) {
 	if !strings.Contains(view, "Window too small") {
 		t.Fatalf("expected small window warning, got %q", view)
 	}
+	if !strings.Contains(view, "60x30") {
+		t.Fatalf("expected 60x30 minimum size hint, got %q", view)
+	}
 }
 
 func TestComputeLayoutStackedAndWide(t *testing.T) {
@@ -1672,6 +1675,79 @@ func TestUpdatePickerSessionEnterWhileBusyRejectsSwitch(t *testing.T) {
 	}
 }
 
+func TestUpdatePickerModelFilterAppliesImmediately(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.modelPicker.SetItems([]list.Item{
+		selectionItem{id: "alpha", name: "alpha-model", description: "a"},
+		selectionItem{id: "beta", name: "beta-model", description: "b"},
+	})
+	app.openPicker(pickerModel, statusChooseModel, &app.modelPicker, "alpha")
+
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("z")})
+	app = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected inline filter update to return nil cmd")
+	}
+	if app.modelPicker.FilterValue() != "z" {
+		t.Fatalf("expected filter text to update, got %q", app.modelPicker.FilterValue())
+	}
+	if got := len(app.modelPicker.VisibleItems()); got != 0 {
+		t.Fatalf("expected 0 matched items after filtering, got %d", got)
+	}
+}
+
+func TestUpdatePickerModelAllowsArrowNavigationWhileFiltering(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.modelPicker.SetItems([]list.Item{
+		selectionItem{id: "m1", name: "model-one", description: "first"},
+		selectionItem{id: "m2", name: "model-two", description: "second"},
+	})
+	app.openPicker(pickerModel, statusChooseModel, &app.modelPicker, "m1")
+
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyDown})
+	app = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected nil cmd for arrow navigation while filtering")
+	}
+	selected, ok := app.modelPicker.SelectedItem().(selectionItem)
+	if !ok {
+		t.Fatalf("expected selected model item type, got %T", app.modelPicker.SelectedItem())
+	}
+	if selected.id != "m2" {
+		t.Fatalf("expected selection to move to m2, got %q", selected.id)
+	}
+}
+
+func TestUpdatePickerModelFilterUsesFuzzyMatching(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.modelPicker.SetItems([]list.Item{
+		selectionItem{id: "qwen", name: "qwen-turbo", description: "fast"},
+		selectionItem{id: "glm", name: "glm-5.1", description: "alt"},
+	})
+	app.openPicker(pickerModel, statusChooseModel, &app.modelPicker, "qwen")
+
+	model, _ := app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	app = model.(App)
+	model, _ = app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	app = model.(App)
+	model, _ = app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	app = model.(App)
+
+	if app.modelPicker.FilterValue() != "qtr" {
+		t.Fatalf("expected filter text qtr, got %q", app.modelPicker.FilterValue())
+	}
+	if got := len(app.modelPicker.VisibleItems()); got != 1 {
+		t.Fatalf("expected fuzzy filter to keep one item, got %d", got)
+	}
+	selected, ok := app.modelPicker.SelectedItem().(selectionItem)
+	if !ok {
+		t.Fatalf("expected selected model item type, got %T", app.modelPicker.SelectedItem())
+	}
+	if selected.id != "qwen" {
+		t.Fatalf("expected fuzzy match to select qwen, got %q", selected.id)
+	}
+}
+
 func TestActivateSessionByIDNotFound(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.Sessions = []agentsession.Summary{{ID: "s1", Title: "one"}}
@@ -2018,9 +2094,10 @@ func TestUpdatePickerHelpSelectionOpensModelPicker(t *testing.T) {
 
 func TestUpdatePickerHelpSelectionRunsSlashCommand(t *testing.T) {
 	app, _ := newTestApp(t)
+	app.state.CurrentWorkdir = t.TempDir()
 	app.refreshHelpPicker()
 	app.openHelpPicker()
-	selectPickerItemByID(&app.helpPicker, slashCommandStatus)
+	selectPickerItemByID(&app.helpPicker, slashUsageWorkdir)
 
 	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
 	if model == nil {
@@ -2028,7 +2105,7 @@ func TestUpdatePickerHelpSelectionRunsSlashCommand(t *testing.T) {
 	}
 	app = model.(App)
 	if app.state.ActivePicker != pickerNone {
-		t.Fatalf("expected help picker to close after selecting /status")
+		t.Fatalf("expected help picker to close after selecting /cwd")
 	}
 	if cmd == nil {
 		t.Fatalf("expected local slash command cmd")
@@ -2038,8 +2115,11 @@ func TestUpdatePickerHelpSelectionRunsSlashCommand(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected localCommandResultMsg, got %T", msg)
 	}
-	if !strings.Contains(result.Notice, "Status:") {
-		t.Fatalf("expected status output in slash result, got %q", result.Notice)
+	if result.Err == nil {
+		t.Fatalf("expected local slash command result error for /cwd")
+	}
+	if !strings.Contains(strings.ToLower(result.Err.Error()), "unknown command") {
+		t.Fatalf("expected unknown command error, got %v", result.Err)
 	}
 }
 
@@ -2096,19 +2176,6 @@ func TestRunSlashCommandSelectionWorkspaceAndLocal(t *testing.T) {
 	localCmd := app.runSlashCommandSelection("/cwd")
 	if localCmd == nil {
 		t.Fatalf("expected local slash cmd for /cwd")
-	}
-
-	statusCmd := app.runSlashCommandSelection(slashCommandStatus)
-	if statusCmd == nil {
-		t.Fatalf("expected local slash cmd for status")
-	}
-	statusMsg := statusCmd()
-	statusResult, ok := statusMsg.(localCommandResultMsg)
-	if !ok {
-		t.Fatalf("expected localCommandResultMsg, got %T", statusMsg)
-	}
-	if !strings.Contains(statusResult.Notice, "Status:") {
-		t.Fatalf("expected status output in local command result")
 	}
 }
 

@@ -29,7 +29,6 @@ go run ./cmd/neocode
 | `/help` | 查看 Slash 命令帮助 |
 | `/clear` | 清空当前草稿会话展示 |
 | `/compact` | 压缩当前会话上下文 |
-| `/status` | 查看当前会话与运行状态 |
 | `/provider` | 打开 Provider 选择器 |
 | `/provider add` | 添加自定义 Provider |
 | `/model` | 打开 Model 选择器 |

@@ -10,7 +10,6 @@ import (
 
 	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
-	tuistatus "neo-code/internal/tui/core/status"
 )
 
 func TestBuiltinSlashCommands(t *testing.T) {
@@ -22,6 +21,7 @@ func TestBuiltinSlashCommands(t *testing.T) {
 	foundTodo := false
 	foundSkills := false
 	foundSkillUse := false
+	foundStatus := false
 	for _, cmd := range builtinSlashCommands {
 		if cmd.Usage == slashUsageHelp {
 			found = true
@@ -34,6 +34,9 @@ func TestBuiltinSlashCommands(t *testing.T) {
 		}
 		if cmd.Usage == slashUsageSkillUse {
 			foundSkillUse = true
+		}
+		if strings.EqualFold(cmd.Usage, "/status") {
+			foundStatus = true
 		}
 	}
 	if !found {
@@ -48,6 +51,9 @@ func TestBuiltinSlashCommands(t *testing.T) {
 	if !foundSkillUse {
 		t.Error("expected to find /skill use command")
 	}
+	if foundStatus {
+		t.Error("did not expect /status command in builtin slash commands")
+	}
 }
 
 func TestNewSelectionPicker(t *testing.T) {
@@ -55,7 +61,12 @@ func TestNewSelectionPicker(t *testing.T) {
 		selectionItem{id: "1", name: "Item 1", description: "Desc 1"},
 	}
 	picker := newSelectionPicker(items)
-	_ = picker
+	if !picker.FilteringEnabled() {
+		t.Fatalf("expected selection picker filtering to be enabled")
+	}
+	if !picker.ShowFilter() {
+		t.Fatalf("expected selection picker to show search filter")
+	}
 }
 
 func TestNewSelectionPickerItems(t *testing.T) {
@@ -64,6 +75,47 @@ func TestNewSelectionPickerItems(t *testing.T) {
 	}
 	picker := newSelectionPickerItems(items)
 	_ = picker
+}
+
+func TestReplacePickerItemsKeepsFilterEditingState(t *testing.T) {
+	current := newSelectionPickerItems([]selectionItem{
+		{id: "m-1", name: "model-one", description: "first"},
+	})
+	current.SetSize(48, 12)
+	current.SetFilterText("model")
+	current.SetFilterState(list.Filtering)
+
+	replacePickerItems(&current, []selectionItem{
+		{id: "m-2", name: "model-two", description: "second"},
+	})
+
+	if !current.SettingFilter() {
+		t.Fatalf("expected picker to keep filtering state after replace")
+	}
+	if current.FilterValue() != "model" {
+		t.Fatalf("expected picker to keep filter text, got %q", current.FilterValue())
+	}
+}
+
+func TestReplacePickerItemsKeepsFilteringStateWithEmptyQuery(t *testing.T) {
+	current := newSelectionPickerItems([]selectionItem{
+		{id: "m-1", name: "model-one", description: "first"},
+	})
+	current.SetSize(48, 12)
+	current.SetFilterText("")
+	current.SetFilterState(list.Filtering)
+
+	replacePickerItems(&current, []selectionItem{
+		{id: "m-2", name: "model-two", description: "second"},
+		{id: "m-3", name: "model-three", description: "third"},
+	})
+
+	if !current.SettingFilter() {
+		t.Fatalf("expected picker to stay in filtering state")
+	}
+	if got := len(current.VisibleItems()); got != 2 {
+		t.Fatalf("expected visible items to be preserved under empty filter, got %d", got)
+	}
 }
 
 func TestNewCommandMenuModel(t *testing.T) {
@@ -199,7 +251,7 @@ func TestExecuteLocalCommandErrors(t *testing.T) {
 	}
 }
 
-func TestExecuteLocalCommandHelpAndStatus(t *testing.T) {
+func TestExecuteLocalCommandHelpAndStatusRemoved(t *testing.T) {
 	app, _ := newTestApp(t)
 	snapshot := app.currentStatusSnapshot()
 
@@ -211,12 +263,8 @@ func TestExecuteLocalCommandHelpAndStatus(t *testing.T) {
 		t.Fatalf("expected help output, got %q", helpText)
 	}
 
-	statusText, err := executeLocalCommand(context.Background(), app.configManager, app.providerSvc, snapshot, "/status")
-	if err != nil {
-		t.Fatalf("executeLocalCommand(/status) error = %v", err)
-	}
-	if !strings.Contains(statusText, "Status:") {
-		t.Fatalf("expected status output, got %q", statusText)
+	if _, err := executeLocalCommand(context.Background(), app.configManager, app.providerSvc, snapshot, "/status"); err == nil {
+		t.Fatalf("expected /status to be removed")
 	}
 }
 
@@ -298,19 +346,6 @@ func TestRunModelCatalogRefreshCmd(t *testing.T) {
 	}
 }
 
-func TestExecuteStatusCommandFormatting(t *testing.T) {
-	snapshot := tuistatus.Snapshot{
-		ActiveSessionTitle: "Draft",
-		CurrentProvider:    "test-provider",
-		CurrentModel:       "test-model",
-		CurrentWorkdir:     "/tmp",
-	}
-	output := executeStatusCommand(snapshot)
-	if !strings.Contains(output, "Status:") {
-		t.Fatalf("expected Status header, got %q", output)
-	}
-}
-
 func TestRefreshHelpPicker(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.refreshHelpPicker()
@@ -321,11 +356,18 @@ func TestRefreshHelpPicker(t *testing.T) {
 
 func TestOpenHelpPicker(t *testing.T) {
 	app, _ := newTestApp(t)
+	app.helpPicker.SetFilterText("model")
 	app.openHelpPicker()
 	if app.state.ActivePicker != pickerHelp {
 		t.Fatalf("expected help picker to open")
 	}
 	if app.state.StatusText != statusChooseHelp {
 		t.Fatalf("expected help picker status, got %q", app.state.StatusText)
+	}
+	if app.helpPicker.FilterValue() != "" {
+		t.Fatalf("expected help picker filter to be reset, got %q", app.helpPicker.FilterValue())
+	}
+	if !app.helpPicker.SettingFilter() {
+		t.Fatalf("expected help picker search box to be focused")
 	}
 }

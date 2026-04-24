@@ -22,6 +22,8 @@ type layout struct {
 const headerBarHeight = 2
 const transcriptScrollbarWidth = 3
 const startupCommandMenuMinReservedHeight = 8
+const minWindowWidth = 60
+const minWindowHeight = 30
 
 const (
 	pickerPanelHorizontalInset = 8
@@ -45,8 +47,13 @@ type pickerLayoutSpec struct {
 func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
-	if docWidth < 73 || docHeight < 36 {
-		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, "Window too small.\nPlease resize to at least 73x36.")), "\n")
+	if docWidth < minWindowWidth || docHeight < minWindowHeight {
+		hint := fmt.Sprintf(
+			"Window too small.\nPlease resize to at least %dx%d.",
+			minWindowWidth,
+			minWindowHeight,
+		)
+		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, hint)), "\n")
 	}
 
 	lay := a.computeLayout()
@@ -613,15 +620,7 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 		return "", nil
 	}
 
-	var (
-		contentBlock string
-		copyButtons  []copyCodeButtonBinding
-	)
-	if message.Role == roleUser {
-		contentBlock = bodyStyle.Render(wrapPlain(content, max(16, maxMessageWidth-2)))
-	} else {
-		contentBlock, copyButtons = a.renderMessageContentWithCopy(content, maxMessageWidth-2, bodyStyle, startCopyID)
-	}
+	contentBlock, copyButtons := a.renderMessageContentWithCopy(content, maxMessageWidth-2, bodyStyle, startCopyID)
 	if message.Role == roleAssistant && !includeTag {
 		return contentBlock, copyButtons
 	}

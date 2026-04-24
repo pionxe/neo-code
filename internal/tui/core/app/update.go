@@ -819,13 +819,13 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch a.state.ActivePicker {
 	case pickerProvider:
-		a.providerPicker, cmd = a.providerPicker.Update(msg)
+		a.providerPicker, cmd = updateListPickerModel(a.providerPicker, msg)
 	case pickerModel:
-		a.modelPicker, cmd = a.modelPicker.Update(msg)
+		a.modelPicker, cmd = updateListPickerModel(a.modelPicker, msg)
 	case pickerSession:
-		a.sessionPicker, cmd = a.sessionPicker.Update(msg)
+		a.sessionPicker, cmd = updateListPickerModel(a.sessionPicker, msg)
 	case pickerHelp:
-		a.helpPicker, cmd = a.helpPicker.Update(msg)
+		a.helpPicker, cmd = updateListPickerModel(a.helpPicker, msg)
 	case pickerFile:
 		a.fileBrowser, cmd = a.fileBrowser.Update(msg)
 		if didSelect, path := a.fileBrowser.DidSelectFile(msg); didSelect {
@@ -856,6 +856,50 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleModelScopeGuideInput(msg)
 	}
 	return a, cmd
+}
+
+func updateListPickerModel(picker list.Model, msg tea.KeyMsg) (list.Model, tea.Cmd) {
+	if picker.SettingFilter() {
+		switch msg.Type {
+		case tea.KeyUp:
+			picker.CursorUp()
+			return picker, nil
+		case tea.KeyDown:
+			picker.CursorDown()
+			return picker, nil
+		case tea.KeyPgUp:
+			picker.PrevPage()
+			return picker, nil
+		case tea.KeyPgDown:
+			picker.NextPage()
+			return picker, nil
+		case tea.KeyHome:
+			picker.GoToStart()
+			return picker, nil
+		case tea.KeyEnd:
+			picker.GoToEnd()
+			return picker, nil
+		}
+	}
+
+	next, cmd := picker.Update(msg)
+	if !next.SettingFilter() || !isPickerFilterEditKey(msg) {
+		return next, cmd
+	}
+
+	filterValue := next.FilterValue()
+	next.SetFilterText(filterValue)
+	next.SetFilterState(list.Filtering)
+	return next, nil
+}
+
+func isPickerFilterEditKey(msg tea.KeyMsg) bool {
+	switch msg.Type {
+	case tea.KeyRunes, tea.KeyBackspace, tea.KeyDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 // maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程。

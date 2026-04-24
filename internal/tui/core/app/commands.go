@@ -22,7 +22,6 @@ const (
 	slashCommandExit        = "/exit"
 	slashCommandClear       = "/clear"
 	slashCommandCompact     = "/compact"
-	slashCommandStatus      = "/status"
 	slashCommandProvider    = "/provider"
 	slashCommandProviderAdd = "/provider add"
 	slashCommandModelPick   = "/model"
@@ -38,7 +37,6 @@ const (
 	slashUsageExit        = "/exit"
 	slashUsageClear       = "/clear"
 	slashUsageCompact     = "/compact"
-	slashUsageStatus      = "/status"
 	slashUsageProvider    = "/provider"
 	slashUsageProviderAdd = "/provider add"
 	slashUsageModel       = "/model"
@@ -128,7 +126,6 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageHelp, Description: "Show slash command help"},
 	{Usage: slashUsageClear, Description: "Clear the current draft transcript"},
 	{Usage: slashUsageCompact, Description: "Compact the current session context"},
-	{Usage: slashUsageStatus, Description: "Show current session and agent status"},
 	{Usage: slashUsageWorkdir, Description: "Show or set current session workspace root (/cwd [path])"},
 	{Usage: slashUsageMemo, Description: "Show persistent memo index"},
 	{Usage: slashUsageRemember, Description: "Save a persistent memo (/remember <text>)"},
@@ -150,7 +147,8 @@ func newSelectionPicker(items []list.Item) list.Model {
 	picker.Title = ""
 	picker.SetShowHelp(false)
 	picker.SetShowStatusBar(false)
-	picker.SetFilteringEnabled(false)
+	picker.SetShowFilter(true)
+	picker.SetFilteringEnabled(true)
 	picker.DisableQuitKeybindings()
 	return picker
 }
@@ -217,8 +215,16 @@ func mapModelItems(models []providertypes.ModelDescriptor) []selectionItem {
 }
 
 func replacePickerItems(current *list.Model, items []selectionItem) {
+	filterValue := current.FilterValue()
+	filterState := current.FilterState()
 	next := newSelectionPickerItems(items)
 	next.SetSize(current.Width(), current.Height())
+	if filterState != list.Unfiltered {
+		next.SetFilterText(filterValue)
+	}
+	if filterState == list.Filtering {
+		next.SetFilterState(list.Filtering)
+	}
 	*current = next
 }
 
@@ -282,6 +288,9 @@ func (a *App) openPicker(mode pickerMode, statusText string, picker *list.Model,
 	a.state.ActivePicker = mode
 	a.state.StatusText = statusText
 	a.input.Blur()
+	picker.ResetFilter()
+	picker.SetFilterText("")
+	picker.SetFilterState(list.Filtering)
 	selectPickerItemByID(picker, selectedID)
 }
 
@@ -393,17 +402,11 @@ func executeLocalCommand(ctx context.Context, configManager *config.Manager, pro
 	switch strings.ToLower(fields[0]) {
 	case slashCommandHelp:
 		return slashHelpText(), nil
-	case slashCommandStatus:
-		return executeStatusCommand(snapshot), nil
 	case slashCommandProvider:
 		return executeProviderCommand(ctx, providerSvc, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), slashCommandProvider)))
 	default:
 		return "", fmt.Errorf("unknown command %q", fields[0])
 	}
-}
-
-func executeStatusCommand(snapshot tuistatus.Snapshot) string {
-	return tuistatus.Format(snapshot, draftSessionTitle)
 }
 
 func executeProviderCommand(ctx context.Context, providerSvc ProviderController, value string) (string, error) {

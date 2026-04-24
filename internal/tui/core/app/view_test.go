@@ -591,6 +591,9 @@ func TestViewSmallWindowHint(t *testing.T) {
 	if !strings.Contains(view, "Window too small.") {
 		t.Fatalf("expected small-window hint, got %q", view)
 	}
+	if !strings.Contains(view, "Please resize to at least 60x30.") {
+		t.Fatalf("expected 60x30 size hint, got %q", view)
+	}
 }
 
 func TestViewNormalIncludesHeaderAndBody(t *testing.T) {
