@@ -50,6 +50,26 @@ func TestToggleFullAccessModeOpensPromptAndDisables(t *testing.T) {
 	}
 }
 
+func TestUpdateConsumesPendingFullAccessPromptAndBatchesResolveCmd(t *testing.T) {
+	runtime := &permissionTestRuntime{}
+	app := newPermissionTestApp(runtime)
+	app.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
+	app.pendingPermission = &permissionPromptState{
+		Request:  agentruntime.PermissionRequestPayload{RequestID: "perm-from-update"},
+		Selected: 0,
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := model.(App)
+	if next.pendingFullAccessPrompt != nil {
+		t.Fatalf("expected pending full access prompt to be cleared")
+	}
+	done := expectPermissionResolutionFinishedMsg(t, cmd)
+	if done.RequestID != "perm-from-update" || done.Decision != string(agentruntime.DecisionAllowSession) {
+		t.Fatalf("unexpected batched permission resolution message: %+v", done)
+	}
+}
+
 func TestUpdatePendingFullAccessPromptInputEnableAutoApprovesPendingPermission(t *testing.T) {
 	runtime := &permissionTestRuntime{}
 	app := newPermissionTestApp(runtime)
@@ -145,5 +165,191 @@ func TestUpdatePermissionResolutionFinishedMessageRestoresPromptAfterFullAccessA
 	}
 	if next.state.ExecutionError == "" {
 		t.Fatalf("expected execution error to be preserved for failed auto-approval")
+	}
+}
+
+func TestUpdatePendingFullAccessPromptInputGuardAndNavigation(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	if cmd, handled := app.updatePendingFullAccessPromptInput(tea.KeyMsg{Type: tea.KeyEnter}); handled || cmd != nil {
+		t.Fatalf("expected nil prompt state to return not handled")
+	}
+
+	app.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
+	cmd, handled := app.updatePendingFullAccessPromptInput(tea.KeyMsg{Type: tea.KeyDown})
+	if !handled || cmd != nil {
+		t.Fatalf("expected down key to be handled without cmd")
+	}
+	if app.pendingFullAccessPrompt.Selected != 1 {
+		t.Fatalf("expected selection moved to 1, got %d", app.pendingFullAccessPrompt.Selected)
+	}
+	if app.state.StatusText != statusFullAccessPrompt {
+		t.Fatalf("expected status full access prompt after navigation, got %q", app.state.StatusText)
+	}
+
+	cmd, handled = app.updatePendingFullAccessPromptInput(tea.KeyMsg{Type: tea.KeyUp})
+	if !handled || cmd != nil {
+		t.Fatalf("expected up key to be handled without cmd")
+	}
+	if app.pendingFullAccessPrompt.Selected != 0 {
+		t.Fatalf("expected selection moved back to 0, got %d", app.pendingFullAccessPrompt.Selected)
+	}
+}
+
+func TestUpdatePendingFullAccessPromptInputCancelPaths(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	app.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 1}
+
+	cmd, handled := app.updatePendingFullAccessPromptInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if !handled || cmd != nil {
+		t.Fatalf("expected enter on No option to cancel without cmd")
+	}
+	if app.pendingFullAccessPrompt != nil {
+		t.Fatalf("expected prompt cleared after cancel")
+	}
+	if app.fullAccessModeEnabled {
+		t.Fatalf("expected cancel to keep full access disabled")
+	}
+	if app.state.StatusText != statusFullAccessCanceled {
+		t.Fatalf("expected canceled status, got %q", app.state.StatusText)
+	}
+
+	app.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
+	cmd, handled = app.updatePendingFullAccessPromptInput(tea.KeyMsg{Type: tea.KeyEsc})
+	if !handled || cmd != nil {
+		t.Fatalf("expected esc to cancel prompt")
+	}
+	if app.state.StatusText != statusFullAccessCanceled {
+		t.Fatalf("expected canceled status from esc, got %q", app.state.StatusText)
+	}
+
+	app.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
+	cmd, handled = app.updatePendingFullAccessPromptInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if !handled || cmd != nil {
+		t.Fatalf("expected n shortcut to cancel prompt")
+	}
+
+	app.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
+	cmd, handled = app.updatePendingFullAccessPromptInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if !handled || cmd != nil {
+		t.Fatalf("expected unknown key to be consumed without command")
+	}
+}
+
+func TestUpdatePendingFullAccessPromptInputEnterEnablePath(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	app.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
+
+	cmd, handled := app.updatePendingFullAccessPromptInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if !handled {
+		t.Fatalf("expected enter to be handled")
+	}
+	if cmd != nil {
+		t.Fatalf("expected no command without pending permission request")
+	}
+	if !app.fullAccessModeEnabled {
+		t.Fatalf("expected full access mode to be enabled")
+	}
+	if app.state.StatusText != statusFullAccessEnabled {
+		t.Fatalf("expected enabled status, got %q", app.state.StatusText)
+	}
+}
+
+func TestApplyFullAccessPromptSelectionWithSubmittingPermissionDoesNotResubmit(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	app.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
+	app.pendingPermission = &permissionPromptState{
+		Request:    agentruntime.PermissionRequestPayload{RequestID: "perm-submitting"},
+		Selected:   0,
+		Submitting: true,
+	}
+
+	cmd := app.applyFullAccessPromptSelection(true)
+	if cmd != nil {
+		t.Fatalf("expected no command when pending permission is already submitting")
+	}
+	if !app.fullAccessModeEnabled {
+		t.Fatalf("expected full access mode enabled")
+	}
+}
+
+func TestHandleAutoPermissionResolutionFinishedGuardsAndSuccess(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	if handled := app.handleAutoPermissionResolutionFinished(permissionResolutionFinishedMsg{RequestID: "none"}); handled {
+		t.Fatalf("expected no handling without pending auto permission")
+	}
+
+	app.pendingAutoPermission = &autoPermissionApprovalState{
+		Request: agentruntime.PermissionRequestPayload{RequestID: "perm-auto"},
+	}
+	if handled := app.handleAutoPermissionResolutionFinished(permissionResolutionFinishedMsg{RequestID: "perm-other"}); handled {
+		t.Fatalf("expected mismatched request id to be ignored")
+	}
+
+	handled := app.handleAutoPermissionResolutionFinished(permissionResolutionFinishedMsg{
+		RequestID: "perm-auto",
+		Decision:  string(agentruntime.DecisionAllowSession),
+	})
+	if !handled {
+		t.Fatalf("expected matching auto permission callback to be handled")
+	}
+	if app.pendingAutoPermission != nil {
+		t.Fatalf("expected pending auto permission to be cleared")
+	}
+	if app.state.StatusText != statusPermissionSubmitted {
+		t.Fatalf("expected submitted status after success, got %q", app.state.StatusText)
+	}
+}
+
+func TestBeginAutoPermissionApprovalGuards(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	if started := app.beginAutoPermissionApproval(agentruntime.PermissionRequestPayload{RequestID: "perm"}); started {
+		t.Fatalf("expected disabled full access mode to skip auto approval")
+	}
+
+	app.fullAccessModeEnabled = true
+	if started := app.beginAutoPermissionApproval(agentruntime.PermissionRequestPayload{RequestID: "   "}); started {
+		t.Fatalf("expected empty request id to skip auto approval")
+	}
+}
+
+func TestRuntimeEventPermissionResolvedHandlerClearsPendingAutoPermission(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	app.pendingAutoPermission = &autoPermissionApprovalState{
+		Request: agentruntime.PermissionRequestPayload{RequestID: "perm-auto-clear"},
+	}
+	event := agentruntime.RuntimeEvent{
+		Type: agentruntime.EventPermissionResolved,
+		Payload: agentruntime.PermissionResolvedPayload{
+			RequestID: "perm-auto-clear",
+		},
+	}
+	if dirty := runtimeEventPermissionResolvedHandler(app, event); dirty {
+		t.Fatalf("permission resolved should not mark transcript dirty")
+	}
+	if app.pendingAutoPermission != nil {
+		t.Fatalf("expected resolved event to clear pending auto permission")
+	}
+}
+
+func TestRuntimeEventPermissionResolvedHandlerGuardPaths(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	if dirty := runtimeEventPermissionResolvedHandler(app, agentruntime.RuntimeEvent{
+		Type:    agentruntime.EventPermissionResolved,
+		Payload: "invalid",
+	}); dirty {
+		t.Fatalf("invalid payload should not mark transcript dirty")
+	}
+
+	app.pendingAutoPermission = &autoPermissionApprovalState{
+		Request: agentruntime.PermissionRequestPayload{RequestID: "perm-auto-keep"},
+	}
+	runtimeEventPermissionResolvedHandler(app, agentruntime.RuntimeEvent{
+		Type: agentruntime.EventPermissionResolved,
+		Payload: agentruntime.PermissionResolvedPayload{
+			RequestID: "other-id",
+		},
+	})
+	if app.pendingAutoPermission == nil {
+		t.Fatalf("mismatched request id should keep pending auto permission")
 	}
 }

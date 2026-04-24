@@ -23,8 +23,10 @@ func TestParseFullAccessPromptShortcut(t *testing.T) {
 	}{
 		{input: "y", want: true},
 		{input: "yes", want: true},
+		{input: " enable ", want: true},
 		{input: "n", want: false},
 		{input: "no", want: false},
+		{input: "CaNcEl", want: false},
 	}
 	for _, tt := range tests {
 		got, ok := parseFullAccessPromptShortcut(tt.input)
@@ -61,6 +63,40 @@ func TestRenderFullAccessPrompt(t *testing.T) {
 	rendered := app.renderFullAccessPrompt()
 	if !strings.Contains(rendered, "Enable Full Access Mode?") {
 		t.Fatalf("expected full access prompt content, got %q", rendered)
+	}
+}
+
+func TestNormalizeFullAccessPromptSelectionWithEmptyOptions(t *testing.T) {
+	original := fullAccessPromptOptions
+	fullAccessPromptOptions = nil
+	defer func() {
+		fullAccessPromptOptions = original
+	}()
+
+	if got := normalizeFullAccessPromptSelection(5); got != 0 {
+		t.Fatalf("expected empty options normalize to 0, got %d", got)
+	}
+}
+
+func TestFullAccessPromptOptionAtUsesNormalizedSelection(t *testing.T) {
+	option := fullAccessPromptOptionAt(-1)
+	if option.Label != "No" || option.Enable {
+		t.Fatalf("expected wrapped option to select No(false), got %+v", option)
+	}
+}
+
+func TestRenderFullAccessPromptFallsBackToInputView(t *testing.T) {
+	input := textarea.New()
+	input.SetValue("fallback-input")
+	app := App{
+		appComponents: appComponents{
+			input: input,
+		},
+	}
+
+	rendered := app.renderFullAccessPrompt()
+	if !strings.Contains(rendered, "fallback-input") {
+		t.Fatalf("expected input view when prompt is nil, got %q", rendered)
 	}
 }
 

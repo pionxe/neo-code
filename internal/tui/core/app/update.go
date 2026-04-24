@@ -312,9 +312,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if key.Matches(typed, a.keys.ToggleFullAccess) {
-			if cmd := a.toggleFullAccessMode(); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+			a.toggleFullAccessMode()
 			return a, batchUpdateCmds()
 		}
 		if a.state.IsAgentRunning && key.Matches(typed, a.keys.CancelAgent) {
@@ -461,15 +459,6 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			return a, batchUpdateCmds()
 		}
 	}
-	if a.pendingFullAccessPrompt != nil {
-		if cmd, handled := a.updatePendingFullAccessPromptInput(typed); handled {
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			return a, batchUpdateCmds()
-		}
-	}
-
 	if key.Matches(typed, a.keys.Send) {
 		if a.shouldTreatEnterAsNewline(typed, now) {
 			a.growComposerForNewline()
@@ -682,14 +671,13 @@ func (a *App) submitPermissionDecision(decision tuiservices.PermissionResolution
 }
 
 // toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认。
-func (a *App) toggleFullAccessMode() tea.Cmd {
+func (a *App) toggleFullAccessMode() {
 	if a.fullAccessModeEnabled {
 		a.disableFullAccessMode()
-		return nil
+		return
 	}
 
 	a.openFullAccessPrompt()
-	return nil
 }
 
 // updatePendingFullAccessPromptInput 处理 Full Access 风险确认弹窗的键盘交互。
