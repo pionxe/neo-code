@@ -34,6 +34,9 @@ type stubProviderService struct {
 	selectErr      error
 	selectDelay    time.Duration
 	selectResponse configstate.Selection
+	selectHook     func(providerID string)
+	setModelHook   func(modelID string)
+	setModelErr    error
 	createErr      error
 	createResponse configstate.Selection
 }
@@ -46,6 +49,9 @@ func (s stubProviderService) ListProviderOptions(ctx context.Context) ([]configs
 }
 
 func (s stubProviderService) SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error) {
+	if s.selectHook != nil {
+		s.selectHook(providerID)
+	}
 	if s.selectDelay > 0 {
 		timer := time.NewTimer(s.selectDelay)
 		defer timer.Stop()
@@ -70,6 +76,9 @@ func (s stubProviderService) SelectProvider(ctx context.Context, providerID stri
 }
 
 func (s stubProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
+	if s.listModelsErr != nil {
+		return nil, s.listModelsErr
+	}
 	return s.models, nil
 }
 
@@ -81,6 +90,12 @@ func (s stubProviderService) ListModelsSnapshot(ctx context.Context) ([]provider
 }
 
 func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
+	if s.setModelHook != nil {
+		s.setModelHook(modelID)
+	}
+	if s.setModelErr != nil {
+		return configstate.Selection{}, s.setModelErr
+	}
 	providerID := ""
 	if len(s.providers) > 0 {
 		providerID = s.providers[0].ID
@@ -3216,6 +3231,99 @@ func TestHandleModelScopeGuideSubmitResultMsgAuthFallback(t *testing.T) {
 	}
 	if openedTarget != modelScopeAuthURL {
 		t.Fatalf("expected auth url %q, got %q", modelScopeAuthURL, openedTarget)
+	}
+}
+
+func TestRunModelScopeGuideSubmitRollsBackSelectionWhenVerifyFails(t *testing.T) {
+	var selectedProviders []string
+	var selectedModels []string
+	app, _ := newTestApp(t)
+	app.providerSvc = stubProviderService{
+		models:        []providertypes.ModelDescriptor{{ID: "Qwen/Qwen2.5-7B-Instruct", Name: "Qwen"}},
+		listModelsErr: errors.New("modelscope verify failed"),
+		selectHook: func(providerID string) {
+			selectedProviders = append(selectedProviders, providerID)
+		},
+		setModelHook: func(modelID string) {
+			selectedModels = append(selectedModels, modelID)
+		},
+	}
+	before := app.configManager.Get()
+	envName := "MODELSCOPE_TEST_TOKEN_VERIFY_FAIL"
+	t.Setenv(envName, "previous-token")
+
+	msg := app.runModelScopeGuideSubmit(config.ModelScopeName, envName, "new-token")()
+	result, ok := msg.(modelScopeGuideSubmitResultMsg)
+	if !ok {
+		t.Fatalf("expected submit result msg, got %T", msg)
+	}
+	if !strings.Contains(result.Error, "verify token") {
+		t.Fatalf("expected verify token error, got %q", result.Error)
+	}
+	if got := os.Getenv(envName); got != "previous-token" {
+		t.Fatalf("expected env to rollback, got %q", got)
+	}
+	if len(selectedProviders) < 2 {
+		t.Fatalf("expected select provider to include rollback call, got %+v", selectedProviders)
+	}
+	if !strings.EqualFold(selectedProviders[0], config.ModelScopeName) {
+		t.Fatalf("expected first provider selection to modelscope, got %+v", selectedProviders)
+	}
+	if !strings.EqualFold(selectedProviders[1], before.SelectedProvider) {
+		t.Fatalf("expected rollback provider %q, got %+v", before.SelectedProvider, selectedProviders)
+	}
+	if len(selectedModels) == 0 || !strings.EqualFold(selectedModels[0], before.CurrentModel) {
+		t.Fatalf("expected rollback model %q, got %+v", before.CurrentModel, selectedModels)
+	}
+}
+
+func TestRunModelScopeGuideSubmitRollsBackSelectionWhenPersistFails(t *testing.T) {
+	var selectedProviders []string
+	var selectedModels []string
+	providerSvc := stubProviderService{
+		models: []providertypes.ModelDescriptor{{ID: "Qwen/Qwen2.5-7B-Instruct", Name: "Qwen"}},
+		selectHook: func(providerID string) {
+			selectedProviders = append(selectedProviders, providerID)
+		},
+		setModelHook: func(modelID string) {
+			selectedModels = append(selectedModels, modelID)
+		},
+	}
+	app, _ := newTestAppWithProviderService(t, providerSvc)
+	before := app.configManager.Get()
+	envName := "MODELSCOPE_TEST_TOKEN_PERSIST_FAIL"
+	t.Setenv(envName, "previous-token")
+
+	prevPersist := persistProviderUserEnvVar
+	persistProviderUserEnvVar = func(key string, value string) error {
+		return errors.New("persist failed")
+	}
+	t.Cleanup(func() {
+		persistProviderUserEnvVar = prevPersist
+	})
+
+	msg := app.runModelScopeGuideSubmit(config.ModelScopeName, envName, "new-token")()
+	result, ok := msg.(modelScopeGuideSubmitResultMsg)
+	if !ok {
+		t.Fatalf("expected submit result msg, got %T", msg)
+	}
+	if !strings.Contains(result.Error, "persist token env") {
+		t.Fatalf("expected persist token env error, got %q", result.Error)
+	}
+	if got := os.Getenv(envName); got != "previous-token" {
+		t.Fatalf("expected env to rollback, got %q", got)
+	}
+	if len(selectedProviders) < 2 {
+		t.Fatalf("expected select provider to include rollback call, got %+v", selectedProviders)
+	}
+	if !strings.EqualFold(selectedProviders[0], config.ModelScopeName) {
+		t.Fatalf("expected first provider selection to modelscope, got %+v", selectedProviders)
+	}
+	if !strings.EqualFold(selectedProviders[1], before.SelectedProvider) {
+		t.Fatalf("expected rollback provider %q, got %+v", before.SelectedProvider, selectedProviders)
+	}
+	if len(selectedModels) == 0 || !strings.EqualFold(selectedModels[0], before.CurrentModel) {
+		t.Fatalf("expected rollback model %q, got %+v", before.CurrentModel, selectedModels)
 	}
 }
 

@@ -48,6 +48,7 @@ const providerAddSelectTimeout = 10 * time.Second
 const providerAddNonPersistentEnvWarning = "API key is applied to the current process only on this platform; persist it in your shell profile for future sessions."
 const providerAddManualModelsJSONTemplate = "[\n  {\n    \"id\": \"model-id\",\n    \"name\": \"Model Name\"\n  }\n]"
 const modelScopeGuideSelectTimeout = 12 * time.Second
+const modelScopeGuideRollbackTimeout = 8 * time.Second
 const modelScopeLoginURL = "https://www.modelscope.cn/"
 const modelScopeAuthURL = "https://www.modelscope.cn/my/settings/account"
 const modelScopeTokenURL = "https://www.modelscope.cn/my/access/token"
@@ -1022,6 +1023,9 @@ func (a *App) handleModelScopeGuideOpenResultMsg(msg modelScopeGuideOpenResultMs
 func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, token string) tea.Cmd {
 	providerSvc := a.providerSvc
 	baseDir := a.configManager.BaseDir()
+	previousSelection := a.configManager.Get()
+	previousProviderID := strings.TrimSpace(previousSelection.SelectedProvider)
+	previousModelID := strings.TrimSpace(previousSelection.CurrentModel)
 
 	return func() tea.Msg {
 		trimmedToken := strings.TrimSpace(token)
@@ -1049,29 +1053,30 @@ func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, toke
 		if setErr := os.Setenv(trimmedEnvName, trimmedToken); setErr != nil {
 			return modelScopeGuideSubmitResultMsg{Error: sanitizeProviderAddError(setErr)}
 		}
+		failWithRollback := func(rawErr error, stage string) modelScopeGuideSubmitResultMsg {
+			restoreEnv()
+			wrappedErr := fmt.Errorf("%s: %w", stage, rawErr)
+			if rollbackErr := rollbackModelScopeGuideSelection(providerSvc, previousProviderID, previousModelID); rollbackErr != nil {
+				wrappedErr = fmt.Errorf("%w; rollback selection: %v", wrappedErr, rollbackErr)
+			}
+			return modelScopeGuideSubmitResultMsg{
+				Error: sanitizeProviderAddError(wrappedErr, trimmedToken, baseDir),
+			}
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), modelScopeGuideSelectTimeout)
 		defer cancel()
 
 		selection, selectErr := providerSvc.SelectProvider(ctx, providerID)
 		if selectErr != nil {
-			restoreEnv()
-			return modelScopeGuideSubmitResultMsg{
-				Error: sanitizeProviderAddError(fmt.Errorf("select provider: %w", selectErr), trimmedToken, baseDir),
-			}
+			return failWithRollback(selectErr, "select provider")
 		}
 		if _, listErr := providerSvc.ListModels(ctx); listErr != nil {
-			restoreEnv()
-			return modelScopeGuideSubmitResultMsg{
-				Error: sanitizeProviderAddError(fmt.Errorf("verify token: %w", listErr), trimmedToken, baseDir),
-			}
+			return failWithRollback(listErr, "verify token")
 		}
 
 		if persistErr := persistProviderUserEnvVar(trimmedEnvName, trimmedToken); persistErr != nil {
-			restoreEnv()
-			return modelScopeGuideSubmitResultMsg{
-				Error: sanitizeProviderAddError(fmt.Errorf("persist token env: %w", persistErr), trimmedToken, baseDir),
-			}
+			return failWithRollback(persistErr, "persist token env")
 		}
 
 		return modelScopeGuideSubmitResultMsg{
@@ -1079,6 +1084,29 @@ func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, toke
 			Warning:   providerAddPersistenceWarning(),
 		}
 	}
+}
+
+// rollbackModelScopeGuideSelection 在引导流程失败时回滚 provider/model 选择，避免配置状态漂移。
+func rollbackModelScopeGuideSelection(providerSvc ProviderController, providerID string, modelID string) error {
+	normalizedProviderID := strings.TrimSpace(providerID)
+	normalizedModelID := strings.TrimSpace(modelID)
+	if normalizedProviderID == "" || providerSvc == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), modelScopeGuideRollbackTimeout)
+	defer cancel()
+
+	if _, err := providerSvc.SelectProvider(ctx, normalizedProviderID); err != nil {
+		return fmt.Errorf("rollback provider selection: %w", err)
+	}
+	if normalizedModelID == "" {
+		return nil
+	}
+	if _, err := providerSvc.SetCurrentModel(ctx, normalizedModelID); err != nil {
+		return fmt.Errorf("rollback model selection: %w", err)
+	}
+	return nil
 }
 
 // handleModelScopeGuideSubmitResultMsg 处理 token 校验结果，成功后关闭向导，失败时回退并提示下一步。
