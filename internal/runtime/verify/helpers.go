@@ -2,8 +2,39 @@ package verify
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
+
+// verifierMetadataResult 统一生成 metadata 缺失时的 required/optional 结果。
+func verifierMetadataResult(name string, required bool, metadataKey string, skipSummary string) VerificationResult {
+	if !required {
+		return VerificationResult{
+			Name:    name,
+			Status:  VerificationPass,
+			Summary: skipSummary,
+			Reason:  "optional verifier skipped",
+		}
+	}
+	return VerificationResult{
+		Name:    name,
+		Status:  VerificationSoftBlock,
+		Summary: fmt.Sprintf("%s is required but missing", metadataKey),
+		Reason:  fmt.Sprintf("missing %s metadata", metadataKey),
+	}
+}
+
+// verificationDeniedResult 统一生成路径越界等安全拒绝结果。
+func verificationDeniedResult(name string, summary string, reason string, evidence map[string]any) VerificationResult {
+	return VerificationResult{
+		Name:       name,
+		Status:     VerificationFail,
+		Summary:    summary,
+		Reason:     reason,
+		ErrorClass: ErrorClassPermissionDenied,
+		Evidence:   evidence,
+	}
+}
 
 // metadataStringSlice 从 metadata 中解析字符串列表。
 func metadataStringSlice(metadata map[string]any, key string) []string {
@@ -16,13 +47,7 @@ func metadataStringSlice(metadata map[string]any, key string) []string {
 	}
 	switch typed := raw.(type) {
 	case []string:
-		out := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if normalized := strings.TrimSpace(item); normalized != "" {
-				out = append(out, normalized)
-			}
-		}
-		return out
+		return compactStrings(typed)
 	case []any:
 		out := make([]string, 0, len(typed))
 		for _, item := range typed {
@@ -84,4 +109,49 @@ func metadataStringMapSlice(metadata map[string]any, key string) map[string][]st
 		return nil
 	}
 	return normalized
+}
+
+// compactStrings 会去除空白与空字符串，返回紧凑切片。
+func compactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if normalized := strings.TrimSpace(value); normalized != "" {
+			out = append(out, normalized)
+		}
+	}
+	return out
+}
+
+// resolvePathWithinWorkdir 将 verifier 输入路径解析为绝对路径，并确保路径仍位于 workdir 内部。
+func resolvePathWithinWorkdir(workdir string, rawPath string) (string, error) {
+	normalizedWorkdir := strings.TrimSpace(workdir)
+	if normalizedWorkdir == "" {
+		return "", fmt.Errorf("workdir is required")
+	}
+	workdirAbs, err := filepath.Abs(filepath.Clean(normalizedWorkdir))
+	if err != nil {
+		return "", fmt.Errorf("resolve workdir: %w", err)
+	}
+
+	normalizedPath := strings.TrimSpace(rawPath)
+	if normalizedPath == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	resolvedPath := normalizedPath
+	if !filepath.IsAbs(resolvedPath) {
+		resolvedPath = filepath.Join(workdirAbs, resolvedPath)
+	}
+	resolvedPath, err = filepath.Abs(filepath.Clean(resolvedPath))
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+
+	rel, err := filepath.Rel(workdirAbs, resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("check path relation: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q is outside workdir", rawPath)
+	}
+	return resolvedPath, nil
 }

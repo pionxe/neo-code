@@ -3,8 +3,6 @@ package verify
 import (
 	"context"
 	"os"
-	"path/filepath"
-	"strings"
 )
 
 const (
@@ -25,33 +23,23 @@ func (FileExistsVerifier) VerifyFinal(_ context.Context, input FinalVerifyInput)
 	required := exists && cfg.Required
 	paths := metadataStringSlice(input.Metadata, "expected_files")
 	if len(paths) == 0 {
-		if required {
-			return VerificationResult{
-				Name:    fileExistsVerifierName,
-				Status:  VerificationSoftBlock,
-				Summary: "expected_files is required but missing",
-				Reason:  "missing expected_files metadata",
-			}, nil
-		}
-		return VerificationResult{
-			Name:    fileExistsVerifierName,
-			Status:  VerificationPass,
-			Summary: "no expected files configured, skip file existence check",
-			Reason:  "optional verifier skipped",
-		}, nil
+		return verifierMetadataResult(
+			fileExistsVerifierName,
+			required,
+			"expected_files",
+			"no expected files configured, skip file existence check",
+		), nil
 	}
 
 	missing := make([]string, 0)
 	empty := make([]string, 0)
 	dirs := make([]string, 0)
-	for _, raw := range paths {
-		path := strings.TrimSpace(raw)
-		if path == "" {
+	denied := make([]string, 0)
+	for _, path := range paths {
+		absPath, err := resolvePathWithinWorkdir(input.Workdir, path)
+		if err != nil {
+			denied = append(denied, path)
 			continue
-		}
-		absPath := path
-		if !filepath.IsAbs(absPath) {
-			absPath = filepath.Join(strings.TrimSpace(input.Workdir), path)
 		}
 		info, err := os.Stat(absPath)
 		if err != nil {
@@ -72,6 +60,15 @@ func (FileExistsVerifier) VerifyFinal(_ context.Context, input FinalVerifyInput)
 		"missing_files":   missing,
 		"empty_files":     empty,
 		"directory_paths": dirs,
+		"denied_paths":    denied,
+	}
+	if len(denied) > 0 {
+		return verificationDeniedResult(
+			fileExistsVerifierName,
+			"expected files contain paths outside workdir",
+			"file existence path denied by workdir policy",
+			evidence,
+		), nil
 	}
 	if len(missing) == 0 && len(empty) == 0 && len(dirs) == 0 {
 		return VerificationResult{
