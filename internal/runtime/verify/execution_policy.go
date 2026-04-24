@@ -30,6 +30,12 @@ var readonlyGitSubcommands = map[string]struct{}{
 	"ls-files":  {},
 }
 
+const (
+	defaultVerificationTimeoutSec = 120
+	defaultVerificationOutputCap  = 128 * 1024
+	shellMetacharacters           = ";|&`$<>()\n\r"
+)
+
 // CommandExecutionRequest 描述一次 verifier 命令执行请求。
 type CommandExecutionRequest struct {
 	Command       string
@@ -71,20 +77,8 @@ func (PolicyCommandExecutor) Execute(ctx context.Context, req CommandExecutionRe
 		return CommandExecutionResult{}, fmt.Errorf("%w: %s", ErrVerificationExecutionDenied, reason)
 	}
 
-	timeoutSec := req.TimeoutSec
-	if timeoutSec <= 0 {
-		timeoutSec = req.Policy.DefaultTimeout
-	}
-	if timeoutSec <= 0 {
-		timeoutSec = 120
-	}
-	outputCap := req.OutputCapByte
-	if outputCap <= 0 {
-		outputCap = req.Policy.DefaultOutputCap
-	}
-	if outputCap <= 0 {
-		outputCap = 128 * 1024
-	}
+	timeoutSec := firstPositive(req.TimeoutSec, req.Policy.DefaultTimeout, defaultVerificationTimeoutSec)
+	outputCap := firstPositive(req.OutputCapByte, req.Policy.DefaultOutputCap, defaultVerificationOutputCap)
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
@@ -133,26 +127,15 @@ func (PolicyCommandExecutor) Execute(ctx context.Context, req CommandExecutionRe
 
 // isCommandAllowed 判断命令是否符合 verification non-interactive 白名单策略。
 func isCommandAllowed(commandName string, raw string, policy config.VerificationExecutionPolicyConfig) (bool, string) {
-	denied := make(map[string]struct{}, len(policy.DeniedCommands))
-	for _, item := range policy.DeniedCommands {
-		normalized := strings.ToLower(strings.TrimSpace(item))
-		if normalized == "" {
-			continue
-		}
-		denied[normalized] = struct{}{}
+	if hasShellMetacharacter(raw) {
+		return false, "shell metacharacter is not allowed in verification command"
 	}
-	if _, blocked := denied[commandName]; blocked {
+
+	if _, blocked := normalizedCommandSet(policy.DeniedCommands)[commandName]; blocked {
 		return false, fmt.Sprintf("command %q is denied by verification policy", commandName)
 	}
 
-	allowed := make(map[string]struct{}, len(policy.AllowedCommands))
-	for _, item := range policy.AllowedCommands {
-		normalized := strings.ToLower(strings.TrimSpace(item))
-		if normalized == "" {
-			continue
-		}
-		allowed[normalized] = struct{}{}
-	}
+	allowed := normalizedCommandSet(policy.AllowedCommands)
 	if len(allowed) > 0 {
 		if _, ok := allowed[commandName]; !ok {
 			return false, fmt.Sprintf("command %q is not in allowed_commands", commandName)
@@ -171,6 +154,11 @@ func isCommandAllowed(commandName string, raw string, policy config.Verification
 	return true, ""
 }
 
+// hasShellMetacharacter 判断命令文本是否包含会触发 shell 解释的高风险元字符。
+func hasShellMetacharacter(command string) bool {
+	return strings.ContainsAny(command, shellMetacharacters)
+}
+
 // shellCommand 按平台构建执行命令，统一以非交互 shell 运行 verifier 指令。
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
@@ -181,23 +169,50 @@ func shellCommand(ctx context.Context, command string) *exec.Cmd {
 
 // commandHead 返回命令首个 token（小写）。
 func commandHead(command string) string {
-	fields := strings.Fields(strings.TrimSpace(command))
+	fields := commandFields(command)
 	if len(fields) == 0 {
 		return ""
 	}
-	return strings.ToLower(strings.TrimSpace(fields[0]))
+	return fields[0]
 }
 
 // gitSubcommand 提取 git 命令的二级子命令（小写）。
 func gitSubcommand(command string) string {
+	fields := commandFields(command)
+	if len(fields) < 2 || fields[0] != "git" {
+		return ""
+	}
+	return fields[1]
+}
+
+// normalizedCommandSet 将命令列表规整为小写集合，便于白名单/拒绝名单判断。
+func normalizedCommandSet(commands []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(commands))
+	for _, command := range commands {
+		if normalized := commandHead(command); normalized != "" {
+			set[normalized] = struct{}{}
+		}
+	}
+	return set
+}
+
+// commandFields 返回规整后的命令 token 序列。
+func commandFields(command string) []string {
 	fields := strings.Fields(strings.TrimSpace(command))
-	if len(fields) < 2 {
-		return ""
+	for i, field := range fields {
+		fields[i] = strings.ToLower(strings.TrimSpace(field))
 	}
-	if strings.ToLower(strings.TrimSpace(fields[0])) != "git" {
-		return ""
+	return fields
+}
+
+// firstPositive 返回首个大于 0 的值，否则回退到最后一个默认值。
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
 	}
-	return strings.ToLower(strings.TrimSpace(fields[1]))
+	return 0
 }
 
 type cappedBuffer struct {
@@ -209,7 +224,7 @@ type cappedBuffer struct {
 // newCappedBuffer 创建带大小上限的输出缓冲区，避免 verifier 命令输出无限膨胀。
 func newCappedBuffer(limit int) *cappedBuffer {
 	if limit <= 0 {
-		limit = 128 * 1024
+		limit = defaultVerificationOutputCap
 	}
 	return &cappedBuffer{limit: limit}
 }

@@ -3,7 +3,6 @@ package verify
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -25,54 +24,44 @@ func (ContentMatchVerifier) VerifyFinal(_ context.Context, input FinalVerifyInpu
 	required := exists && cfg.Required
 	rules := metadataStringMapSlice(input.Metadata, "content_match")
 	if len(rules) == 0 {
-		if required {
-			return VerificationResult{
-				Name:    contentMatchVerifierName,
-				Status:  VerificationSoftBlock,
-				Summary: "content_match is required but missing",
-				Reason:  "missing content_match metadata",
-			}, nil
-		}
-		return VerificationResult{
-			Name:    contentMatchVerifierName,
-			Status:  VerificationPass,
-			Summary: "no content_match rule configured, skip content check",
-			Reason:  "optional verifier skipped",
-		}, nil
+		return verifierMetadataResult(
+			contentMatchVerifierName,
+			required,
+			"content_match",
+			"no content_match rule configured, skip content check",
+		), nil
 	}
 
 	missingFiles := make([]string, 0)
+	deniedPaths := make([]string, 0)
 	missingTokens := make(map[string][]string)
 	for rawPath, expectedTokens := range rules {
-		path := strings.TrimSpace(rawPath)
-		if path == "" {
+		absPath, err := resolvePathWithinWorkdir(input.Workdir, rawPath)
+		if err != nil {
+			deniedPaths = append(deniedPaths, rawPath)
 			continue
-		}
-		absPath := path
-		if !filepath.IsAbs(absPath) {
-			absPath = filepath.Join(strings.TrimSpace(input.Workdir), path)
 		}
 		contentBytes, err := os.ReadFile(absPath)
 		if err != nil {
-			missingFiles = append(missingFiles, path)
+			missingFiles = append(missingFiles, rawPath)
 			continue
 		}
-		content := string(contentBytes)
-		for _, token := range expectedTokens {
-			normalized := strings.TrimSpace(token)
-			if normalized == "" {
-				continue
-			}
-			if !strings.Contains(content, normalized) {
-				missingTokens[path] = append(missingTokens[path], normalized)
-			}
-		}
+		collectMissingTokens(missingTokens, rawPath, string(contentBytes), expectedTokens)
 	}
 
 	evidence := map[string]any{
 		"rules":          rules,
 		"missing_files":  missingFiles,
 		"missing_tokens": missingTokens,
+		"denied_paths":   deniedPaths,
+	}
+	if len(deniedPaths) > 0 {
+		return verificationDeniedResult(
+			contentMatchVerifierName,
+			"content rules contain paths outside workdir",
+			"content path denied by workdir policy",
+			evidence,
+		), nil
 	}
 	if len(missingFiles) == 0 && len(missingTokens) == 0 {
 		return VerificationResult{
@@ -91,4 +80,13 @@ func (ContentMatchVerifier) VerifyFinal(_ context.Context, input FinalVerifyInpu
 		ErrorClass: ErrorClassUnknown,
 		Evidence:   evidence,
 	}, nil
+}
+
+// collectMissingTokens 收敛文件缺失关键字，保持 token 去空白后的匹配语义不变。
+func collectMissingTokens(missingTokens map[string][]string, path string, content string, expectedTokens []string) {
+	for _, token := range compactStrings(expectedTokens) {
+		if !strings.Contains(content, token) {
+			missingTokens[path] = append(missingTokens[path], token)
+		}
+	}
 }
