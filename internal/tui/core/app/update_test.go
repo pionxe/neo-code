@@ -3535,32 +3535,32 @@ func TestHandleModelScopeGuideInputStepTransitionsAndEditing(t *testing.T) {
 		openExternalResource = prevOpen
 	})
 
-	_, cmd := app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatalf("expected guide step enter to open target")
+	cases := []struct {
+		name   string
+		step   modelScopeGuideStep
+		target string
+	}{
+		{name: "guide fallback opens login", step: modelScopeGuideStepGuide, target: modelScopeLoginURL},
+		{name: "login opens login page", step: modelScopeGuideStepLogin, target: modelScopeLoginURL},
+		{name: "token opens token page", step: modelScopeGuideStepToken, target: modelScopeTokenURL},
 	}
-	_ = cmd()
-	if len(opened) != 1 || opened[0] != modelScopeLoginURL {
-		t.Fatalf("expected guide fallback to login url, got %v", opened)
-	}
-
-	app.modelScopeGuide.Step = modelScopeGuideStepLogin
-	_, cmd = app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
-	_ = cmd()
-	if len(opened) != 2 || opened[1] != modelScopeLoginURL {
-		t.Fatalf("expected login step to open login url, got %v", opened)
-	}
-
-	app.modelScopeGuide.Step = modelScopeGuideStepToken
-	_, cmd = app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
-	_ = cmd()
-	if len(opened) != 3 || opened[2] != modelScopeTokenURL {
-		t.Fatalf("expected token step to open token url, got %v", opened)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app.modelScopeGuide.Step = tc.step
+			_, cmd := app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatalf("expected open command for step %v", tc.step)
+			}
+			_ = cmd()
+			if got := opened[len(opened)-1]; got != tc.target {
+				t.Fatalf("expected target %q, got %q", tc.target, got)
+			}
+		})
 	}
 
 	app.modelScopeGuide.Step = modelScopeGuideStepPasteToken
 	app.modelScopeGuide.Token = ""
-	_, cmd = app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatalf("expected empty token submit to return nil command")
 	}
@@ -3607,22 +3607,25 @@ func TestHandleModelScopeGuideOpenResultMsgTransitionsAndErrors(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: modelScopeLoginURL})
 
-	app.modelScopeGuide = &modelScopeGuideState{Step: modelScopeGuideStepGuide}
-	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: modelScopeLoginURL})
-	if app.modelScopeGuide.Step != modelScopeGuideStepLogin {
-		t.Fatalf("expected guide step to move to login, got %v", app.modelScopeGuide.Step)
+	cases := []struct {
+		name     string
+		step     modelScopeGuideStep
+		target   string
+		expected modelScopeGuideStep
+	}{
+		{name: "guide advances to login", step: modelScopeGuideStepGuide, target: modelScopeLoginURL, expected: modelScopeGuideStepLogin},
+		{name: "login advances to token", step: modelScopeGuideStepLogin, target: modelScopeTokenURL, expected: modelScopeGuideStepToken},
+		{name: "token advances after token page", step: modelScopeGuideStepToken, target: modelScopeTokenURL, expected: modelScopeGuideStepPasteToken},
+		{name: "token stays on auth page", step: modelScopeGuideStepToken, target: modelScopeAuthURL, expected: modelScopeGuideStepToken},
 	}
-
-	app.modelScopeGuide.Step = modelScopeGuideStepLogin
-	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: modelScopeTokenURL})
-	if app.modelScopeGuide.Step != modelScopeGuideStepToken {
-		t.Fatalf("expected login step to move to token, got %v", app.modelScopeGuide.Step)
-	}
-
-	app.modelScopeGuide.Step = modelScopeGuideStepToken
-	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: modelScopeTokenURL})
-	if app.modelScopeGuide.Step != modelScopeGuideStepPasteToken {
-		t.Fatalf("expected token step to move to paste token, got %v", app.modelScopeGuide.Step)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app.modelScopeGuide = &modelScopeGuideState{Step: tc.step}
+			app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: tc.target})
+			if app.modelScopeGuide.Step != tc.expected {
+				t.Fatalf("expected step %v, got %v", tc.expected, app.modelScopeGuide.Step)
+			}
+		})
 	}
 
 	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Error: "boom"})
@@ -3631,6 +3634,59 @@ func TestHandleModelScopeGuideOpenResultMsgTransitionsAndErrors(t *testing.T) {
 	}
 	if app.state.ExecutionError != "boom" {
 		t.Fatalf("expected execution error set on open error, got %q", app.state.ExecutionError)
+	}
+}
+
+func TestModelScopeGuideOpenTarget(t *testing.T) {
+	cases := []struct {
+		name      string
+		step      modelScopeGuideStep
+		guidePath string
+		target    string
+		ok        bool
+	}{
+		{name: "guide uses local html", step: modelScopeGuideStepGuide, guidePath: "/tmp/guide.html", target: "/tmp/guide.html", ok: true},
+		{name: "guide falls back to login", step: modelScopeGuideStepGuide, target: modelScopeLoginURL, ok: true},
+		{name: "login uses login page", step: modelScopeGuideStepLogin, target: modelScopeLoginURL, ok: true},
+		{name: "token uses token page", step: modelScopeGuideStepToken, target: modelScopeTokenURL, ok: true},
+		{name: "paste token has no open target", step: modelScopeGuideStepPasteToken},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target, ok := modelScopeGuideOpenTarget(tc.step, tc.guidePath)
+			if ok != tc.ok {
+				t.Fatalf("expected ok=%v, got %v", tc.ok, ok)
+			}
+			if target != tc.target {
+				t.Fatalf("expected target %q, got %q", tc.target, target)
+			}
+		})
+	}
+}
+
+func TestAdvanceModelScopeGuideStep(t *testing.T) {
+	cases := []struct {
+		name     string
+		current  modelScopeGuideStep
+		target   string
+		next     modelScopeGuideStep
+		advanced bool
+	}{
+		{name: "guide advances", current: modelScopeGuideStepGuide, target: modelScopeLoginURL, next: modelScopeGuideStepLogin, advanced: true},
+		{name: "login advances", current: modelScopeGuideStepLogin, target: modelScopeLoginURL, next: modelScopeGuideStepToken, advanced: true},
+		{name: "token advances only for token page", current: modelScopeGuideStepToken, target: modelScopeTokenURL, next: modelScopeGuideStepPasteToken, advanced: true},
+		{name: "token ignores auth page", current: modelScopeGuideStepToken, target: modelScopeAuthURL, next: modelScopeGuideStepToken, advanced: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			next, advanced := advanceModelScopeGuideStep(tc.current, tc.target)
+			if advanced != tc.advanced {
+				t.Fatalf("expected advanced=%v, got %v", tc.advanced, advanced)
+			}
+			if next != tc.next {
+				t.Fatalf("expected next %v, got %v", tc.next, next)
+			}
+		})
 	}
 }
 

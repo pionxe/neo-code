@@ -932,44 +932,56 @@ func (a *App) handleModelScopeGuideInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	guide := a.modelScopeGuide
 	switch {
 	case msg.String() == "enter":
-		switch guide.Step {
-		case modelScopeGuideStepGuide:
-			target := guide.GuidePath
-			if strings.TrimSpace(target) == "" {
-				target = modelScopeLoginURL
-			}
+		if guide.Step == modelScopeGuideStepPasteToken {
+			return a, a.submitModelScopeGuideToken(guide)
+		}
+		if target, ok := modelScopeGuideOpenTarget(guide.Step, guide.GuidePath); ok {
 			return a, a.runModelScopeGuideOpen(target)
-		case modelScopeGuideStepLogin:
-			return a, a.runModelScopeGuideOpen(modelScopeLoginURL)
-		case modelScopeGuideStepToken:
-			return a, a.runModelScopeGuideOpen(modelScopeTokenURL)
-		case modelScopeGuideStepPasteToken:
-			token := strings.TrimSpace(guide.Token)
-			if token == "" {
-				guide.Error = "Token is required."
-				return a, nil
-			}
-			guide.Submitting = true
-			guide.Error = ""
-			guide.Notice = ""
-			a.state.StatusText = "Validating ModelScope token..."
-			return a, a.runModelScopeGuideSubmit(guide.ProviderID, guide.APIKeyEnv, token)
 		}
 	case msg.Type == tea.KeyBackspace || msg.Type == tea.KeyCtrlH:
 		if guide.Step == modelScopeGuideStepPasteToken {
 			guide.Token = trimLastRune(guide.Token)
-			guide.Error = ""
-			guide.Notice = ""
+			clearModelScopeGuideFeedback(guide)
 		}
 	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0:
 		if guide.Step == modelScopeGuideStepPasteToken {
 			guide.Token += sanitizeProviderAddInputRunes(msg.Runes)
-			guide.Error = ""
-			guide.Notice = ""
+			clearModelScopeGuideFeedback(guide)
 		}
 	}
 
 	return a, nil
+}
+
+// modelScopeGuideOpenTarget 返回当前引导步骤对应的外部资源目标。
+func modelScopeGuideOpenTarget(step modelScopeGuideStep, guidePath string) (string, bool) {
+	switch step {
+	case modelScopeGuideStepGuide:
+		target := strings.TrimSpace(guidePath)
+		if target == "" {
+			return modelScopeLoginURL, true
+		}
+		return target, true
+	case modelScopeGuideStepLogin:
+		return modelScopeLoginURL, true
+	case modelScopeGuideStepToken:
+		return modelScopeTokenURL, true
+	default:
+		return "", false
+	}
+}
+
+// submitModelScopeGuideToken 校验并提交用户粘贴的 token。
+func (a *App) submitModelScopeGuideToken(guide *modelScopeGuideState) tea.Cmd {
+	token := strings.TrimSpace(guide.Token)
+	if token == "" {
+		guide.Error = "Token is required."
+		return nil
+	}
+	guide.Submitting = true
+	clearModelScopeGuideFeedback(guide)
+	a.state.StatusText = "Validating ModelScope token..."
+	return a.runModelScopeGuideSubmit(guide.ProviderID, guide.APIKeyEnv, token)
 }
 
 // runModelScopeGuideOpen 异步打开 ModelScope 引导资源（本地 HTML 或网页 URL）。
@@ -1009,14 +1021,33 @@ func (a *App) handleModelScopeGuideOpenResultMsg(msg modelScopeGuideOpenResultMs
 	guide.Notice = "Opened: " + strings.TrimSpace(msg.Target)
 	a.state.ExecutionError = ""
 	a.state.StatusText = "ModelScope guide opened"
-	switch guide.Step {
-	case modelScopeGuideStepGuide:
-		guide.Step = modelScopeGuideStepLogin
-	case modelScopeGuideStepLogin:
-		guide.Step = modelScopeGuideStepToken
-	case modelScopeGuideStepToken:
-		guide.Step = modelScopeGuideStepPasteToken
+	if nextStep, advanced := advanceModelScopeGuideStep(guide.Step, msg.Target); advanced {
+		guide.Step = nextStep
 	}
+}
+
+// advanceModelScopeGuideStep 根据打开结果推进引导步骤。
+func advanceModelScopeGuideStep(current modelScopeGuideStep, target string) (modelScopeGuideStep, bool) {
+	switch current {
+	case modelScopeGuideStepGuide:
+		return modelScopeGuideStepLogin, true
+	case modelScopeGuideStepLogin:
+		return modelScopeGuideStepToken, true
+	case modelScopeGuideStepToken:
+		if strings.TrimSpace(target) == modelScopeTokenURL {
+			return modelScopeGuideStepPasteToken, true
+		}
+	}
+	return current, false
+}
+
+// clearModelScopeGuideFeedback 清空引导面板上的错误和提示信息。
+func clearModelScopeGuideFeedback(guide *modelScopeGuideState) {
+	if guide == nil {
+		return
+	}
+	guide.Error = ""
+	guide.Notice = ""
 }
 
 // runModelScopeGuideSubmit 在设置 token 后完成 provider 选择与最小可用校验。
