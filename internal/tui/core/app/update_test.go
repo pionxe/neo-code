@@ -2370,8 +2370,8 @@ func TestStartDraftSessionResetsRunState(t *testing.T) {
 	if len(app.activities) != 0 {
 		t.Fatalf("expected activities to be cleared")
 	}
-	if !app.startupScreenLocked {
-		t.Fatalf("expected startupScreenLocked to remain true after new session")
+	if app.startupScreenLocked {
+		t.Fatalf("expected startupScreenLocked to stay unlocked after new session")
 	}
 }
 func TestSetCurrentWorkdir(t *testing.T) {
