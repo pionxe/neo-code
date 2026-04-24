@@ -5602,7 +5602,7 @@ func TestAgentDoneEventCarriesRunScopedEnvelope(t *testing.T) {
 	if doneEvent.Turn == turnUnspecified {
 		t.Fatalf("expected run-scoped turn, got %d", doneEvent.Turn)
 	}
-	if doneEvent.Phase != string(controlplane.RunStatePlan) {
-		t.Fatalf("expected phase=%q, got %q", controlplane.RunStatePlan, doneEvent.Phase)
+	if doneEvent.Phase != string(controlplane.RunStateVerify) {
+		t.Fatalf("expected phase=%q, got %q", controlplane.RunStateVerify, doneEvent.Phase)
 	}
 }
