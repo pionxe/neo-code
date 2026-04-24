@@ -43,3 +43,16 @@ func TestFullHelpIncludesOpenWorkspace(t *testing.T) {
 	}
 	t.Fatalf("expected full help to include open workspace binding")
 }
+
+func TestFullHelpIncludesToggleFullAccess(t *testing.T) {
+	keys := newKeyMap()
+	help := keys.FullHelp()
+	for _, row := range help {
+		for _, binding := range row {
+			if binding.Help().Key == keys.ToggleFullAccess.Help().Key {
+				return
+			}
+		}
+	}
+	t.Fatalf("expected full help to include full access toggle binding")
+}

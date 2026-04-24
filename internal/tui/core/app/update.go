@@ -311,6 +311,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.applyComponentLayout(true)
 			return a, batchUpdateCmds()
 		}
+		if a.pendingFullAccessPrompt != nil {
+			if cmd, handled := a.updatePendingFullAccessPromptInput(typed); handled {
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return a, batchUpdateCmds()
+			}
+		}
+		if key.Matches(typed, a.keys.ToggleFullAccess) {
+			if cmd := a.toggleFullAccessMode(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return a, batchUpdateCmds()
+		}
 		if a.state.IsAgentRunning && key.Matches(typed, a.keys.CancelAgent) {
 			if a.runtime.CancelActiveRun() {
 				a.state.StatusText = statusCanceling
@@ -449,6 +463,14 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 	if a.pendingPermission != nil {
 		if cmd, handled := a.updatePendingPermissionInput(typed); handled {
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return a, batchUpdateCmds()
+		}
+	}
+	if a.pendingFullAccessPrompt != nil {
+		if cmd, handled := a.updatePendingFullAccessPromptInput(typed); handled {
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -665,6 +687,81 @@ func (a *App) submitPermissionDecision(decision tuiservices.PermissionResolution
 	a.appendActivity("permission", "Submitting permission decision", string(decision), false)
 
 	return runResolvePermission(a.runtime, requestID, decision)
+}
+
+// toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认。
+func (a *App) toggleFullAccessMode() tea.Cmd {
+	if a.fullAccessModeEnabled {
+		a.fullAccessModeEnabled = false
+		a.pendingFullAccessPrompt = nil
+		a.state.StatusText = statusFullAccessDisabled
+		a.state.ExecutionError = ""
+		a.appendActivity("permission", "Full access mode disabled", "", false)
+		a.refreshPermissionPromptLayout()
+		return nil
+	}
+
+	a.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
+	a.focus = panelInput
+	a.applyFocus()
+	a.state.StatusText = statusFullAccessPrompt
+	a.state.ExecutionError = ""
+	a.appendActivity("permission", "Full access risk prompt opened", "Press Y to enable, N to cancel", false)
+	a.refreshPermissionPromptLayout()
+	return nil
+}
+
+// updatePendingFullAccessPromptInput 处理 Full Access 风险确认弹窗的键盘交互。
+func (a *App) updatePendingFullAccessPromptInput(typed tea.KeyMsg) (tea.Cmd, bool) {
+	if a.pendingFullAccessPrompt == nil {
+		return nil, false
+	}
+
+	switch {
+	case key.Matches(typed, a.keys.ScrollUp):
+		a.pendingFullAccessPrompt.Selected = normalizeFullAccessPromptSelection(a.pendingFullAccessPrompt.Selected - 1)
+		a.state.StatusText = statusFullAccessPrompt
+		return nil, true
+	case key.Matches(typed, a.keys.ScrollDown):
+		a.pendingFullAccessPrompt.Selected = normalizeFullAccessPromptSelection(a.pendingFullAccessPrompt.Selected + 1)
+		a.state.StatusText = statusFullAccessPrompt
+		return nil, true
+	case key.Matches(typed, a.keys.Send):
+		option := fullAccessPromptOptionAt(a.pendingFullAccessPrompt.Selected)
+		return a.applyFullAccessPromptSelection(option.Enable), true
+	case key.Matches(typed, a.keys.FocusInput):
+		return a.applyFullAccessPromptSelection(false), true
+	}
+
+	if typed.Type == tea.KeyRunes && len(typed.Runes) > 0 {
+		if enable, ok := parseFullAccessPromptShortcut(string(typed.Runes)); ok {
+			return a.applyFullAccessPromptSelection(enable), true
+		}
+	}
+	return nil, true
+}
+
+// applyFullAccessPromptSelection 根据风险确认结果更新 Full Access 模式，并按需自动处理待审批请求。
+func (a *App) applyFullAccessPromptSelection(enable bool) tea.Cmd {
+	a.pendingFullAccessPrompt = nil
+	if !enable {
+		a.state.StatusText = statusFullAccessCanceled
+		a.state.ExecutionError = ""
+		a.appendActivity("permission", "Full access enable canceled", "", false)
+		a.refreshPermissionPromptLayout()
+		return nil
+	}
+
+	a.fullAccessModeEnabled = true
+	a.state.StatusText = statusFullAccessEnabled
+	a.state.ExecutionError = ""
+	a.appendActivity("permission", "Full access mode enabled", "All upcoming tool requests will be auto-approved", false)
+	a.refreshPermissionPromptLayout()
+
+	if a.pendingPermission != nil && !a.pendingPermission.Submitting {
+		return a.submitPermissionDecision(tuiservices.DecisionAllowSession)
+	}
+	return nil
 }
 
 func (a App) now() time.Time {
@@ -2140,6 +2237,23 @@ func runtimeEventPermissionRequestHandler(a *App, event tuiservices.RuntimeEvent
 	payload, ok := parsePermissionRequestPayload(event.Payload)
 	if !ok {
 		return false
+	}
+	if a.fullAccessModeEnabled {
+		requestID := strings.TrimSpace(payload.RequestID)
+		if requestID != "" {
+			a.pendingPermission = nil
+			a.state.StatusText = statusPermissionSubmitting
+			a.state.ExecutionError = ""
+			a.deferredEventCmd = runResolvePermission(a.runtime, requestID, tuiservices.DecisionAllowSession)
+			a.appendActivity(
+				"permission",
+				"Full access auto-approved permission",
+				fmt.Sprintf("%s -> %s", fallbackText(payload.ToolName, "tool"), fallbackText(payload.Target, "(empty target)")),
+				false,
+			)
+			a.refreshPermissionPromptLayout()
+			return false
+		}
 	}
 
 	if a.pendingPermission != nil {

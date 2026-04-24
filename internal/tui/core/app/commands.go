@@ -100,6 +100,10 @@ const (
 	statusPermissionRequired   = "Permission required: choose a decision and press Enter"
 	statusPermissionSubmitting = "Submitting permission decision"
 	statusPermissionSubmitted  = "Permission decision submitted"
+	statusFullAccessPrompt     = "Full access risk prompt: press Y/N"
+	statusFullAccessEnabled    = "Full access mode enabled: tool approvals are auto-approved"
+	statusFullAccessDisabled   = "Full access mode disabled"
+	statusFullAccessCanceled   = "Full access enable canceled"
 
 	focusLabelSessions   = "Sessions"
 	focusLabelTranscript = "Transcript"

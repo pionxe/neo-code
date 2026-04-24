@@ -24,12 +24,13 @@ type startupQuickActionItem struct {
 var startupQuickActions = []startupQuickActionItem{
 	{Key: "Ctrl+N", Label: "New Chat            "},
 	{Key: "     /", Label: "Open Command Palette"},
+	{Key: "Ctrl+F", Label: "Full Access Mode    "},
 	{Key: "Ctrl+L", Label: "Open Log Viewer     "},
 	{Key: "Ctrl+U", Label: "Exit NeoCode        "},
 }
 
 func (a App) shouldRenderStartupScreen() bool {
-	if a.state.ActivePicker != pickerNone || a.logViewerVisible || a.pendingPermission != nil {
+	if a.state.ActivePicker != pickerNone || a.logViewerVisible || a.pendingPermission != nil || a.pendingFullAccessPrompt != nil {
 		return false
 	}
 	if a.state.IsAgentRunning || a.state.IsCompacting {

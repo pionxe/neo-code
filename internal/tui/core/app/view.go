@@ -527,6 +527,10 @@ func maskedSecret(value string) string {
 }
 
 func (a App) renderPrompt(width int) string {
+	if a.pendingFullAccessPrompt != nil {
+		box := a.styles.inputBoxFocused
+		return box.Width(width).Margin(1, 0, 0, 0).Render(a.renderFullAccessPrompt())
+	}
 	if a.pendingPermission != nil {
 		box := a.styles.inputBoxFocused
 		return box.Width(width).Margin(1, 0, 0, 0).Render(a.renderPermissionPrompt())
