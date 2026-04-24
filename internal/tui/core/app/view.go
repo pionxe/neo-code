@@ -215,7 +215,7 @@ func (a App) renderWaterfall(width int, height int) string {
 
 func (a App) renderTranscriptWithScrollbar(totalWidth int, content string) string {
 	scrollbarWidth := a.transcriptScrollbarWidth(totalWidth)
-	if scrollbarWidth <= 0 {
+	if scrollbarWidth <= 0 || a.transcriptMaxOffset() <= 0 {
 		return a.styles.streamContent.Render(content)
 	}
 
@@ -237,9 +237,8 @@ func (a App) renderTranscriptScrollbar(width int, height int) string {
 		return ""
 	}
 
-	track := strings.Repeat("|", width)
-	thumb := strings.Repeat("#", width)
-	trackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(oliveGray))
+	blank := strings.Repeat(" ", width)
+	thumb := strings.Repeat("█", width)
 	thumbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(purpleAccent)).Bold(true)
 
 	maxOffset := a.transcriptMaxOffset()
@@ -262,7 +261,7 @@ func (a App) renderTranscriptScrollbar(width int, height int) string {
 			lines = append(lines, thumbStyle.Render(thumb))
 			continue
 		}
-		lines = append(lines, trackStyle.Render(track))
+		lines = append(lines, blank)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
