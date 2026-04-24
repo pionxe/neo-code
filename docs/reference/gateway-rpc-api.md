@@ -486,7 +486,105 @@ Observation：
 
 ---
 
-## 7. gateway.cancel
+## 7. gateway.activateSessionSkill
+
+Method: `gateway.activateSessionSkill`  
+Stability: `Stable`  
+Auth Required: `Yes`
+
+Request Schema（Go Struct）：
+
+```go
+type ActivateSessionSkillParams struct {
+	SessionID string `json:"session_id"` // MUST
+	SkillID   string `json:"skill_id"`   // MUST
+}
+```
+
+Response Schema：
+1. Success：返回 `ack`，`payload` 包含 `session_id`、`skill_id` 与确认消息。  
+2. Failure：统一 `error` 信封，常见 `missing_required_field` / `invalid_action` / `access_denied`。  
+
+Observation：
+1. 计入 `gateway_requests_total{method="gateway.activateSessionSkill",...}`。  
+2. 与 `gateway.event` 中 `skill_activated` 事件联动。  
+
+---
+
+## 8. gateway.deactivateSessionSkill
+
+Method: `gateway.deactivateSessionSkill`  
+Stability: `Stable`  
+Auth Required: `Yes`
+
+Request Schema（Go Struct）：
+
+```go
+type DeactivateSessionSkillParams struct {
+	SessionID string `json:"session_id"` // MUST
+	SkillID   string `json:"skill_id"`   // MUST
+}
+```
+
+Response Schema：
+1. Success：返回 `ack`，`payload` 包含 `session_id`、`skill_id` 与确认消息。  
+2. Failure：统一 `error` 信封，常见 `missing_required_field` / `invalid_action` / `access_denied`。  
+
+Observation：
+1. 计入 `gateway_requests_total{method="gateway.deactivateSessionSkill",...}`。  
+2. 与 `gateway.event` 中 `skill_deactivated` 事件联动。  
+
+---
+
+## 9. gateway.listSessionSkills
+
+Method: `gateway.listSessionSkills`  
+Stability: `Stable`  
+Auth Required: `Yes`
+
+Request Schema（Go Struct）：
+
+```go
+type ListSessionSkillsParams struct {
+	SessionID string `json:"session_id"` // MUST
+}
+```
+
+Response Schema：
+1. Success：返回 `ack`，`payload.skills` 为会话激活技能状态数组。  
+2. Failure：统一 `error` 信封，常见 `missing_required_field` / `access_denied`。  
+
+Observation：
+1. 计入 `gateway_requests_total{method="gateway.listSessionSkills",...}`。  
+2. `payload.skills[*].missing=true` 表示会话中记录了该技能但当前注册表不可见。  
+
+---
+
+## 10. gateway.listAvailableSkills
+
+Method: `gateway.listAvailableSkills`  
+Stability: `Stable`  
+Auth Required: `Yes`
+
+Request Schema（Go Struct）：
+
+```go
+type ListAvailableSkillsParams struct {
+	SessionID string `json:"session_id,omitempty"` // OPTIONAL
+}
+```
+
+Response Schema：
+1. Success：返回 `ack`，`payload.skills` 为可见技能状态数组。  
+2. Failure：统一 `error` 信封，常见 `invalid_action` / `access_denied`。  
+
+Observation：
+1. 计入 `gateway_requests_total{method="gateway.listAvailableSkills",...}`。  
+2. 当携带 `session_id` 时，返回值中的 `active` 字段表示会话激活态。  
+
+---
+
+## 11. gateway.cancel
 
 Method: `gateway.cancel`  
 Stability: `Stable`  
@@ -530,7 +628,7 @@ Observation：
 
 ---
 
-## 8. gateway.listSessions
+## 12. gateway.listSessions
 
 Method: `gateway.listSessions`  
 Stability: `Stable`  
@@ -585,7 +683,7 @@ Observation：
 
 ---
 
-## 9. gateway.loadSession
+## 13. gateway.loadSession
 
 Method: `gateway.loadSession`  
 Stability: `Stable`  
@@ -633,7 +731,7 @@ Observation：
 
 ---
 
-## 10. gateway.resolvePermission
+## 14. gateway.resolvePermission
 
 Method: `gateway.resolvePermission`  
 Stability: `Stable`  
@@ -677,7 +775,7 @@ Observation：
 
 ---
 
-## 11. wake.openUrl
+## 15. wake.openUrl
 
 Method: `wake.openUrl`  
 Stability: `Experimental`  
@@ -727,7 +825,7 @@ Observation：
 
 ---
 
-## 12. gateway.event（服务端通知）
+## 16. gateway.event（服务端通知）
 
 Method: `gateway.event`  
 Stability: `Stable`  
@@ -1135,6 +1233,236 @@ Failure Response：
 Notes：
 
 1. `tool_name` 在网关层按白名单校验，当前仅允许 memo 系统工具。
+
+### gateway.activateSessionSkill
+
+Request：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-on-1",
+  "method": "gateway.activateSessionSkill",
+  "params": {
+    "session_id": "session-demo-1",
+    "skill_id": "go-review"
+  }
+}
+```
+
+Success Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-on-1",
+  "result": {
+    "type": "ack",
+    "action": "activate_session_skill",
+    "request_id": "req-skill-on-1",
+    "session_id": "session-demo-1",
+    "payload": {
+      "message": "skill activated",
+      "session_id": "session-demo-1",
+      "skill_id": "go-review"
+    }
+  }
+}
+```
+
+Failure Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-on-1",
+  "error": {
+    "code": -32602,
+    "message": "missing required field: params.skill_id",
+    "data": {
+      "gateway_code": "missing_required_field"
+    }
+  }
+}
+```
+
+### gateway.deactivateSessionSkill
+
+Request：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-off-1",
+  "method": "gateway.deactivateSessionSkill",
+  "params": {
+    "session_id": "session-demo-1",
+    "skill_id": "go-review"
+  }
+}
+```
+
+Success Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-off-1",
+  "result": {
+    "type": "ack",
+    "action": "deactivate_session_skill",
+    "request_id": "req-skill-off-1",
+    "session_id": "session-demo-1",
+    "payload": {
+      "message": "skill deactivated",
+      "session_id": "session-demo-1",
+      "skill_id": "go-review"
+    }
+  }
+}
+```
+
+Failure Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-off-1",
+  "error": {
+    "code": -32602,
+    "message": "missing required field: params.skill_id",
+    "data": {
+      "gateway_code": "missing_required_field"
+    }
+  }
+}
+```
+
+### gateway.listSessionSkills
+
+Request：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-active-1",
+  "method": "gateway.listSessionSkills",
+  "params": {
+    "session_id": "session-demo-1"
+  }
+}
+```
+
+Success Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-active-1",
+  "result": {
+    "type": "ack",
+    "action": "list_session_skills",
+    "request_id": "req-skill-active-1",
+    "session_id": "session-demo-1",
+    "payload": {
+      "skills": [
+        {
+          "skill_id": "go-review",
+          "descriptor": {
+            "id": "go-review",
+            "name": "Go Review",
+            "description": "Review Go code with actionable findings.",
+            "version": "1.0.0",
+            "source": {
+              "kind": "local"
+            },
+            "scope": "session"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Failure Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-active-1",
+  "error": {
+    "code": -32602,
+    "message": "missing required field: params.session_id",
+    "data": {
+      "gateway_code": "missing_required_field"
+    }
+  }
+}
+```
+
+### gateway.listAvailableSkills
+
+Request：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-list-1",
+  "method": "gateway.listAvailableSkills",
+  "params": {
+    "session_id": "session-demo-1"
+  }
+}
+```
+
+Success Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-list-1",
+  "result": {
+    "type": "ack",
+    "action": "list_available_skills",
+    "request_id": "req-skill-list-1",
+    "session_id": "session-demo-1",
+    "payload": {
+      "skills": [
+        {
+          "descriptor": {
+            "id": "go-review",
+            "name": "Go Review",
+            "description": "Review Go code with actionable findings.",
+            "version": "1.0.0",
+            "source": {
+              "kind": "local"
+            },
+            "scope": "session"
+          },
+          "active": true
+        }
+      ]
+    }
+  }
+}
+```
+
+Failure Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-skill-list-1",
+  "error": {
+    "code": -32602,
+    "message": "access denied",
+    "data": {
+      "gateway_code": "access_denied"
+    }
+  }
+}
+```
 
 ### gateway.cancel
 

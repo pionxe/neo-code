@@ -71,6 +71,23 @@ func TestValidateFrameCancelAndListSessions(t *testing.T) {
 		t.Fatalf("list_sessions request should be valid, got %v", listErr)
 	}
 
+	listAvailableErr := ValidateFrame(MessageFrame{
+		Type:   FrameTypeRequest,
+		Action: FrameActionListAvailableSkills,
+	})
+	if listAvailableErr != nil {
+		t.Fatalf("list_available_skills request should be valid, got %v", listAvailableErr)
+	}
+
+	listSessionErr := ValidateFrame(MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionListSessionSkills,
+		SessionID: "sess-1",
+	})
+	if listSessionErr != nil {
+		t.Fatalf("list_session_skills request should be valid with session_id, got %v", listSessionErr)
+	}
+
 	executeErr := ValidateFrame(MessageFrame{
 		Type:   FrameTypeRequest,
 		Action: FrameActionExecuteSystemTool,

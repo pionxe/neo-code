@@ -269,6 +269,88 @@ type ExecuteSystemToolParams struct {
 
 ---
 
+## Method: gateway.activateSessionSkill
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type ActivateSessionSkillParams struct {
+	SessionID string `json:"session_id"` // MUST
+	SkillID   string `json:"skill_id"`   // MUST
+}
+```
+
+- Response Schema:
+  - Success: `ack`，`payload` 返回 `session_id`、`skill_id` 与状态提示
+  - Failure: 标准 `error`（`missing_required_field` / `invalid_action` / `access_denied` 等）
+- Observation:
+  - `gateway_requests_total{method="gateway.activateSessionSkill",...}`
+
+---
+
+## Method: gateway.deactivateSessionSkill
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type DeactivateSessionSkillParams struct {
+	SessionID string `json:"session_id"` // MUST
+	SkillID   string `json:"skill_id"`   // MUST
+}
+```
+
+- Response Schema:
+  - Success: `ack`，`payload` 返回 `session_id`、`skill_id` 与状态提示
+  - Failure: 标准 `error`（`missing_required_field` / `invalid_action` / `access_denied` 等）
+- Observation:
+  - `gateway_requests_total{method="gateway.deactivateSessionSkill",...}`
+
+---
+
+## Method: gateway.listSessionSkills
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type ListSessionSkillsParams struct {
+	SessionID string `json:"session_id"` // MUST
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload.skills`（会话内激活技能状态数组）
+  - Failure: 标准 `error`（`missing_required_field` / `access_denied` 等）
+- Observation:
+  - `gateway_requests_total{method="gateway.listSessionSkills",...}`
+
+---
+
+## Method: gateway.listAvailableSkills
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type ListAvailableSkillsParams struct {
+	SessionID string `json:"session_id,omitempty"` // OPTIONAL
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload.skills`（可见技能状态数组，含 `active` 标记）
+  - Failure: 标准 `error`（`invalid_action` / `access_denied` 等）
+- Observation:
+  - `gateway_requests_total{method="gateway.listAvailableSkills",...}`
+
+---
+
 ## Method: gateway.cancel
 
 - Stability: Stable

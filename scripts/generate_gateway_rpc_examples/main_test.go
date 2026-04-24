@@ -18,8 +18,8 @@ func TestBuildMethodExamples(t *testing.T) {
 		t.Fatalf("buildMethodExamples() error = %v", err)
 	}
 
-	if len(examples) != 11 {
-		t.Fatalf("len(examples) = %d, want 11", len(examples))
+	if len(examples) != 16 {
+		t.Fatalf("len(examples) = %d, want 16", len(examples))
 	}
 
 	if examples[0].Method != protocol.MethodGatewayAuthenticate {
@@ -40,6 +40,8 @@ func TestRenderGeneratedBlock(t *testing.T) {
 	mustContain := []string{
 		"### " + protocol.MethodGatewayRun,
 		"### " + protocol.MethodGatewayBindStream,
+		"### " + protocol.MethodGatewayActivateSessionSkill,
+		"### " + protocol.MethodGatewayListAvailableSkills,
 		"### " + protocol.MethodGatewayEvent,
 		"```json",
 		"Notes：",

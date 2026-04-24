@@ -385,6 +385,25 @@ func (s *runtimePortEventStub) ExecuteSystemTool(
 	return tools.ToolResult{}, nil
 }
 
+func (s *runtimePortEventStub) ActivateSessionSkill(_ context.Context, _ SessionSkillMutationInput) error {
+	return nil
+}
+
+func (s *runtimePortEventStub) DeactivateSessionSkill(_ context.Context, _ SessionSkillMutationInput) error {
+	return nil
+}
+
+func (s *runtimePortEventStub) ListSessionSkills(_ context.Context, _ ListSessionSkillsInput) ([]SessionSkillState, error) {
+	return nil, nil
+}
+
+func (s *runtimePortEventStub) ListAvailableSkills(
+	_ context.Context,
+	_ ListAvailableSkillsInput,
+) ([]AvailableSkillState, error) {
+	return nil, nil
+}
+
 func (s *runtimePortEventStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"neo-code/internal/gateway/protocol"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 )
 
@@ -379,29 +380,103 @@ func (r *RemoteRuntimeAdapter) LoadSession(ctx context.Context, id string) (agen
 	return mapGatewaySessionToRuntimeSession(loaded), nil
 }
 
-// ActivateSessionSkill 在 gateway 模式下显式不支持。
-func (r *RemoteRuntimeAdapter) ActivateSessionSkill(context.Context, string, string) error {
-	return unsupportedGatewayActionError()
+// ActivateSessionSkill 转发 gateway.activateSessionSkill 请求，并兼容旧网关的未实现错误。
+func (r *RemoteRuntimeAdapter) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	if err := r.authenticate(ctx); err != nil {
+		return err
+	}
+	_, err := r.callFrame(ctx, protocol.MethodGatewayActivateSessionSkill, protocol.ActivateSessionSkillParams{
+		SessionID: strings.TrimSpace(sessionID),
+		SkillID:   strings.TrimSpace(skillID),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		if isGatewayUnsupportedActionError(err) {
+			return unsupportedGatewayActionError()
+		}
+		return err
+	}
+	return nil
 }
 
-// DeactivateSessionSkill 在 gateway 模式下显式不支持。
-func (r *RemoteRuntimeAdapter) DeactivateSessionSkill(context.Context, string, string) error {
-	return unsupportedGatewayActionError()
+// DeactivateSessionSkill 转发 gateway.deactivateSessionSkill 请求，并兼容旧网关的未实现错误。
+func (r *RemoteRuntimeAdapter) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	if err := r.authenticate(ctx); err != nil {
+		return err
+	}
+	_, err := r.callFrame(ctx, protocol.MethodGatewayDeactivateSessionSkill, protocol.DeactivateSessionSkillParams{
+		SessionID: strings.TrimSpace(sessionID),
+		SkillID:   strings.TrimSpace(skillID),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		if isGatewayUnsupportedActionError(err) {
+			return unsupportedGatewayActionError()
+		}
+		return err
+	}
+	return nil
 }
 
-// ListSessionSkills 在 gateway 模式下显式不支持。
+// ListSessionSkills 转发 gateway.listSessionSkills，并映射会话技能状态。
 func (r *RemoteRuntimeAdapter) ListSessionSkills(ctx context.Context, sessionID string) ([]SessionSkillState, error) {
-	_ = ctx
-	_ = sessionID
-	return nil, unsupportedGatewayActionError()
+	if err := r.authenticate(ctx); err != nil {
+		return nil, err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayListSessionSkills, protocol.ListSessionSkillsParams{
+		SessionID: strings.TrimSpace(sessionID),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		if isGatewayUnsupportedActionError(err) {
+			return nil, unsupportedGatewayActionError()
+		}
+		return nil, err
+	}
+
+	payload := struct {
+		Skills []gateway.SessionSkillState `json:"skills"`
+	}{}
+	if err := decodeIntoValue(frame.Payload, &payload); err != nil {
+		return nil, err
+	}
+	return mapGatewaySessionSkillStates(payload.Skills), nil
 }
 
-// ListAvailableSkills 在 gateway 模式下显式不支持。
+// ListAvailableSkills 转发 gateway.listAvailableSkills，并映射可用技能状态。
 func (r *RemoteRuntimeAdapter) ListAvailableSkills(
-	context.Context,
-	string,
+	ctx context.Context,
+	sessionID string,
 ) ([]AvailableSkillState, error) {
-	return nil, unsupportedGatewayActionError()
+	if err := r.authenticate(ctx); err != nil {
+		return nil, err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayListAvailableSkills, protocol.ListAvailableSkillsParams{
+		SessionID: strings.TrimSpace(sessionID),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		if isGatewayUnsupportedActionError(err) {
+			return nil, unsupportedGatewayActionError()
+		}
+		return nil, err
+	}
+
+	payload := struct {
+		Skills []gateway.AvailableSkillState `json:"skills"`
+	}{}
+	if err := decodeIntoValue(frame.Payload, &payload); err != nil {
+		return nil, err
+	}
+	return mapGatewayAvailableSkillStates(payload.Skills), nil
 }
 
 // Close 关闭远程适配器并结束事件桥接。
@@ -668,6 +743,63 @@ func mapGatewaySessionToRuntimeSession(source gateway.Session) agentsession.Sess
 		Workdir:   strings.TrimSpace(source.Workdir),
 		Messages:  messages,
 	}
+}
+
+// mapGatewaySkillSource 将网关技能来源结构映射为 runtime 兼容的 skills.Source。
+func mapGatewaySkillSource(source gateway.SkillSource) skills.Source {
+	return skills.Source{
+		Kind:     skills.SourceKind(strings.TrimSpace(source.Kind)),
+		RootDir:  strings.TrimSpace(source.RootDir),
+		SkillDir: strings.TrimSpace(source.SkillDir),
+		FilePath: strings.TrimSpace(source.FilePath),
+	}
+}
+
+// mapGatewaySkillDescriptor 将网关技能描述结构映射为 runtime 兼容的 skills.Descriptor。
+func mapGatewaySkillDescriptor(descriptor gateway.SkillDescriptor) skills.Descriptor {
+	return skills.Descriptor{
+		ID:          strings.TrimSpace(descriptor.ID),
+		Name:        strings.TrimSpace(descriptor.Name),
+		Description: strings.TrimSpace(descriptor.Description),
+		Version:     strings.TrimSpace(descriptor.Version),
+		Source:      mapGatewaySkillSource(descriptor.Source),
+		Scope:       skills.ActivationScope(strings.TrimSpace(descriptor.Scope)),
+	}
+}
+
+// mapGatewaySessionSkillStates 将网关会话技能状态映射为 TUI 运行时契约结构。
+func mapGatewaySessionSkillStates(source []gateway.SessionSkillState) []SessionSkillState {
+	if len(source) == 0 {
+		return nil
+	}
+	converted := make([]SessionSkillState, 0, len(source))
+	for _, item := range source {
+		state := SessionSkillState{
+			SkillID: strings.TrimSpace(item.SkillID),
+			Missing: item.Missing,
+		}
+		if item.Descriptor != nil {
+			descriptor := mapGatewaySkillDescriptor(*item.Descriptor)
+			state.Descriptor = &descriptor
+		}
+		converted = append(converted, state)
+	}
+	return converted
+}
+
+// mapGatewayAvailableSkillStates 将网关可用技能状态映射为 TUI 运行时契约结构。
+func mapGatewayAvailableSkillStates(source []gateway.AvailableSkillState) []AvailableSkillState {
+	if len(source) == 0 {
+		return nil
+	}
+	converted := make([]AvailableSkillState, 0, len(source))
+	for _, item := range source {
+		converted = append(converted, AvailableSkillState{
+			Descriptor: mapGatewaySkillDescriptor(item.Descriptor),
+			Active:     item.Active,
+		})
+	}
+	return converted
 }
 
 func decodeFramePayload[T any](payload any) (T, error) {

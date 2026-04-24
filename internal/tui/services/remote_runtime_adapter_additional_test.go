@@ -219,28 +219,144 @@ func TestRemoteRuntimeAdapterCompactPayloadDecodeError(t *testing.T) {
 	}
 }
 
-func TestRemoteRuntimeAdapterUnsupportedSkillMethods(t *testing.T) {
+func TestRemoteRuntimeAdapterSkillMethods(t *testing.T) {
 	t.Parallel()
 
-	adapter := newRemoteRuntimeAdapterWithClients(
-		&stubRemoteRPCClient{notifications: make(chan gatewayRPCNotification)},
-		&stubRemoteStreamClient{events: make(chan RuntimeEvent)},
-		time.Second,
-		1,
-	)
+	rpcClient := &stubRemoteRPCClient{
+		frames: map[string]gateway.MessageFrame{
+			protocol.MethodGatewayActivateSessionSkill: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionActivateSessionSkill,
+			},
+			protocol.MethodGatewayDeactivateSessionSkill: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionDeactivateSessionSkill,
+			},
+			protocol.MethodGatewayListSessionSkills: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionListSessionSkills,
+				Payload: map[string]any{
+					"skills": []gateway.SessionSkillState{
+						{
+							SkillID: "go-review",
+						},
+					},
+				},
+			},
+			protocol.MethodGatewayListAvailableSkills: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionListAvailableSkills,
+				Payload: map[string]any{
+					"skills": []gateway.AvailableSkillState{
+						{
+							Descriptor: gateway.SkillDescriptor{
+								ID:          "go-review",
+								Name:        "Go Review",
+								Description: "Review Go code",
+								Version:     "v1",
+								Source: gateway.SkillSource{
+									Kind: "local",
+								},
+								Scope: "session",
+							},
+							Active: true,
+						},
+					},
+				},
+			},
+		},
+		notifications: make(chan gatewayRPCNotification),
+	}
+	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, &stubRemoteStreamClient{events: make(chan RuntimeEvent)}, time.Second, 1)
 	t.Cleanup(func() { _ = adapter.Close() })
 
-	if err := adapter.ActivateSessionSkill(context.Background(), "s", "skill"); err == nil {
-		t.Fatalf("ActivateSessionSkill should be unsupported")
+	if err := adapter.ActivateSessionSkill(context.Background(), " s1 ", " go-review "); err != nil {
+		t.Fatalf("ActivateSessionSkill() error = %v", err)
 	}
-	if err := adapter.DeactivateSessionSkill(context.Background(), "s", "skill"); err == nil {
-		t.Fatalf("DeactivateSessionSkill should be unsupported")
+	if err := adapter.DeactivateSessionSkill(context.Background(), " s1 ", " go-review "); err != nil {
+		t.Fatalf("DeactivateSessionSkill() error = %v", err)
 	}
-	if _, err := adapter.ListSessionSkills(context.Background(), "s"); err == nil {
-		t.Fatalf("ListSessionSkills should be unsupported")
+	sessionSkills, err := adapter.ListSessionSkills(context.Background(), " s1 ")
+	if err != nil {
+		t.Fatalf("ListSessionSkills() error = %v", err)
 	}
-	if _, err := adapter.ListAvailableSkills(context.Background(), "s"); err == nil {
-		t.Fatalf("ListAvailableSkills should be unsupported")
+	if len(sessionSkills) != 1 || sessionSkills[0].SkillID != "go-review" {
+		t.Fatalf("session skills = %#v, want one go-review skill", sessionSkills)
+	}
+	availableSkills, err := adapter.ListAvailableSkills(context.Background(), " s1 ")
+	if err != nil {
+		t.Fatalf("ListAvailableSkills() error = %v", err)
+	}
+	if len(availableSkills) != 1 || availableSkills[0].Descriptor.ID != "go-review" || !availableSkills[0].Active {
+		t.Fatalf("available skills = %#v, want one active go-review skill", availableSkills)
+	}
+
+	params := rpcClient.snapshotParams()
+	activateParams, ok := params[protocol.MethodGatewayActivateSessionSkill].(protocol.ActivateSessionSkillParams)
+	if !ok {
+		t.Fatalf("activate params type = %T, want protocol.ActivateSessionSkillParams", params[protocol.MethodGatewayActivateSessionSkill])
+	}
+	if activateParams.SessionID != "s1" || activateParams.SkillID != "go-review" {
+		t.Fatalf("activate params = %#v, want trimmed session_id/skill_id", activateParams)
+	}
+	deactivateParams, ok := params[protocol.MethodGatewayDeactivateSessionSkill].(protocol.DeactivateSessionSkillParams)
+	if !ok {
+		t.Fatalf(
+			"deactivate params type = %T, want protocol.DeactivateSessionSkillParams",
+			params[protocol.MethodGatewayDeactivateSessionSkill],
+		)
+	}
+	if deactivateParams.SessionID != "s1" || deactivateParams.SkillID != "go-review" {
+		t.Fatalf("deactivate params = %#v, want trimmed session_id/skill_id", deactivateParams)
+	}
+}
+
+func TestRemoteRuntimeAdapterSkillMethodsLegacyUnsupportedFallback(t *testing.T) {
+	t.Parallel()
+
+	rpcClient := &stubRemoteRPCClient{
+		callErrs: map[string]error{
+			protocol.MethodGatewayActivateSessionSkill: &GatewayRPCError{
+				Method:      protocol.MethodGatewayActivateSessionSkill,
+				Code:        protocol.JSONRPCCodeMethodNotFound,
+				GatewayCode: protocol.GatewayCodeUnsupportedAction,
+				Message:     "method not found",
+			},
+			protocol.MethodGatewayDeactivateSessionSkill: &GatewayRPCError{
+				Method:      protocol.MethodGatewayDeactivateSessionSkill,
+				Code:        protocol.JSONRPCCodeMethodNotFound,
+				GatewayCode: protocol.GatewayCodeUnsupportedAction,
+				Message:     "method not found",
+			},
+			protocol.MethodGatewayListSessionSkills: &GatewayRPCError{
+				Method:      protocol.MethodGatewayListSessionSkills,
+				Code:        protocol.JSONRPCCodeMethodNotFound,
+				GatewayCode: protocol.GatewayCodeUnsupportedAction,
+				Message:     "method not found",
+			},
+			protocol.MethodGatewayListAvailableSkills: &GatewayRPCError{
+				Method:      protocol.MethodGatewayListAvailableSkills,
+				Code:        protocol.JSONRPCCodeMethodNotFound,
+				GatewayCode: protocol.GatewayCodeUnsupportedAction,
+				Message:     "method not found",
+			},
+		},
+		notifications: make(chan gatewayRPCNotification),
+	}
+	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, &stubRemoteStreamClient{events: make(chan RuntimeEvent)}, time.Second, 1)
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	if err := adapter.ActivateSessionSkill(context.Background(), "s", "skill"); !errors.Is(err, ErrUnsupportedActionInGatewayMode) {
+		t.Fatalf("ActivateSessionSkill() err = %v, want unsupported action sentinel", err)
+	}
+	if err := adapter.DeactivateSessionSkill(context.Background(), "s", "skill"); !errors.Is(err, ErrUnsupportedActionInGatewayMode) {
+		t.Fatalf("DeactivateSessionSkill() err = %v, want unsupported action sentinel", err)
+	}
+	if _, err := adapter.ListSessionSkills(context.Background(), "s"); !errors.Is(err, ErrUnsupportedActionInGatewayMode) {
+		t.Fatalf("ListSessionSkills() err = %v, want unsupported action sentinel", err)
+	}
+	if _, err := adapter.ListAvailableSkills(context.Background(), "s"); !errors.Is(err, ErrUnsupportedActionInGatewayMode) {
+		t.Fatalf("ListAvailableSkills() err = %v, want unsupported action sentinel", err)
 	}
 }
 

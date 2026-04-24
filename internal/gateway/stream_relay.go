@@ -925,6 +925,34 @@ func extractSessionIDFromPayload(payload any) string {
 			return ""
 		}
 		return strings.TrimSpace(typed.SessionID)
+	case protocol.ActivateSessionSkillParams:
+		return strings.TrimSpace(typed.SessionID)
+	case *protocol.ActivateSessionSkillParams:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.SessionID)
+	case protocol.DeactivateSessionSkillParams:
+		return strings.TrimSpace(typed.SessionID)
+	case *protocol.DeactivateSessionSkillParams:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.SessionID)
+	case protocol.ListSessionSkillsParams:
+		return strings.TrimSpace(typed.SessionID)
+	case *protocol.ListSessionSkillsParams:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.SessionID)
+	case protocol.ListAvailableSkillsParams:
+		return strings.TrimSpace(typed.SessionID)
+	case *protocol.ListAvailableSkillsParams:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.SessionID)
 	case map[string]any:
 		if rawSessionID, exists := typed["session_id"]; exists {
 			if sessionID, ok := rawSessionID.(string); ok {

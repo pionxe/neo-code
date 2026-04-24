@@ -1628,6 +1628,28 @@ func (stubRuntimePort) ExecuteSystemTool(context.Context, gateway.ExecuteSystemT
 	return tools.ToolResult{}, nil
 }
 
+func (stubRuntimePort) ActivateSessionSkill(context.Context, gateway.SessionSkillMutationInput) error {
+	return nil
+}
+
+func (stubRuntimePort) DeactivateSessionSkill(context.Context, gateway.SessionSkillMutationInput) error {
+	return nil
+}
+
+func (stubRuntimePort) ListSessionSkills(
+	context.Context,
+	gateway.ListSessionSkillsInput,
+) ([]gateway.SessionSkillState, error) {
+	return nil, nil
+}
+
+func (stubRuntimePort) ListAvailableSkills(
+	context.Context,
+	gateway.ListAvailableSkillsInput,
+) ([]gateway.AvailableSkillState, error) {
+	return nil, nil
+}
+
 func (stubRuntimePort) ResolvePermission(context.Context, gateway.PermissionResolutionInput) error {
 	return nil
 }

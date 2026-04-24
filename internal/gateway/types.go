@@ -30,6 +30,14 @@ const (
 	FrameActionCompact FrameAction = "compact"
 	// FrameActionExecuteSystemTool 表示触发一次系统工具执行。
 	FrameActionExecuteSystemTool FrameAction = "execute_system_tool"
+	// FrameActionActivateSessionSkill 表示在会话内激活一个 skill。
+	FrameActionActivateSessionSkill FrameAction = "activate_session_skill"
+	// FrameActionDeactivateSessionSkill 表示在会话内停用一个 skill。
+	FrameActionDeactivateSessionSkill FrameAction = "deactivate_session_skill"
+	// FrameActionListSessionSkills 表示查询会话内已激活 skills。
+	FrameActionListSessionSkills FrameAction = "list_session_skills"
+	// FrameActionListAvailableSkills 表示查询当前可用 skills 列表。
+	FrameActionListAvailableSkills FrameAction = "list_available_skills"
 	// FrameActionCancel 表示取消当前活跃运行。
 	FrameActionCancel FrameAction = "cancel"
 	// FrameActionListSessions 表示获取会话摘要列表。
