@@ -3,7 +3,6 @@ on:
   push:
     branches:
       - main
-  pull_request: # 组员提 PR 也会触发预览！
 
 jobs:
   deploy:
@@ -27,6 +26,8 @@ jobs:
       - name: Install Dependencies
         run: pnpm install
         working-directory: ./www # 假设你的目录叫 www
+
+
 
       - name: Build Docs
         run: CF_PAGES=1 pnpm run docs:build
