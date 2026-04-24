@@ -322,6 +322,11 @@ func (a App) renderPicker(width int, height int) string {
 		subtitle = providerAddSubtitle
 		body = a.renderProviderAddForm()
 	}
+	if a.state.ActivePicker == pickerModelScope {
+		title = modelScopeGuideTitle
+		subtitle = modelScopeGuideSubtitle
+		body = a.renderModelScopeGuide()
+	}
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		a.styles.panelTitle.Render(title),
@@ -334,6 +339,58 @@ func (a App) renderPicker(width int, height int) string {
 		Height(max(1, height-frameHeight)).
 		Render(content)
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, panel)
+}
+
+// renderModelScopeGuide 渲染 ModelScope 半引导流程界面，提供步骤提示与 token 回填输入。
+func (a App) renderModelScopeGuide() string {
+	if a.modelScopeGuide == nil {
+		return "ModelScope guide is not active."
+	}
+
+	guide := a.modelScopeGuide
+	stepText := ""
+	switch guide.Step {
+	case modelScopeGuideStepGuide:
+		stepText = "Step 1/4 打开指导页（HTML）"
+	case modelScopeGuideStepLogin:
+		stepText = "Step 2/4 打开 ModelScope 登录页"
+	case modelScopeGuideStepToken:
+		stepText = "Step 3/4 打开 Token 页面获取 API Key"
+	default:
+		stepText = "Step 4/4 粘贴 Token 并完成校验"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(stepText + "\n")
+	sb.WriteString("Provider: " + guide.ProviderID + "\n")
+	sb.WriteString("API Key Env: " + guide.APIKeyEnv + "\n\n")
+
+	if strings.TrimSpace(guide.GuidePath) != "" {
+		sb.WriteString("Guide HTML: " + guide.GuidePath + "\n")
+	}
+	sb.WriteString("Login URL: https://www.modelscope.cn/\n")
+	sb.WriteString("Token URL: https://www.modelscope.cn/my/access/token\n")
+	sb.WriteString("Auth URL: https://www.modelscope.cn/my/settings/account\n\n")
+
+	if guide.Step == modelScopeGuideStepPasteToken {
+		sb.WriteString("Token: " + maskedSecret(guide.Token) + "\n")
+		sb.WriteString("[Enter] 提交 Token  [Backspace] 删除  [Esc] 取消\n")
+	} else {
+		sb.WriteString("[Enter] 继续下一步并自动打开页面  [Esc] 取消\n")
+	}
+
+	if strings.TrimSpace(guide.Notice) != "" {
+		sb.WriteString("\n[Notice] " + strings.TrimSpace(guide.Notice) + "\n")
+	}
+	if strings.TrimSpace(guide.Error) != "" {
+		sb.WriteString("\n[Error] " + strings.TrimSpace(guide.Error) + "\n")
+	}
+
+	if guide.Submitting {
+		sb.WriteString("\nSubmitting token...\n")
+	}
+
+	return sb.String()
 }
 
 func (a App) renderProviderAddForm() string {

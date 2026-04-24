@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -46,6 +47,11 @@ const (
 const providerAddSelectTimeout = 10 * time.Second
 const providerAddNonPersistentEnvWarning = "API key is applied to the current process only on this platform; persist it in your shell profile for future sessions."
 const providerAddManualModelsJSONTemplate = "[\n  {\n    \"id\": \"model-id\",\n    \"name\": \"Model Name\"\n  }\n]"
+const modelScopeGuideSelectTimeout = 12 * time.Second
+const modelScopeGuideRollbackTimeout = 8 * time.Second
+const modelScopeLoginURL = "https://www.modelscope.cn/"
+const modelScopeAuthURL = "https://www.modelscope.cn/my/settings/account"
+const modelScopeTokenURL = "https://www.modelscope.cn/my/access/token"
 
 const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is active"
 const logViewerEntryLimit = 500
@@ -62,6 +68,7 @@ var supportsUserEnvPersistence = config.SupportsUserEnvPersistence
 var persistProviderUserEnvVar = config.PersistUserEnvVar
 var deleteProviderUserEnvVar = config.DeleteUserEnvVar
 var lookupProviderUserEnvVar = config.LookupUserEnvVar
+var openExternalResource = tuiinfra.OpenExternalResource
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -107,6 +114,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, batchUpdateCmds()
 	case providerAddResultMsg:
 		a.handleProviderAddResultMsg(typed)
+		return a, batchUpdateCmds()
+	case modelScopeGuideOpenResultMsg:
+		a.handleModelScopeGuideOpenResultMsg(typed)
+		return a, batchUpdateCmds()
+	case modelScopeGuideSubmitResultMsg:
+		if cmd := a.handleModelScopeGuideSubmitResultMsg(typed); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		return a, batchUpdateCmds()
 	case RuntimeMsg:
 		runtimeEvent, ok := typed.Event.(tuiservices.RuntimeEvent)
@@ -769,6 +784,9 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return a, nil
 			}
+			if cmd, started := a.maybeStartModelScopeGuideFromProvider(item.id); started {
+				return a, cmd
+			}
 			return a, runProviderSelection(a.providerSvc, item.name)
 		case pickerModel:
 			item, ok := a.modelPicker.SelectedItem().(selectionItem)
@@ -834,8 +852,369 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case pickerProviderAdd:
 		return a.handleProviderAddFormInput(msg)
+	case pickerModelScope:
+		return a.handleModelScopeGuideInput(msg)
 	}
 	return a, cmd
+}
+
+// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程。
+func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd, bool) {
+	if !strings.EqualFold(strings.TrimSpace(providerID), config.ModelScopeName) {
+		return nil, false
+	}
+
+	currentConfig := a.configManager.Get()
+	providerConfig, err := currentConfig.ProviderByName(providerID)
+	if err != nil {
+		return nil, false
+	}
+
+	apiKeyEnv := strings.TrimSpace(providerConfig.APIKeyEnv)
+	if apiKeyEnv == "" {
+		return nil, false
+	}
+	if strings.TrimSpace(os.Getenv(apiKeyEnv)) != "" {
+		return nil, false
+	}
+	if userValue, exists, lookupErr := lookupProviderUserEnvVar(apiKeyEnv); lookupErr == nil && exists &&
+		strings.TrimSpace(userValue) != "" {
+		return nil, false
+	}
+
+	guidePath := a.resolveModelScopeGuidePath()
+	a.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: strings.TrimSpace(providerID),
+		APIKeyEnv:  apiKeyEnv,
+		GuidePath:  guidePath,
+		Step:       modelScopeGuideStepGuide,
+	}
+	a.state.ActivePicker = pickerModelScope
+	a.state.StatusText = "ModelScope setup guide"
+	a.state.ExecutionError = ""
+	if strings.TrimSpace(guidePath) == "" {
+		a.modelScopeGuide.Step = modelScopeGuideStepLogin
+		a.modelScopeGuide.Notice = "Guide HTML not found, fallback to ModelScope login page."
+		return a.runModelScopeGuideOpen(modelScopeLoginURL), true
+	}
+	return a.runModelScopeGuideOpen(guidePath), true
+}
+
+// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串。
+func (a *App) resolveModelScopeGuidePath() string {
+	baseDir := strings.TrimSpace(a.configManager.BaseDir())
+	if baseDir == "" {
+		return ""
+	}
+	candidate := filepath.Join(baseDir, "modelscope-guide.html")
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return candidate
+}
+
+// handleModelScopeGuideInput 处理 ModelScope 半引导流程中的键盘交互。
+func (a *App) handleModelScopeGuideInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if a.modelScopeGuide == nil {
+		return a, nil
+	}
+	if key.Matches(msg, a.keys.FocusInput) {
+		a.modelScopeGuide = nil
+		a.closePicker()
+		a.state.StatusText = "ModelScope setup canceled"
+		return a, nil
+	}
+	if a.modelScopeGuide.Submitting {
+		return a, nil
+	}
+
+	guide := a.modelScopeGuide
+	switch {
+	case msg.String() == "enter":
+		if guide.Step == modelScopeGuideStepPasteToken {
+			return a, a.submitModelScopeGuideToken(guide)
+		}
+		if target, ok := modelScopeGuideOpenTarget(guide.Step, guide.GuidePath); ok {
+			return a, a.runModelScopeGuideOpen(target)
+		}
+	case msg.Type == tea.KeyBackspace || msg.Type == tea.KeyCtrlH:
+		if guide.Step == modelScopeGuideStepPasteToken {
+			guide.Token = trimLastRune(guide.Token)
+			clearModelScopeGuideFeedback(guide)
+		}
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0:
+		if guide.Step == modelScopeGuideStepPasteToken {
+			guide.Token += sanitizeProviderAddInputRunes(msg.Runes)
+			clearModelScopeGuideFeedback(guide)
+		}
+	}
+
+	return a, nil
+}
+
+// modelScopeGuideOpenTarget 返回当前引导步骤对应的外部资源目标。
+func modelScopeGuideOpenTarget(step modelScopeGuideStep, guidePath string) (string, bool) {
+	switch step {
+	case modelScopeGuideStepGuide:
+		target := strings.TrimSpace(guidePath)
+		if target == "" {
+			return modelScopeLoginURL, true
+		}
+		return target, true
+	case modelScopeGuideStepLogin:
+		return modelScopeLoginURL, true
+	case modelScopeGuideStepToken:
+		return modelScopeTokenURL, true
+	default:
+		return "", false
+	}
+}
+
+// submitModelScopeGuideToken 校验并提交用户粘贴的 token。
+func (a *App) submitModelScopeGuideToken(guide *modelScopeGuideState) tea.Cmd {
+	token := strings.TrimSpace(guide.Token)
+	if token == "" {
+		guide.Error = "Token is required."
+		return nil
+	}
+	guide.Submitting = true
+	clearModelScopeGuideFeedback(guide)
+	a.state.StatusText = "Validating ModelScope token..."
+	return a.runModelScopeGuideSubmit(guide.ProviderID, guide.APIKeyEnv, token)
+}
+
+// runModelScopeGuideOpen 异步打开 ModelScope 引导资源（本地 HTML 或网页 URL）。
+func (a *App) runModelScopeGuideOpen(target string) tea.Cmd {
+	openTarget := strings.TrimSpace(target)
+	if openTarget == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := openExternalResource(openTarget); err != nil {
+			return modelScopeGuideOpenResultMsg{
+				Target: openTarget,
+				Error:  sanitizeProviderAddError(err),
+			}
+		}
+		return modelScopeGuideOpenResultMsg{Target: openTarget}
+	}
+}
+
+// handleModelScopeGuideOpenResultMsg 处理页面打开结果，并推进引导状态机。
+func (a *App) handleModelScopeGuideOpenResultMsg(msg modelScopeGuideOpenResultMsg) {
+	if a.modelScopeGuide == nil {
+		return
+	}
+
+	guide := a.modelScopeGuide
+	if strings.TrimSpace(msg.Error) != "" {
+		guide.Error = msg.Error
+		guide.Notice = ""
+		a.state.ExecutionError = msg.Error
+		a.state.StatusText = "ModelScope guide open failed"
+		a.appendActivity("provider", "ModelScope guide open failed", msg.Error, true)
+		return
+	}
+
+	guide.Error = ""
+	guide.Notice = "Opened: " + strings.TrimSpace(msg.Target)
+	a.state.ExecutionError = ""
+	a.state.StatusText = "ModelScope guide opened"
+	if nextStep, advanced := advanceModelScopeGuideStep(guide.Step, msg.Target); advanced {
+		guide.Step = nextStep
+	}
+}
+
+// advanceModelScopeGuideStep 根据打开结果推进引导步骤。
+func advanceModelScopeGuideStep(current modelScopeGuideStep, target string) (modelScopeGuideStep, bool) {
+	switch current {
+	case modelScopeGuideStepGuide:
+		return modelScopeGuideStepLogin, true
+	case modelScopeGuideStepLogin:
+		return modelScopeGuideStepToken, true
+	case modelScopeGuideStepToken:
+		if strings.TrimSpace(target) == modelScopeTokenURL {
+			return modelScopeGuideStepPasteToken, true
+		}
+	}
+	return current, false
+}
+
+// clearModelScopeGuideFeedback 清空引导面板上的错误和提示信息。
+func clearModelScopeGuideFeedback(guide *modelScopeGuideState) {
+	if guide == nil {
+		return
+	}
+	guide.Error = ""
+	guide.Notice = ""
+}
+
+// runModelScopeGuideSubmit 在设置 token 后完成 provider 选择与最小可用校验。
+func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, token string) tea.Cmd {
+	providerSvc := a.providerSvc
+	baseDir := a.configManager.BaseDir()
+	previousSelection := a.configManager.Get()
+	previousProviderID := strings.TrimSpace(previousSelection.SelectedProvider)
+	previousModelID := strings.TrimSpace(previousSelection.CurrentModel)
+
+	return func() tea.Msg {
+		trimmedToken := strings.TrimSpace(token)
+		trimmedEnvName := strings.TrimSpace(apiKeyEnv)
+		if trimmedToken == "" {
+			return modelScopeGuideSubmitResultMsg{Error: "ModelScope token is empty"}
+		}
+		if err := config.ValidateEnvVarName(trimmedEnvName); err != nil {
+			return modelScopeGuideSubmitResultMsg{Error: sanitizeProviderAddError(err)}
+		}
+		if config.IsProtectedEnvVarName(trimmedEnvName) {
+			return modelScopeGuideSubmitResultMsg{
+				Error: fmt.Sprintf("ModelScope token env %q is protected", trimmedEnvName),
+			}
+		}
+
+		previousValue, hadPreviousValue := os.LookupEnv(trimmedEnvName)
+		restoreEnv := func() {
+			if hadPreviousValue {
+				_ = os.Setenv(trimmedEnvName, previousValue)
+				return
+			}
+			_ = os.Unsetenv(trimmedEnvName)
+		}
+		if setErr := os.Setenv(trimmedEnvName, trimmedToken); setErr != nil {
+			return modelScopeGuideSubmitResultMsg{Error: sanitizeProviderAddError(setErr)}
+		}
+		failWithRollback := func(rawErr error, stage string) modelScopeGuideSubmitResultMsg {
+			restoreEnv()
+			wrappedErr := fmt.Errorf("%s: %w", stage, rawErr)
+			if rollbackErr := rollbackModelScopeGuideSelection(providerSvc, previousProviderID, previousModelID); rollbackErr != nil {
+				wrappedErr = fmt.Errorf("%w; rollback selection: %v", wrappedErr, rollbackErr)
+			}
+			return modelScopeGuideSubmitResultMsg{
+				Error: sanitizeProviderAddError(wrappedErr, trimmedToken, baseDir),
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), modelScopeGuideSelectTimeout)
+		defer cancel()
+
+		selection, selectErr := providerSvc.SelectProvider(ctx, providerID)
+		if selectErr != nil {
+			return failWithRollback(selectErr, "select provider")
+		}
+		if _, listErr := providerSvc.ListModels(ctx); listErr != nil {
+			return failWithRollback(listErr, "verify token")
+		}
+
+		if persistErr := persistProviderUserEnvVar(trimmedEnvName, trimmedToken); persistErr != nil {
+			return failWithRollback(persistErr, "persist token env")
+		}
+
+		return modelScopeGuideSubmitResultMsg{
+			Selection: selection,
+			Warning:   providerAddPersistenceWarning(),
+		}
+	}
+}
+
+// rollbackModelScopeGuideSelection 在引导流程失败时回滚 provider/model 选择，避免配置状态漂移。
+func rollbackModelScopeGuideSelection(providerSvc ProviderController, providerID string, modelID string) error {
+	normalizedProviderID := strings.TrimSpace(providerID)
+	normalizedModelID := strings.TrimSpace(modelID)
+	if normalizedProviderID == "" || providerSvc == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), modelScopeGuideRollbackTimeout)
+	defer cancel()
+
+	if _, err := providerSvc.SelectProvider(ctx, normalizedProviderID); err != nil {
+		return fmt.Errorf("rollback provider selection: %w", err)
+	}
+	if normalizedModelID == "" {
+		return nil
+	}
+	if _, err := providerSvc.SetCurrentModel(ctx, normalizedModelID); err != nil {
+		return fmt.Errorf("rollback model selection: %w", err)
+	}
+	return nil
+}
+
+// handleModelScopeGuideSubmitResultMsg 处理 token 校验结果，成功后关闭向导，失败时回退并提示下一步。
+func (a *App) handleModelScopeGuideSubmitResultMsg(msg modelScopeGuideSubmitResultMsg) tea.Cmd {
+	if a.modelScopeGuide == nil {
+		return nil
+	}
+
+	guide := a.modelScopeGuide
+	guide.Submitting = false
+	if strings.TrimSpace(msg.Error) != "" {
+		guide.Error = msg.Error
+		guide.Notice = ""
+		guide.Step = modelScopeGuideStepPasteToken
+		a.state.ExecutionError = msg.Error
+		a.state.StatusText = "ModelScope token validation failed"
+		a.appendActivity("provider", "ModelScope token validation failed", msg.Error, true)
+
+		if isModelScopeAuthOrPermissionError(msg.Error) {
+			guide.Notice = "Detected auth/permission issue, opening Aliyun account binding page."
+			guide.Step = modelScopeGuideStepToken
+			return a.runModelScopeGuideOpen(modelScopeAuthURL)
+		}
+		return nil
+	}
+
+	guideProviderID := strings.TrimSpace(guide.ProviderID)
+	a.modelScopeGuide = nil
+	a.state.ActivePicker = pickerNone
+	a.state.ExecutionError = ""
+	if strings.TrimSpace(msg.Selection.ProviderID) != "" {
+		a.state.CurrentProvider = strings.TrimSpace(msg.Selection.ProviderID)
+	} else {
+		a.state.CurrentProvider = guideProviderID
+	}
+	if strings.TrimSpace(msg.Selection.ModelID) != "" {
+		a.state.CurrentModel = strings.TrimSpace(msg.Selection.ModelID)
+	}
+	a.state.StatusText = "ModelScope provider selected"
+	a.appendActivity("provider", "ModelScope setup completed", a.state.CurrentProvider, false)
+	if strings.TrimSpace(msg.Warning) != "" {
+		a.appendActivity("provider", "Provider key persistence", strings.TrimSpace(msg.Warning), false)
+	}
+
+	if err := a.refreshProviderPicker(); err != nil {
+		a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
+	}
+	if err := a.refreshModelPicker(); err != nil {
+		a.appendActivity("system", "Failed to refresh models", err.Error(), true)
+	}
+	return a.requestModelCatalogRefresh(a.state.CurrentProvider)
+}
+
+// isModelScopeAuthOrPermissionError 判断错误是否指向认证或权限未完成场景。
+func isModelScopeAuthOrPermissionError(raw string) bool {
+	lowered := strings.ToLower(strings.TrimSpace(raw))
+	if lowered == "" {
+		return false
+	}
+	keywords := []string{
+		"401",
+		"403",
+		"unauthorized",
+		"forbidden",
+		"permission",
+		"access denied",
+		"auth",
+		"认证",
+		"实名",
+		"aliyun",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(lowered, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) refreshSessionPicker() error {
@@ -3399,6 +3778,17 @@ type providerAddResultMsg struct {
 	Model   string
 	Error   string
 	Warning string
+}
+
+type modelScopeGuideOpenResultMsg struct {
+	Target string
+	Error  string
+}
+
+type modelScopeGuideSubmitResultMsg struct {
+	Selection configstate.Selection
+	Error     string
+	Warning   string
 }
 
 // providerAddDefaultChatEndpointPath 返回 provider add 表单的驱动默认聊天端点路径。
