@@ -114,10 +114,7 @@ export default defineConfig({
             },
           ],
         },
-        outline: {
-          level: [2, 3],
-          label: "本页目录",
-        },
+        outline: false,
         docFooter: {
           prev: "上一页",
           next: "下一页",
@@ -161,10 +158,7 @@ export default defineConfig({
             },
           ],
         },
-        outline: {
-          level: [2, 3],
-          label: "On this page",
-        },
+        outline: false,
         docFooter: {
           prev: "Previous page",
           next: "Next page",
