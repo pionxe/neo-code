@@ -362,6 +362,11 @@ const (
 	QiniuDefaultBaseURL   = "https://api.qnaigc.com/v1"
 	QiniuDefaultModel     = "z-ai/glm-5.1"
 	QiniuDefaultAPIKeyEnv = "QINIU_API_KEY"
+
+	ModelScopeName             = "modelscope"
+	ModelScopeDefaultBaseURL   = "https://api-inference.modelscope.cn/v1"
+	ModelScopeDefaultModel     = "Qwen/Qwen2.5-7B-Instruct"
+	ModelScopeDefaultAPIKeyEnv = "MODELSCOPE_API_KEY"
 )
 
 // OpenAIProvider returns the builtin OpenAI provider definition.
@@ -427,6 +432,22 @@ func QiniuProvider() ProviderConfig {
 	}
 }
 
+// ModelScopeProvider 返回内置的 ModelScope provider 配置。
+func ModelScopeProvider() ProviderConfig {
+	return ProviderConfig{
+		Name:                  ModelScopeName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               ModelScopeDefaultBaseURL,
+		Model:                 ModelScopeDefaultModel,
+		APIKeyEnv:             ModelScopeDefaultAPIKeyEnv,
+		ModelSource:           ModelSourceDiscover,
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath:      "/chat/completions",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceBuiltin,
+	}
+}
+
 // DefaultProviders returns all builtin provider definitions.
 func DefaultProviders() []ProviderConfig {
 	return []ProviderConfig{
@@ -434,5 +455,6 @@ func DefaultProviders() []ProviderConfig {
 		GeminiProvider(),
 		OpenLLProvider(),
 		QiniuProvider(),
+		ModelScopeProvider(),
 	}
 }

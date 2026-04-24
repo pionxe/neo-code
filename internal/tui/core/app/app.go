@@ -49,6 +49,7 @@ const (
 	pickerFile        pickerMode = tuistate.PickerFile
 	pickerHelp        pickerMode = tuistate.PickerHelp
 	pickerProviderAdd pickerMode = tuistate.PickerProviderAdd
+	pickerModelScope  pickerMode = tuistate.PickerModelScopeGuide
 )
 
 type RuntimeMsg = tuistate.RuntimeMsg
@@ -123,6 +124,7 @@ type appRuntimeState struct {
 	pendingPermission       *permissionPromptState
 	pendingImageAttachments []pendingImageAttachment
 	providerAddForm         *providerAddFormState
+	modelScopeGuide         *modelScopeGuideState
 	layoutCached            bool
 	cachedWidth             int
 	cachedHeight            int
@@ -187,6 +189,28 @@ const (
 	providerAddFormStageFields providerAddFormStage = iota
 	providerAddFormStageManualModels
 )
+
+// modelScopeGuideStep 定义 ModelScope 半引导流程中的阶段。
+type modelScopeGuideStep int
+
+const (
+	modelScopeGuideStepGuide modelScopeGuideStep = iota
+	modelScopeGuideStepLogin
+	modelScopeGuideStepToken
+	modelScopeGuideStepPasteToken
+)
+
+// modelScopeGuideState 保存 ModelScope 半引导流程的运行时状态。
+type modelScopeGuideState struct {
+	ProviderID string
+	APIKeyEnv  string
+	GuidePath  string
+	Step       modelScopeGuideStep
+	Token      string
+	Submitting bool
+	Error      string
+	Notice     string
+}
 
 type App struct {
 	state tuistate.UIState

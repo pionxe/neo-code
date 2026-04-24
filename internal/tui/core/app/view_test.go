@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 
+	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 	tuistate "neo-code/internal/tui/state"
@@ -98,6 +99,67 @@ func TestRenderPickerProviderAndFileMode(t *testing.T) {
 	providerAddView := app.renderPicker(48, 14)
 	if !strings.Contains(providerAddView, providerAddTitle) {
 		t.Fatalf("expected provider add title")
+	}
+
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  config.ModelScopeDefaultAPIKeyEnv,
+		Step:       modelScopeGuideStepPasteToken,
+		Token:      "test-token",
+	}
+	app.state.ActivePicker = pickerModelScope
+	modelScopeView := app.renderPicker(48, 14)
+	if !strings.Contains(modelScopeView, modelScopeGuideTitle) {
+		t.Fatalf("expected modelscope guide title")
+	}
+}
+
+func TestRenderModelScopeGuideBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	if got := app.renderModelScopeGuide(); !strings.Contains(got, "not active") {
+		t.Fatalf("expected inactive guide message, got %q", got)
+	}
+
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  config.ModelScopeDefaultAPIKeyEnv,
+		GuidePath:  "/tmp/modelscope-guide.html",
+		Step:       modelScopeGuideStepGuide,
+	}
+	guideView := app.renderModelScopeGuide()
+	if !strings.Contains(guideView, "Step 1/4") || !strings.Contains(guideView, "Guide HTML: /tmp/modelscope-guide.html") {
+		t.Fatalf("expected step 1 guide content, got %q", guideView)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepLogin
+	loginView := app.renderModelScopeGuide()
+	if !strings.Contains(loginView, "Step 2/4") {
+		t.Fatalf("expected step 2 login content, got %q", loginView)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepToken
+	tokenView := app.renderModelScopeGuide()
+	if !strings.Contains(tokenView, "Step 3/4") {
+		t.Fatalf("expected step 3 token content, got %q", tokenView)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepPasteToken
+	app.modelScopeGuide.Token = "abc123xyz"
+	app.modelScopeGuide.Notice = "notice text"
+	app.modelScopeGuide.Error = "error text"
+	app.modelScopeGuide.Submitting = true
+	pasteView := app.renderModelScopeGuide()
+	if !strings.Contains(pasteView, "Step 4/4") {
+		t.Fatalf("expected step 4 paste token content, got %q", pasteView)
+	}
+	if strings.Contains(pasteView, app.modelScopeGuide.Token) {
+		t.Fatalf("expected token to be masked in view, got %q", pasteView)
+	}
+	if !strings.Contains(pasteView, "[Notice] notice text") || !strings.Contains(pasteView, "[Error] error text") {
+		t.Fatalf("expected notice and error sections, got %q", pasteView)
+	}
+	if !strings.Contains(pasteView, "Submitting token...") {
+		t.Fatalf("expected submitting hint, got %q", pasteView)
 	}
 }
 

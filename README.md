@@ -25,7 +25,7 @@ NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-A
 ## 有什么能力？
 - 终端原生 TUI 交互体验（Bubble Tea）
 - Agent 可调用内置工具完成文件与命令相关任务
-- 支持 Provider/Model 切换（内建 `openai`、`gemini`、`openll`、`qiniu`）
+- 支持 Provider/Model 切换（内建 `openai`、`gemini`、`openll`、`qiniu`、`modelscope`）
 - 支持上下文压缩（`/compact`），帮助长会话保持可用
 - 支持工作区隔离（`--workdir`、`/cwd`）
 - 会话持久化与恢复，降低重复沟通成本
@@ -35,7 +35,7 @@ NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-A
 
 ### 1) 环境要求
 - Go `1.25+`
-- 可用的 API Key（如 OpenAI、Gemini、OpenLL、Qiniu）
+- 可用的 API Key（如 OpenAI、Gemini、OpenLL、Qiniu、ModelScope）
 
 ### 2) 一键安装
 macOS / Linux：
@@ -97,6 +97,7 @@ export OPENAI_API_KEY="your_key_here"
 export GEMINI_API_KEY="your_key_here"
 export AI_API_KEY="your_key_here"
 export QINIU_API_KEY="your_key_here"
+export MODELSCOPE_API_KEY="your_key_here"
 ```
 
 Windows PowerShell：
@@ -105,6 +106,7 @@ $env:OPENAI_API_KEY = "your_key_here"
 $env:GEMINI_API_KEY = "your_key_here"
 $env:AI_API_KEY = "your_key_here"
 $env:QINIU_API_KEY = "your_key_here"
+$env:MODELSCOPE_API_KEY = "your_key_here"
 ```
 
 按工作区启动（仅当前进程生效）：
@@ -170,6 +172,7 @@ Gateway 转发与自动拉起说明：
 - [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
 - [Skills 设计与使用](docs/skills-system-design.md)
 - [MCP 配置指南](docs/guides/mcp-configuration.md)
+- [ModelScope 半引导配置](docs/guides/modelscope-provider-setup.md)
 - [更新与升级](docs/guides/update.md)
 
 ## 如何参与
