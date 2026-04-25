@@ -132,7 +132,7 @@ func applyReadTimeContextProjection(
 	}
 
 	projectedMessages = microCompactMessagesWithPolicies(
-		messages,
+		projectedMessages,
 		policies,
 		options.MicroCompactRetainedToolSpans,
 		summarizers,
