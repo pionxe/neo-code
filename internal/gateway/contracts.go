@@ -304,3 +304,13 @@ type Gateway interface {
 	// Close 优雅关闭网关服务。
 	Close(ctx context.Context) error
 }
+
+// TransportAdapter defines the shared lifecycle contract for gateway transports.
+type TransportAdapter interface {
+	// ListenAddress returns the listening address for this transport.
+	ListenAddress() string
+	// Serve starts the transport and binds it to the runtime port.
+	Serve(ctx context.Context, runtimePort RuntimePort) error
+	// Close gracefully shuts down the transport.
+	Close(ctx context.Context) error
+}
