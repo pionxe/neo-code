@@ -22,12 +22,35 @@ switch ($Flavor) {
 	}
 }
 
-$Architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToUpperInvariant()
+# 1. 识别物理架构（优先考虑 64 位重定向环境）
+$RawArch = $env:PROCESSOR_ARCHITEW6432
+if ([string]::IsNullOrWhiteSpace($RawArch)) {
+    $RawArch = $env:PROCESSOR_ARCHITECTURE
+}
+
+# 2. 跨平台补丁：如果环境变量拿不到（如 CI 环境），尝试 .NET 方法
+if ([string]::IsNullOrWhiteSpace($RawArch)) {
+    try {
+        $Architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToUpperInvariant()
+    } catch {
+        throw "Failed to determine system architecture. Cannot proceed with installation."
+    }
+} else {
+    $Architecture = $RawArch.ToUpperInvariant()
+}
+
+# 3. 严格匹配资产列表
 switch ($Architecture) {
-	"X64" { $ArchName = "x86_64" }
-	"AMD64" { $ArchName = "x86_64" }
-	"ARM64" { $ArchName = "arm64" }
-	default { throw "Unsupported architecture: $Architecture" }
+    "X64"   { $ArchName = "x86_64" }
+    "AMD64" { $ArchName = "x86_64" }
+    "ARM64" { $ArchName = "arm64" }
+    "X86"   { 
+        # 32 位系统用户，明确告知不支持
+        throw "NeoCode only supports 64-bit systems (x86_64/arm64). Your current system (x86) is not supported." 
+    }
+    default { 
+        throw "Unsupported architecture: $Architecture. Please visit the releases page to check for available binaries." 
+    }
 }
 
 if (![string]::IsNullOrWhiteSpace($env:NEOCODE_INSTALL_LATEST_TAG)) {
