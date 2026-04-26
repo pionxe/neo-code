@@ -8,12 +8,19 @@ import (
 	"time"
 
 	"neo-code/internal/gateway/protocol"
+	"neo-code/internal/tools"
 )
 
 type rpcRunCaptureRuntimeStub struct {
-	runInput      RunInput
-	runCh         chan RunInput
-	loadSessionFn func(ctx context.Context, input LoadSessionInput) (Session, error)
+	runInput            RunInput
+	runCh               chan RunInput
+	executeSystemToolIn ExecuteSystemToolInput
+	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
+	activateSkillFn     func(ctx context.Context, input SessionSkillMutationInput) error
+	deactivateSkillFn   func(ctx context.Context, input SessionSkillMutationInput) error
+	listSessionSkillsFn func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
+	listAvailableFn     func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
+	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
 }
 
 func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error {
@@ -26,6 +33,51 @@ func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error 
 
 func (s *rpcRunCaptureRuntimeStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ExecuteSystemTool(
+	ctx context.Context,
+	input ExecuteSystemToolInput,
+) (tools.ToolResult, error) {
+	s.executeSystemToolIn = input
+	if s.executeSystemToolFn != nil {
+		return s.executeSystemToolFn(ctx, input)
+	}
+	return tools.ToolResult{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ActivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error {
+	if s.activateSkillFn != nil {
+		return s.activateSkillFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) DeactivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error {
+	if s.deactivateSkillFn != nil {
+		return s.deactivateSkillFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ListSessionSkills(
+	ctx context.Context,
+	input ListSessionSkillsInput,
+) ([]SessionSkillState, error) {
+	if s.listSessionSkillsFn != nil {
+		return s.listSessionSkillsFn(ctx, input)
+	}
+	return nil, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ListAvailableSkills(
+	ctx context.Context,
+	input ListAvailableSkillsInput,
+) ([]AvailableSkillState, error) {
+	if s.listAvailableFn != nil {
+		return s.listAvailableFn(ctx, input)
+	}
+	return nil, nil
 }
 
 func (s *rpcRunCaptureRuntimeStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
@@ -367,6 +419,201 @@ func TestDispatchRPCRequestResolvePermissionDoesNotRequireSession(t *testing.T) 
 	}
 	if frame.Action != FrameActionResolvePermission {
 		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionResolvePermission)
+	}
+}
+
+func TestDispatchRPCRequestExecuteSystemToolDoesNotRequireSession(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	runtimeStub := &rpcRunCaptureRuntimeStub{
+		executeSystemToolFn: func(_ context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error) {
+			if input.ToolName != "memo_list" {
+				t.Fatalf("tool_name = %q, want %q", input.ToolName, "memo_list")
+			}
+			if string(input.Arguments) != "{}" {
+				t.Fatalf("arguments = %s, want {}", string(input.Arguments))
+			}
+			if input.Workdir != "/repo" {
+				t.Fatalf("workdir = %q, want %q", input.Workdir, "/repo")
+			}
+			return tools.ToolResult{
+				Name:    "memo_list",
+				Content: "ok",
+			}, nil
+		},
+	}
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-exec-no-session"`),
+		Method:  protocol.MethodGatewayExecuteSystemTool,
+		Params: json.RawMessage(`{
+			"tool_name":"memo_list",
+			"workdir":" /repo ",
+			"arguments":null
+		}`),
+	}, runtimeStub)
+	if response.Error != nil {
+		t.Fatalf("execute system tool should pass without session_id, got error: %+v", response.Error)
+	}
+
+	frame, err := decodeJSONRPCResultFrame(response)
+	if err != nil {
+		t.Fatalf("decode execute_system_tool result frame: %v", err)
+	}
+	if frame.Action != FrameActionExecuteSystemTool {
+		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionExecuteSystemTool)
+	}
+}
+
+func TestDispatchRPCRequestSkillMethods(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	runtimeStub := &rpcRunCaptureRuntimeStub{
+		activateSkillFn: func(_ context.Context, input SessionSkillMutationInput) error {
+			if input.SessionID != "session-skills" {
+				t.Fatalf("activate session_id = %q, want %q", input.SessionID, "session-skills")
+			}
+			if input.SkillID != "go-review" {
+				t.Fatalf("activate skill_id = %q, want %q", input.SkillID, "go-review")
+			}
+			return nil
+		},
+		deactivateSkillFn: func(_ context.Context, input SessionSkillMutationInput) error {
+			if input.SessionID != "session-skills" {
+				t.Fatalf("deactivate session_id = %q, want %q", input.SessionID, "session-skills")
+			}
+			if input.SkillID != "go-review" {
+				t.Fatalf("deactivate skill_id = %q, want %q", input.SkillID, "go-review")
+			}
+			return nil
+		},
+		listSessionSkillsFn: func(_ context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error) {
+			if input.SessionID != "session-skills" {
+				t.Fatalf("listSessionSkills session_id = %q, want %q", input.SessionID, "session-skills")
+			}
+			return []SessionSkillState{
+				{
+					SkillID: "go-review",
+				},
+			}, nil
+		},
+		listAvailableFn: func(_ context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error) {
+			if input.SessionID != "session-skills" {
+				t.Fatalf("listAvailableSkills session_id = %q, want %q", input.SessionID, "session-skills")
+			}
+			return []AvailableSkillState{
+				{
+					Descriptor: SkillDescriptor{ID: "go-review"},
+					Active:     true,
+				},
+			}, nil
+		},
+	}
+
+	activate := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-activate-skill"`),
+		Method:  protocol.MethodGatewayActivateSessionSkill,
+		Params:  json.RawMessage(`{"session_id":"session-skills","skill_id":"go-review"}`),
+	}, runtimeStub)
+	if activate.Error != nil {
+		t.Fatalf("activateSessionSkill response error: %+v", activate.Error)
+	}
+	activateFrame, err := decodeJSONRPCResultFrame(activate)
+	if err != nil {
+		t.Fatalf("decode activateSessionSkill frame: %v", err)
+	}
+	if activateFrame.Action != FrameActionActivateSessionSkill {
+		t.Fatalf("activateSessionSkill action = %q, want %q", activateFrame.Action, FrameActionActivateSessionSkill)
+	}
+
+	deactivate := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-deactivate-skill"`),
+		Method:  protocol.MethodGatewayDeactivateSessionSkill,
+		Params:  json.RawMessage(`{"session_id":"session-skills","skill_id":"go-review"}`),
+	}, runtimeStub)
+	if deactivate.Error != nil {
+		t.Fatalf("deactivateSessionSkill response error: %+v", deactivate.Error)
+	}
+	deactivateFrame, err := decodeJSONRPCResultFrame(deactivate)
+	if err != nil {
+		t.Fatalf("decode deactivateSessionSkill frame: %v", err)
+	}
+	if deactivateFrame.Action != FrameActionDeactivateSessionSkill {
+		t.Fatalf("deactivateSessionSkill action = %q, want %q", deactivateFrame.Action, FrameActionDeactivateSessionSkill)
+	}
+
+	listSession := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-list-session-skills"`),
+		Method:  protocol.MethodGatewayListSessionSkills,
+		Params:  json.RawMessage(`{"session_id":"session-skills"}`),
+	}, runtimeStub)
+	if listSession.Error != nil {
+		t.Fatalf("listSessionSkills response error: %+v", listSession.Error)
+	}
+	listSessionFrame, err := decodeJSONRPCResultFrame(listSession)
+	if err != nil {
+		t.Fatalf("decode listSessionSkills frame: %v", err)
+	}
+	if listSessionFrame.Action != FrameActionListSessionSkills {
+		t.Fatalf("listSessionSkills action = %q, want %q", listSessionFrame.Action, FrameActionListSessionSkills)
+	}
+
+	listAvailable := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-list-available-skills"`),
+		Method:  protocol.MethodGatewayListAvailableSkills,
+		Params:  json.RawMessage(`{"session_id":"session-skills"}`),
+	}, runtimeStub)
+	if listAvailable.Error != nil {
+		t.Fatalf("listAvailableSkills response error: %+v", listAvailable.Error)
+	}
+	listAvailableFrame, err := decodeJSONRPCResultFrame(listAvailable)
+	if err != nil {
+		t.Fatalf("decode listAvailableSkills frame: %v", err)
+	}
+	if listAvailableFrame.Action != FrameActionListAvailableSkills {
+		t.Fatalf("listAvailableSkills action = %q, want %q", listAvailableFrame.Action, FrameActionListAvailableSkills)
+	}
+}
+
+func TestDispatchRPCRequestListAvailableSkillsDoesNotRequireSession(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	runtimeStub := &rpcRunCaptureRuntimeStub{
+		listAvailableFn: func(_ context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error) {
+			if input.SessionID != "" {
+				t.Fatalf("listAvailableSkills session_id = %q, want empty", input.SessionID)
+			}
+			return []AvailableSkillState{
+				{
+					Descriptor: SkillDescriptor{ID: "go-review"},
+					Active:     false,
+				},
+			}, nil
+		},
+	}
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-list-available-no-session"`),
+		Method:  protocol.MethodGatewayListAvailableSkills,
+	}, runtimeStub)
+	if response.Error != nil {
+		t.Fatalf("listAvailableSkills should pass without session_id, got error: %+v", response.Error)
+	}
+	frame, err := decodeJSONRPCResultFrame(response)
+	if err != nil {
+		t.Fatalf("decode listAvailableSkills frame: %v", err)
+	}
+	if frame.Action != FrameActionListAvailableSkills {
+		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionListAvailableSkills)
 	}
 }
 

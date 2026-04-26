@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"neo-code/internal/gateway/protocol"
+	"neo-code/internal/tools"
 )
 
 func TestServerHandleConnectionPing(t *testing.T) {
@@ -375,6 +376,32 @@ func (s *runtimePortEventStub) Run(_ context.Context, _ RunInput) error {
 
 func (s *runtimePortEventStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
+}
+
+func (s *runtimePortEventStub) ExecuteSystemTool(
+	_ context.Context,
+	_ ExecuteSystemToolInput,
+) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
+}
+
+func (s *runtimePortEventStub) ActivateSessionSkill(_ context.Context, _ SessionSkillMutationInput) error {
+	return nil
+}
+
+func (s *runtimePortEventStub) DeactivateSessionSkill(_ context.Context, _ SessionSkillMutationInput) error {
+	return nil
+}
+
+func (s *runtimePortEventStub) ListSessionSkills(_ context.Context, _ ListSessionSkillsInput) ([]SessionSkillState, error) {
+	return nil, nil
+}
+
+func (s *runtimePortEventStub) ListAvailableSkills(
+	_ context.Context,
+	_ ListAvailableSkillsInput,
+) ([]AvailableSkillState, error) {
+	return nil, nil
 }
 
 func (s *runtimePortEventStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {

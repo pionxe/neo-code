@@ -42,6 +42,7 @@ Skills 不会改变：
 
 ```text
 ~/.neocode/skills/
+~/.codex/skills/   （当 ~/.neocode/skills/ 不存在时自动回退）
 ```
 
 加载规则包括：

@@ -18,7 +18,8 @@ Skills 不影响：
 
 ## 2. 发现机制（Discovery）
 当前本地发现路径：
-- `~/.neocode/skills/`
+- `~/.neocode/skills/`（首选）
+- `~/.codex/skills/`（当 `~/.neocode/skills/` 不存在时自动回退）
 
 加载规则：
 - 扫描 root 下的子目录（忽略隐藏目录）

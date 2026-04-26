@@ -981,6 +981,79 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeFallsBackToCodexSkillsRootWhenNeoCodeRootMissing(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	skillsRoot := filepath.Join(home, ".codex", "skills", "go-review")
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir skills root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsRoot, "SKILL.md"), []byte(strings.Join([]string{
+		"---",
+		"id: go-review",
+		"name: go-review",
+		"---",
+		"",
+		"# Go Review",
+		"",
+		"Review code carefully.",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
+	}
+	if bundle.Close != nil {
+		t.Cleanup(func() {
+			if err := bundle.Close(); err != nil {
+				t.Fatalf("bundle.Close() error = %v", err)
+			}
+		})
+	}
+
+	store := agentsession.NewSQLiteStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close() error = %v", err)
+		}
+	})
+	session := agentsession.New("fallback skill session")
+	session, err = store.CreateSession(context.Background(), agentsession.CreateSessionInput{
+		ID:        session.ID,
+		Title:     session.Title,
+		CreatedAt: session.CreatedAt,
+		UpdatedAt: session.UpdatedAt,
+		Head:      session.HeadSnapshot(),
+	})
+	if err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	runtimeWithSkills, ok := bundle.Runtime.(interface {
+		ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error
+	})
+	if !ok {
+		t.Fatalf("expected runtime to expose ActivateSessionSkill")
+	}
+	if err := runtimeWithSkills.ActivateSessionSkill(context.Background(), session.ID, "go-review"); err != nil {
+		t.Fatalf("ActivateSessionSkill() error = %v", err)
+	}
+
+	loaded, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got := loaded.ActiveSkillIDs(); len(got) != 1 || got[0] != "go-review" {
+		t.Fatalf("expected codex fallback skill to be activated, got %+v", got)
+	}
+}
+
 func TestBuildSkillsRegistryKeepsInstanceWhenRefreshFails(t *testing.T) {
 	t.Parallel()
 

@@ -265,6 +265,21 @@ func TestStreamRelayAutoBindAndExtractSessionBranches(t *testing.T) {
 	if got := extractSessionIDFromPayload((*protocol.BindStreamParams)(nil)); got != "" {
 		t.Fatalf("session from nil bind ptr = %q, want empty", got)
 	}
+	if got := extractSessionIDFromPayload(protocol.ActivateSessionSkillParams{SessionID: "s4"}); got != "s4" {
+		t.Fatalf("session from activateSessionSkill params = %q, want s4", got)
+	}
+	if got := extractSessionIDFromPayload((*protocol.ActivateSessionSkillParams)(nil)); got != "" {
+		t.Fatalf("session from nil activateSessionSkill ptr = %q, want empty", got)
+	}
+	if got := extractSessionIDFromPayload(protocol.DeactivateSessionSkillParams{SessionID: "s5"}); got != "s5" {
+		t.Fatalf("session from deactivateSessionSkill params = %q, want s5", got)
+	}
+	if got := extractSessionIDFromPayload(protocol.ListSessionSkillsParams{SessionID: "s6"}); got != "s6" {
+		t.Fatalf("session from listSessionSkills params = %q, want s6", got)
+	}
+	if got := extractSessionIDFromPayload(protocol.ListAvailableSkillsParams{SessionID: "s7"}); got != "s7" {
+		t.Fatalf("session from listAvailableSkills params = %q, want s7", got)
+	}
 	if got := extractSessionIDFromPayload(map[string]any{"session_id": " s3 "}); got != "s3" {
 		t.Fatalf("session from map = %q, want s3", got)
 	}
@@ -433,6 +448,21 @@ func TestRPCDispatchAdditionalBranches(t *testing.T) {
 	}
 	if requiresSession(FrameActionResolvePermission) {
 		t.Fatal("resolve_permission should not require session")
+	}
+	if requiresSession(FrameActionExecuteSystemTool) {
+		t.Fatal("execute_system_tool should not require session")
+	}
+	if !requiresSession(FrameActionActivateSessionSkill) {
+		t.Fatal("activate_session_skill should require session")
+	}
+	if !requiresSession(FrameActionDeactivateSessionSkill) {
+		t.Fatal("deactivate_session_skill should require session")
+	}
+	if !requiresSession(FrameActionListSessionSkills) {
+		t.Fatal("list_session_skills should require session")
+	}
+	if requiresSession(FrameActionListAvailableSkills) {
+		t.Fatal("list_available_skills should not require session")
 	}
 
 	ctx := context.Background()

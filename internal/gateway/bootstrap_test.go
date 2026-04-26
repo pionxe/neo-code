@@ -11,11 +11,17 @@ import (
 
 	"neo-code/internal/gateway/handlers"
 	"neo-code/internal/gateway/protocol"
+	"neo-code/internal/tools"
 )
 
 type bootstrapRuntimeStub struct {
 	runFn               func(ctx context.Context, input RunInput) error
 	compactFn           func(ctx context.Context, input CompactInput) (CompactResult, error)
+	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
+	activateSkillFn     func(ctx context.Context, input SessionSkillMutationInput) error
+	deactivateSkillFn   func(ctx context.Context, input SessionSkillMutationInput) error
+	listSessionSkillsFn func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
+	listAvailableFn     func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
 	resolvePermissionFn func(ctx context.Context, input PermissionResolutionInput) error
 	cancelRunFn         func(ctx context.Context, input CancelInput) (bool, error)
 	events              <-chan RuntimeEvent
@@ -35,6 +41,50 @@ func (s *bootstrapRuntimeStub) Compact(ctx context.Context, input CompactInput) 
 		return s.compactFn(ctx, input)
 	}
 	return CompactResult{}, nil
+}
+
+func (s *bootstrapRuntimeStub) ExecuteSystemTool(
+	ctx context.Context,
+	input ExecuteSystemToolInput,
+) (tools.ToolResult, error) {
+	if s != nil && s.executeSystemToolFn != nil {
+		return s.executeSystemToolFn(ctx, input)
+	}
+	return tools.ToolResult{}, nil
+}
+
+func (s *bootstrapRuntimeStub) ActivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error {
+	if s != nil && s.activateSkillFn != nil {
+		return s.activateSkillFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *bootstrapRuntimeStub) DeactivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error {
+	if s != nil && s.deactivateSkillFn != nil {
+		return s.deactivateSkillFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *bootstrapRuntimeStub) ListSessionSkills(
+	ctx context.Context,
+	input ListSessionSkillsInput,
+) ([]SessionSkillState, error) {
+	if s != nil && s.listSessionSkillsFn != nil {
+		return s.listSessionSkillsFn(ctx, input)
+	}
+	return nil, nil
+}
+
+func (s *bootstrapRuntimeStub) ListAvailableSkills(
+	ctx context.Context,
+	input ListAvailableSkillsInput,
+) ([]AvailableSkillState, error) {
+	if s != nil && s.listAvailableFn != nil {
+		return s.listAvailableFn(ctx, input)
+	}
+	return nil, nil
 }
 
 func (s *bootstrapRuntimeStub) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error {
@@ -598,6 +648,131 @@ func TestHandleCompactFrameBranches(t *testing.T) {
 	})
 }
 
+func TestHandleExecuteSystemToolFrameBranches(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionExecuteSystemTool,
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName: "memo_list",
+			},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-invalid-1",
+			Payload: map[string]any{
+				"tool_name": " ",
+			},
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeMissingRequiredField.String())
+		}
+	})
+
+	t.Run("reject non-memo system tool", func(t *testing.T) {
+		called := false
+		stub := &bootstrapRuntimeStub{
+			executeSystemToolFn: func(_ context.Context, _ ExecuteSystemToolInput) (tools.ToolResult, error) {
+				called = true
+				return tools.ToolResult{}, nil
+			},
+		}
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-invalid-tool-1",
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName:  "bash",
+				Arguments: []byte("{}"),
+			},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		}
+		if called {
+			t.Fatal("runtime executeSystemTool should not be called for non-whitelisted tools")
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			executeSystemToolFn: func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("execute_system_tool should use timeout context")
+				}
+				if input.ToolName != "memo_list" {
+					t.Fatalf("tool name = %q, want %q", input.ToolName, "memo_list")
+				}
+				if string(input.Arguments) != "{}" {
+					t.Fatalf("arguments = %s, want {}", string(input.Arguments))
+				}
+				if input.Workdir != "/repo" {
+					t.Fatalf("workdir = %q, want %q", input.Workdir, "/repo")
+				}
+				return tools.ToolResult{
+					Name:    "memo_list",
+					Content: "ok",
+				}, nil
+			},
+		}
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-ok-1",
+			Workdir:   "/repo",
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName:  "memo_list",
+				Arguments: []byte("null"),
+			},
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		if response.Action != FrameActionExecuteSystemTool {
+			t.Fatalf("response action = %q, want %q", response.Action, FrameActionExecuteSystemTool)
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			executeSystemToolFn: func(_ context.Context, _ ExecuteSystemToolInput) (tools.ToolResult, error) {
+				return tools.ToolResult{}, context.DeadlineExceeded
+			},
+		}
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-timeout-1",
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName:  "memo_list",
+				Arguments: []byte("{}"),
+			},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeTimeout.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeTimeout.String())
+		}
+	})
+}
+
 func TestHandleCancelListLoadResolveBranches(t *testing.T) {
 	t.Run("cancel runtime unavailable", func(t *testing.T) {
 		response := handleCancelFrame(context.Background(), MessageFrame{
@@ -855,6 +1030,155 @@ func TestHandleCancelListLoadResolveBranches(t *testing.T) {
 		}
 		if response.Error.Message != "resolve_permission failed" {
 			t.Fatalf("response message = %q, want %q", response.Error.Message, "resolve_permission failed")
+		}
+	})
+}
+
+func TestHandleSessionSkillFramesBranches(t *testing.T) {
+	t.Run("activate session skill runtime unavailable", func(t *testing.T) {
+		response := handleActivateSessionSkillFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionActivateSessionSkill,
+			Payload: protocol.ActivateSessionSkillParams{
+				SessionID: "session-1",
+				SkillID:   "go-review",
+			},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("activate and deactivate session skill success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			activateSkillFn: func(ctx context.Context, input SessionSkillMutationInput) error {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("activate session skill should use timeout context")
+				}
+				if input.SessionID != "session-skills" || input.SkillID != "go-review" {
+					t.Fatalf("activate input = %#v, want session-skills/go-review", input)
+				}
+				return nil
+			},
+			deactivateSkillFn: func(ctx context.Context, input SessionSkillMutationInput) error {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("deactivate session skill should use timeout context")
+				}
+				if input.SessionID != "session-skills" || input.SkillID != "go-review" {
+					t.Fatalf("deactivate input = %#v, want session-skills/go-review", input)
+				}
+				return nil
+			},
+		}
+
+		activate := handleActivateSessionSkillFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionActivateSessionSkill,
+			RequestID: "activate-1",
+			Payload: protocol.ActivateSessionSkillParams{
+				SessionID: " session-skills ",
+				SkillID:   " go-review ",
+			},
+		}, stub)
+		if activate.Type != FrameTypeAck {
+			t.Fatalf("activate response type = %q, want %q", activate.Type, FrameTypeAck)
+		}
+		if activate.Action != FrameActionActivateSessionSkill {
+			t.Fatalf("activate response action = %q, want %q", activate.Action, FrameActionActivateSessionSkill)
+		}
+
+		deactivate := handleDeactivateSessionSkillFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeactivateSessionSkill,
+			RequestID: "deactivate-1",
+			Payload: protocol.DeactivateSessionSkillParams{
+				SessionID: " session-skills ",
+				SkillID:   " go-review ",
+			},
+		}, stub)
+		if deactivate.Type != FrameTypeAck {
+			t.Fatalf("deactivate response type = %q, want %q", deactivate.Type, FrameTypeAck)
+		}
+		if deactivate.Action != FrameActionDeactivateSessionSkill {
+			t.Fatalf("deactivate response action = %q, want %q", deactivate.Action, FrameActionDeactivateSessionSkill)
+		}
+	})
+
+	t.Run("activate session skill invalid payload", func(t *testing.T) {
+		response := handleActivateSessionSkillFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionActivateSessionSkill,
+			RequestID: "activate-invalid",
+			Payload:   "invalid",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		}
+	})
+
+	t.Run("list session skills success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			listSessionSkillsFn: func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("list session skills should use timeout context")
+				}
+				if input.SessionID != "session-skills" {
+					t.Fatalf("list session skills session_id = %q, want %q", input.SessionID, "session-skills")
+				}
+				return []SessionSkillState{{SkillID: "go-review"}}, nil
+			},
+		}
+
+		response := handleListSessionSkillsFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListSessionSkills,
+			RequestID: "list-session-skills-1",
+			Payload: protocol.ListSessionSkillsParams{
+				SessionID: " session-skills ",
+			},
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		if response.Action != FrameActionListSessionSkills {
+			t.Fatalf("response action = %q, want %q", response.Action, FrameActionListSessionSkills)
+		}
+	})
+
+	t.Run("list available skills success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			listAvailableFn: func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("list available skills should use timeout context")
+				}
+				if input.SessionID != "" {
+					t.Fatalf("list available skills session_id = %q, want empty", input.SessionID)
+				}
+				return []AvailableSkillState{
+					{
+						Descriptor: SkillDescriptor{ID: "go-review"},
+						Active:     false,
+					},
+				}, nil
+			},
+		}
+
+		response := handleListAvailableSkillsFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListAvailableSkills,
+			RequestID: "list-available-skills-1",
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		if response.Action != FrameActionListAvailableSkills {
+			t.Fatalf("response action = %q, want %q", response.Action, FrameActionListAvailableSkills)
 		}
 	})
 }

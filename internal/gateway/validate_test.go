@@ -32,6 +32,33 @@ func TestValidateFrame_BasicRules(t *testing.T) {
 			wantField: "payload",
 		},
 		{
+			name: "execute_system_tool missing payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionExecuteSystemTool,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
+		{
+			name: "activate_session_skill missing payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionActivateSessionSkill,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
+		{
+			name: "list_session_skills missing session_id",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionListSessionSkills,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "session_id",
+		},
+		{
 			name: "valid wake open url request",
 			frame: MessageFrame{
 				Type:   FrameTypeRequest,

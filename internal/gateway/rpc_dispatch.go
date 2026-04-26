@@ -328,7 +328,13 @@ func convertProtocolRunInputParts(parts []protocol.RunInputPart) []InputPart {
 // requiresSession 判断指定动作在分发阶段是否必须携带 session_id。
 func requiresSession(action FrameAction) bool {
 	switch action {
-	case FrameActionBindStream, FrameActionRun, FrameActionCompact, FrameActionLoadSession:
+	case FrameActionBindStream,
+		FrameActionRun,
+		FrameActionCompact,
+		FrameActionLoadSession,
+		FrameActionActivateSessionSkill,
+		FrameActionDeactivateSessionSkill,
+		FrameActionListSessionSkills:
 		return true
 	default:
 		return false

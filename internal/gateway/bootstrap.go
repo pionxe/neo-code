@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 
 	"neo-code/internal/gateway/handlers"
 	"neo-code/internal/gateway/protocol"
+	toolkits "neo-code/internal/tools"
 )
 
 const (
@@ -21,6 +23,13 @@ const (
 type requestFrameHandler func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame
 
 var wakeOpenURLHandler = handlers.NewWakeOpenURLHandler()
+
+var allowedSystemToolNames = map[string]struct{}{
+	toolkits.ToolNameMemoList:     {},
+	toolkits.ToolNameMemoRemember: {},
+	toolkits.ToolNameMemoRecall:   {},
+	toolkits.ToolNameMemoRemove:   {},
+}
 
 var requestFrameHandlers = map[FrameAction]requestFrameHandler{
 	FrameActionAuthenticate: func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
@@ -35,12 +44,17 @@ var requestFrameHandlers = map[FrameAction]requestFrameHandler{
 	FrameActionWakeOpenURL: func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 		return handleWakeOpenURLFrame(ctx, frame)
 	},
-	FrameActionRun:               handleRunFrame,
-	FrameActionCompact:           handleCompactFrame,
-	FrameActionCancel:            handleCancelFrame,
-	FrameActionListSessions:      handleListSessionsFrame,
-	FrameActionLoadSession:       handleLoadSessionFrame,
-	FrameActionResolvePermission: handleResolvePermissionFrame,
+	FrameActionRun:                    handleRunFrame,
+	FrameActionCompact:                handleCompactFrame,
+	FrameActionExecuteSystemTool:      handleExecuteSystemToolFrame,
+	FrameActionActivateSessionSkill:   handleActivateSessionSkillFrame,
+	FrameActionDeactivateSessionSkill: handleDeactivateSessionSkillFrame,
+	FrameActionListSessionSkills:      handleListSessionSkillsFrame,
+	FrameActionListAvailableSkills:    handleListAvailableSkillsFrame,
+	FrameActionCancel:                 handleCancelFrame,
+	FrameActionListSessions:           handleListSessionsFrame,
+	FrameActionLoadSession:            handleLoadSessionFrame,
+	FrameActionResolvePermission:      handleResolvePermissionFrame,
 }
 
 // dispatchRequestFrame 统一分发 request 帧到对应处理器。
@@ -240,6 +254,228 @@ func handleCompactFrame(ctx context.Context, frame MessageFrame, runtimePort Run
 		SessionID: strings.TrimSpace(frame.SessionID),
 		RunID:     strings.TrimSpace(frame.RunID),
 		Payload:   result,
+	}
+}
+
+// handleExecuteSystemToolFrame 处理 gateway.executeSystemTool 请求。
+func handleExecuteSystemToolFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeExecuteSystemToolPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+	if params.RunID == "" {
+		params.RunID = strings.TrimSpace(frame.RunID)
+	}
+	if params.Workdir == "" {
+		params.Workdir = strings.TrimSpace(frame.Workdir)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, err := runtimePort.ExecuteSystemTool(callCtx, ExecuteSystemToolInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: params.SessionID,
+		RunID:     params.RunID,
+		Workdir:   params.Workdir,
+		ToolName:  params.ToolName,
+		Arguments: append([]byte(nil), params.Arguments...),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "execute_system_tool")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionExecuteSystemTool,
+		RequestID: frame.RequestID,
+		SessionID: params.SessionID,
+		RunID:     params.RunID,
+		Payload:   result,
+	}
+}
+
+// handleActivateSessionSkillFrame 处理 gateway.activateSessionSkill 请求。
+func handleActivateSessionSkillFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeActivateSessionSkillPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+	if params.SessionID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.session_id"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if err := runtimePort.ActivateSessionSkill(callCtx, SessionSkillMutationInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: params.SessionID,
+		SkillID:   params.SkillID,
+	}); err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "activate_session_skill")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionActivateSessionSkill,
+		RequestID: frame.RequestID,
+		SessionID: params.SessionID,
+		Payload: map[string]any{
+			"session_id": params.SessionID,
+			"skill_id":   params.SkillID,
+			"message":    "skill activated",
+		},
+	}
+}
+
+// handleDeactivateSessionSkillFrame 处理 gateway.deactivateSessionSkill 请求。
+func handleDeactivateSessionSkillFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeDeactivateSessionSkillPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+	if params.SessionID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.session_id"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if err := runtimePort.DeactivateSessionSkill(callCtx, SessionSkillMutationInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: params.SessionID,
+		SkillID:   params.SkillID,
+	}); err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "deactivate_session_skill")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionDeactivateSessionSkill,
+		RequestID: frame.RequestID,
+		SessionID: params.SessionID,
+		Payload: map[string]any{
+			"session_id": params.SessionID,
+			"skill_id":   params.SkillID,
+			"message":    "skill deactivated",
+		},
+	}
+}
+
+// handleListSessionSkillsFrame 处理 gateway.listSessionSkills 请求。
+func handleListSessionSkillsFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeListSessionSkillsPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+	if params.SessionID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.session_id"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	states, err := runtimePort.ListSessionSkills(callCtx, ListSessionSkillsInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: params.SessionID,
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "list_session_skills")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListSessionSkills,
+		RequestID: frame.RequestID,
+		SessionID: params.SessionID,
+		Payload: map[string]any{
+			"skills": states,
+		},
+	}
+}
+
+// handleListAvailableSkillsFrame 处理 gateway.listAvailableSkills 请求。
+func handleListAvailableSkillsFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeListAvailableSkillsPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	states, err := runtimePort.ListAvailableSkills(callCtx, ListAvailableSkillsInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: params.SessionID,
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "list_available_skills")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListAvailableSkills,
+		RequestID: frame.RequestID,
+		SessionID: params.SessionID,
+		Payload: map[string]any{
+			"skills": states,
+		},
 	}
 }
 
@@ -493,6 +729,27 @@ type cancelParams struct {
 	RunID     string
 }
 
+type executeSystemToolParams struct {
+	SessionID string
+	RunID     string
+	Workdir   string
+	ToolName  string
+	Arguments []byte
+}
+
+type sessionSkillMutationParams struct {
+	SessionID string
+	SkillID   string
+}
+
+type listSessionSkillsParams struct {
+	SessionID string
+}
+
+type listAvailableSkillsParams struct {
+	SessionID string
+}
+
 // decodeBindStreamParams 解析 bind_stream 的负载参数。
 func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 	switch typed := payload.(type) {
@@ -617,6 +874,219 @@ func decodeCancelInput(frame MessageFrame) (cancelParams, *FrameError) {
 		return cancelParams{}, NewMissingRequiredFieldError("payload.run_id")
 	}
 	return params, nil
+}
+
+// decodeExecuteSystemToolPayload 解析 execute_system_tool 负载并收敛为统一输入结构。
+func decodeExecuteSystemToolPayload(payload any) (executeSystemToolParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ExecuteSystemToolParams:
+		return normalizeExecuteSystemToolParams(typed)
+	case *protocol.ExecuteSystemToolParams:
+		if typed == nil {
+			return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool payload")
+		}
+		return normalizeExecuteSystemToolParams(*typed)
+	case map[string]any:
+		params := protocol.ExecuteSystemToolParams{
+			SessionID: readStringValue(typed, "session_id"),
+			RunID:     readStringValue(typed, "run_id"),
+			Workdir:   readStringValue(typed, "workdir"),
+			ToolName:  readStringValue(typed, "tool_name"),
+		}
+		if rawArgs, exists := typed["arguments"]; exists {
+			encodedArgs, err := json.Marshal(rawArgs)
+			if err != nil {
+				return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool arguments")
+			}
+			params.Arguments = encodedArgs
+		}
+		return normalizeExecuteSystemToolParams(params)
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool payload")
+		}
+		var decoded protocol.ExecuteSystemToolParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool payload")
+		}
+		return normalizeExecuteSystemToolParams(decoded)
+	}
+}
+
+// normalizeExecuteSystemToolParams 校验并归一化 execute_system_tool 请求参数。
+func normalizeExecuteSystemToolParams(params protocol.ExecuteSystemToolParams) (executeSystemToolParams, *FrameError) {
+	normalized := executeSystemToolParams{
+		SessionID: strings.TrimSpace(params.SessionID),
+		RunID:     strings.TrimSpace(params.RunID),
+		Workdir:   strings.TrimSpace(params.Workdir),
+		ToolName:  strings.TrimSpace(params.ToolName),
+	}
+	if normalized.ToolName == "" {
+		return executeSystemToolParams{}, NewMissingRequiredFieldError("payload.tool_name")
+	}
+	if _, allowed := allowedSystemToolNames[normalized.ToolName]; !allowed {
+		return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool tool_name")
+	}
+
+	arguments := bytes.TrimSpace(params.Arguments)
+	switch {
+	case len(arguments) == 0, bytes.Equal(arguments, []byte("null")):
+		normalized.Arguments = []byte("{}")
+	case !json.Valid(arguments):
+		return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool arguments")
+	default:
+		normalized.Arguments = append([]byte(nil), arguments...)
+	}
+	return normalized, nil
+}
+
+// decodeActivateSessionSkillPayload 解析 activate_session_skill 负载并收敛为统一输入结构。
+func decodeActivateSessionSkillPayload(payload any) (sessionSkillMutationParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ActivateSessionSkillParams:
+		return normalizeSessionSkillMutationParams(typed.SessionID, typed.SkillID, "activate_session_skill")
+	case *protocol.ActivateSessionSkillParams:
+		if typed == nil {
+			return sessionSkillMutationParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid activate_session_skill payload")
+		}
+		return normalizeSessionSkillMutationParams(typed.SessionID, typed.SkillID, "activate_session_skill")
+	case map[string]any:
+		return normalizeSessionSkillMutationParams(
+			readStringValue(typed, "session_id"),
+			readStringValue(typed, "skill_id"),
+			"activate_session_skill",
+		)
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return sessionSkillMutationParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid activate_session_skill payload")
+		}
+		var decoded protocol.ActivateSessionSkillParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return sessionSkillMutationParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid activate_session_skill payload")
+		}
+		return normalizeSessionSkillMutationParams(decoded.SessionID, decoded.SkillID, "activate_session_skill")
+	}
+}
+
+// decodeDeactivateSessionSkillPayload 解析 deactivate_session_skill 负载并收敛为统一输入结构。
+func decodeDeactivateSessionSkillPayload(payload any) (sessionSkillMutationParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.DeactivateSessionSkillParams:
+		return normalizeSessionSkillMutationParams(typed.SessionID, typed.SkillID, "deactivate_session_skill")
+	case *protocol.DeactivateSessionSkillParams:
+		if typed == nil {
+			return sessionSkillMutationParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid deactivate_session_skill payload")
+		}
+		return normalizeSessionSkillMutationParams(typed.SessionID, typed.SkillID, "deactivate_session_skill")
+	case map[string]any:
+		return normalizeSessionSkillMutationParams(
+			readStringValue(typed, "session_id"),
+			readStringValue(typed, "skill_id"),
+			"deactivate_session_skill",
+		)
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return sessionSkillMutationParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid deactivate_session_skill payload")
+		}
+		var decoded protocol.DeactivateSessionSkillParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return sessionSkillMutationParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid deactivate_session_skill payload")
+		}
+		return normalizeSessionSkillMutationParams(decoded.SessionID, decoded.SkillID, "deactivate_session_skill")
+	}
+}
+
+// decodeListSessionSkillsPayload 解析 list_session_skills 负载并收敛为统一输入结构。
+func decodeListSessionSkillsPayload(payload any) (listSessionSkillsParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ListSessionSkillsParams:
+		return normalizeListSessionSkillsParams(typed.SessionID), nil
+	case *protocol.ListSessionSkillsParams:
+		if typed == nil {
+			return listSessionSkillsParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid list_session_skills payload")
+		}
+		return normalizeListSessionSkillsParams(typed.SessionID), nil
+	case map[string]any:
+		return normalizeListSessionSkillsParams(readStringValue(typed, "session_id")), nil
+	case nil:
+		return listSessionSkillsParams{}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return listSessionSkillsParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid list_session_skills payload")
+		}
+		var decoded protocol.ListSessionSkillsParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return listSessionSkillsParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid list_session_skills payload")
+		}
+		return normalizeListSessionSkillsParams(decoded.SessionID), nil
+	}
+}
+
+// decodeListAvailableSkillsPayload 解析 list_available_skills 负载并收敛为统一输入结构。
+func decodeListAvailableSkillsPayload(payload any) (listAvailableSkillsParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ListAvailableSkillsParams:
+		return normalizeListAvailableSkillsParams(typed.SessionID), nil
+	case *protocol.ListAvailableSkillsParams:
+		if typed == nil {
+			return listAvailableSkillsParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid list_available_skills payload")
+		}
+		return normalizeListAvailableSkillsParams(typed.SessionID), nil
+	case map[string]any:
+		return normalizeListAvailableSkillsParams(readStringValue(typed, "session_id")), nil
+	case nil:
+		return listAvailableSkillsParams{}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return listAvailableSkillsParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid list_available_skills payload")
+		}
+		var decoded protocol.ListAvailableSkillsParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return listAvailableSkillsParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid list_available_skills payload")
+		}
+		return normalizeListAvailableSkillsParams(decoded.SessionID), nil
+	}
+}
+
+// normalizeSessionSkillMutationParams 校验并归一化会话技能启停请求参数。
+func normalizeSessionSkillMutationParams(
+	sessionID string,
+	skillID string,
+	operation string,
+) (sessionSkillMutationParams, *FrameError) {
+	normalized := sessionSkillMutationParams{
+		SessionID: strings.TrimSpace(sessionID),
+		SkillID:   strings.TrimSpace(skillID),
+	}
+	if normalized.SessionID == "" {
+		return sessionSkillMutationParams{}, NewMissingRequiredFieldError("payload.session_id")
+	}
+	if normalized.SkillID == "" {
+		return sessionSkillMutationParams{}, NewMissingRequiredFieldError("payload.skill_id")
+	}
+	if strings.TrimSpace(operation) == "" {
+		return sessionSkillMutationParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid session_skill payload")
+	}
+	return normalized, nil
+}
+
+// normalizeListSessionSkillsParams 归一化 list_session_skills 请求参数。
+func normalizeListSessionSkillsParams(sessionID string) listSessionSkillsParams {
+	return listSessionSkillsParams{
+		SessionID: strings.TrimSpace(sessionID),
+	}
+}
+
+// normalizeListAvailableSkillsParams 归一化 list_available_skills 请求参数。
+func normalizeListAvailableSkillsParams(sessionID string) listAvailableSkillsParams {
+	return listAvailableSkillsParams{
+		SessionID: strings.TrimSpace(sessionID),
+	}
 }
 
 // normalizeBindStreamParams 校验并归一化 bind_stream 请求参数。

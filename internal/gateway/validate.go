@@ -30,16 +30,21 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 	}
 
 	switch frame.Action {
-	case FrameActionAuthenticate, FrameActionBindStream, FrameActionWakeOpenURL:
+	case FrameActionAuthenticate,
+		FrameActionBindStream,
+		FrameActionWakeOpenURL,
+		FrameActionExecuteSystemTool,
+		FrameActionActivateSessionSkill,
+		FrameActionDeactivateSessionSkill:
 		if frame.Payload == nil {
 			return NewMissingRequiredFieldError("payload")
 		}
 		return nil
-	case FrameActionPing, FrameActionCancel, FrameActionListSessions:
+	case FrameActionPing, FrameActionCancel, FrameActionListSessions, FrameActionListAvailableSkills:
 		return nil
 	case FrameActionRun:
 		return validateRunFrame(frame)
-	case FrameActionCompact, FrameActionLoadSession:
+	case FrameActionCompact, FrameActionLoadSession, FrameActionListSessionSkills:
 		if strings.TrimSpace(frame.SessionID) == "" {
 			return NewMissingRequiredFieldError("session_id")
 		}
@@ -179,6 +184,11 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionWakeOpenURL,
 		FrameActionRun,
 		FrameActionCompact,
+		FrameActionExecuteSystemTool,
+		FrameActionActivateSessionSkill,
+		FrameActionDeactivateSessionSkill,
+		FrameActionListSessionSkills,
+		FrameActionListAvailableSkills,
 		FrameActionCancel,
 		FrameActionListSessions,
 		FrameActionLoadSession,

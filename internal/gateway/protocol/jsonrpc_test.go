@@ -184,6 +184,129 @@ func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 		t.Fatalf("compact normalized = %#v", compactNormalized)
 	}
 
+	execNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"exec-1"`),
+		Method:  MethodGatewayExecuteSystemTool,
+		Params: json.RawMessage(`{
+			"session_id":" s-1 ",
+			"run_id":" r-1 ",
+			"workdir":" /repo ",
+			"tool_name":" memo_list ",
+			"arguments":{"scope":"all"}
+		}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize executeSystemTool request: %v", rpcErr)
+	}
+	if execNormalized.Action != "execute_system_tool" {
+		t.Fatalf("executeSystemTool action = %q, want %q", execNormalized.Action, "execute_system_tool")
+	}
+	if execNormalized.SessionID != "s-1" || execNormalized.RunID != "r-1" || execNormalized.Workdir != "/repo" {
+		t.Fatalf("executeSystemTool normalized ids/workdir = %#v", execNormalized)
+	}
+	execParams, ok := execNormalized.Payload.(ExecuteSystemToolParams)
+	if !ok {
+		t.Fatalf("executeSystemTool payload type = %T, want ExecuteSystemToolParams", execNormalized.Payload)
+	}
+	if execParams.ToolName != "memo_list" {
+		t.Fatalf("executeSystemTool tool_name = %q, want %q", execParams.ToolName, "memo_list")
+	}
+	if string(execParams.Arguments) != `{"scope":"all"}` {
+		t.Fatalf("executeSystemTool arguments = %s, want %s", string(execParams.Arguments), `{"scope":"all"}`)
+	}
+
+	activateSkillNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"activate-skill-1"`),
+		Method:  MethodGatewayActivateSessionSkill,
+		Params:  json.RawMessage(`{"session_id":" s-1 ","skill_id":" go-review "}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize activateSessionSkill request: %v", rpcErr)
+	}
+	if activateSkillNormalized.Action != "activate_session_skill" || activateSkillNormalized.SessionID != "s-1" {
+		t.Fatalf("activateSessionSkill normalized = %#v", activateSkillNormalized)
+	}
+	activateSkillParams, ok := activateSkillNormalized.Payload.(ActivateSessionSkillParams)
+	if !ok {
+		t.Fatalf("activateSessionSkill payload type = %T, want ActivateSessionSkillParams", activateSkillNormalized.Payload)
+	}
+	if activateSkillParams.SessionID != "s-1" || activateSkillParams.SkillID != "go-review" {
+		t.Fatalf("activateSessionSkill payload = %#v, want trimmed session_id/skill_id", activateSkillParams)
+	}
+
+	deactivateSkillNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"deactivate-skill-1"`),
+		Method:  MethodGatewayDeactivateSessionSkill,
+		Params:  json.RawMessage(`{"session_id":" s-1 ","skill_id":" go-review "}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize deactivateSessionSkill request: %v", rpcErr)
+	}
+	if deactivateSkillNormalized.Action != "deactivate_session_skill" || deactivateSkillNormalized.SessionID != "s-1" {
+		t.Fatalf("deactivateSessionSkill normalized = %#v", deactivateSkillNormalized)
+	}
+	deactivateSkillParams, ok := deactivateSkillNormalized.Payload.(DeactivateSessionSkillParams)
+	if !ok {
+		t.Fatalf("deactivateSessionSkill payload type = %T, want DeactivateSessionSkillParams", deactivateSkillNormalized.Payload)
+	}
+	if deactivateSkillParams.SessionID != "s-1" || deactivateSkillParams.SkillID != "go-review" {
+		t.Fatalf("deactivateSessionSkill payload = %#v, want trimmed session_id/skill_id", deactivateSkillParams)
+	}
+
+	listSessionSkillsNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"list-session-skills-1"`),
+		Method:  MethodGatewayListSessionSkills,
+		Params:  json.RawMessage(`{"session_id":" s-1 "}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize listSessionSkills request: %v", rpcErr)
+	}
+	if listSessionSkillsNormalized.Action != "list_session_skills" || listSessionSkillsNormalized.SessionID != "s-1" {
+		t.Fatalf("listSessionSkills normalized = %#v", listSessionSkillsNormalized)
+	}
+	if _, ok := listSessionSkillsNormalized.Payload.(ListSessionSkillsParams); !ok {
+		t.Fatalf("listSessionSkills payload type = %T, want ListSessionSkillsParams", listSessionSkillsNormalized.Payload)
+	}
+
+	listAvailableSkillsNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"list-available-skills-1"`),
+		Method:  MethodGatewayListAvailableSkills,
+		Params:  json.RawMessage(`{"session_id":" s-1 "}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize listAvailableSkills request: %v", rpcErr)
+	}
+	if listAvailableSkillsNormalized.Action != "list_available_skills" || listAvailableSkillsNormalized.SessionID != "s-1" {
+		t.Fatalf("listAvailableSkills normalized = %#v", listAvailableSkillsNormalized)
+	}
+	if _, ok := listAvailableSkillsNormalized.Payload.(ListAvailableSkillsParams); !ok {
+		t.Fatalf("listAvailableSkills payload type = %T, want ListAvailableSkillsParams", listAvailableSkillsNormalized.Payload)
+	}
+
+	listAvailableSkillsWithoutParams, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"list-available-skills-2"`),
+		Method:  MethodGatewayListAvailableSkills,
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize listAvailableSkills without params request: %v", rpcErr)
+	}
+	listAvailableSkillsWithoutParamsPayload, ok := listAvailableSkillsWithoutParams.Payload.(ListAvailableSkillsParams)
+	if !ok {
+		t.Fatalf(
+			"listAvailableSkills without params payload type = %T, want ListAvailableSkillsParams",
+			listAvailableSkillsWithoutParams.Payload,
+		)
+	}
+	if listAvailableSkillsWithoutParamsPayload.SessionID != "" {
+		t.Fatalf("listAvailableSkills without params payload = %#v, want empty session_id", listAvailableSkillsWithoutParamsPayload)
+	}
+
 	cancelNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
 		ID:      json.RawMessage(`"cancel-1"`),
@@ -452,6 +575,167 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 			wantGatewayCode: GatewayCodeInvalidFrame,
 		},
 		{
+			name: "executeSystemTool missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayExecuteSystemTool,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "executeSystemTool invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayExecuteSystemTool,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "executeSystemTool missing tool_name",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayExecuteSystemTool,
+				Params:  json.RawMessage(`{"tool_name":" "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "activateSessionSkill missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayActivateSessionSkill,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "activateSessionSkill invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayActivateSessionSkill,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "activateSessionSkill missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayActivateSessionSkill,
+				Params:  json.RawMessage(`{"skill_id":"go-review"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "activateSessionSkill missing skill_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayActivateSessionSkill,
+				Params:  json.RawMessage(`{"session_id":"s-1"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "deactivateSessionSkill missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeactivateSessionSkill,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "deactivateSessionSkill invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeactivateSessionSkill,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "deactivateSessionSkill missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeactivateSessionSkill,
+				Params:  json.RawMessage(`{"skill_id":"go-review"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "deactivateSessionSkill missing skill_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeactivateSessionSkill,
+				Params:  json.RawMessage(`{"session_id":"s-1"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "listSessionSkills missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayListSessionSkills,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "listSessionSkills invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayListSessionSkills,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "listSessionSkills missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayListSessionSkills,
+				Params:  json.RawMessage(`{"session_id":" "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "listAvailableSkills invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayListAvailableSkills,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
 			name: "compact missing params",
 			request: JSONRPCRequest{
 				JSONRPC: JSONRPCVersion,
@@ -597,6 +881,31 @@ func TestJSONRPCDecode_RejectUnknownFields(t *testing.T) {
 			name:   "loadSession params contain unknown field",
 			method: MethodGatewayLoadSession,
 			params: `{"session_id":"s-1","extra":1}`,
+		},
+		{
+			name:   "executeSystemTool params contain unknown field",
+			method: MethodGatewayExecuteSystemTool,
+			params: `{"tool_name":"memo_list","unknown":"x"}`,
+		},
+		{
+			name:   "activateSessionSkill params contain unknown field",
+			method: MethodGatewayActivateSessionSkill,
+			params: `{"session_id":"s-1","skill_id":"go-review","unknown":"x"}`,
+		},
+		{
+			name:   "deactivateSessionSkill params contain unknown field",
+			method: MethodGatewayDeactivateSessionSkill,
+			params: `{"session_id":"s-1","skill_id":"go-review","unknown":"x"}`,
+		},
+		{
+			name:   "listSessionSkills params contain unknown field",
+			method: MethodGatewayListSessionSkills,
+			params: `{"session_id":"s-1","unknown":"x"}`,
+		},
+		{
+			name:   "listAvailableSkills params contain unknown field",
+			method: MethodGatewayListAvailableSkills,
+			params: `{"session_id":"s-1","unknown":"x"}`,
 		},
 	}
 

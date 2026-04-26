@@ -3791,7 +3791,7 @@ func (a *App) runMemoSystemTool(toolName string, arguments map[string]any) tea.C
 			if err != nil {
 				message := strings.TrimSpace(result.Content)
 				if message == "" {
-					message = err.Error()
+					message = normalizeMemoCommandErrorMessage(err)
 				}
 				return localCommandResultMsg{Err: errors.New(message)}
 			}
@@ -3802,6 +3802,21 @@ func (a *App) runMemoSystemTool(toolName string, arguments map[string]any) tea.C
 			return localCommandResultMsg{Notice: notice}
 		},
 	)
+}
+
+// normalizeMemoCommandErrorMessage 将 memo 命令的底层错误映射为用户可读提示，避免暴露内部 sentinel 文本。
+func normalizeMemoCommandErrorMessage(err error) string {
+	if err == nil {
+		return "memo command failed"
+	}
+	if isGatewayUnsupportedActionError(err) {
+		return "gateway does not support memo commands; please upgrade gateway and client to the latest version"
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return "memo command failed"
+	}
+	return message
 }
 
 // setCurrentWorkdir updates the current workdir only when the value is non-empty and absolute.

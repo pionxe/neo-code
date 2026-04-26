@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"time"
+
+	"neo-code/internal/tools"
 )
 
 // RuntimeEventType 表示运行时事件类型。
@@ -67,6 +69,56 @@ type CompactInput struct {
 	SessionID string
 	// RunID 是运行标识。
 	RunID string
+}
+
+// ExecuteSystemToolInput 表示 gateway.executeSystemTool 动作的下游输入。
+type ExecuteSystemToolInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是会话标识，可选。
+	SessionID string
+	// RunID 是运行标识，可选。
+	RunID string
+	// Workdir 是请求级工作目录覆盖值，可选。
+	Workdir string
+	// ToolName 是要执行的系统工具名。
+	ToolName string
+	// Arguments 是工具参数 JSON 字节串。
+	Arguments []byte
+}
+
+// SessionSkillMutationInput 表示会话技能启停动作输入。
+type SessionSkillMutationInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是目标会话标识。
+	SessionID string
+	// SkillID 是目标技能标识。
+	SkillID string
+}
+
+// ListSessionSkillsInput 表示查询会话激活技能列表动作输入。
+type ListSessionSkillsInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是目标会话标识。
+	SessionID string
+}
+
+// ListAvailableSkillsInput 表示查询可用技能列表动作输入。
+type ListAvailableSkillsInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是可选会话标识，用于附带激活态。
+	SessionID string
 }
 
 // CancelInput 表示 gateway.cancel 动作的下游输入。
@@ -171,12 +223,68 @@ type SessionSummary struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// SkillSource 描述技能来源元数据。
+type SkillSource struct {
+	// Kind 表示技能来源类型（local/builtin）。
+	Kind string `json:"kind"`
+	// RootDir 表示来源根目录。
+	RootDir string `json:"root_dir,omitempty"`
+	// SkillDir 表示技能目录。
+	SkillDir string `json:"skill_dir,omitempty"`
+	// FilePath 表示技能入口文件路径。
+	FilePath string `json:"file_path,omitempty"`
+}
+
+// SkillDescriptor 描述技能元信息。
+type SkillDescriptor struct {
+	// ID 是技能唯一标识。
+	ID string `json:"id"`
+	// Name 是技能展示名称。
+	Name string `json:"name,omitempty"`
+	// Description 是技能说明。
+	Description string `json:"description,omitempty"`
+	// Version 是技能版本号。
+	Version string `json:"version,omitempty"`
+	// Source 是技能来源信息。
+	Source SkillSource `json:"source"`
+	// Scope 是技能激活作用域。
+	Scope string `json:"scope,omitempty"`
+}
+
+// SessionSkillState 描述会话技能状态。
+type SessionSkillState struct {
+	// SkillID 是技能标识。
+	SkillID string `json:"skill_id"`
+	// Missing 表示技能已在会话中激活但当前注册表不可见。
+	Missing bool `json:"missing,omitempty"`
+	// Descriptor 是技能描述信息（可选）。
+	Descriptor *SkillDescriptor `json:"descriptor,omitempty"`
+}
+
+// AvailableSkillState 描述可见技能状态。
+type AvailableSkillState struct {
+	// Descriptor 是技能描述信息。
+	Descriptor SkillDescriptor `json:"descriptor"`
+	// Active 表示该技能在当前会话是否激活。
+	Active bool `json:"active"`
+}
+
 // RuntimePort 定义网关访问运行时编排的下游端口契约。
 type RuntimePort interface {
 	// Run 启动一次运行编排。
 	Run(ctx context.Context, input RunInput) error
 	// Compact 对指定会话触发一次手动压缩。
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
+	// ExecuteSystemTool 执行一次系统工具调用。
+	ExecuteSystemTool(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
+	// ActivateSessionSkill 在指定会话中激活一个技能。
+	ActivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error
+	// DeactivateSessionSkill 在指定会话中停用一个技能。
+	DeactivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error
+	// ListSessionSkills 查询指定会话的激活技能列表。
+	ListSessionSkills(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
+	// ListAvailableSkills 查询当前可用技能列表。
+	ListAvailableSkills(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
 	// ResolvePermission 向运行时提交一次权限审批决策。
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 	// CancelRun 按 run_id 精确取消运行态任务。

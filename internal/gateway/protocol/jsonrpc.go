@@ -24,6 +24,16 @@ const (
 	MethodGatewayRun = "gateway.run"
 	// MethodGatewayCompact 表示通过网关触发一次会话压缩。
 	MethodGatewayCompact = "gateway.compact"
+	// MethodGatewayExecuteSystemTool 表示通过网关触发一次系统工具执行。
+	MethodGatewayExecuteSystemTool = "gateway.executeSystemTool"
+	// MethodGatewayActivateSessionSkill 表示通过网关在会话内激活技能。
+	MethodGatewayActivateSessionSkill = "gateway.activateSessionSkill"
+	// MethodGatewayDeactivateSessionSkill 表示通过网关在会话内停用技能。
+	MethodGatewayDeactivateSessionSkill = "gateway.deactivateSessionSkill"
+	// MethodGatewayListSessionSkills 表示通过网关查询会话激活技能列表。
+	MethodGatewayListSessionSkills = "gateway.listSessionSkills"
+	// MethodGatewayListAvailableSkills 表示通过网关查询可用技能列表。
+	MethodGatewayListAvailableSkills = "gateway.listAvailableSkills"
 	// MethodGatewayCancel 表示取消当前活跃运行。
 	MethodGatewayCancel = "gateway.cancel"
 	// MethodGatewayListSessions 表示查询会话摘要列表。
@@ -168,6 +178,37 @@ type CompactParams struct {
 	RunID     string `json:"run_id,omitempty"`
 }
 
+// ExecuteSystemToolParams 表示 gateway.executeSystemTool 参数。
+type ExecuteSystemToolParams struct {
+	SessionID string          `json:"session_id,omitempty"`
+	RunID     string          `json:"run_id,omitempty"`
+	Workdir   string          `json:"workdir,omitempty"`
+	ToolName  string          `json:"tool_name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
+// ActivateSessionSkillParams 表示 gateway.activateSessionSkill 参数。
+type ActivateSessionSkillParams struct {
+	SessionID string `json:"session_id"`
+	SkillID   string `json:"skill_id"`
+}
+
+// DeactivateSessionSkillParams 表示 gateway.deactivateSessionSkill 参数。
+type DeactivateSessionSkillParams struct {
+	SessionID string `json:"session_id"`
+	SkillID   string `json:"skill_id"`
+}
+
+// ListSessionSkillsParams 表示 gateway.listSessionSkills 参数。
+type ListSessionSkillsParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// ListAvailableSkillsParams 表示 gateway.listAvailableSkills 参数。
+type ListAvailableSkillsParams struct {
+	SessionID string `json:"session_id,omitempty"`
+}
+
 // LoadSessionParams 表示 gateway.loadSession 参数。
 type LoadSessionParams struct {
 	SessionID string `json:"session_id"`
@@ -248,6 +289,53 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.Action = "compact"
 		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayExecuteSystemTool:
+		params, parseErr := decodeExecuteSystemToolParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "execute_system_tool"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayActivateSessionSkill:
+		params, parseErr := decodeActivateSessionSkillParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "activate_session_skill"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayDeactivateSessionSkill:
+		params, parseErr := decodeDeactivateSessionSkillParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "deactivate_session_skill"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListSessionSkills:
+		params, parseErr := decodeListSessionSkillsParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "list_session_skills"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListAvailableSkills:
+		params, parseErr := decodeListAvailableSkillsParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "list_available_skills"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.Payload = params
 		return normalized, nil
 	case MethodGatewayCancel:
@@ -647,6 +735,168 @@ func decodeCompactParams(raw json.RawMessage) (CompactParams, *JSONRPCError) {
 			GatewayCodeMissingRequiredField,
 		)
 	}
+	return params, nil
+}
+
+// decodeExecuteSystemToolParams 对 gateway.executeSystemTool 的 params 执行反序列化与字段校验。
+func decodeExecuteSystemToolParams(raw json.RawMessage) (ExecuteSystemToolParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ExecuteSystemToolParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params ExecuteSystemToolParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return ExecuteSystemToolParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.executeSystemTool",
+			GatewayCodeInvalidFrame,
+		)
+	}
+
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.RunID = strings.TrimSpace(params.RunID)
+	params.Workdir = strings.TrimSpace(params.Workdir)
+	params.ToolName = strings.TrimSpace(params.ToolName)
+	params.Arguments = cloneJSONRawMessage(bytes.TrimSpace(params.Arguments))
+
+	if params.ToolName == "" {
+		return ExecuteSystemToolParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.tool_name",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	return params, nil
+}
+
+// decodeActivateSessionSkillParams 对 gateway.activateSessionSkill 的 params 执行反序列化与字段校验。
+func decodeActivateSessionSkillParams(raw json.RawMessage) (ActivateSessionSkillParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ActivateSessionSkillParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params ActivateSessionSkillParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return ActivateSessionSkillParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.activateSessionSkill",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.SkillID = strings.TrimSpace(params.SkillID)
+	if params.SessionID == "" {
+		return ActivateSessionSkillParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	if params.SkillID == "" {
+		return ActivateSessionSkillParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.skill_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
+}
+
+// decodeDeactivateSessionSkillParams 对 gateway.deactivateSessionSkill 的 params 执行反序列化与字段校验。
+func decodeDeactivateSessionSkillParams(raw json.RawMessage) (DeactivateSessionSkillParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return DeactivateSessionSkillParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params DeactivateSessionSkillParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return DeactivateSessionSkillParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.deactivateSessionSkill",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.SkillID = strings.TrimSpace(params.SkillID)
+	if params.SessionID == "" {
+		return DeactivateSessionSkillParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	if params.SkillID == "" {
+		return DeactivateSessionSkillParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.skill_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
+}
+
+// decodeListSessionSkillsParams 对 gateway.listSessionSkills 的 params 执行反序列化与字段校验。
+func decodeListSessionSkillsParams(raw json.RawMessage) (ListSessionSkillsParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ListSessionSkillsParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params ListSessionSkillsParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return ListSessionSkillsParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.listSessionSkills",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	if params.SessionID == "" {
+		return ListSessionSkillsParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
+}
+
+// decodeListAvailableSkillsParams 对 gateway.listAvailableSkills 的 params 执行反序列化与字段清理。
+func decodeListAvailableSkillsParams(raw json.RawMessage) (ListAvailableSkillsParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ListAvailableSkillsParams{}, nil
+	}
+
+	var params ListAvailableSkillsParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return ListAvailableSkillsParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.listAvailableSkills",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
 	return params, nil
 }
 

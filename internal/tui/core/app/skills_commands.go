@@ -153,8 +153,8 @@ func normalizeSkillCommandError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, tuiservices.ErrUnsupportedActionInGatewayMode) {
-		return errors.New("gateway 模式暂不支持 skills 管理，请切换到 local runtime")
+	if isGatewayUnsupportedActionError(err) {
+		return errors.New("gateway does not support skills management; please upgrade gateway and client to the latest version")
 	}
 	return err
 }

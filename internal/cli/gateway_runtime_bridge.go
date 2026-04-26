@@ -13,6 +13,8 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/skills"
+	"neo-code/internal/tools"
 )
 
 const bridgeLocalSubjectID = "local_admin"
@@ -113,6 +115,84 @@ func (b *gatewayRuntimePortBridge) Compact(ctx context.Context, input gateway.Co
 		TranscriptID:   result.TranscriptID,
 		TranscriptPath: result.TranscriptPath,
 	}, nil
+}
+
+// ExecuteSystemTool 将 gateway.executeSystemTool 请求映射到 runtime 系统工具执行能力。
+func (b *gatewayRuntimePortBridge) ExecuteSystemTool(
+	ctx context.Context,
+	input gateway.ExecuteSystemToolInput,
+) (tools.ToolResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return tools.ToolResult{}, err
+	}
+
+	return b.runtime.ExecuteSystemTool(ctx, agentruntime.SystemToolInput{
+		SessionID: strings.TrimSpace(input.SessionID),
+		RunID:     strings.TrimSpace(input.RunID),
+		Workdir:   strings.TrimSpace(input.Workdir),
+		ToolName:  strings.TrimSpace(input.ToolName),
+		Arguments: append([]byte(nil), input.Arguments...),
+	})
+}
+
+// ActivateSessionSkill 将 gateway.activateSessionSkill 请求映射到 runtime 会话技能激活能力。
+func (b *gatewayRuntimePortBridge) ActivateSessionSkill(
+	ctx context.Context,
+	input gateway.SessionSkillMutationInput,
+) error {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return err
+	}
+	return b.runtime.ActivateSessionSkill(
+		ctx,
+		strings.TrimSpace(input.SessionID),
+		strings.TrimSpace(input.SkillID),
+	)
+}
+
+// DeactivateSessionSkill 将 gateway.deactivateSessionSkill 请求映射到 runtime 会话技能停用能力。
+func (b *gatewayRuntimePortBridge) DeactivateSessionSkill(
+	ctx context.Context,
+	input gateway.SessionSkillMutationInput,
+) error {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return err
+	}
+	return b.runtime.DeactivateSessionSkill(
+		ctx,
+		strings.TrimSpace(input.SessionID),
+		strings.TrimSpace(input.SkillID),
+	)
+}
+
+// ListSessionSkills 查询会话激活技能列表，并映射为 gateway 契约输出。
+func (b *gatewayRuntimePortBridge) ListSessionSkills(
+	ctx context.Context,
+	input gateway.ListSessionSkillsInput,
+) ([]gateway.SessionSkillState, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return nil, err
+	}
+	states, err := b.runtime.ListSessionSkills(ctx, strings.TrimSpace(input.SessionID))
+	if err != nil {
+		return nil, err
+	}
+	return convertRuntimeSessionSkillStates(states), nil
+}
+
+// ListAvailableSkills 查询可用技能列表，并映射为 gateway 契约输出。
+func (b *gatewayRuntimePortBridge) ListAvailableSkills(
+	ctx context.Context,
+	input gateway.ListAvailableSkillsInput,
+) ([]gateway.AvailableSkillState, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return nil, err
+	}
+	states, err := b.runtime.ListAvailableSkills(ctx, strings.TrimSpace(input.SessionID))
+	if err != nil {
+		return nil, err
+	}
+	return convertRuntimeAvailableSkillStates(states), nil
 }
 
 // ResolvePermission 将网关审批决策转换为 runtime 审批输入并提交。
@@ -363,6 +443,63 @@ func convertRuntimeSessionToGatewaySession(session agentsession.Session) gateway
 		Workdir:   strings.TrimSpace(session.Workdir),
 		Messages:  convertSessionMessages(session.Messages),
 	}
+}
+
+// convertRuntimeSkillSource 将 runtime 技能来源映射为 gateway 输出结构。
+func convertRuntimeSkillSource(source skills.Source) gateway.SkillSource {
+	return gateway.SkillSource{
+		Kind:     strings.TrimSpace(string(source.Kind)),
+		RootDir:  strings.TrimSpace(source.RootDir),
+		SkillDir: strings.TrimSpace(source.SkillDir),
+		FilePath: strings.TrimSpace(source.FilePath),
+	}
+}
+
+// convertRuntimeSkillDescriptor 将 runtime 技能描述映射为 gateway 输出结构。
+func convertRuntimeSkillDescriptor(descriptor skills.Descriptor) gateway.SkillDescriptor {
+	return gateway.SkillDescriptor{
+		ID:          strings.TrimSpace(descriptor.ID),
+		Name:        strings.TrimSpace(descriptor.Name),
+		Description: strings.TrimSpace(descriptor.Description),
+		Version:     strings.TrimSpace(descriptor.Version),
+		Source:      convertRuntimeSkillSource(descriptor.Source),
+		Scope:       strings.TrimSpace(string(descriptor.Scope)),
+	}
+}
+
+// convertRuntimeSessionSkillStates 将 runtime 会话技能状态映射为 gateway 契约结构。
+func convertRuntimeSessionSkillStates(states []agentruntime.SessionSkillState) []gateway.SessionSkillState {
+	if len(states) == 0 {
+		return nil
+	}
+	converted := make([]gateway.SessionSkillState, 0, len(states))
+	for _, state := range states {
+		item := gateway.SessionSkillState{
+			SkillID: strings.TrimSpace(state.SkillID),
+			Missing: state.Missing,
+		}
+		if state.Descriptor != nil {
+			descriptor := convertRuntimeSkillDescriptor(*state.Descriptor)
+			item.Descriptor = &descriptor
+		}
+		converted = append(converted, item)
+	}
+	return converted
+}
+
+// convertRuntimeAvailableSkillStates 将 runtime 可用技能状态映射为 gateway 契约结构。
+func convertRuntimeAvailableSkillStates(states []agentruntime.AvailableSkillState) []gateway.AvailableSkillState {
+	if len(states) == 0 {
+		return nil
+	}
+	converted := make([]gateway.AvailableSkillState, 0, len(states))
+	for _, state := range states {
+		converted = append(converted, gateway.AvailableSkillState{
+			Descriptor: convertRuntimeSkillDescriptor(state.Descriptor),
+			Active:     state.Active,
+		})
+	}
+	return converted
 }
 
 // renderSessionMessageContent 将 provider 多段内容渲染为对外展示的单段文本摘要。

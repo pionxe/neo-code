@@ -407,12 +407,48 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 
 // buildSkillsRegistry 负责以最小代价初始化本地 skills registry，refresh 失败时仅记录日志并保留 registry 实例。
 func buildSkillsRegistry(ctx context.Context, baseDir string) skills.Registry {
-	root := filepath.Join(baseDir, "skills")
+	primaryRoot := filepath.Join(baseDir, "skills")
+	root := primaryRoot
+	if fallbackRoot, ok := resolveCodexSkillsFallbackRoot(baseDir, primaryRoot); ok {
+		root = fallbackRoot
+		log.Printf("skills: primary root %s not found, fallback to %s", primaryRoot, root)
+	}
 	registry := skills.NewRegistry(skills.NewLocalLoader(root))
 	if err := registry.Refresh(ctx); err != nil {
 		log.Printf("skills: initialize registry from %s failed: %v", root, err)
 	}
 	return registry
+}
+
+// resolveCodexSkillsFallbackRoot 在 neocode 默认目录缺失时，回退到同级 codex skills 目录。
+func resolveCodexSkillsFallbackRoot(baseDir string, primaryRoot string) (string, bool) {
+	if isExistingDirectory(primaryRoot) {
+		return "", false
+	}
+
+	normalizedBaseDir := strings.TrimSpace(baseDir)
+	if normalizedBaseDir == "" {
+		return "", false
+	}
+	cleanBaseDir := filepath.Clean(normalizedBaseDir)
+	if !strings.EqualFold(filepath.Base(cleanBaseDir), ".neocode") {
+		return "", false
+	}
+
+	fallbackRoot := filepath.Join(filepath.Dir(cleanBaseDir), ".codex", "skills")
+	if !isExistingDirectory(fallbackRoot) {
+		return "", false
+	}
+	return fallbackRoot, true
+}
+
+// isExistingDirectory 判断路径是否存在且为目录。
+func isExistingDirectory(path string) bool {
+	info, err := os.Stat(strings.TrimSpace(path))
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 // buildMCPAgentExposureRules 将配置层的 agent 过滤规则转换为 tools/mcp 层输入。

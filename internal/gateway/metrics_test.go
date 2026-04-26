@@ -5,6 +5,8 @@ import "testing"
 func TestGatewayMetricsSnapshot(t *testing.T) {
 	metrics := NewGatewayMetrics()
 	metrics.IncRequests("ipc", "gateway.ping", "ok")
+	metrics.IncRequests("ipc", "gateway.executeSystemTool", "ok")
+	metrics.IncRequests("ipc", "gateway.listAvailableSkills", "ok")
 	metrics.IncAuthFailures("ws", "unauthorized")
 	metrics.IncACLDenied("http", "wake.openUrl")
 	metrics.SetConnectionsActive("ws", 2)
@@ -13,6 +15,12 @@ func TestGatewayMetricsSnapshot(t *testing.T) {
 	snapshot := metrics.Snapshot()
 	if snapshot["gateway_requests_total"]["ipc|gateway.ping|ok"] != 1 {
 		t.Fatalf("requests snapshot mismatch: %#v", snapshot["gateway_requests_total"])
+	}
+	if snapshot["gateway_requests_total"]["ipc|gateway.executesystemtool|ok"] != 1 {
+		t.Fatalf("executeSystemTool snapshot mismatch: %#v", snapshot["gateway_requests_total"])
+	}
+	if snapshot["gateway_requests_total"]["ipc|gateway.listavailableskills|ok"] != 1 {
+		t.Fatalf("listAvailableSkills snapshot mismatch: %#v", snapshot["gateway_requests_total"])
 	}
 	if snapshot["gateway_auth_failures_total"]["ws|unauthorized"] != 1 {
 		t.Fatalf("auth failures snapshot mismatch: %#v", snapshot["gateway_auth_failures_total"])

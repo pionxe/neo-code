@@ -12,6 +12,7 @@ import (
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/tools"
 )
 
 const (
@@ -245,6 +246,141 @@ func buildMethodExamples() ([]methodExample, error) {
 		gateway.ErrorCodeTimeout.String(),
 	)
 
+	executeSystemToolRequest := buildRequest("req-exec-tool-1", protocol.MethodGatewayExecuteSystemTool, protocol.ExecuteSystemToolParams{
+		SessionID: sessionID,
+		RunID:     runID,
+		Workdir:   "C:/workspace/demo",
+		ToolName:  tools.ToolNameMemoList,
+		Arguments: json.RawMessage("{}"),
+	})
+	executeSystemToolSuccess := buildSuccessResponse("req-exec-tool-1", gateway.MessageFrame{
+		Type:      gateway.FrameTypeAck,
+		Action:    gateway.FrameActionExecuteSystemTool,
+		RequestID: "req-exec-tool-1",
+		SessionID: sessionID,
+		RunID:     runID,
+		Payload: tools.ToolResult{
+			Name:    tools.ToolNameMemoList,
+			Content: "[memo] listed successfully",
+		},
+	})
+	executeSystemToolFailure := buildFailureResponse(
+		"req-exec-tool-1",
+		protocol.MapGatewayCodeToJSONRPCCode(gateway.ErrorCodeInvalidAction.String()),
+		"invalid execute_system_tool tool_name",
+		gateway.ErrorCodeInvalidAction.String(),
+	)
+
+	activateSkillRequest := buildRequest("req-skill-on-1", protocol.MethodGatewayActivateSessionSkill, protocol.ActivateSessionSkillParams{
+		SessionID: sessionID,
+		SkillID:   "go-review",
+	})
+	activateSkillSuccess := buildSuccessResponse("req-skill-on-1", gateway.MessageFrame{
+		Type:      gateway.FrameTypeAck,
+		Action:    gateway.FrameActionActivateSessionSkill,
+		RequestID: "req-skill-on-1",
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"skill_id":   "go-review",
+			"message":    "skill activated",
+		},
+	})
+	activateSkillFailure := buildFailureResponse(
+		"req-skill-on-1",
+		protocol.MapGatewayCodeToJSONRPCCode(gateway.ErrorCodeMissingRequiredField.String()),
+		"missing required field: params.skill_id",
+		gateway.ErrorCodeMissingRequiredField.String(),
+	)
+
+	deactivateSkillRequest := buildRequest("req-skill-off-1", protocol.MethodGatewayDeactivateSessionSkill, protocol.DeactivateSessionSkillParams{
+		SessionID: sessionID,
+		SkillID:   "go-review",
+	})
+	deactivateSkillSuccess := buildSuccessResponse("req-skill-off-1", gateway.MessageFrame{
+		Type:      gateway.FrameTypeAck,
+		Action:    gateway.FrameActionDeactivateSessionSkill,
+		RequestID: "req-skill-off-1",
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"skill_id":   "go-review",
+			"message":    "skill deactivated",
+		},
+	})
+	deactivateSkillFailure := buildFailureResponse(
+		"req-skill-off-1",
+		protocol.MapGatewayCodeToJSONRPCCode(gateway.ErrorCodeMissingRequiredField.String()),
+		"missing required field: params.skill_id",
+		gateway.ErrorCodeMissingRequiredField.String(),
+	)
+
+	listSessionSkillsRequest := buildRequest("req-skill-active-1", protocol.MethodGatewayListSessionSkills, protocol.ListSessionSkillsParams{
+		SessionID: sessionID,
+	})
+	listSessionSkillsSuccess := buildSuccessResponse("req-skill-active-1", gateway.MessageFrame{
+		Type:      gateway.FrameTypeAck,
+		Action:    gateway.FrameActionListSessionSkills,
+		RequestID: "req-skill-active-1",
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"skills": []gateway.SessionSkillState{
+				{
+					SkillID: "go-review",
+					Descriptor: &gateway.SkillDescriptor{
+						ID:          "go-review",
+						Name:        "Go Review",
+						Description: "Review Go code with actionable findings.",
+						Version:     "1.0.0",
+						Source: gateway.SkillSource{
+							Kind: "local",
+						},
+						Scope: "session",
+					},
+				},
+			},
+		},
+	})
+	listSessionSkillsFailure := buildFailureResponse(
+		"req-skill-active-1",
+		protocol.MapGatewayCodeToJSONRPCCode(gateway.ErrorCodeMissingRequiredField.String()),
+		"missing required field: params.session_id",
+		gateway.ErrorCodeMissingRequiredField.String(),
+	)
+
+	listAvailableSkillsRequest := buildRequest("req-skill-list-1", protocol.MethodGatewayListAvailableSkills, protocol.ListAvailableSkillsParams{
+		SessionID: sessionID,
+	})
+	listAvailableSkillsSuccess := buildSuccessResponse("req-skill-list-1", gateway.MessageFrame{
+		Type:      gateway.FrameTypeAck,
+		Action:    gateway.FrameActionListAvailableSkills,
+		RequestID: "req-skill-list-1",
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"skills": []gateway.AvailableSkillState{
+				{
+					Descriptor: gateway.SkillDescriptor{
+						ID:          "go-review",
+						Name:        "Go Review",
+						Description: "Review Go code with actionable findings.",
+						Version:     "1.0.0",
+						Source: gateway.SkillSource{
+							Kind: "local",
+						},
+						Scope: "session",
+					},
+					Active: true,
+				},
+			},
+		},
+	})
+	listAvailableSkillsFailure := buildFailureResponse(
+		"req-skill-list-1",
+		protocol.MapGatewayCodeToJSONRPCCode(gateway.ErrorCodeAccessDenied.String()),
+		"access denied",
+		gateway.ErrorCodeAccessDenied.String(),
+	)
+
 	cancelRequest := buildRequest("req-cancel-1", protocol.MethodGatewayCancel, protocol.CancelParams{
 		SessionID: sessionID,
 		RunID:     runID,
@@ -423,6 +559,39 @@ func buildMethodExamples() ([]methodExample, error) {
 			Request: compactRequest,
 			Success: compactSuccess,
 			Failure: compactFailure,
+		},
+		{
+			Method:  protocol.MethodGatewayExecuteSystemTool,
+			Request: executeSystemToolRequest,
+			Success: executeSystemToolSuccess,
+			Failure: executeSystemToolFailure,
+			Notes: []string{
+				"`tool_name` 在网关层按白名单校验，当前仅允许 memo 系统工具。",
+			},
+		},
+		{
+			Method:  protocol.MethodGatewayActivateSessionSkill,
+			Request: activateSkillRequest,
+			Success: activateSkillSuccess,
+			Failure: activateSkillFailure,
+		},
+		{
+			Method:  protocol.MethodGatewayDeactivateSessionSkill,
+			Request: deactivateSkillRequest,
+			Success: deactivateSkillSuccess,
+			Failure: deactivateSkillFailure,
+		},
+		{
+			Method:  protocol.MethodGatewayListSessionSkills,
+			Request: listSessionSkillsRequest,
+			Success: listSessionSkillsSuccess,
+			Failure: listSessionSkillsFailure,
+		},
+		{
+			Method:  protocol.MethodGatewayListAvailableSkills,
+			Request: listAvailableSkillsRequest,
+			Success: listAvailableSkillsSuccess,
+			Failure: listAvailableSkillsFailure,
 		},
 		{
 			Method:  protocol.MethodGatewayCancel,

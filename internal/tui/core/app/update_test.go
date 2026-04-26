@@ -16,6 +16,7 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
@@ -2271,6 +2272,58 @@ func TestHandleMemoCommandsRouteToSystemTools(t *testing.T) {
 	}
 }
 
+func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "legacy sentinel",
+			err:  agentruntime.ErrUnsupportedActionInGatewayMode,
+		},
+		{
+			name: "gateway rpc unsupported_action",
+			err: &agentruntime.GatewayRPCError{
+				Method:      protocol.MethodGatewayExecuteSystemTool,
+				Code:        protocol.JSONRPCCodeMethodNotFound,
+				GatewayCode: protocol.GatewayCodeUnsupportedAction,
+				Message:     "method not found",
+			},
+		},
+		{
+			name: "gateway rpc method_not_found",
+			err: &agentruntime.GatewayRPCError{
+				Method:  protocol.MethodGatewayExecuteSystemTool,
+				Code:    protocol.JSONRPCCodeMethodNotFound,
+				Message: "method not found",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			app, runtime := newTestApp(t)
+			runtime.systemToolErr = tt.err
+
+			cmd := app.handleMemoCommand()
+			if cmd == nil {
+				t.Fatalf("expected /memo command")
+			}
+			model, _ := app.Update(cmd())
+			app = model.(App)
+
+			status := strings.ToLower(strings.TrimSpace(app.state.StatusText))
+			if strings.Contains(status, "unsupported_action_in_gateway_mode") {
+				t.Fatalf("expected sentinel to be hidden from UI, got %q", app.state.StatusText)
+			}
+			if !strings.Contains(status, "gateway") {
+				t.Fatalf("expected gateway upgrade hint, got %q", app.state.StatusText)
+			}
+		})
+	}
+}
+
 func TestHandleRememberAndForgetValidation(t *testing.T) {
 	app, _ := newTestApp(t)
 
@@ -2383,7 +2436,12 @@ func TestHandleSkillCommandValidationAndGatewayErrors(t *testing.T) {
 		t.Fatalf("expected /skills usage error, got %q", app.state.StatusText)
 	}
 
-	runtime.activateSkillErr = agentruntime.ErrUnsupportedActionInGatewayMode
+	runtime.activateSkillErr = &agentruntime.GatewayRPCError{
+		Method:      protocol.MethodGatewayActivateSessionSkill,
+		Code:        protocol.JSONRPCCodeMethodNotFound,
+		GatewayCode: protocol.GatewayCodeUnsupportedAction,
+		Message:     "method not found",
+	}
 	handled, cmd = app.handleImmediateSlashCommand("/skill use go-review")
 	if !handled || cmd == nil {
 		t.Fatalf("expected /skill use to produce cmd on gateway error")

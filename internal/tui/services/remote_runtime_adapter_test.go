@@ -154,18 +154,110 @@ func TestRemoteRuntimeAdapterSubmitFailFastOnBindStreamError(t *testing.T) {
 	}
 }
 
-func TestRemoteRuntimeAdapterExecuteSystemToolUnsupported(t *testing.T) {
-	rpcClient := &stubRemoteRPCClient{notifications: make(chan gatewayRPCNotification)}
-	streamClient := &stubRemoteStreamClient{events: make(chan RuntimeEvent)}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
-	t.Cleanup(func() { _ = adapter.Close() })
+func TestRemoteRuntimeAdapterExecuteSystemTool(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		rpcClient := &stubRemoteRPCClient{
+			frames: map[string]gateway.MessageFrame{
+				protocol.MethodGatewayExecuteSystemTool: {
+					Type:   gateway.FrameTypeAck,
+					Action: gateway.FrameActionExecuteSystemTool,
+					Payload: tools.ToolResult{
+						Name:    "memo_list",
+						Content: "memo ok",
+					},
+				},
+			},
+			notifications: make(chan gatewayRPCNotification),
+		}
+		streamClient := &stubRemoteStreamClient{events: make(chan RuntimeEvent)}
+		adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
+		t.Cleanup(func() { _ = adapter.Close() })
 
-	_, err := adapter.ExecuteSystemTool(context.Background(), SystemToolInput{
-		ToolName: "bash",
+		result, err := adapter.ExecuteSystemTool(context.Background(), SystemToolInput{
+			SessionID: "session-1",
+			RunID:     "run-1",
+			Workdir:   "/repo",
+			ToolName:  "memo_list",
+			Arguments: []byte("null"),
+		})
+		if err != nil {
+			t.Fatalf("ExecuteSystemTool() error = %v", err)
+		}
+		if result.Content != "memo ok" || result.Name != "memo_list" {
+			t.Fatalf("result = %#v, want memo_list/memo ok", result)
+		}
+		if rpcClient.authCalls != 1 {
+			t.Fatalf("authenticate call count = %d, want %d", rpcClient.authCalls, 1)
+		}
+		params, ok := rpcClient.snapshotParams()[protocol.MethodGatewayExecuteSystemTool].(protocol.ExecuteSystemToolParams)
+		if !ok {
+			t.Fatalf(
+				"executeSystemTool params type = %T, want protocol.ExecuteSystemToolParams",
+				rpcClient.snapshotParams()[protocol.MethodGatewayExecuteSystemTool],
+			)
+		}
+		if params.SessionID != "session-1" || params.RunID != "run-1" || params.Workdir != "/repo" || params.ToolName != "memo_list" {
+			t.Fatalf("unexpected executeSystemTool params: %#v", params)
+		}
+		if string(params.Arguments) != "{}" {
+			t.Fatalf("executeSystemTool arguments = %s, want {}", string(params.Arguments))
+		}
 	})
-	if err == nil || !errors.Is(err, ErrUnsupportedActionInGatewayMode) {
-		t.Fatalf("expected unsupported_action_in_gateway_mode, got %v", err)
-	}
+
+	t.Run("gateway unsupported action passthrough", func(t *testing.T) {
+		rpcClient := &stubRemoteRPCClient{
+			callErrs: map[string]error{
+				protocol.MethodGatewayExecuteSystemTool: &GatewayRPCError{
+					Method:      protocol.MethodGatewayExecuteSystemTool,
+					Code:        protocol.JSONRPCCodeMethodNotFound,
+					GatewayCode: protocol.GatewayCodeUnsupportedAction,
+					Message:     "method not found",
+				},
+			},
+			notifications: make(chan gatewayRPCNotification),
+		}
+		streamClient := &stubRemoteStreamClient{events: make(chan RuntimeEvent)}
+		adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
+		t.Cleanup(func() { _ = adapter.Close() })
+
+		_, err := adapter.ExecuteSystemTool(context.Background(), SystemToolInput{
+			ToolName: "memo_list",
+		})
+		var rpcErr *GatewayRPCError
+		if !errors.As(err, &rpcErr) {
+			t.Fatalf("expected GatewayRPCError passthrough, got %v", err)
+		}
+		if rpcErr.Code != protocol.JSONRPCCodeMethodNotFound || rpcErr.GatewayCode != protocol.GatewayCodeUnsupportedAction {
+			t.Fatalf("unexpected rpc error payload: %#v", rpcErr)
+		}
+	})
+
+	t.Run("gateway method not found passthrough", func(t *testing.T) {
+		rpcClient := &stubRemoteRPCClient{
+			callErrs: map[string]error{
+				protocol.MethodGatewayExecuteSystemTool: &GatewayRPCError{
+					Method:  protocol.MethodGatewayExecuteSystemTool,
+					Code:    protocol.JSONRPCCodeMethodNotFound,
+					Message: "method not found",
+				},
+			},
+			notifications: make(chan gatewayRPCNotification),
+		}
+		streamClient := &stubRemoteStreamClient{events: make(chan RuntimeEvent)}
+		adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
+		t.Cleanup(func() { _ = adapter.Close() })
+
+		_, err := adapter.ExecuteSystemTool(context.Background(), SystemToolInput{
+			ToolName: "memo_list",
+		})
+		var rpcErr *GatewayRPCError
+		if !errors.As(err, &rpcErr) {
+			t.Fatalf("expected GatewayRPCError passthrough, got %v", err)
+		}
+		if rpcErr.Code != protocol.JSONRPCCodeMethodNotFound || rpcErr.GatewayCode != "" {
+			t.Fatalf("unexpected rpc error payload: %#v", rpcErr)
+		}
+	})
 }
 
 func TestRemoteRuntimeAdapterLoadSessionMinimalMapping(t *testing.T) {

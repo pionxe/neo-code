@@ -19,6 +19,7 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/adapters/urlscheme"
+	"neo-code/internal/tools"
 	"neo-code/internal/updater"
 )
 
@@ -1653,6 +1654,32 @@ func (stubRuntimePort) Run(context.Context, gateway.RunInput) error { return nil
 
 func (stubRuntimePort) Compact(context.Context, gateway.CompactInput) (gateway.CompactResult, error) {
 	return gateway.CompactResult{}, nil
+}
+
+func (stubRuntimePort) ExecuteSystemTool(context.Context, gateway.ExecuteSystemToolInput) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
+}
+
+func (stubRuntimePort) ActivateSessionSkill(context.Context, gateway.SessionSkillMutationInput) error {
+	return nil
+}
+
+func (stubRuntimePort) DeactivateSessionSkill(context.Context, gateway.SessionSkillMutationInput) error {
+	return nil
+}
+
+func (stubRuntimePort) ListSessionSkills(
+	context.Context,
+	gateway.ListSessionSkillsInput,
+) ([]gateway.SessionSkillState, error) {
+	return nil, nil
+}
+
+func (stubRuntimePort) ListAvailableSkills(
+	context.Context,
+	gateway.ListAvailableSkillsInput,
+) ([]gateway.AvailableSkillState, error) {
+	return nil, nil
 }
 
 func (stubRuntimePort) ResolvePermission(context.Context, gateway.PermissionResolutionInput) error {

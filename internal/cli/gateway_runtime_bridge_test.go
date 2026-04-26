@@ -11,6 +11,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 )
 
@@ -20,18 +21,37 @@ type runtimeStub struct {
 	compactInput    agentruntime.CompactInput
 	compactResult   agentruntime.CompactResult
 	compactErr      error
+	systemToolInput agentruntime.SystemToolInput
+	systemToolRes   tools.ToolResult
+	systemToolErr   error
 	permissionInput agentruntime.PermissionResolutionInput
 	permissionErr   error
-	cancelReturn    bool
-	eventsCh        chan agentruntime.RuntimeEvent
-	sessionList     []agentsession.Summary
-	listErr         error
-	loadID          string
-	loadSession     agentsession.Session
-	loadErr         error
-	createID        string
-	createSession   agentsession.Session
-	createErr       error
+	activateSession struct {
+		sessionID string
+		skillID   string
+	}
+	activateSessionErr error
+	deactivateSession  struct {
+		sessionID string
+		skillID   string
+	}
+	deactivateSessionErr  error
+	sessionSkills         []agentruntime.SessionSkillState
+	sessionSkillsErr      error
+	listSessionSkillsID   string
+	availableSkills       []agentruntime.AvailableSkillState
+	availableSkillsErr    error
+	listAvailableSkillsID string
+	cancelReturn          bool
+	eventsCh              chan agentruntime.RuntimeEvent
+	sessionList           []agentsession.Summary
+	listErr               error
+	loadID                string
+	loadSession           agentsession.Session
+	loadErr               error
+	createID              string
+	createSession         agentsession.Session
+	createErr             error
 }
 
 const testBridgeSubjectID = bridgeLocalSubjectID
@@ -54,8 +74,9 @@ func (s *runtimeStub) Compact(_ context.Context, input agentruntime.CompactInput
 	return s.compactResult, s.compactErr
 }
 
-func (s *runtimeStub) ExecuteSystemTool(context.Context, agentruntime.SystemToolInput) (tools.ToolResult, error) {
-	return tools.ToolResult{}, nil
+func (s *runtimeStub) ExecuteSystemTool(_ context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	s.systemToolInput = input
+	return s.systemToolRes, s.systemToolErr
 }
 
 func (s *runtimeStub) ResolvePermission(_ context.Context, input agentruntime.PermissionResolutionInput) error {
@@ -89,20 +110,26 @@ func (s *runtimeStub) CreateSession(_ context.Context, id string) (agentsession.
 	return s.createSession, s.createErr
 }
 
-func (s *runtimeStub) ActivateSessionSkill(context.Context, string, string) error {
-	return nil
+func (s *runtimeStub) ActivateSessionSkill(_ context.Context, sessionID string, skillID string) error {
+	s.activateSession.sessionID = sessionID
+	s.activateSession.skillID = skillID
+	return s.activateSessionErr
 }
 
-func (s *runtimeStub) DeactivateSessionSkill(context.Context, string, string) error {
-	return nil
+func (s *runtimeStub) DeactivateSessionSkill(_ context.Context, sessionID string, skillID string) error {
+	s.deactivateSession.sessionID = sessionID
+	s.deactivateSession.skillID = skillID
+	return s.deactivateSessionErr
 }
 
-func (s *runtimeStub) ListSessionSkills(context.Context, string) ([]agentruntime.SessionSkillState, error) {
-	return nil, nil
+func (s *runtimeStub) ListSessionSkills(_ context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	s.listSessionSkillsID = sessionID
+	return s.sessionSkills, s.sessionSkillsErr
 }
 
-func (s *runtimeStub) ListAvailableSkills(context.Context, string) ([]agentruntime.AvailableSkillState, error) {
-	return nil, nil
+func (s *runtimeStub) ListAvailableSkills(_ context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
+	s.listAvailableSkillsID = sessionID
+	return s.availableSkills, s.availableSkillsErr
 }
 
 type runtimeWithoutCreator struct {
@@ -172,6 +199,37 @@ func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
 	if _, err := nilBridge.Compact(context.Background(), gateway.CompactInput{}); err == nil {
 		t.Fatal("expected compact error for nil bridge")
 	}
+	if _, err := nilBridge.ExecuteSystemTool(context.Background(), gateway.ExecuteSystemToolInput{
+		SubjectID: testBridgeSubjectID,
+		ToolName:  "memo_list",
+	}); err == nil {
+		t.Fatal("expected execute_system_tool error for nil bridge")
+	}
+	if err := nilBridge.ActivateSessionSkill(context.Background(), gateway.SessionSkillMutationInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		SkillID:   "go-review",
+	}); err == nil {
+		t.Fatal("expected activate_session_skill error for nil bridge")
+	}
+	if err := nilBridge.DeactivateSessionSkill(context.Background(), gateway.SessionSkillMutationInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		SkillID:   "go-review",
+	}); err == nil {
+		t.Fatal("expected deactivate_session_skill error for nil bridge")
+	}
+	if _, err := nilBridge.ListSessionSkills(context.Background(), gateway.ListSessionSkillsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	}); err == nil {
+		t.Fatal("expected list_session_skills error for nil bridge")
+	}
+	if _, err := nilBridge.ListAvailableSkills(context.Background(), gateway.ListAvailableSkillsInput{
+		SubjectID: testBridgeSubjectID,
+	}); err == nil {
+		t.Fatal("expected list_available_skills error for nil bridge")
+	}
 	if err := nilBridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{}); err == nil {
 		t.Fatal("expected resolve_permission error for nil bridge")
 	}
@@ -207,6 +265,45 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 			TriggerMode:    "manual",
 			TranscriptID:   "tx-1",
 			TranscriptPath: "/tmp/tx-1.md",
+		},
+		systemToolRes: tools.ToolResult{
+			ToolCallID: "call-system-1",
+			Name:       "memo_list",
+			Content:    "memo ok",
+		},
+		sessionSkills: []agentruntime.SessionSkillState{
+			{
+				SkillID: "go-review",
+				Descriptor: &skills.Descriptor{
+					ID:          "go-review",
+					Name:        "Go Review",
+					Description: "Review Go code",
+					Version:     "v1",
+					Source: skills.Source{
+						Kind: skills.SourceKindLocal,
+					},
+					Scope: skills.ScopeSession,
+				},
+			},
+			{
+				SkillID: "missing-skill",
+				Missing: true,
+			},
+		},
+		availableSkills: []agentruntime.AvailableSkillState{
+			{
+				Descriptor: skills.Descriptor{
+					ID:          "go-review",
+					Name:        "Go Review",
+					Description: "Review Go code",
+					Version:     "v1",
+					Source: skills.Source{
+						Kind: skills.SourceKindLocal,
+					},
+					Scope: skills.ScopeSession,
+				},
+				Active: true,
+			},
 		},
 		sessionList: []agentsession.Summary{
 			{
@@ -293,6 +390,86 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	}
 	if !compactResult.Applied || compactResult.BeforeChars != 200 || compactResult.AfterChars != 100 || compactResult.SavedRatio != 0.5 {
 		t.Fatalf("compact result = %#v", compactResult)
+	}
+
+	systemToolResult, err := bridge.ExecuteSystemTool(context.Background(), gateway.ExecuteSystemToolInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+		RunID:     " run-1 ",
+		Workdir:   " /tmp/work ",
+		ToolName:  " memo_list ",
+		Arguments: []byte(`{"limit":10}`),
+	})
+	if err != nil {
+		t.Fatalf("execute_system_tool: %v", err)
+	}
+	if stub.systemToolInput.SessionID != "session-1" || stub.systemToolInput.RunID != "run-1" {
+		t.Fatalf("system tool input ids = %#v, want trimmed session/run ids", stub.systemToolInput)
+	}
+	if stub.systemToolInput.Workdir != "/tmp/work" || stub.systemToolInput.ToolName != "memo_list" {
+		t.Fatalf("system tool input = %#v, want trimmed workdir/tool_name", stub.systemToolInput)
+	}
+	if string(stub.systemToolInput.Arguments) != `{"limit":10}` {
+		t.Fatalf("system tool arguments = %s, want {\"limit\":10}", string(stub.systemToolInput.Arguments))
+	}
+	if systemToolResult.Content != "memo ok" || systemToolResult.Name != "memo_list" {
+		t.Fatalf("system tool result = %#v, want stubbed result", systemToolResult)
+	}
+
+	if err := bridge.ActivateSessionSkill(context.Background(), gateway.SessionSkillMutationInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+		SkillID:   " go-review ",
+	}); err != nil {
+		t.Fatalf("activate_session_skill: %v", err)
+	}
+	if stub.activateSession.sessionID != "session-1" || stub.activateSession.skillID != "go-review" {
+		t.Fatalf("activate skill input = %#v, want trimmed session/skill ids", stub.activateSession)
+	}
+
+	if err := bridge.DeactivateSessionSkill(context.Background(), gateway.SessionSkillMutationInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+		SkillID:   " go-review ",
+	}); err != nil {
+		t.Fatalf("deactivate_session_skill: %v", err)
+	}
+	if stub.deactivateSession.sessionID != "session-1" || stub.deactivateSession.skillID != "go-review" {
+		t.Fatalf("deactivate skill input = %#v, want trimmed session/skill ids", stub.deactivateSession)
+	}
+
+	sessionSkills, err := bridge.ListSessionSkills(context.Background(), gateway.ListSessionSkillsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+	})
+	if err != nil {
+		t.Fatalf("list_session_skills: %v", err)
+	}
+	if stub.listSessionSkillsID != "session-1" {
+		t.Fatalf("list session skills session_id = %q, want %q", stub.listSessionSkillsID, "session-1")
+	}
+	if len(sessionSkills) != 2 || sessionSkills[0].SkillID != "go-review" || sessionSkills[1].SkillID != "missing-skill" {
+		t.Fatalf("session skills = %#v, want mapped runtime states", sessionSkills)
+	}
+	if sessionSkills[0].Descriptor == nil || sessionSkills[0].Descriptor.ID != "go-review" {
+		t.Fatalf("session skill descriptor = %#v, want go-review descriptor", sessionSkills[0].Descriptor)
+	}
+	if !sessionSkills[1].Missing {
+		t.Fatalf("missing session skill should keep missing=true, got %#v", sessionSkills[1])
+	}
+
+	availableSkills, err := bridge.ListAvailableSkills(context.Background(), gateway.ListAvailableSkillsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+	})
+	if err != nil {
+		t.Fatalf("list_available_skills: %v", err)
+	}
+	if stub.listAvailableSkillsID != "session-1" {
+		t.Fatalf("list available skills session_id = %q, want %q", stub.listAvailableSkillsID, "session-1")
+	}
+	if len(availableSkills) != 1 || availableSkills[0].Descriptor.ID != "go-review" || !availableSkills[0].Active {
+		t.Fatalf("available skills = %#v, want one active go-review skill", availableSkills)
 	}
 
 	if err := bridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{
@@ -411,11 +588,16 @@ func TestIsRuntimeNotFoundErrorIncludesOSErrNotExist(t *testing.T) {
 
 func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 	stub := &runtimeStub{
-		submitErr:     errors.New("submit failed"),
-		compactErr:    errors.New("compact failed"),
-		permissionErr: errors.New("permission failed"),
-		listErr:       errors.New("list failed"),
-		loadErr:       errors.New("load failed"),
+		submitErr:            errors.New("submit failed"),
+		compactErr:           errors.New("compact failed"),
+		systemToolErr:        errors.New("system tool failed"),
+		permissionErr:        errors.New("permission failed"),
+		activateSessionErr:   errors.New("activate skill failed"),
+		deactivateSessionErr: errors.New("deactivate skill failed"),
+		sessionSkillsErr:     errors.New("list session skills failed"),
+		availableSkillsErr:   errors.New("list available skills failed"),
+		listErr:              errors.New("list failed"),
+		loadErr:              errors.New("load failed"),
 	}
 	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
 	if err != nil {
@@ -428,6 +610,38 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 	}
 	if _, err := bridge.Compact(context.Background(), gateway.CompactInput{SubjectID: testBridgeSubjectID}); err == nil {
 		t.Fatal("expected compact error from runtime")
+	}
+	if _, err := bridge.ExecuteSystemTool(context.Background(), gateway.ExecuteSystemToolInput{
+		SubjectID: testBridgeSubjectID,
+		ToolName:  "memo_list",
+	}); err == nil {
+		t.Fatal("expected execute_system_tool error from runtime")
+	}
+	if err := bridge.ActivateSessionSkill(context.Background(), gateway.SessionSkillMutationInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		SkillID:   "go-review",
+	}); err == nil {
+		t.Fatal("expected activate_session_skill error from runtime")
+	}
+	if err := bridge.DeactivateSessionSkill(context.Background(), gateway.SessionSkillMutationInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		SkillID:   "go-review",
+	}); err == nil {
+		t.Fatal("expected deactivate_session_skill error from runtime")
+	}
+	if _, err := bridge.ListSessionSkills(context.Background(), gateway.ListSessionSkillsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	}); err == nil {
+		t.Fatal("expected list_session_skills error from runtime")
+	}
+	if _, err := bridge.ListAvailableSkills(context.Background(), gateway.ListAvailableSkillsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	}); err == nil {
+		t.Fatal("expected list_available_skills error from runtime")
 	}
 	if err := bridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{
 		SubjectID: testBridgeSubjectID,

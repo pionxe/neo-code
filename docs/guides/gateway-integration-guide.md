@@ -158,6 +158,11 @@
 - `gateway.bindStream`
 - `gateway.run`
 - `gateway.compact`
+- `gateway.executeSystemTool`
+- `gateway.activateSessionSkill`
+- `gateway.deactivateSessionSkill`
+- `gateway.listSessionSkills`
+- `gateway.listAvailableSkills`
 - `gateway.cancel`
 - `gateway.listSessions`
 - `gateway.loadSession`
@@ -173,6 +178,9 @@
 - `gateway.cancel`：`params.run_id` 必填。
 - `gateway.bindStream`：`params.session_id` 必填，`channel` 允许 `all|ipc|ws|sse`。
 - `gateway.run`：`input_text` 或 `input_parts` 至少一个非空。
+- `gateway.activateSessionSkill` / `gateway.deactivateSessionSkill`：`params.session_id` 与 `params.skill_id` 必填。
+- `gateway.listSessionSkills`：`params.session_id` 必填（也可使用 frame/session 自动绑定）。
+- `gateway.listAvailableSkills`：`params.session_id` 可选；为空时返回全局可见技能。
 - 参数解析为严格模式，未知字段会触发参数错误。
 
 ## 3. Status Codes
