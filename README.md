@@ -1,8 +1,8 @@
+[中文](README.md) | [EN](README.en.md)
+
 # NeoCode
 
 > 一个本地优先的 AI Coding Agent，帮助你理解代码、修改项目、调用工具，并把开发任务接入终端、桌面端和自动化工作流。
-
-English: [README.en.md](README.en.md)
 
 <p align="center">
   <a href="https://go.dev/">
@@ -14,16 +14,16 @@ English: [README.en.md](README.en.md)
   <a href="https://github.com/1024XEngineer/neo-code/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/1024XEngineer/neo-code?color=97CA00" alt="License" />
   </a>
-  <a href="https://1024xengineer.github.io/neo-code/">
+  <a href="https://neocode-docs.pages.dev/">
     <img src="https://img.shields.io/badge/Docs-Official-1677FF?logo=readthedocs&logoColor=white" alt="Docs" />
   </a>
-  <a href="https://1024xengineer.github.io/neo-code/guide/install">
+  <a href="https://neocode-docs.pages.dev/guide/install">
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4EAA25" alt="Platform" />
   </a>
 </p>
 
 <p align="center">
-  <a href="https://1024xengineer.github.io/neo-code/">文档</a>
+  <a href="https://neocode-docs.pages.dev/">文档</a>
   ·
   <a href="https://github.com/1024XEngineer/neo-code/issues">Issues</a>
   ·
@@ -131,17 +131,38 @@ neocode --workdir /path/to/your/project
 
 详细说明在文档内：
 
-- Gateway 集成与协议：`docs/guides/gateway-integration-guide.md`
-- MCP 配置与接入：`docs/guides/mcp-configuration.md`
-- Skills 设计：`docs/skills-system-design.md`
-- Runtime 与事件流：`docs/runtime-provider-event-flow.md`
+- [Gateway 集成与协议（Guide）](https://neocode-docs.pages.dev/guide/gateway)
+- [MCP 工具接入（Guide）](https://neocode-docs.pages.dev/guide/mcp)
+- [Skills 使用（Guide）](https://neocode-docs.pages.dev/guide/skills)
+- [工具与权限（Guide）](https://neocode-docs.pages.dev/guide/tools-permissions)
+- [Runtime / Provider 事件流（Repo Doc）](docs/runtime-provider-event-flow.md)
 
 ---
 
 ## 文档
 
-- 官方文档站：[https://1024xengineer.github.io/neo-code/](https://1024xengineer.github.io/neo-code/)
+- 官方文档站：[https://neocode-docs.pages.dev/](https://neocode-docs.pages.dev/)
 - 快速引导（中文）：[www/guide/index.md](www/guide/index.md)
+- [配置指南](https://neocode-docs.pages.dev/guide/configuration)
+- [工具与权限](https://neocode-docs.pages.dev/guide/tools-permissions)
+- [Skills 使用](https://neocode-docs.pages.dev/guide/skills)
+- [MCP 工具接入](https://neocode-docs.pages.dev/guide/mcp)
+- [升级与版本检查](https://neocode-docs.pages.dev/guide/update)
+- [排障与常见问题](https://neocode-docs.pages.dev/guide/troubleshooting)
+
+仓库内设计文档：
+
+- [配置管理设计](docs/config-management-detail-design.md)
+- [扩展 Provider](docs/guides/adding-providers.md)
+- [Runtime / Provider 事件流](docs/runtime-provider-event-flow.md)
+- [Session 持久化设计](docs/session-persistence-design.md)
+- [Context Compact 说明](docs/context-compact.md)
+- [Repository 模块设计](docs/repository-design.md)
+- [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
+- [Skills 设计与使用](docs/skills-system-design.md)
+- [MCP 配置指南](docs/guides/mcp-configuration.md)
+- [ModelScope 半引导配置](docs/guides/modelscope-provider-setup.md)
+- [更新与升级（实现说明）](docs/guides/update.md)
 
 文档站源码位于 `www/`，本地预览：
 

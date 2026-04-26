@@ -1,8 +1,8 @@
+[中文](README.md) | [EN](README.en.md)
+
 # NeoCode
 
 > A local-first AI coding agent that helps you understand code, edit projects, call tools, and connect your workflow across terminal, desktop, and automation.
-
-中文: [README.md](README.md)
 
 <p align="center">
   <a href="https://go.dev/">
@@ -14,16 +14,16 @@
   <a href="https://github.com/1024XEngineer/neo-code/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/1024XEngineer/neo-code?color=97CA00" alt="License" />
   </a>
-  <a href="https://1024xengineer.github.io/neo-code/">
+  <a href="https://neocode-docs.pages.dev/">
     <img src="https://img.shields.io/badge/Docs-Official-1677FF?logo=readthedocs&logoColor=white" alt="Docs" />
   </a>
-  <a href="https://1024xengineer.github.io/neo-code/en/guide/install">
+  <a href="https://neocode-docs.pages.dev/en/guide/install">
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4EAA25" alt="Platform" />
   </a>
 </p>
 
 <p align="center">
-  <a href="https://1024xengineer.github.io/neo-code/en/">Docs</a>
+  <a href="https://neocode-docs.pages.dev/en/">Docs</a>
   ·
   <a href="https://github.com/1024XEngineer/neo-code/issues">Issues</a>
   ·
@@ -140,7 +140,7 @@ Detailed docs are intentionally split out. README keeps entry links:
 
 ## Documentation
 
-- Official docs site: [https://neocode-docs.pages.dev](https://1024xengineer.github.io/neo-code/en/)
+- Official docs site: [https://neocode-docs.pages.dev/en/](https://neocode-docs.pages.dev/en/)
 - English guide index: [www/en/guide/index.md](www/en/guide/index.md)
 
 Docs site source lives in `www/`. Local preview:
