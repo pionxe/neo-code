@@ -66,7 +66,7 @@ Other providers:
 neocode
 ```
 
-You will enter the TUI. Type in the input box at the bottom to start a conversation.
+You will enter the terminal interface. Type in the input box at the bottom to start a conversation.
 To open a specific workspace:
 
 ```bash
@@ -82,14 +82,14 @@ Read the current project directory structure and give a module summary
 ```
 
 ```text
-Find the tool result injection logic in internal/runtime
+Based on that structure, find the test entry point and the main business entry point.
 ```
 
-The agent will use file reading and search tools automatically. When it needs to write files or run commands, the TUI will ask for approval.
+The agent will use file reading and search tools automatically. When it needs to write files or run commands, NeoCode will ask for approval.
 
 ## 6. Common `/` commands
 
-Inside the TUI, use `/` commands for common actions:
+Inside NeoCode, use `/` commands for common actions:
 
 | Command | Action |
 |---|---|

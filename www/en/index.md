@@ -1,7 +1,7 @@
 ---
 layout: page
 title: NeoCode
-description: A local AI coding agent for your terminal, built around the TUI, Gateway, Runtime, Provider, and Tools path.
+description: A local AI coding agent for your terminal that helps you understand code, edit files, and run verification.
 aside: false
 outline: false
 sidebar: false

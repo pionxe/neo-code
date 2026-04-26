@@ -33,5 +33,8 @@ Connect NeoCode to your own workflow:
 ## Something wrong?
 
 - [Troubleshooting](./troubleshooting) — 3-step diagnosis by symptom
-- [Gateway Usage](/guide/gateway) — when to start gateway separately
 - [Update & Version](./update) — check version, upgrade
+
+## Advanced design
+
+If you are building integrations, modifying NeoCode, or checking architecture boundaries, start from [Reference](/reference/).

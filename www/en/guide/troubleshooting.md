@@ -1,117 +1,136 @@
 ---
 title: Troubleshooting
-description: Common NeoCode issues and practical checks for startup, provider auth, gateway, and long-session quality.
+description: Diagnose NeoCode startup, auth, config, approval, MCP, and long-session issues by symptom.
 ---
 
 # Troubleshooting
 
-This page follows: symptom -> likely causes -> 3-step checks.
+This page is organized by symptom, likely causes, and practical fixes.
 
 ## 1) `neocode` command not found
 
 ### Symptom
 
-- Terminal says `command not found` or executable is missing.
+- Terminal says `command not found`
+- Windows says the executable is not recognized
 
 ### Likely causes
 
-- Install script did not complete.
-- Binary path is not in `PATH`.
+- Installation did not finish
+- Install directory is not in `PATH`
+- Current terminal has not loaded updated environment variables
 
-### 3-step checks
+### Fix
 
-1. Run `neocode version` and `neocode --help`.
-2. If missing, rerun the install steps in [Install and Run](./install).
-3. Open a new terminal session and run `neocode version` again.
+1. Rerun the installer from [Install & First Run](./install).
+2. Close and reopen the terminal.
+3. Run `neocode version`.
 
 ## 2) API key is set but auth still fails
 
 ### Symptom
 
-- Requests fail with `unauthorized` or invalid API key errors.
+- Model requests return `unauthorized`, `invalid api key`, or similar auth errors
 
 ### Likely causes
 
-- Env vars were set in a different shell session.
-- Current provider does not match the env var you set.
+- The key was set in a different terminal session
+- Active provider does not match the environment variable you set
+- The key expired or lacks access to the selected model
 
-### 3-step checks
+### Fix
 
 1. Use `/provider` to confirm the active provider.
-2. Check the env var mapping in [Configuration](./configuration).
-3. Restart terminal, then launch `neocode` again.
+2. Check the environment variable table in [Configuration](./configuration).
+3. Set the variable in the same terminal that launches NeoCode, then restart NeoCode.
 
 ## 3) Provider or model switch does not apply
 
 ### Symptom
 
-- You switched provider or model, but behavior still looks unchanged.
+- You switched provider or model, but responses still look unchanged
+- Model list is empty or requests fail after switching
 
 ### Likely causes
 
-- Current session still carries previous context.
-- Target model is unavailable under that provider.
+- Current session still carries old task context
+- API key for the new provider is missing
+- Selected model is unavailable for your account
 
-### 3-step checks
+### Fix
 
-1. Reconfirm the current selection with `/provider` and `/model`.
-2. Run `/compact` to reduce stale context impact in the current session.
+1. Confirm the current choices with `/provider` and `/model`.
+2. Run `/compact` to reduce old context impact.
 3. Start a new session and retry the same prompt.
 
 ## 4) Too many permission prompts
 
 ### Symptom
 
-- Frequent approval prompts for file edits or commands.
+- File edits or command runs repeatedly ask for approval
+- You thought you allowed an action, but NeoCode asks again
 
 ### Likely causes
 
-- Current policy is still `Ask`.
-- Slight parameter changes make requests non-identical.
+- Current decision is `Ask`
+- Tool arguments changed, so it is a new operation
+- The action is risky enough to require confirmation
 
-### 3-step checks
+### Fix
 
-1. Read [Tools and Permissions](./tools-permissions) decision table.
-2. Use `Allow` for stable, trusted repetitive actions.
-3. Keep `Ask` for unknown repos or risky operations.
+1. Use `Allow` for stable, trusted repeated actions.
+2. Keep `Ask` for unknown repositories or risky commands.
+3. When unsure, ask the agent to explain the command and its impact first.
 
-## 5) Gateway connection or URL dispatch fails
+See [Tools & Permissions](./tools-permissions) for details.
+
+## 5) Long sessions drift or degrade
 
 ### Symptom
 
-- Gateway is running but external request flow still fails.
+- Responses repeat
+- The agent forgets recent instructions
+- New tasks still reference old task context
 
 ### Likely causes
 
-- Gateway not ready or listening mismatch.
-- Auth token mismatch.
-- Origin/source policy blocks request.
+- The session is too long
+- History contains too much noise
+- The new task is unrelated to the previous task
 
-### 3-step checks
+### Fix
 
-1. Start `neocode gateway` separately and confirm the process is running.
-2. Verify minimal local path first on `127.0.0.1:8080`.
-3. Review auth and origin limits in [Gateway usage](/guide/gateway).
+1. Run `/compact`.
+2. If it still drifts, start a new session.
+3. For unrelated work, start a new session and restate the goal.
 
-## 6) Long sessions drift or degrade
+## 6) MCP tool is unavailable
 
 ### Symptom
 
-- Answers become repetitive, miss context, or quality drops.
+- The agent cannot see your MCP tool
+- The tool appears but calls fail
 
 ### Likely causes
 
-- Prompt budget is too tight for current context.
-- Session history contains too much noise.
+- MCP server is not enabled
+- Startup command, working directory, or environment variable is wrong
+- Tool arguments do not match the MCP server requirements
 
-### 3-step checks
+### Fix
 
-1. Trigger manual compaction with `/compact`.
-2. Tune `context.budget.*` and `context.compact.*` in config.
-3. Start a new session for unrelated tasks.
+1. Confirm `enabled: true`.
+2. Confirm required environment variables are set in the same terminal.
+3. Follow the verification steps in [MCP Tools](./mcp): list tools first, then try one simple call.
+
+## 7) External integration cannot connect
+
+External integrations usually depend on a local service being running, listening on the expected address, and using the expected auth setup.
+
+Normal chat usage does not require this. If you are building an external integration, start from [Gateway Reference](/reference/gateway).
 
 ## Still blocked?
 
-- Return to [Getting Started](./) for a minimal path
-- Daily operations: [Daily use](./daily-use)
-- Gateway issues: [Gateway usage](/guide/gateway)
+- Return to [Install & First Run](./install) and retry the minimal path
+- Check [Configuration](./configuration) against your active provider
+- Read [Tools & Permissions](./tools-permissions) for approval behavior

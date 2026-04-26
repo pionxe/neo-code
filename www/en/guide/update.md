@@ -1,17 +1,13 @@
 ---
 title: Update & Version Check
-description: Check your version and upgrade NeoCode.
+description: Check the installed version and upgrade NeoCode.
 ---
 
 # Update & Version Check
 
-## Automatic update check
+NeoCode checks for newer versions at startup. In normal use, no extra configuration is required; if an update is available, follow the upgrade command shown by NeoCode.
 
-NeoCode silently checks for a newer version in the background at startup (3-second timeout). The update notice is printed after you exit the TUI, so it does not interrupt the session.
-
-`url-dispatch` and `update` subcommands skip this check.
-
-## Check version
+## Check your version
 
 ```bash
 neocode version
@@ -23,23 +19,35 @@ Include pre-release versions:
 neocode version --prerelease
 ```
 
-When the remote "semantic latest" is not installable on the current platform, `version` will also show the "highest installable version" upgrade hint and flag the remote asset anomaly.
+## Upgrade
 
-## Manual upgrade
+Upgrade to the latest stable version:
 
 ```bash
 neocode update
 ```
 
-Include pre-release versions:
+Install a pre-release version:
 
 ```bash
 neocode update --prerelease
 ```
 
-## Version info
+## Common issues
 
-- Release builds have a version injected via `ldflags` into `internal/version.Version`
-- Local development builds report `dev`
+### Version shows `dev`
 
-If you're running from source, seeing `dev` is expected.
+If you run NeoCode from source, the version may show `dev`. That usually means you are using a local development build instead of a release package.
+
+For normal use, rerun the installer from [Install & First Run](./install).
+
+### Version is still old after upgrading
+
+1. Close and reopen your terminal.
+2. Run `neocode version`.
+3. If the version is still old, rerun the installer and confirm the install directory is in `PATH`.
+
+## Next steps
+
+- Install issues: [Troubleshooting](./troubleshooting)
+- Configure models or providers: [Configuration](./configuration)

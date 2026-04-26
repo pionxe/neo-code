@@ -5,126 +5,129 @@ description: Four copy-pasteable scenarios to help you get comfortable with NeoC
 
 # Usage Examples
 
-All examples below are based on NeoCode's currently implemented TUI, tools, and Gateway capabilities. You can copy them directly into a session.
+You can paste these examples directly into a NeoCode session. Replace `{...}` with real paths, logs, or requirements from your project.
 
 ---
 
 ## Scenario 1: Understand an unfamiliar project
 
-**Goal**: You just cloned a repo and want a quick overview of the directory structure and module responsibilities.
+**Goal**: You opened a project and want a quick overview of its structure and main modules.
 
 **Prompt**:
 
 ```text
-Please read the current project directory structure and summarize each module's responsibilities. If you see an internal/ directory, explain the boundaries of each subpackage in particular.
+Please read the current project directory structure, explain what each main directory is responsible for, and point out which files I should read first to understand the main flow.
 ```
 
 **Expected behavior**:
 
-- NeoCode will call file-read tools to scan directories
-- Provide a structured summary of module responsibilities
-- If the tree is deep, it may ask whether to continue expanding
+- Scan the project tree and key files
+- Summarize module responsibilities and entry points
+- If the project is large, give an overview first and ask before going deeper
 
-**Key decision points**:
+**Approval tips**:
 
-- If it requests reading many files, choose **Allow** (read-only, no risk)
-- If it suggests running `find` or `tree`, choose **Allow** (read_only classification)
+- File reads and search are usually safe to allow
+- If it wants to run a command, check that the command is only inspecting project structure
 
 ---
 
-## Scenario 2: Locate and fix a bug
+## Scenario 2: Find and fix a bug
 
-**Goal**: A test fails and you want to find the root cause and a fix.
+**Goal**: You have an error or failing test log and want NeoCode to find the cause and fix it.
 
-**Prompt (step 1 — provide context)**:
+**Prompt (step 1)**:
 
 ```text
-I see the following test failure. Please locate the root cause and propose a fix:
+I see the following failure. Please locate the root cause and propose a fix:
+
+{test log}
 ```
 
-Paste the failure log after this line.
-
-**Prompt (step 2 — ask it to apply)**:
+**Prompt (step 2)**:
 
 ```text
-Please modify the corresponding file to fix this issue and describe the verification steps. Only change one file.
+Please apply the fix you proposed, then explain what changed and how to verify it.
 ```
 
 **Expected behavior**:
 
-- Read the relevant source and test files
-- Pinpoint the specific function or logic error
-- Provide a code diff with the fix
-- Remind you how to run the test to verify
+- Read relevant source and tests
+- Find the failing logic
+- Modify only the needed files
+- Suggest or run the relevant tests
 
-**Key decision points**:
+**Approval tips**:
 
-- When it requests file modifications, choose **Ask** or **Allow** (local_mutation, controllable)
-- When it requests running the test command, choose **Allow** (necessary verification step)
+- Choose **Ask** or **Allow** for file edits
+- Test commands are usually safe to allow
+- Reject or ask for explanation before deletes, resets, or broad rewrites
 
 ---
 
 ## Scenario 3: Add tests for a function
 
-**Goal**: Generate unit tests for a function that currently lacks them.
+**Goal**: Add tests for a function or module.
 
 **Prompt**:
 
 ```text
-Please generate unit tests for the ReadFile function in internal/tools/file.go, covering the happy path, file-not-found, and permission-denied cases. Write the tests to internal/tools/file_test.go.
+Please add unit tests for {function name} in {source file}. Cover the happy path, empty input, and error return. Put the tests in {test file}.
+```
+
+**Verification**:
+
+```text
+Please run the related tests. If any fail, analyze and fix them.
 ```
 
 **Expected behavior**:
 
-- Read the target function source to understand inputs and outputs
-- Generate corresponding test cases
-- After writing the file, ask whether to run verification
+- Read the target function and existing test style
+- Generate tests that match the project
+- Run the smallest relevant test scope
 
-**Prompt (verification)**:
+**Approval tips**:
 
-```text
-Please run the tests for this package. If any fail, analyze and fix them.
-```
-
-**Key decision points**:
-
-- File writes are local_mutation; **Ask** is recommended (confirm path and content are correct)
-- Running tests is read_only / local_mutation; **Allow** is fine
+- Check the file path before allowing test writes
+- Allow the project's existing test command
 
 ---
 
-## Scenario 4: Add a new feature / endpoint
+## Scenario 4: Add a small feature
 
-**Goal**: Add a new endpoint or feature point to existing code.
+**Goal**: Add a clear feature to an existing project.
 
 **Prompt (design phase)**:
 
 ```text
-I want to add a health-check endpoint in internal/gateway that returns the current runtime status. Please propose an implementation plan, including which files need to be modified.
+I want to add this feature: {feature description}. Please read the related code first, then propose the smallest implementation plan and the files that need changes.
 ```
 
 **Prompt (implementation phase)**:
 
 ```text
-Please implement according to the plan, keeping the style consistent with existing code. After finishing, run go build ./... to verify compilation passes.
+Please implement the plan, keep the existing code style, and add necessary tests.
 ```
 
 **Expected behavior**:
 
-- Analyze the existing gateway route registration pattern
-- Add a new handler and register the route
-- Run the build to verify
+- Identify the feature entry point and impact
+- Propose a short implementation plan
+- Modify only relevant files
+- Add tests and report verification
 
-**Key decision points**:
+**Approval tips**:
 
-- For multi-file modifications, **Ask** each time to confirm
-- Running `go build` is read_only (verification only), **Allow** is fine
+- Keep **Ask** for multi-file changes
+- Allow build or test commands
+- If it proposes unrelated refactors, ask it to narrow the change
 
 ---
 
 ## Next steps
 
-- Permission decision details: [Tools & permissions](./tools-permissions)
+- Permission decisions: [Tools & Permissions](./tools-permissions)
 - Configure models and providers: [Configuration](./configuration)
-- Daily operations: [Daily use](./daily-use)
+- Daily operations: [Daily Use](./daily-use)
 - Something wrong: [Troubleshooting](./troubleshooting)

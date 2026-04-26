@@ -16,7 +16,7 @@ if (isVercel) {
 
 export default defineConfig({
   title: "NeoCode",
-  description: "基于 Go + Bubble Tea 的本地 Coding Agent 用户指南",
+  description: "终端里的本地 AI 编码助手用户指南",
   lang: "zh-CN",
   
   // 使用动态计算的 base
@@ -40,7 +40,7 @@ export default defineConfig({
       "meta",
       {
         property: "og:description",
-        content: "围绕真实命令、配置与 Gateway 使用场景整理的 NeoCode 用户指导网站。",
+        content: "围绕安装、配置、日常使用、扩展能力和排障整理的 NeoCode 用户指南。",
       },
     ],
     ["meta", { property: "og:type", content: "website" }],
@@ -72,7 +72,6 @@ export default defineConfig({
           { text: "快速开始", link: "/guide/" },
           { text: "日常使用", link: "/guide/daily-use" },
           { text: "排障", link: "/guide/troubleshooting" },
-          { text: "Gateway", link: "/guide/gateway" },
           { text: "进阶与设计", link: "/reference/" },
           { text: "GitHub", link: repoUrl },
         ],
@@ -105,7 +104,6 @@ export default defineConfig({
               text: "质量与协作",
               items: [
                 { text: "排障与常见问题", link: "/guide/troubleshooting" },
-                { text: "Gateway 使用", link: "/guide/gateway" },
                 { text: "升级与版本检查", link: "/guide/update" },
               ],
             },
@@ -115,6 +113,7 @@ export default defineConfig({
               text: "深入阅读",
               items: [
                 { text: "文档导航", link: "/reference/" },
+                { text: "Gateway 集成参考", link: "/reference/gateway" },
               ],
             },
           ],
@@ -140,7 +139,7 @@ export default defineConfig({
           text: "在 GitHub 上编辑此页",
         },
         footer: {
-          message: "围绕真实命令、配置与主链路整理的 NeoCode 用户指南。",
+          message: "围绕安装、配置、日常使用、扩展能力和排障整理的 NeoCode 用户指南。",
           copyright: "MIT Licensed",
         },
         returnToTopLabel: "返回顶部",
@@ -161,8 +160,6 @@ export default defineConfig({
           { text: "Getting Started", link: "/en/guide/" },
           { text: "Daily Use", link: "/en/guide/daily-use" },
           { text: "Troubleshooting", link: "/en/guide/troubleshooting" },
-          // Gateway 页面仅有中文版，英文站跨语言指向
-          { text: "Gateway", link: "/guide/gateway" },
           { text: "Reference", link: "/reference/" },
           { text: "GitHub", link: repoUrl },
         ],
@@ -195,8 +192,6 @@ export default defineConfig({
               text: "Quality & Ops",
               items: [
                 { text: "Troubleshooting", link: "/en/guide/troubleshooting" },
-                // Gateway 页面仅有中文版，英文站跨语言指向
-                { text: "Gateway Usage", link: "/guide/gateway" },
                 { text: "Update & Version", link: "/en/guide/update" },
               ],
             },
@@ -206,6 +201,7 @@ export default defineConfig({
               text: "Reference",
               items: [
                 { text: "Documentation Index", link: "/reference/" },
+                { text: "Gateway Reference", link: "/reference/gateway" },
               ],
             },
           ],

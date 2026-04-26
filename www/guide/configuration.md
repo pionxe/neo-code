@@ -1,171 +1,35 @@
 ---
 title: 配置指南
-description: 最小配置跑起来，然后按需调整模型、shell、超时和自定义 Provider。
+description: 配好 API Key、模型、Shell、工作区、自定义 Provider 和 MCP 工具。
 ---
 
 # 配置指南
 
-## 总原则
+NeoCode 的配置目标很简单：把常用选择保存下来，把密钥留在环境变量里。第一次使用只需要配置 Provider、模型和 Shell；其他能力按需打开。
 
-- `config.yaml` 只保存最小运行时状态
-- provider 元数据来自代码内置定义或 custom provider 文件
-- API Key 只从环境变量读取
-- YAML 采用严格解析，未知字段直接报错
+配置文件位置：
 
-这意味着 NeoCode 当前不会：
-
-- 自动清理旧版 `providers` / `provider_overrides`
-- 自动兼容 `workdir`、`default_workdir` 等旧字段
+```text
+~/.neocode/config.yaml
+```
 
 ## 最小配置
 
-如果你只想让 NeoCode 跑起来，这个配置就够了：
-
 ```yaml
 selected_provider: openai
 current_model: gpt-5.4
 shell: bash
 ```
 
-Windows 用户把 `shell` 改成 `powershell`。其他字段都有默认值，不需要一开始就全部填写。
-
-配置文件位置：`~/.neocode/config.yaml`
-
-## 常见任务速查
-
-### 切换模型
-
-在 TUI 里直接切换，选择会自动保存：
-
-```text
-/provider          # 切换 Provider
-/model             # 切换模型
-```
-
-如果模型列表为空，检查对应的环境变量是否已设置。
-
-### 换 Shell
+Windows 用户通常使用：
 
 ```yaml
-shell: powershell    # Windows
-shell: bash          # macOS / Linux
+shell: powershell
 ```
 
-### 调工具超时
+## API Key
 
-```yaml
-tool_timeout_sec: 30    # 默认 20 秒
-```
-
-### 会话太长跑偏了
-
-先试 `/compact`。如果经常跑偏，可以在配置里调大保留的最近消息数：
-
-```yaml
-context:
-  compact:
-    manual_keep_recent_messages: 20    # 默认 10
-```
-
-## 完整配置示例
-
-```yaml
-selected_provider: openai
-current_model: gpt-5.4
-shell: bash
-tool_timeout_sec: 20
-runtime:
-  max_no_progress_streak: 3
-  max_repeat_cycle_streak: 3
-  assets:
-    max_session_asset_bytes: 20971520
-    max_session_assets_total_bytes: 20971520
-
-tools:
-  webfetch:
-    max_response_bytes: 262144
-    supported_content_types:
-      - text/html
-      - text/plain
-      - application/json
-
-context:
-  compact:
-    manual_strategy: keep_recent
-    manual_keep_recent_messages: 10
-    micro_compact_retained_tool_spans: 6
-    read_time_max_message_spans: 24
-    max_summary_chars: 1200
-    micro_compact_disabled: false
-  budget:
-    prompt_budget: 0
-    reserve_tokens: 13000
-    fallback_prompt_budget: 100000
-    max_reactive_compacts: 3
-```
-
-## 字段说明
-
-### 基础字段
-
-| 字段 | 说明 |
-|------|------|
-| `selected_provider` | 当前选中的 provider 名称 |
-| `current_model` | 当前选中的模型 ID |
-| `shell` | 默认 shell，Windows 默认 `powershell`，其他平台默认 `bash` |
-| `tool_timeout_sec` | 工具执行超时（秒） |
-
-### `context` 字段
-
-| 字段 | 说明 |
-|------|------|
-| `context.compact.manual_strategy` | `/compact` 手动压缩策略，支持 `keep_recent` / `full_replace` |
-| `context.compact.manual_keep_recent_messages` | `keep_recent` 策略下保留的最近消息数 |
-| `context.compact.micro_compact_retained_tool_spans` | 默认保留原始内容的最近可压缩工具块数量，默认 `6` |
-| `context.compact.read_time_max_message_spans` | context 读时保留的 message span 上限 |
-| `context.compact.max_summary_chars` | compact summary 最大字符数 |
-| `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
-| `context.budget.prompt_budget` | 显式输入预算；`> 0` 时直接使用，`0` 表示自动推导 |
-| `context.budget.reserve_tokens` | 自动推导输入预算时，从模型窗口中预留给输出、tool call、system prompt 的缓冲 |
-| `context.budget.fallback_prompt_budget` | 模型窗口不可用或推导失败时使用的保底输入预算 |
-| `context.budget.max_reactive_compacts` | 单次 Run 内允许的 reactive compact 最大次数 |
-
-### `runtime` 字段
-
-| 字段 | 说明 |
-|------|------|
-| `runtime.max_no_progress_streak` | 连续"无进展"轮次提醒阈值，默认 `5` |
-| `runtime.max_repeat_cycle_streak` | 连续"重复调用同一工具参数"提醒阈值，默认 `3` |
-| `runtime.max_turns` | 单次 Run 的最大推理轮数上限，默认 `40` |
-| `runtime.assets.max_session_asset_bytes` | 单个 session asset 最大字节数，默认 20 MiB |
-| `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 session asset 总字节上限，默认 20 MiB |
-
-### `verification` 字段
-
-| 字段 | 说明 |
-|------|------|
-| `verification.enabled` | 是否启用验证引擎，默认 `true` |
-| `verification.final_intercept` | 是否在任务收尾前拦截并触发验证，默认 `true` |
-| `verification.max_no_progress` | 验证无进展时的最大重试次数，默认 `3` |
-| `verification.max_retries` | 验证失败后的最大重试次数，默认 `2` |
-| `verification.verifiers.<name>.enabled` | 是否启用该验证器 |
-| `verification.verifiers.<name>.required` | 该验证器是否为硬性要求 |
-| `verification.verifiers.<name>.timeout_sec` | 该验证器的执行超时 |
-| `verification.verifiers.<name>.fail_closed` | 验证器异常时是否按失败处理 |
-| `verification.execution_policy.allowed_commands` | 验证器可执行的命令白名单 |
-| `verification.execution_policy.denied_commands` | 验证器禁止执行的命令黑名单 |
-
-### `tools` 字段
-
-| 字段 | 说明 |
-|------|------|
-| `tools.webfetch.max_response_bytes` | WebFetch 最大响应字节数 |
-| `tools.webfetch.supported_content_types` | WebFetch 允许的内容类型 |
-| `tools.mcp.servers` | MCP server 列表，见下方 MCP 配置 |
-
-## 环境变量
-
-API Key 只从环境变量读取，不写入配置文件。
+NeoCode 只从环境变量读取 API Key，不会把明文密钥写进配置文件。
 
 | Provider | 环境变量 |
 |---|---|
@@ -175,24 +39,90 @@ API Key 只从环境变量读取，不写入配置文件。
 | Qiniu | `QINIU_API_KEY` |
 | ModelScope | `MODELSCOPE_API_KEY` |
 
+macOS / Linux：
+
 ```bash
-export OPENAI_API_KEY="sk-..."
-export GEMINI_API_KEY="AI..."
-export MODELSCOPE_API_KEY="ms-..."
+export OPENAI_API_KEY="your_key_here"
+```
+
+Windows PowerShell：
+
+```powershell
+$env:OPENAI_API_KEY = "your_key_here"
+```
+
+如果想长期保存环境变量，请用你所在系统或 Shell 的标准方式保存，不要把真实 Key 写进 `config.yaml`。
+
+## 切换 Provider 和模型
+
+推荐在 NeoCode 界面里切换，选择会自动保存：
+
+```text
+/provider
+/model
+```
+
+也可以直接修改配置：
+
+```yaml
+selected_provider: gemini
+current_model: gemini-2.5-pro
+```
+
+如果模型列表为空，优先检查当前 Provider 对应的 API Key 是否已在启动 NeoCode 的同一个终端里设置。
+
+## 工作区
+
+工作区建议通过启动参数指定，不写进主配置：
+
+```bash
+neocode --workdir /path/to/project
+```
+
+在 NeoCode 界面里也可以查看或切换：
+
+```text
+/cwd
+/cwd /path/to/project
+```
+
+## Shell 和工具超时
+
+Shell 决定 Agent 执行命令时使用的环境：
+
+```yaml
+shell: powershell    # Windows
+shell: bash          # macOS / Linux
+```
+
+如果你的项目测试或构建经常比较慢，可以调高工具执行超时：
+
+```yaml
+tool_timeout_sec: 30
 ```
 
 ## 自定义 Provider
 
-如果你用的模型服务不在内置列表里，可以通过配置文件接入。
+如果你的模型服务不在内置列表里，可以添加 OpenAI 兼容 Provider。
 
-配置文件位置：`~/.neocode/providers/<name>/provider.yaml`
+更推荐先在界面里交互添加：
 
-示例（OpenAI 兼容接口）：
+```text
+/provider add
+```
+
+也可以创建配置文件：
+
+```text
+~/.neocode/providers/company/provider.yaml
+```
+
+示例：
 
 ```yaml
-name: company-gateway
+name: company
 driver: openaicompat
-api_key_env: COMPANY_GATEWAY_API_KEY
+api_key_env: COMPANY_API_KEY
 model_source: discover
 base_url: https://llm.example.com/v1
 chat_api_mode: chat_completions
@@ -200,41 +130,28 @@ chat_endpoint_path: /chat/completions
 discovery_endpoint_path: /models
 ```
 
-也可以在 TUI 里用 `/provider add` 交互式添加。
-
-### 手动指定模型列表
-
-如果 provider 不支持模型发现（`/models` 接口），使用 `model_source: manual`：
+如果服务不支持自动获取模型列表，改用手动列表：
 
 ```yaml
-name: company-gateway
+name: company
 driver: openaicompat
-api_key_env: COMPANY_GATEWAY_API_KEY
+api_key_env: COMPANY_API_KEY
 model_source: manual
 base_url: https://llm.example.com/v1
 chat_endpoint_path: /chat/completions
 models:
-  - id: gpt-4o-mini
-    name: GPT-4o Mini
+  - id: company-coder
+    name: Company Coder
     context_window: 128000
 ```
 
-### 自定义 Provider 字段说明
-
-| 字段 | 说明 |
-|------|------|
-| `name` | provider 标识，用于 `selected_provider` |
-| `driver` | 驱动类型，目前支持 `openaicompat` |
-| `api_key_env` | API Key 的环境变量名 |
-| `model_source` | `discover`（自动发现）或 `manual`（手动列表） |
-| `base_url` | 服务 base URL |
-| `chat_api_mode` | `chat_completions` 或 `responses` |
-| `chat_endpoint_path` | 聊天接口路径 |
-| `discovery_endpoint_path` | 模型发现接口路径（`discover` 模式） |
+自定义 Provider 里同样只写环境变量名，真实 Key 放在系统环境变量 `COMPANY_API_KEY` 中。
 
 ## MCP 工具
 
-如果你有 MCP server，可以在 `config.yaml` 中通过 `tools.mcp.servers` 注册。当前支持 `stdio` server，工具注册后会以 `mcp.<server-id>.<tool>` 命名。
+如果你有外部工具想让 Agent 调用，例如文档搜索、Issue 查询或内部平台操作，可以通过 MCP 接入。
+
+最小示例：
 
 ```yaml
 tools:
@@ -243,57 +160,45 @@ tools:
       - id: docs
         enabled: true
         source: stdio
-        version: v1
         stdio:
           command: node
           args:
             - ./mcp-server.js
           workdir: ./mcp
-          start_timeout_sec: 8
-          call_timeout_sec: 20
-          restart_backoff_sec: 1
         env:
           - name: MCP_TOKEN
             value_env: MCP_TOKEN
 ```
 
-完整字段、暴露策略、验证方法和排障步骤见 [MCP 工具接入](./mcp)。
+配置完成后，启动 NeoCode 并询问：
 
-## 不允许写进 config.yaml 的字段
+```text
+请列出你当前可用的工具。
+```
 
-以下字段如果出现在主配置文件中，加载会直接报错：
+更完整的 MCP 配置、工具暴露和排障步骤见 [MCP 工具接入](./mcp)。
 
-`providers`、`provider_overrides`、`workdir`、`default_workdir`、`base_url`、`api_key_env`、`models`
-
-## 常见错误
-
-### 旧字段被拒绝
-
-如果在 `config.yaml` 中包含 `workdir`、`providers` 等字段，当前版本会报未知字段错误。处理方式是手动删除这些字段。
-
-### 旧 `context.auto_compact` 字段
-
-如果配置中只存在 `context.auto_compact`，启动时 preflight 会自动迁移为 `context.budget`，并写入 `config.yaml.bak` 备份。如果 `context.auto_compact` 与 `context.budget` 同时存在，启动会直接报错，需要手动合并后再启动。
+## 常见问题
 
 ### API Key 未设置
 
+看到类似下面的错误：
+
 ```text
-config: environment variable OPENAI_API_KEY is empty
+environment variable OPENAI_API_KEY is empty
 ```
 
-在当前 shell 中设置对应环境变量后再启动 NeoCode。
+说明当前 Provider 对应的环境变量没有在当前终端会话里生效。设置环境变量后，重新启动 NeoCode。
 
-## CLI 运行参数覆盖
+### 配置文件报未知字段
 
-工作目录不写入 `config.yaml`，只通过启动参数覆盖：
+NeoCode 会严格检查 `config.yaml`。如果你从旧版本文档复制过配置，先保留这些常用字段：`selected_provider`、`current_model`、`shell`、`tool_timeout_sec`、`tools`。
 
-```bash
-neocode --workdir /path/to/workspace
-```
+其他不确定的字段建议先删掉，再用 `/provider`、`/model` 或 `/provider add` 重新配置。
 
 ## 下一步
 
-- 想了解日常操作：[日常使用](./daily-use)
-- 想了解 Agent 能做什么：[工具与权限](./tools-permissions)
-- 遇到问题：[排障与常见问题](./troubleshooting)
-- 切换模型：[升级与版本检查](./update)
+- 想看日常命令：[日常使用](./daily-use)
+- 想了解权限确认：[工具与权限](./tools-permissions)
+- 想接入外部工具：[MCP 工具接入](./mcp)
+- 遇到报错：[排障与常见问题](./troubleshooting)

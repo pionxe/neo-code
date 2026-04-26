@@ -1,90 +1,120 @@
 ---
 title: Daily Use
-description: Session management, memory, skills, and subagents — the operations you use every day.
+description: Workspace, sessions, memory, Skills, and subagents for everyday NeoCode use.
 ---
 
 # Daily Use
 
-## Session management
+## Workspace
 
-### Switch workspace
+The workspace decides which project NeoCode can read and edit.
 
 ```text
-/cwd                     # View current workspace
+/cwd                     # Show current workspace
 /cwd /path/to/project    # Switch to another project
 ```
 
-### Switch session
+You can also set it at launch:
+
+```bash
+neocode --workdir /path/to/project
+```
+
+## Sessions
+
+### Switch sessions
 
 ```text
-/session                 # Open session picker, switch to another session
+/session                 # Open the session picker
 ```
 
 ### Compress long sessions
 
-When the conversation gets too long, agent quality drops. Run a compression to clean up old context:
+When a conversation gets long, old context can interfere with the current task. Run:
 
 ```text
 /compact
 ```
 
-### New session vs. continue
+### New session or continue?
 
 | Scenario | Recommendation |
 |---|---|
-| Finished a feature, starting unrelated bug fix | New session |
-| Continuing to refine the same feature | Continue current session |
-| Switching to a completely different project | New session + switch workspace |
-| Session is long and responses drift | Try `/compact` first, then new session if needed |
+| Starting an unrelated task | New session |
+| Continuing the same feature | Continue current session |
+| Switching projects | New session and switch workspace |
+| Responses repeat or drift | Try `/compact`, then new session if needed |
 
 ## Memory
 
-Memory saves preferences and project facts across sessions — no need to repeat yourself.
-
-### Common operations
+Memory is for preferences or project facts that should carry across sessions.
 
 ```text
 /memo                              # View all memories
 /remember I prefer powershell      # Save a memory
-/forget powershell                 # Delete matching memory
+/forget powershell                 # Delete matching memories
 ```
 
-### Memory vs. Skills
+Good uses:
 
-- **Memory**: Saves facts and preferences, persists across sessions. E.g. "I prefer powershell", "This project uses Go 1.25"
-- **Skills**: Saves workflow hints, active in current session. E.g. "Read before modifying"
+- Your usual shell, test command, or code style preference
+- Stable project facts, such as language, package manager, or test entry point
+- Personal preferences you do not want to repeat
 
-Quick rule: Need it across sessions → memory. Need a special workflow for the current task → skill.
+Avoid storing:
+
+- Temporary task instructions
+- Secrets, tokens, or passwords
+- Context that only matters in the current session
 
 ## Skills
 
-Skills are workflow hints that influence agent behavior in the current session. For authoring and loading rules, see [Skills](./skills).
+Skills make the agent follow a workflow in the current session, such as "read tests before editing" or "list review risks first".
 
-### Common operations
+Common commands:
 
 ```text
-/skills                  # View available skills
-/skill use go-review     # Activate a skill in current session
-/skill off go-review     # Deactivate a skill
-/skill active            # View active skills in current session
+/skills                  # View available Skills
+/skill use go-review     # Activate a Skill
+/skill off go-review     # Deactivate a Skill
+/skill active            # View active Skills
 ```
 
-Quick rule: need a special workflow for the current task → enable a Skill; need a long-term fact → use memory; need a real external tool → use [MCP](./mcp).
+Quick rule:
+
+- Long-term preference or project fact: use memory
+- Current task workflow: use a Skill
+- Real external tool capability: use [MCP](./mcp)
 
 ## Subagents
 
-The agent can launch subagents to handle subtasks in parallel — e.g. a researcher to search, a reviewer to check results. You don't need to trigger this manually; the agent decides when to use subagents.
+For complex tasks, NeoCode may use subagents for search, review, or checks. You usually do not need to manage them.
 
-If you want to encourage subagent use, say something like:
+If you want it to split the task, say:
 
 ```text
-Use the researcher role to search all compact-related function signatures in internal/runtime
-Use the reviewer role to check if the recent changes meet test coverage requirements
+Please have a researcher review the related code first, then have a reviewer check the plan for risks.
 ```
+
+## Common commands
+
+| Command | Purpose |
+|---|---|
+| `/help` | Show all commands |
+| `/provider` | Switch provider |
+| `/model` | Switch model |
+| `/cwd` | View or switch workspace |
+| `/session` | Switch session |
+| `/compact` | Compress a long session |
+| `/memo` | View memory |
+| `/remember <text>` | Save memory |
+| `/forget <keyword>` | Delete memory |
+| `/skills` | View Skills |
+| `/exit` | Exit |
 
 ## Next steps
 
 - Configure models and providers: [Configuration](./configuration)
-- What the agent can do and when it needs approval: [Tools & permissions](./tools-permissions)
+- Understand approvals: [Tools & Permissions](./tools-permissions)
 - Write or activate a Skill: [Skills](./skills)
 - Something wrong: [Troubleshooting](./troubleshooting)

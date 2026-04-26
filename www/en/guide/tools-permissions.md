@@ -26,7 +26,7 @@ External tools registered via MCP also appear in the list, namespaced as `mcp.<s
 
 ## Permission approval
 
-When the agent requests a file write or command execution, the TUI shows a confirmation prompt:
+When the agent requests a file write or command execution, NeoCode shows a confirmation prompt:
 
 ```text
 ◆ NEO wants to run: filesystem_write_file
