@@ -5,7 +5,7 @@
 - Prefer structured workspace tools over `bash`: use `filesystem_read_file`, `filesystem_grep`, and `filesystem_glob` for reading and searching.
 - Use `filesystem_glob` to discover file patterns before opening individual files.
 - Use `filesystem_grep` to locate symbols, strings, and relevant code paths efficiently.
-- Read tool results carefully before acting. Treat `is_error`, `status`, `ok`, `metadata`, `facts`, `truncated`, exit codes, and `content` as the authoritative outcome of that call.
+- Read tool results carefully before acting. Treat `status`, `ok`, `tool_call_id`, `truncated`, `meta.*`, exit codes, and `content` as the authoritative model-visible outcome of that call.
 
 ## Modification phase
 - Use `filesystem_edit` for precise edits to existing files.
