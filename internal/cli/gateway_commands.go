@@ -296,21 +296,27 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		_ = ipcServer.Close(context.Background())
 		return err
 	}
-	transportAdapters := []gateway.TransportAdapter{ipcServer, networkServer}
-	transportNames := []string{"ipc", "network"}
+	type transportAdapterEntry struct {
+		name    string
+		adapter gateway.TransportAdapter
+	}
+	transportAdapters := []transportAdapterEntry{
+		{name: "ipc", adapter: ipcServer},
+		{name: "network", adapter: networkServer},
+	}
 	defer func() {
 		relay.Stop()
 		for index := len(transportAdapters) - 1; index >= 0; index-- {
-			_ = transportAdapters[index].Close(context.Background())
+			_ = transportAdapters[index].adapter.Close(context.Background())
 		}
 	}()
 
-	for index, adapter := range transportAdapters {
-		logger.Printf("gateway %s listen address: %s", transportNames[index], adapter.ListenAddress())
+	for _, entry := range transportAdapters {
+		logger.Printf("gateway %s listen address: %s", entry.name, entry.adapter.ListenAddress())
 	}
 	idleCloser.observe(0)
 
-	for index, adapter := range transportAdapters {
+	for index, entry := range transportAdapters {
 		if index == 0 {
 			continue
 		}
@@ -323,10 +329,10 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 					serveErr,
 				)
 			}
-		}(adapter)
+		}(entry.adapter)
 	}
 
-	return transportAdapters[0].Serve(runtimeContext, runtimePort)
+	return transportAdapters[0].adapter.Serve(runtimeContext, runtimePort)
 }
 
 type gatewayIdleShutdownController struct {
