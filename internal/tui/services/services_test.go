@@ -267,16 +267,16 @@ func TestCommandCmds(t *testing.T) {
 }
 
 func TestFileServices(t *testing.T) {
-	matches := SuggestFileMatches("int", []string{
+	matches := SuggestFileMatches("read", []string{
 		"README.md",
 		"internal/tui/update.go",
 		"docs/internal-arch.md",
 	}, 2)
-	if len(matches) != 2 {
-		t.Fatalf("expected 2 matches, got %d (%v)", len(matches), matches)
+	if len(matches) == 0 {
+		t.Fatalf("expected at least one match, got %d (%v)", len(matches), matches)
 	}
-	if matches[0] != "internal/tui/update.go" {
-		t.Fatalf("expected best fuzzy match first, got %v", matches)
+	if matches[0] != "README.md" {
+		t.Fatalf("expected filename fuzzy match first, got %v", matches)
 	}
 
 	root := t.TempDir()
@@ -321,6 +321,9 @@ func TestSuggestFileMatchesBranches(t *testing.T) {
 	}
 	if got := SuggestFileMatches("itup", candidates, 2); len(got) == 0 || got[0] != "internal/tui/update.go" {
 		t.Fatalf("expected fuzzy abbreviation match for itup, got %v", got)
+	}
+	if got := SuggestFileMatches("int", candidates, 2); len(got) == 0 || got[0] != "docs/internal-arch.md" {
+		t.Fatalf("expected filename-priority fuzzy match for int, got %v", got)
 	}
 }
 

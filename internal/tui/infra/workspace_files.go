@@ -27,7 +27,7 @@ func CollectWorkspaceFiles(root string, limit int) ([]string, error) {
 		name := d.Name()
 		if d.IsDir() {
 			switch name {
-			case ".git", ".gocache", "node_modules":
+			case ".git", ".gocache", "node_modules", ".build":
 				return filepath.SkipDir
 			}
 			return nil

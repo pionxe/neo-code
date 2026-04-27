@@ -465,8 +465,8 @@ func TestStartupCtrlNStartsDraftSession(t *testing.T) {
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	next := model.(App)
-	if next.startupScreenLocked {
-		t.Fatalf("expected Ctrl+N to unlock startup")
+	if !next.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to return to startup screen")
 	}
 	if next.state.ActiveSessionID != "" {
 		t.Fatalf("expected draft session id to be empty")
@@ -476,6 +476,30 @@ func TestStartupCtrlNStartsDraftSession(t *testing.T) {
 	}
 	if got := next.input.Value(); got != "" {
 		t.Fatalf("expected composer reset, got %q", got)
+	}
+}
+
+func TestCtrlNRelocksStartupFromActiveDraft(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = false
+	app.state.ActiveSessionID = "session-2"
+	app.state.ActiveSessionTitle = "Session 2"
+	app.input.SetValue("keep me?")
+	app.state.InputText = "keep me?"
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("history")}},
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	next := model.(App)
+	if !next.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to relock startup screen from active draft")
+	}
+	if next.state.ActiveSessionID != "" {
+		t.Fatalf("expected active session cleared, got %q", next.state.ActiveSessionID)
+	}
+	if len(next.activeMessages) != 0 {
+		t.Fatalf("expected transcript history cleared for startup draft")
 	}
 }
 
@@ -2574,7 +2598,7 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 	}
 	offsetBeforeDrag := app.transcript.YOffset
 	if !app.handleTranscriptMouse(tea.MouseMsg{
-		X: sx + 1, Y: sy + max(1, sh/2), Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+		X: sx + max(0, sw-1), Y: sy + max(1, sh/2), Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
 	}) {
 		t.Fatalf("expected transcript scrollbar press to be handled")
 	}
@@ -2582,7 +2606,7 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 		t.Fatalf("expected scrollbar drag mode to start after press")
 	}
 	if !app.handleTranscriptMouse(tea.MouseMsg{
-		X: sx + 1, Y: sy + sh - 1, Action: tea.MouseActionMotion,
+		X: sx + max(0, sw-1), Y: sy + sh - 1, Action: tea.MouseActionMotion,
 	}) {
 		t.Fatalf("expected transcript scrollbar drag motion to be handled")
 	}
@@ -2590,7 +2614,7 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 		t.Fatalf("expected drag motion to move transcript offset, got %d <= %d", app.transcript.YOffset, offsetBeforeDrag)
 	}
 	if !app.handleTranscriptMouse(tea.MouseMsg{
-		X: sx + 1, Y: sy + sh - 1, Action: tea.MouseActionRelease,
+		X: sx + max(0, sw-1), Y: sy + sh - 1, Action: tea.MouseActionRelease,
 	}) {
 		t.Fatalf("expected transcript scrollbar release to be handled")
 	}

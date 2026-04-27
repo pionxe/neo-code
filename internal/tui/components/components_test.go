@@ -114,6 +114,20 @@ func TestRenderCommandMenuRow(t *testing.T) {
 	if !strings.Contains(row, "/help") || !strings.Contains(row, "show help") {
 		t.Fatalf("unexpected command menu row: %q", row)
 	}
+
+	selected := RenderCommandMenuRow(CommandMenuRowData{
+		Title:            "/help",
+		Description:      "show help",
+		Highlight:        false,
+		Selected:         true,
+		Width:            30,
+		UsageStyle:       lipgloss.NewStyle(),
+		UsageMatchStyle:  lipgloss.NewStyle().Bold(true),
+		DescriptionStyle: lipgloss.NewStyle(),
+	})
+	if !strings.Contains(selected, "> /help") {
+		t.Fatalf("expected selected command row indicator, got %q", selected)
+	}
 }
 
 func TestRenderSessionRow(t *testing.T) {

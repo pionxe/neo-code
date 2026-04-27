@@ -28,6 +28,9 @@ var startupQuickActions = []startupQuickActionItem{
 	{Key: "Ctrl+U", Label: "Exit NeoCode        "},
 }
 
+const startupLayoutFullMinWidth = 73
+const startupLayoutFullMinHeight = 30
+
 func (a App) shouldRenderStartupScreen() bool {
 	if a.state.ActivePicker != pickerNone || a.logViewerVisible || a.pendingPermission != nil {
 		return false
@@ -97,41 +100,70 @@ func (a App) renderStartupScreen(width int, height int) string {
 		logoContent = startupCenterPadLine("NeoCode", contentWidth)
 	}
 
-	menuLines := make([]string, 0, len(startupQuickActions))
-	for _, item := range startupQuickActions {
-		if compactMenu {
-			compactLine := item.Key + "  " + item.Label
-			menuLines = append(menuLines, menuLineStyle.Render(compactStatusText(compactLine, max(8, cardInnerWidth))))
-			continue
+	renderMenu := func() string {
+		menuLines := make([]string, 0, len(startupQuickActions))
+		for _, item := range startupQuickActions {
+			if compactMenu {
+				compactLine := item.Key + "  " + item.Label
+				menuLines = append(menuLines, menuLineStyle.Render(compactStatusText(compactLine, max(8, cardInnerWidth))))
+				continue
+			}
+			line := lipgloss.JoinHorizontal(
+				lipgloss.Left,
+				menuKeyStyle.Render(item.Key),
+				"  ",
+				menuLabelStyle.Render(item.Label),
+			)
+			menuLines = append(menuLines, menuLineStyle.Render(line))
 		}
-		line := lipgloss.JoinHorizontal(
-			lipgloss.Left,
-			menuKeyStyle.Render(item.Key),
-			"  ",
-			menuLabelStyle.Render(item.Label),
-		)
-		menuLines = append(menuLines, menuLineStyle.Render(line))
+		return lipgloss.NewStyle().
+			Width(contentWidth).
+			Align(lipgloss.Center).
+			Render(strings.Join(menuLines, "\n"))
 	}
 
-	card := strings.Join(menuLines, "\n")
-	menuBlock := lipgloss.NewStyle().
-		Width(contentWidth).
-		Align(lipgloss.Center).
-		Render(card)
+	showHints := width >= startupLayoutFullMinWidth && height >= startupLayoutFullMinHeight
+	showLogo := true
+	buildContent := func(includeLogo bool, includeHints bool) string {
+		parts := make([]string, 0, 5)
+		if includeLogo {
+			parts = append(parts, logoStyle.Render(logoContent))
+		}
+		parts = append(parts, subtitleStyle.Render("AI-POWERED CLI WORKSPACE"))
+		parts = append(parts, stateStyle.Render("Ready"))
+		if includeHints {
+			parts = append(parts, sectionTitleStyle.Render("Quick Actions"))
+			parts = append(parts, renderMenu())
+		}
+		return lipgloss.JoinVertical(lipgloss.Center, parts...)
+	}
 
-	content := lipgloss.JoinVertical(
-		lipgloss.Center,
-		logoStyle.Render(logoContent),
-		subtitleStyle.Render("AI-POWERED CLI WORKSPACE"),
-		stateStyle.Render("Ready"),
-		sectionTitleStyle.Render("Quick Actions"),
-		menuBlock,
-	)
+	content := buildContent(showLogo, showHints)
+	topOffset := startupTopOffset(height, showHints)
 
-	fixedTopOffset := 6
+	// Prefer shrinking top offset first before removing startup sections.
+	if usedHeight := lipgloss.Height(content) + topOffset; usedHeight > height {
+		topOffset = max(0, height-lipgloss.Height(content))
+	}
+	if showHints && lipgloss.Height(content)+topOffset > height {
+		showHints = false
+		content = buildContent(showLogo, showHints)
+		topOffset = startupTopOffset(height, showHints)
+		if usedHeight := lipgloss.Height(content) + topOffset; usedHeight > height {
+			topOffset = max(0, height-lipgloss.Height(content))
+		}
+	}
+	if showLogo && lipgloss.Height(content)+topOffset > height {
+		showLogo = false
+		content = buildContent(showLogo, showHints)
+		topOffset = startupTopOffset(height, showHints)
+		if usedHeight := lipgloss.Height(content) + topOffset; usedHeight > height {
+			topOffset = max(0, height-lipgloss.Height(content))
+		}
+	}
 
 	paddedContent := lipgloss.NewStyle().
-		MarginTop(fixedTopOffset).
+		MarginTop(topOffset).
 		Render(content)
 	return lipgloss.Place(
 		width,
@@ -141,6 +173,19 @@ func (a App) renderStartupScreen(width int, height int) string {
 		paddedContent,
 		lipgloss.WithWhitespaceChars(" "),
 	)
+}
+
+func startupTopOffset(height int, includeHints bool) int {
+	if height <= 0 {
+		return 0
+	}
+	if includeHints {
+		return max(1, min(4, height/10))
+	}
+	if height >= 24 {
+		return 2
+	}
+	return 1
 }
 
 func startupContentWidth(totalWidth int) int {

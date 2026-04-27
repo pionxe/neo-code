@@ -18,7 +18,6 @@ import (
 
 const (
 	maxCommandMenuRows = 6
-	commandMenuBrowse  = "@ browse files..."
 )
 
 type commandMenuItem struct {
@@ -344,17 +343,7 @@ func (a App) fileMenuSuggestions(input string) []commandMenuItem {
 		return nil
 	}
 
-	items := make([]commandMenuItem, 0, len(suggestions)+1)
-	if query == "" {
-		items = append(items, commandMenuItem{
-			title:           commandMenuBrowse,
-			description:     "open workspace file browser",
-			filter:          commandMenuBrowse,
-			highlight:       true,
-			openFileBrowser: true,
-		})
-	}
-
+	items := make([]commandMenuItem, 0, len(suggestions))
 	for index, suggestion := range suggestions {
 		entry := "@" + suggestion
 		items = append(items, commandMenuItem{

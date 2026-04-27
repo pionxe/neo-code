@@ -20,7 +20,7 @@ type layout struct {
 }
 
 const headerBarHeight = 2
-const transcriptScrollbarWidth = 3
+const transcriptScrollbarWidth = 2
 const startupCommandMenuMinReservedHeight = 8
 const minWindowWidth = 60
 const minWindowHeight = 30
@@ -47,11 +47,12 @@ type pickerLayoutSpec struct {
 func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
-	if docWidth < minWindowWidth || docHeight < minWindowHeight {
+	minRequiredHeight := a.minimumDocHeight(docWidth)
+	if docWidth < minWindowWidth || docHeight < minRequiredHeight {
 		hint := fmt.Sprintf(
 			"Window too small.\nPlease resize to at least %dx%d.",
 			minWindowWidth,
-			minWindowHeight,
+			minRequiredHeight,
 		)
 		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, hint)), "\n")
 	}
@@ -71,6 +72,17 @@ func (a App) View() string {
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, content)), "\n")
+}
+
+func (a App) minimumDocHeight(contentWidth int) int {
+	if !a.shouldRenderStartupScreen() {
+		return minWindowHeight
+	}
+	headerHeight := headerBarHeight
+	menuHeight := a.commandMenuHeight(contentWidth, 0)
+	promptHeight := lipgloss.Height(a.renderPrompt(contentWidth))
+	hintHeight := a.helpHeight(contentWidth)
+	return max(1, headerHeight+menuHeight+promptHeight+hintHeight)
 }
 
 func (a App) renderFooter(width int) string {
@@ -162,10 +174,17 @@ func (a App) renderBody(lay layout) string {
 // waterfallMetrics 统一计算瀑布区各组件高度，确保渲染、布局与命中区域使用同一组尺寸。
 func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
 	activityHeight := 0
-	todoHeight := a.todoPreviewHeight()
+	todoHeight := 0
+	if todo := a.renderTodoPreview(width); strings.TrimSpace(todo) != "" {
+		todoHeight = lipgloss.Height(todo)
+	}
 	menuHeight := a.commandMenuHeight(width, height)
 	promptHeight := lipgloss.Height(a.renderPrompt(width))
-	transcriptHeight := max(6, height-activityHeight-todoHeight-menuHeight-promptHeight)
+	minTranscriptHeight := 6
+	if a.shouldRenderStartupScreen() {
+		minTranscriptHeight = 1
+	}
+	transcriptHeight := max(minTranscriptHeight, height-activityHeight-todoHeight-menuHeight-promptHeight)
 	return transcriptHeight, activityHeight, menuHeight, todoHeight
 }
 
@@ -185,33 +204,59 @@ func (a App) renderWaterfall(width int, height int) string {
 		return a.renderLogViewer(width, height)
 	}
 
-	transcript := a.renderTranscriptWithScrollbar(width, a.transcript.View())
-	if a.shouldRenderStartupScreen() {
-		transcript = a.renderStartupScreen(width, max(1, a.transcript.Height))
-	}
-
-	parts := []string{transcript}
+	thinking := ""
 	if a.state.IsAgentRunning && a.state.StatusText == statusThinking {
 		thinkingStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)).
 			Italic(true)
-		parts = append(parts, thinkingStyle.Render("Thinking..."))
+		thinking = thinkingStyle.Render("Thinking...")
 	}
+	selectionNotice := ""
 	if a.hasTextSelection() {
-		selStyle := lipgloss.NewStyle().
+		selectionNotice = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(selectionFg)).
 			UnsetBackground().
-			Padding(0, 1)
-		parts = append(parts, selStyle.Render("已选择内容，右键复制"))
+			Padding(0, 1).
+			Render("已选择内容，右键复制")
 	}
-	if todo := a.renderTodoPreview(width); todo != "" {
+	todo := a.renderTodoPreview(width)
+	menu := a.renderCommandMenu(width)
+	prompt := a.renderPrompt(width)
+
+	reservedHeight := lipgloss.Height(prompt)
+	if strings.TrimSpace(thinking) != "" {
+		reservedHeight += lipgloss.Height(thinking)
+	}
+	if strings.TrimSpace(selectionNotice) != "" {
+		reservedHeight += lipgloss.Height(selectionNotice)
+	}
+	if strings.TrimSpace(todo) != "" {
+		reservedHeight += lipgloss.Height(todo)
+	}
+	if strings.TrimSpace(menu) != "" {
+		reservedHeight += lipgloss.Height(menu)
+	}
+	transcriptSlotHeight := max(1, height-reservedHeight)
+
+	transcript := a.renderTranscriptWithScrollbar(width, a.transcript.View())
+	if a.shouldRenderStartupScreen() {
+		transcript = a.renderStartupScreen(width, transcriptSlotHeight)
+	}
+
+	parts := []string{transcript}
+	if strings.TrimSpace(thinking) != "" {
+		parts = append(parts, thinking)
+	}
+	if strings.TrimSpace(selectionNotice) != "" {
+		parts = append(parts, selectionNotice)
+	}
+	if strings.TrimSpace(todo) != "" {
 		parts = append(parts, todo)
 	}
-	menu := a.renderCommandMenu(width)
-	if menu != "" {
+	if strings.TrimSpace(menu) != "" {
 		parts = append(parts, menu)
 	}
-	parts = append(parts, a.renderPrompt(width))
+	parts = append(parts, prompt)
 
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
@@ -243,7 +288,7 @@ func (a App) renderTranscriptScrollbar(width int, height int) string {
 
 	blank := strings.Repeat(" ", width)
 	thumb := strings.Repeat("█", width)
-	thumbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(purpleAccent)).Bold(true)
+	thumbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(stoneGray))
 
 	maxOffset := a.transcriptMaxOffset()
 	thumbHeight := height
@@ -637,8 +682,8 @@ func (a App) renderCommandMenu(width int) string {
 	if strings.TrimSpace(a.commandMenuMeta.Title) != "" {
 		title = a.commandMenuMeta.Title
 	}
-	body := strings.TrimSpace(a.commandMenu.View())
-	if body == "" {
+	body := a.commandMenu.View()
+	if strings.TrimSpace(body) == "" {
 		return ""
 	}
 	menuWidth := a.startupPanelWidth(width)

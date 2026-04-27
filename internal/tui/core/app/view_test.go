@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestViewStartupScreenRendersStartupSections(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
 	app.width = 120
-	app.height = 40
+	app.height = 50
 
 	view := app.View()
 	plain := copyCodeANSIPattern.ReplaceAllString(view, "")
@@ -50,6 +51,57 @@ func TestViewStartupScreenRendersStartupSections(t *testing.T) {
 	}
 	if !strings.Contains(plain, "Quick Actions") {
 		t.Fatalf("expected startup action description in view")
+	}
+}
+
+func TestMinimumDocHeightStartupUsesHeaderMenuPromptAndHint(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.width = 100
+	app.input.SetValue("/he")
+	app.state.InputText = "/he"
+	app.applyComponentLayout(true)
+	app.refreshCommandMenu()
+
+	contentWidth := max(0, app.width-app.styles.doc.GetHorizontalFrameSize())
+	want := headerBarHeight +
+		app.commandMenuHeight(contentWidth, 0) +
+		lipgloss.Height(app.renderPrompt(contentWidth)) +
+		app.helpHeight(contentWidth)
+	if got := app.minimumDocHeight(contentWidth); got != want {
+		t.Fatalf("expected startup minimum doc height %d, got %d", want, got)
+	}
+}
+
+func TestViewStartupUsesDynamicMinimumHeightThreshold(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.width = 100
+	app.input.SetValue("/he")
+	app.state.InputText = "/he"
+	app.applyComponentLayout(true)
+	app.refreshCommandMenu()
+
+	contentWidth := max(0, app.width-app.styles.doc.GetHorizontalFrameSize())
+	minDocHeight := app.minimumDocHeight(contentWidth)
+
+	app.height = app.styles.doc.GetVerticalFrameSize() + minDocHeight - 1
+	view := app.View()
+	if !strings.Contains(view, "Window too small") {
+		t.Fatalf("expected startup dynamic minimum height warning at %d", minDocHeight-1)
+	}
+	if !strings.Contains(view, fmt.Sprintf("%dx%d", minWindowWidth, minDocHeight)) {
+		t.Fatalf("expected startup dynamic size hint %dx%d, got %q", minWindowWidth, minDocHeight, view)
+	}
+
+	app.height++
+	view = app.View()
+	if strings.Contains(view, "Window too small") {
+		t.Fatalf("expected startup view to render at dynamic minimum height %d", minDocHeight)
 	}
 }
 
@@ -213,7 +265,7 @@ func TestRenderWaterfallShowsStartupScreenForEmptyDraft(t *testing.T) {
 	app.activeMessages = nil
 	app.input.SetValue("")
 
-	view := app.renderWaterfall(100, 26)
+	view := app.renderWaterfall(100, 50)
 	if !strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
 		t.Fatalf("expected startup subtitle in waterfall, got %q", view)
 	}
@@ -267,22 +319,52 @@ func TestStartupWidthsClampToAvailableSpace(t *testing.T) {
 	}
 }
 
-func TestRenderStartupScreenFitsNarrowViewport(t *testing.T) {
+func TestRenderStartupScreenHidesQuickActionsBelowFullLayoutThreshold(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
 	app.state.ActivePicker = pickerNone
 	app.activeMessages = nil
 	app.input.SetValue("")
 
-	const viewportWidth = 64
-	view := copyCodeANSIPattern.ReplaceAllString(app.renderWaterfall(viewportWidth, 24), "")
-	if !strings.Contains(view, "Quick Actions") {
-		t.Fatalf("expected startup quick actions in narrow viewport")
+	const viewportWidth = 72
+	const viewportHeight = 29
+	view := copyCodeANSIPattern.ReplaceAllString(app.renderWaterfall(viewportWidth, viewportHeight), "")
+	if strings.Contains(view, "Quick Actions") {
+		t.Fatalf("expected startup quick actions hidden below %dx%d", startupLayoutFullMinWidth, startupLayoutFullMinHeight)
 	}
 
 	for _, line := range strings.Split(view, "\n") {
 		if got := lipgloss.Width(line); got > viewportWidth {
 			t.Fatalf("expected line width <= %d, got %d in line %q", viewportWidth, got, line)
+		}
+	}
+}
+
+func TestRenderWaterfallStartupWithCommandSuggestionsFitsViewport(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("/he")
+	app.state.InputText = "/he"
+	app.width = 100
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.refreshCommandMenu()
+
+	view := copyCodeANSIPattern.ReplaceAllString(app.renderWaterfall(100, 32), "")
+	if !strings.Contains(view, commandMenuTitle) {
+		t.Fatalf("expected command suggestion menu to be rendered on startup")
+	}
+	if !strings.Contains(view, "┌") || !strings.Contains(view, "└") {
+		t.Fatalf("expected prompt box to stay visible with startup command suggestions, got %q", view)
+	}
+	if got := lipgloss.Height(view); got != 32 {
+		t.Fatalf("expected startup waterfall height to match viewport, got %d", got)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > 100 {
+			t.Fatalf("expected line width <= %d, got %d in line %q", 100, got, line)
 		}
 	}
 }
@@ -337,6 +419,18 @@ func TestRenderStartupScreenCompactMenuAndInvalidSize(t *testing.T) {
 	compact := copyCodeANSIPattern.ReplaceAllString(app.renderStartupScreen(30, 16), "")
 	if !strings.Contains(compact, "NeoCode") {
 		t.Fatalf("expected fallback logo text for narrow width, got %q", compact)
+	}
+}
+
+func TestRenderStartupScreenHidesLogoWhenHeightIsVeryTight(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	compact := copyCodeANSIPattern.ReplaceAllString(app.renderStartupScreen(80, 4), "")
+	if strings.Contains(compact, "NeoCode") {
+		t.Fatalf("expected startup logo hidden when height is very tight, got %q", compact)
+	}
+	if !strings.Contains(compact, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup subtitle to remain visible, got %q", compact)
 	}
 }
 
@@ -716,10 +810,13 @@ func TestRenderPanelAndActivityPreview(t *testing.T) {
 	}
 }
 
-func TestRenderHelpShowsCtrlLAndError(t *testing.T) {
+func TestRenderHelpShowsCtrlNCtrlLAndError(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.StatusText = statusReady
 	rendered := copyCodeANSIPattern.ReplaceAllString(app.renderHelp(80), "")
+	if !strings.Contains(rendered, "Ctrl+N New chat") {
+		t.Fatalf("expected footer help to include new session shortcut, got %q", rendered)
+	}
 	if !strings.Contains(rendered, "Ctrl+L Log viewer") {
 		t.Fatalf("expected footer help to include log viewer shortcut, got %q", rendered)
 	}
@@ -886,6 +983,34 @@ func TestRenderCommandMenuEmptyBody(t *testing.T) {
 	}
 }
 
+func TestRenderCommandMenuKeepsFirstRowIndent(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActivePicker = pickerNone
+	app.transcript.Width = 80
+	app.commandMenu.SetItems([]list.Item{
+		commandMenuItem{title: "/help", description: "show help"},
+		commandMenuItem{title: "/clear", description: "clear current draft"},
+	})
+	app.commandMenu.Select(1)
+	app.commandMenuMeta = tuistate.CommandMenuMeta{Title: commandMenuTitle}
+	app.resizeCommandMenu()
+
+	menu := copyCodeANSIPattern.ReplaceAllString(app.renderCommandMenu(80), "")
+	helpLine := ""
+	for _, line := range strings.Split(menu, "\n") {
+		if strings.Contains(line, "/help") {
+			helpLine = line
+			break
+		}
+	}
+	if helpLine == "" {
+		t.Fatalf("expected /help row in command menu, got %q", menu)
+	}
+	if strings.Index(helpLine, "/help") < 2 {
+		t.Fatalf("expected first row to keep leading indent, got %q", helpLine)
+	}
+}
+
 func TestNormalizeAndTrimHelpers(t *testing.T) {
 	trimmed := trimRenderedTrailingWhitespace("line1  \nline2\t")
 	if strings.HasSuffix(trimmed, "\t") || strings.HasSuffix(trimmed, " ") {
@@ -937,7 +1062,7 @@ func TestRenderActivityLineAndScrollbarHelpers(t *testing.T) {
 		t.Fatalf("expected renderActivityLine to return non-empty text")
 	}
 
-	if got := app.transcriptScrollbarWidth(3); got != 0 {
+	if got := app.transcriptScrollbarWidth(transcriptScrollbarWidth); got != 0 {
 		t.Fatalf("expected narrow transcript width to disable scrollbar, got %d", got)
 	}
 	if got := app.transcriptScrollbarWidth(20); got != transcriptScrollbarWidth {

@@ -111,13 +111,19 @@ func TestBuildCommandMenuItemsForSlashCommands(t *testing.T) {
 	}
 }
 
-func TestFileMenuSuggestionsEmptyQueryIncludesBrowse(t *testing.T) {
+func TestFileMenuSuggestionsEmptyQueryReturnsFileReferences(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.fileCandidates = []string{"README.md", "docs/guide.md"}
 
 	items := app.fileMenuSuggestions("@")
-	if len(items) == 0 || !items[0].openFileBrowser {
-		t.Fatalf("expected browse file entry")
+	if len(items) == 0 {
+		t.Fatalf("expected file suggestions")
+	}
+	if items[0].openFileBrowser {
+		t.Fatalf("expected browse file entry to be removed")
+	}
+	if !strings.HasPrefix(items[0].replacement, "@") {
+		t.Fatalf("expected replacement to start with @, got %q", items[0].replacement)
 	}
 }
 
@@ -152,11 +158,11 @@ func TestApplySelectedCommandSuggestionReplacesInput(t *testing.T) {
 	}
 }
 
-func TestApplySelectedCommandSuggestionOpenFileBrowser(t *testing.T) {
+func TestApplySelectedCommandSuggestionAppliesFileReference(t *testing.T) {
 	app, _ := newTestApp(t)
-	app.state.CurrentWorkdir = t.TempDir()
 	app.fileCandidates = []string{"README.md"}
 	app.input.SetValue("@")
+	app.state.InputText = "@"
 	app.transcript.Width = 80
 	app.refreshCommandMenu()
 
@@ -165,10 +171,10 @@ func TestApplySelectedCommandSuggestionOpenFileBrowser(t *testing.T) {
 	}
 	applied := app.applySelectedCommandSuggestion()
 	if !applied {
-		t.Fatalf("expected browse action to apply")
+		t.Fatalf("expected file reference action to apply")
 	}
-	if app.state.ActivePicker != pickerFile {
-		t.Fatalf("expected file picker to open")
+	if got := app.input.Value(); got != "@README.md" {
+		t.Fatalf("expected selected file reference to be applied, got %q", got)
 	}
 }
 

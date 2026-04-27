@@ -359,6 +359,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if key.Matches(typed, a.keys.NewSession) && !a.isBusy() {
 			a.startDraftSession()
+			a.startupScreenLocked = true
 			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.OpenWorkspace) {
@@ -3029,14 +3030,9 @@ func (a *App) rebuildTranscript() {
 	atBottom := a.transcript.AtBottom()
 	var builder strings.Builder
 	hasBlock := false
-	previousRole := ""
 	for _, message := range a.activeMessages {
-		if message.Role == roleTool {
-			// tool 消息在 transcript 中不直接展示，但需要打断 assistant 连续分段。
-			previousRole = roleTool
-			continue
-		}
-		continuation := message.Role == roleAssistant && previousRole == roleAssistant
+
+		continuation := false
 		rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, !continuation)
 		if rendered == "" {
 			continue
@@ -3051,7 +3047,6 @@ func (a *App) rebuildTranscript() {
 		}
 		builder.WriteString(rendered)
 		hasBlock = true
-		previousRole = message.Role
 	}
 
 	a.setTranscriptContent(builder.String())
@@ -3087,7 +3082,7 @@ func (a *App) highlightTranscriptContent(content string) string {
 	}
 
 	highlightStyle := lipgloss.NewStyle().
-		UnsetBackground().
+		Background(lipgloss.Color(selectionBg)).
 		Foreground(lipgloss.Color(selectionFg))
 
 	for i := startLine; i <= endLine && i < len(lines); i++ {

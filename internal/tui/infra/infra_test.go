@@ -24,13 +24,14 @@ func TestCollectWorkspaceFiles(t *testing.T) {
 	mustWrite("internal/tui/update.go")
 	mustWrite(".git/config")
 	mustWrite("node_modules/skip.js")
+	mustWrite(".build/output.log")
 
 	files, err := CollectWorkspaceFiles(root, 10)
 	if err != nil {
 		t.Fatalf("CollectWorkspaceFiles() error = %v", err)
 	}
 	got := strings.Join(files, ",")
-	if strings.Contains(got, ".git") || strings.Contains(got, "node_modules") {
+	if strings.Contains(got, ".git") || strings.Contains(got, "node_modules") || strings.Contains(got, ".build") {
 		t.Fatalf("expected ignored dirs skipped, got %v", files)
 	}
 	if !strings.Contains(got, "README.md") || !strings.Contains(got, "internal/tui/update.go") {

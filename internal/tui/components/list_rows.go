@@ -21,10 +21,18 @@ type CommandMenuRowData struct {
 
 // RenderCommandMenuRow 渲染命令建议菜单中的单行内容。
 func RenderCommandMenuRow(data CommandMenuRowData) string {
-	contentWidth := max(12, data.Width-2)
+	prefix := "  "
+	if data.Selected {
+		prefix = "> "
+	}
+	contentWidth := max(12, data.Width-lipgloss.Width(prefix))
 	usageStyle := data.UsageStyle
 	if data.Highlight || data.Selected {
 		usageStyle = data.UsageMatchStyle
+	}
+	descriptionStyle := data.DescriptionStyle
+	if data.Selected {
+		descriptionStyle = data.UsageMatchStyle
 	}
 
 	line := usageStyle.Render(data.Title)
@@ -34,11 +42,11 @@ func RenderCommandMenuRow(data CommandMenuRowData) string {
 			lipgloss.Top,
 			line,
 			lipgloss.NewStyle().Width(2).Render(""),
-			data.DescriptionStyle.Render(trimMiddle(description, descWidth)),
+			descriptionStyle.Render(trimMiddle(description, descWidth)),
 		)
 	}
 
-	return lipgloss.NewStyle().Width(contentWidth).Render(line)
+	return prefix + lipgloss.NewStyle().Width(contentWidth).Render(line)
 }
 
 // SessionRowData 描述会话列表单行渲染所需数据。
