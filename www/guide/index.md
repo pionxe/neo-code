@@ -23,6 +23,11 @@ NeoCode 是一个在终端里运行的本地 AI 编码助手。它不是云端 S
 | 如何让 Agent 遵守项目规则 | [AGENTS.md 项目规则](./agents-md) |
 | 记忆、Skills、AGENTS.md、MCP 怎么选 | [能力选择指南](./capability-choice) |
 
+## 仓库 README（快速总览）
+
+- [README（中文）](https://github.com/1024XEngineer/neo-code/blob/main/README.md)
+- [README (English)](https://github.com/1024XEngineer/neo-code/blob/main/README.en.md)
+
 ## 日常使用
 
 - [日常使用](./daily-use) — 从打开项目到完成任务的工作流

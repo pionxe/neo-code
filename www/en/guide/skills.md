@@ -25,12 +25,16 @@ If the rule belongs to the project, use [AGENTS.md](./agents-md). If it is a per
 Local Skills live under:
 
 ```text
+<workspace>/.neocode/skills/
 ~/.neocode/skills/
 ```
+
+If `~/.neocode/skills/` does not exist, NeoCode falls back to `~/.codex/skills/`.
 
 Recommended layout:
 
 ```text
+<workspace>/.neocode/skills/go-review/SKILL.md
 ~/.neocode/skills/go-review/SKILL.md
 ```
 

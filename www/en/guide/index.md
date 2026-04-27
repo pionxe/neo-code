@@ -23,6 +23,11 @@ NeoCode is a local terminal AI coding assistant. It works around your workspace,
 | Project-level agent rules | [AGENTS.md Project Rules](./agents-md) |
 | Memory vs Skills vs AGENTS.md vs MCP | [Capability Guide](./capability-choice) |
 
+## Repository README (quick overview)
+
+- [README (Chinese)](https://github.com/1024XEngineer/neo-code/blob/main/README.md)
+- [README (English)](https://github.com/1024XEngineer/neo-code/blob/main/README.en.md)
+
 ## Daily use
 
 - [Daily Use](./daily-use)
