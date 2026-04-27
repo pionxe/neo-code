@@ -79,13 +79,6 @@ current_model: gemini-2.5-pro
 neocode --workdir /path/to/project
 ```
 
-在 NeoCode 界面里也可以查看或切换：
-
-```text
-/cwd
-/cwd /path/to/project
-```
-
 ## Shell 和工具超时
 
 Shell 决定 Agent 执行命令时使用的环境：

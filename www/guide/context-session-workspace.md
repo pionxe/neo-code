@@ -19,13 +19,6 @@ NeoCode 的日常使用围绕三个概念：工作区、会话和上下文。
 neocode --workdir /path/to/project
 ```
 
-在 NeoCode 中查看或切换：
-
-```text
-/cwd
-/cwd /path/to/project
-```
-
 建议一个会话只服务一个工作区。切换到另一个项目时，新建会话会更清楚。
 
 ## 会话

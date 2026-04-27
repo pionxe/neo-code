@@ -18,7 +18,7 @@ NeoCode 是一个在终端里运行的本地 AI 编码助手。它不是云端 S
 
 | 你想了解 | 阅读 |
 |---|---|
-| `/compact`、`/cwd`、`/model` 等命令怎么用 | [Slash 指令](./slash-commands) |
+| `/compact`、`/model` 等命令怎么用 | [Slash 指令](./slash-commands) |
 | 工作区、会话和上下文的区别 | [会话、上下文与工作区](./context-session-workspace) |
 | 如何让 Agent 遵守项目规则 | [AGENTS.md 项目规则](./agents-md) |
 | 记忆、Skills、AGENTS.md、MCP 怎么选 | [能力选择指南](./capability-choice) |

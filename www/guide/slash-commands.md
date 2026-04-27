@@ -17,8 +17,6 @@ Slash 指令是 NeoCode 的本地控制命令。它们以 `/` 开头，用来切
 
 ```text
 /help
-/cwd
-/cwd /path/to/project
 /remember 我习惯先看测试再改代码
 ```
 
@@ -34,8 +32,6 @@ Slash 指令是 NeoCode 的本地控制命令。它们以 `/` 开头，用来切
 
 | 命令 | 用途 | 示例 |
 |---|---|---|
-| `/cwd` | 查看当前工作区 | `/cwd` |
-| `/cwd <path>` | 切换到另一个工作区 | `/cwd ../my-project` |
 | `/session` | 打开会话选择器 | `/session` |
 | `/compact` | 压缩当前长会话上下文 | `/compact` |
 
