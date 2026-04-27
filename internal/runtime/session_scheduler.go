@@ -36,7 +36,14 @@ func (s *Service) loadOrCreateSession(
 	if err != nil {
 		return agentsession.Session{}, err
 	}
+	profileChanged := establishSessionVerificationProfile(&session)
 	if strings.TrimSpace(requestedWorkdir) == "" && strings.TrimSpace(session.Workdir) != "" {
+		if profileChanged {
+			session.UpdatedAt = time.Now()
+			if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session)); err != nil {
+				return agentsession.Session{}, err
+			}
+		}
 		return session, nil
 	}
 
@@ -44,11 +51,13 @@ func (s *Service) loadOrCreateSession(
 	if err != nil {
 		return agentsession.Session{}, err
 	}
-	if session.Workdir == resolved {
+	workdirChanged := session.Workdir != resolved
+	if !workdirChanged && !profileChanged {
 		return session, nil
 	}
-
-	session.Workdir = resolved
+	if workdirChanged {
+		session.Workdir = resolved
+	}
 	session.UpdatedAt = time.Now()
 	if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session)); err != nil {
 		return agentsession.Session{}, err
@@ -57,14 +66,15 @@ func (s *Service) loadOrCreateSession(
 }
 
 // establishSessionVerificationProfile 在创建新会话的边界显式写入验收 profile，避免运行时依赖隐式零值。
-func establishSessionVerificationProfile(session *agentsession.Session) {
+func establishSessionVerificationProfile(session *agentsession.Session) bool {
 	if session == nil {
-		return
+		return false
 	}
 	if session.TaskState.VerificationProfile.Valid() {
-		return
+		return false
 	}
 	session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
+	return true
 }
 
 // startRun 记录当前激活的运行取消句柄，并分配一个新的运行令牌。

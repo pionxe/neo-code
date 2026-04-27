@@ -149,6 +149,16 @@ func TestExecutionPolicyHelpers(t *testing.T) {
 		if _, ok := set["git"]; !ok {
 			t.Fatalf("normalized set should include git")
 		}
+		spacedSet := normalizedCommandSet([]string{"go test ./...", " git status "})
+		if _, ok := spacedSet["go"]; !ok {
+			t.Fatalf("normalized set should parse command head from spaced go command")
+		}
+		if _, ok := spacedSet["git"]; !ok {
+			t.Fatalf("normalized set should parse command head from spaced git command")
+		}
+		if _, ok := spacedSet["go test ./..."]; ok {
+			t.Fatalf("normalized set should not retain entire shell-like command as key")
+		}
 		if got := firstPositive(-1, 0, 9, 10); got != 9 {
 			t.Fatalf("firstPositive() = %d, want 9", got)
 		}

@@ -201,7 +201,7 @@ func hasDangerousGitArguments(argv []string) (bool, string) {
 func normalizedCommandSet(commands []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(commands))
 	for _, command := range commands {
-		head := commandHead([]string{command})
+		head := commandHead(strings.Fields(command))
 		if head != "" {
 			set[head] = struct{}{}
 		}
