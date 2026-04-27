@@ -1,10 +1,10 @@
-//go:build !windows
+//go:build !windows && !darwin && !linux
 
 package urlscheme
 
 import "fmt"
 
-// RegisterURLScheme 在非 Windows 平台返回 not_supported，保证编译与行为稳定。
+// RegisterURLScheme 在未适配平台上返回 not_supported，保持行为稳定并避免误导性成功。
 func RegisterURLScheme(executablePath string) error {
 	return newDispatchError(
 		ErrorCodeNotSupported,

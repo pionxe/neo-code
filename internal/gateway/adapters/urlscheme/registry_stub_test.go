@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin && !linux
 
 package urlscheme
 
@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestRegisterURLSchemeNotSupportedOnNonWindows(t *testing.T) {
+func TestRegisterURLSchemeNotSupportedOnUnsupportedPlatforms(t *testing.T) {
 	err := RegisterURLScheme("/tmp/neocode")
 	if err == nil {
 		t.Fatal("expected not supported error")
