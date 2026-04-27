@@ -88,7 +88,7 @@ func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 
 	if !promptInjected {
 		t.Error("expected self-healing prompt to be injected before repetitive no-progress turns")
@@ -170,7 +170,7 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 }
 
 func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
@@ -237,7 +237,7 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 
 	if !promptInjected {
 		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
@@ -377,7 +377,7 @@ func TestRunStopsWhenMaxTurnsReached(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonMaxTurnsReached, "runtime: max turn limit reached (1)")
+	assertStopReasonDecided(t, events, controlplane.StopReasonMaxTurnExceeded, "runtime: max turn limit reached (1)")
 }
 
 func TestComputeToolSignatureNormalizationAndFallback(t *testing.T) {
@@ -592,9 +592,22 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 					Role: providertypes.RoleAssistant,
 					ToolCalls: []providertypes.ToolCall{
 						{
-							ID:        "todo-close",
+							ID:        "todo-start",
 							Name:      tools.ToolNameTodoWrite,
-							Arguments: `{"action":"set_status","id":"todo-1","status":"canceled","expected_revision":1}`,
+							Arguments: `{"action":"set_status","id":"todo-1","status":"in_progress","expected_revision":1}`,
+						},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{
+							ID:        "todo-complete",
+							Name:      tools.ToolNameTodoWrite,
+							Arguments: `{"action":"complete","id":"todo-1","expected_revision":2}`,
 						},
 					},
 				},
@@ -629,13 +642,20 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	if len(providerImpl.requests) < 2 {
 		t.Fatalf("expected at least 2 provider requests, got %d", len(providerImpl.requests))
 	}
-	if !strings.Contains(providerImpl.requests[1].SystemPrompt, selfHealingReminder) {
-		t.Fatalf("expected stalled reminder in second provider request, got %q", providerImpl.requests[1].SystemPrompt)
+	foundReminder := false
+	for _, message := range providerImpl.requests[1].Messages {
+		if message.Role == providertypes.RoleSystem && strings.Contains(renderPartsForTest(message.Parts), finalContinueReminder) {
+			foundReminder = true
+			break
+		}
+	}
+	if !foundReminder {
+		t.Fatalf("expected continue reminder in second provider request messages, got %+v", providerImpl.requests[1].Messages)
 	}
 
 	events := collectRuntimeEvents(service.Events())
 	assertEventContains(t, events, EventProgressEvaluated)
-	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 }
 
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {

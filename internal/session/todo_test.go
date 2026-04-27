@@ -558,3 +558,92 @@ func TestSessionUpdateTodoExecutorPatch(t *testing.T) {
 		t.Fatalf("executor = %q, want %q", updated.Executor, TodoExecutorSubAgent)
 	}
 }
+
+func TestTodoSupersedesAndContentChecksValidation(t *testing.T) {
+	t.Parallel()
+
+	// ContentChecks normalize: 空 artifact 或空 contains 被过滤
+	item, err := normalizeTodoItem(TodoItem{
+		ID:      "cc",
+		Content: "content checks test",
+		ContentChecks: []TodoContentCheck{
+			{Artifact: "  ", Contains: []string{"x"}},
+			{Artifact: "a.go", Contains: []string{"  ", "token"}},
+			{Artifact: "b.go", Contains: []string{"t1", "t1", "t2"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeTodoItem error = %v", err)
+	}
+	if len(item.ContentChecks) != 2 {
+		t.Fatalf("expected 2 content checks after normalize, got %d", len(item.ContentChecks))
+	}
+	if item.ContentChecks[0].Artifact != "a.go" || len(item.ContentChecks[0].Contains) != 1 || item.ContentChecks[0].Contains[0] != "token" {
+		t.Fatalf("unexpected first check: %+v", item.ContentChecks[0])
+	}
+	if item.ContentChecks[1].Artifact != "b.go" || len(item.ContentChecks[1].Contains) != 2 {
+		t.Fatalf("unexpected second check: %+v", item.ContentChecks[1])
+	}
+
+	// Clone 深拷贝 ContentChecks 和 Supersedes
+	original := TodoItem{
+		ID:            "clone",
+		Content:       "clone test",
+		Supersedes:    []string{"a", "b"},
+		ContentChecks: []TodoContentCheck{{Artifact: "x.go", Contains: []string{"ok"}}},
+	}
+	cloned := original.Clone()
+	cloned.Supersedes[0] = "mutated"
+	cloned.ContentChecks[0].Contains[0] = "mutated"
+	if original.Supersedes[0] != "a" || original.ContentChecks[0].Contains[0] != "ok" {
+		t.Fatalf("Clone should deep copy Supersedes and ContentChecks")
+	}
+
+	// normalizeAndValidateTodos 校验 Supersedes 存在性
+	session := New("supersedes-validation")
+	if err := session.AddTodo(TodoItem{ID: "real", Content: "real"}); err != nil {
+		t.Fatalf("AddTodo(real) error = %v", err)
+	}
+	if err := session.AddTodo(TodoItem{ID: "ghost", Content: "ghost", Supersedes: []string{"missing"}}); err == nil || !strings.Contains(err.Error(), "unknown superseded todo") {
+		t.Fatalf("expected unknown superseded todo error, got %v", err)
+	}
+
+	// Supersedes 自引用校验
+	if err := session.AddTodo(TodoItem{ID: "self", Content: "self", Supersedes: []string{"self"}}); err == nil || !strings.Contains(err.Error(), "cannot supersede itself") {
+		t.Fatalf("expected self-supersede error, got %v", err)
+	}
+
+	// Patch 覆盖 Supersedes 和 ContentChecks
+	if err := session.AddTodo(TodoItem{ID: "patch-target", Content: "patch", Supersedes: []string{"real"}}); err != nil {
+		t.Fatalf("AddTodo(patch-target) error = %v", err)
+	}
+	newSupersedes := []string{"real"}
+	newChecks := []TodoContentCheck{{Artifact: "main.go", Contains: []string{"func main"}}}
+	if err := session.UpdateTodo("patch-target", TodoPatch{
+		Supersedes:    &newSupersedes,
+		ContentChecks: &newChecks,
+	}, 1); err != nil {
+		t.Fatalf("UpdateTodo error = %v", err)
+	}
+	patched, _ := session.FindTodo("patch-target")
+	if len(patched.Supersedes) != 1 || patched.Supersedes[0] != "real" || len(patched.ContentChecks) != 1 {
+		t.Fatalf("unexpected patched state: %+v", patched)
+	}
+
+	// required canceled todo 必须有 replacement（通过 Supersedes 声明）
+	if err := session.ReplaceTodos([]TodoItem{
+		{ID: "orig", Content: "orig", Status: TodoStatusCanceled, Required: boolPtr(true)},
+		{ID: "repl", Content: "repl", Required: boolPtr(true), Supersedes: []string{"orig"}},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos with valid replacement error = %v", err)
+	}
+	if err := session.ReplaceTodos([]TodoItem{
+		{ID: "orphan", Content: "orphan", Status: TodoStatusCanceled, Required: boolPtr(true)},
+	}); err == nil || !strings.Contains(err.Error(), "must declare an explicit replacement") {
+		t.Fatalf("expected replacement required error, got %v", err)
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}

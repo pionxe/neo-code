@@ -12,12 +12,12 @@ func defaultExecutionPolicy() config.VerificationExecutionPolicyConfig {
 	return config.StaticDefaults().Runtime.Verification.ExecutionPolicy
 }
 
-func assertExecutionDenied(t *testing.T, command string) {
+func assertExecutionDenied(t *testing.T, argv []string) {
 	t.Helper()
 
 	_, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{
-		Command: command,
-		Policy:  defaultExecutionPolicy(),
+		Argv:   argv,
+		Policy: defaultExecutionPolicy(),
 	})
 	if err == nil {
 		t.Fatal("expected command to be denied")
@@ -31,8 +31,8 @@ func TestPolicyCommandExecutorAllowsWhitelistedCommand(t *testing.T) {
 	t.Parallel()
 
 	result, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{
-		Command: "go version",
-		Policy:  defaultExecutionPolicy(),
+		Argv:   []string{"go", "version"},
+		Policy: defaultExecutionPolicy(),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -45,28 +45,17 @@ func TestPolicyCommandExecutorAllowsWhitelistedCommand(t *testing.T) {
 func TestPolicyCommandExecutorRejectsDeniedCommand(t *testing.T) {
 	t.Parallel()
 
-	assertExecutionDenied(t, "rm -rf .")
+	assertExecutionDenied(t, []string{"rm", "-rf", "."})
 }
 
 func TestPolicyCommandExecutorRejectsGitWriteSubcommand(t *testing.T) {
 	t.Parallel()
 
-	assertExecutionDenied(t, "git checkout .")
+	assertExecutionDenied(t, []string{"git", "checkout", "."})
 }
 
-func TestPolicyCommandExecutorRejectsShellMetacharacter(t *testing.T) {
+func TestPolicyCommandExecutorRejectsNonWhitelistedCommand(t *testing.T) {
 	t.Parallel()
 
-	testCases := []string{
-		"go test ./...; rm -rf .",
-		"git diff && git checkout .",
-		"echo $HOME",
-	}
-	for _, command := range testCases {
-		command := command
-		t.Run(command, func(t *testing.T) {
-			t.Parallel()
-			assertExecutionDenied(t, command)
-		})
-	}
+	assertExecutionDenied(t, []string{"echo", "$HOME"})
 }

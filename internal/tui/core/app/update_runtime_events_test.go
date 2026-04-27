@@ -87,7 +87,7 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	app.state.ExecutionError = ""
 	app.state.StatusText = "not-ready"
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompleted},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonAccepted},
 	})
 	if app.state.StatusText != statusReady {
 		t.Fatalf("expected completed with empty execution error to set ready status")
@@ -96,7 +96,7 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	app.state.ExecutionError = "boom"
 	app.state.StatusText = ""
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompleted},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonAccepted},
 	})
 	if app.state.StatusText == statusReady {
 		t.Fatalf("expected completed branch to keep status unchanged when execution error exists")
@@ -117,7 +117,7 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	}
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.StopReasonDecidedPayload{
-			Reason: agentruntime.StopReasonMaxTurnsReached,
+			Reason: agentruntime.StopReasonMaxTurnExceeded,
 			Detail: "runtime: max turn limit reached (40)",
 		},
 	})
@@ -137,13 +137,6 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	})
 	if app.state.StatusText != "explicit failure" || app.state.ExecutionError != "explicit failure" {
 		t.Fatalf("expected explicit fatal stop detail to be surfaced")
-	}
-
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompatibilityFallback},
-	})
-	if app.state.ExecutionError != "" || app.state.StatusText != "Completed via compatibility fallback" {
-		t.Fatalf("expected compatibility fallback to be non-error, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{

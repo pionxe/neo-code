@@ -49,6 +49,9 @@ func TestServiceCreateSessionUpsertWhenMissing(t *testing.T) {
 	if created.Title != "New Session" {
 		t.Fatalf("created session title = %q, want %q", created.Title, "New Session")
 	}
+	if created.TaskState.VerificationProfile != agentsession.VerificationProfileTaskOnly {
+		t.Fatalf("created verification profile = %q, want %q", created.TaskState.VerificationProfile, agentsession.VerificationProfileTaskOnly)
+	}
 
 	savesAfterCreate := store.memoryStore.saves
 	loaded, err := service.CreateSession(context.Background(), "session-upsert")

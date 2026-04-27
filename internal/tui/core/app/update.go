@@ -1811,18 +1811,10 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		reason = strings.ToLower(string(tuiservices.StopReasonBudgetExceeded))
 	}
 	switch reason {
-	case strings.ToLower(string(tuiservices.StopReasonCompleted)):
+	case strings.ToLower(string(tuiservices.StopReasonAccepted)):
 		if strings.TrimSpace(a.state.ExecutionError) == "" {
 			a.state.StatusText = statusReady
 		}
-	case strings.ToLower(string(tuiservices.StopReasonCompatibilityFallback)):
-		detail := strings.TrimSpace(payload.Detail)
-		if detail == "" {
-			detail = "Completed via compatibility fallback"
-		}
-		a.state.ExecutionError = ""
-		a.state.StatusText = detail
-		a.appendActivity("run", "Run completed (compatibility fallback)", detail, false)
 	case strings.ToLower(string(tuiservices.StopReasonTodoNotConverged)),
 		strings.ToLower(string(tuiservices.StopReasonTodoWaitingExternal)),
 		strings.ToLower(string(tuiservices.StopReasonNoProgressAfterFinalIntercept)),
@@ -1839,8 +1831,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.state.ExecutionError = ""
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
-	case strings.ToLower(string(tuiservices.StopReasonRetryExhausted)),
-		strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
+	case strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
 		detail := strings.TrimSpace(payload.Detail)
@@ -1858,7 +1849,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.state.ExecutionError = ""
 		a.state.StatusText = detail
 		a.appendActivity("run", "Context budget exceeded", detail, false)
-	case strings.ToLower(string(tuiservices.StopReasonMaxTurnsReached)):
+	case strings.ToLower(string(tuiservices.StopReasonMaxTurnExceeded)):
 		detail := strings.TrimSpace(payload.Detail)
 		if detail == "" {
 			detail = "Max turns reached"

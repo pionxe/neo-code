@@ -1,6 +1,6 @@
 package controlplane
 
-// StopReason 表示一次 Run 的最终硬停止原因。
+// StopReason 表示一次 Run 的最终终止原因。
 type StopReason string
 
 const (
@@ -12,33 +12,24 @@ const (
 	StopReasonBudgetExceeded StopReason = "budget_exceeded"
 	// StopReasonMaxTurnExceeded 表示达到运行轮次上限并主动终止。
 	StopReasonMaxTurnExceeded StopReason = "max_turn_exceeded"
-	// StopReasonRetryExhausted 表示 todo 重试次数已耗尽。
-	StopReasonRetryExhausted StopReason = "retry_exhausted"
-	// StopReasonVerificationFailed 表示验证器明确失败。
+	// StopReasonVerificationFailed 表示 verifier 明确失败。
 	StopReasonVerificationFailed StopReason = "verification_failed"
-	// StopReasonAccepted 表示 completion/verification 双门控均通过并完成收尾。
+	// StopReasonAccepted 表示 completion gate 与 verifier gate 均通过并完成收尾。
 	StopReasonAccepted StopReason = "accepted"
 	// StopReasonTodoNotConverged 表示 required todo 尚未收敛。
 	StopReasonTodoNotConverged StopReason = "todo_not_converged"
-	// StopReasonTodoWaitingExternal 表示 required todo 等待外部输入。
+	// StopReasonTodoWaitingExternal 表示 required todo 仍在等待外部条件。
 	StopReasonTodoWaitingExternal StopReason = "todo_waiting_external"
-	// StopReasonNoProgressAfterFinalIntercept 表示 final 连续拦截但无进展。
+	// StopReasonNoProgressAfterFinalIntercept 表示 final 连续被拦截且没有新进展。
 	StopReasonNoProgressAfterFinalIntercept StopReason = "no_progress_after_final_intercept"
-	// StopReasonMaxTurnExceededWithUnconvergedTodos 表示 max turn + todo 未收敛。
+	// StopReasonMaxTurnExceededWithUnconvergedTodos 表示达到最大轮次时 todo 仍未收敛。
 	StopReasonMaxTurnExceededWithUnconvergedTodos StopReason = "max_turn_exceeded_with_unconverged_todos"
-	// StopReasonMaxTurnExceededWithFailedVerification 表示 max turn + verification 未通过。
+	// StopReasonMaxTurnExceededWithFailedVerification 表示达到最大轮次时 verifier 已失败。
 	StopReasonMaxTurnExceededWithFailedVerification StopReason = "max_turn_exceeded_with_failed_verification"
-	// StopReasonVerificationConfigMissing 表示 verifier 必需配置缺失。
+	// StopReasonVerificationConfigMissing 表示 verifier 依赖的配置缺失或非法。
 	StopReasonVerificationConfigMissing StopReason = "verification_config_missing"
 	// StopReasonVerificationExecutionDenied 表示 verifier 命令被执行策略拒绝。
 	StopReasonVerificationExecutionDenied StopReason = "verification_execution_denied"
 	// StopReasonVerificationExecutionError 表示 verifier 命令执行异常。
 	StopReasonVerificationExecutionError StopReason = "verification_execution_error"
-	// StopReasonCompatibilityFallback 表示走了兼容回退路径。
-	StopReasonCompatibilityFallback StopReason = "compatibility_fallback"
-
-	// StopReasonMaxTurnsReached 兼容旧命名，语义等价于 max_turn_exceeded。
-	StopReasonMaxTurnsReached StopReason = StopReasonMaxTurnExceeded
-	// StopReasonCompleted 兼容旧命名，语义等价于 accepted。
-	StopReasonCompleted StopReason = StopReasonAccepted
 )

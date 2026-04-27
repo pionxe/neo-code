@@ -28,7 +28,7 @@ generate_start_timeout_sec: 90
 runtime:
   max_no_progress_streak: 5
   max_repeat_cycle_streak: 3
-  max_turns: 40
+  max_turns: 90
   assets:
     max_session_asset_bytes: 20971520
     max_session_assets_total_bytes: 20971520
@@ -157,7 +157,6 @@ internal/config/provider.go
 
 - `openai`
 - `gemini`
-- `openll`
 - `qiniu`
 - `modelscope`
 
@@ -210,7 +209,6 @@ API Key 只从系统环境变量读取。
 |----------|----------|
 | `openai` | `OPENAI_API_KEY` |
 | `gemini` | `GEMINI_API_KEY` |
-| `openll` | `AI_API_KEY` |
 | `qiniu` | `QINIU_API_KEY` |
 | `modelscope` | `MODELSCOPE_API_KEY` |
 

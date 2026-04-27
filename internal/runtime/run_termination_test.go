@@ -102,8 +102,8 @@ func TestEmitRunTerminationMapsMaxTurnsToDedicatedStopReason(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
 		}
-		if payload.Reason != controlplane.StopReasonMaxTurnsReached {
-			t.Fatalf("stop reason = %q, want %q", payload.Reason, controlplane.StopReasonMaxTurnsReached)
+		if payload.Reason != controlplane.StopReasonMaxTurnExceeded {
+			t.Fatalf("stop reason = %q, want %q", payload.Reason, controlplane.StopReasonMaxTurnExceeded)
 		}
 		if payload.Detail != "runtime: max turn limit reached (40)" {
 			t.Fatalf("stop detail = %q, want max turn detail", payload.Detail)

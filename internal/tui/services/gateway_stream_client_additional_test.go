@@ -154,7 +154,7 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 				if !ok {
 					t.Fatalf("payload type = %T", got)
 				}
-				if value.Reason != StopReasonCompleted {
+				if value.Reason != StopReasonAccepted {
 					t.Fatalf("reason = %q", value.Reason)
 				}
 			},

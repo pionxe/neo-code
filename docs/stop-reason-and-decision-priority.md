@@ -1,11 +1,10 @@
 # Stop Reason And Decision Priority
 
-## StopReason 全集
+## StopReason 集合
 - `user_interrupt`
 - `fatal_error`
 - `budget_exceeded`
 - `max_turn_exceeded`
-- `retry_exhausted`
 - `verification_failed`
 - `accepted`
 - `todo_not_converged`
@@ -16,16 +15,13 @@
 - `verification_config_missing`
 - `verification_execution_denied`
 - `verification_execution_error`
-- `compatibility_fallback`
 
-## 优先级
-- `user_interrupt` > `fatal_error` > `budget_exceeded` > `max_turn_exceeded` > `retry_exhausted` > `verification_failed` > `accepted`
-
-## 决议互斥关系
-- decider 返回单一 stop reason。
-- acceptance/verifier 只提供输入，不直接终裁。
+## 决策优先级
+- controlplane decider 仍负责输出唯一 stop reason。
+- 通用优先级保持为：`user_interrupt` > `fatal_error` > `budget_exceeded` > `max_turn_exceeded` > `verification_failed` > `accepted`。
+- final acceptance 只根据 completion gate、verifier gate 与 terminal decision 规则产出结果，不再额外注入 todo retry 旁路。
 
 ## 与 ErrorClass 的关系
-- `ErrorClass` 只描述失败分类（compile/test/lint/type/timeout/permission 等）。
-- stop reason 描述终止归因；error class 描述失败类型，二者不重复表达。
-
+- `StopReason` 表达“为什么这次 run 结束”。
+- `ErrorClass` 只表达 verifier 失败的领域分类，例如 `env_missing`、`execution_denied`、`timeout`。
+- `pass` 结果不得携带 `ErrorClass`。

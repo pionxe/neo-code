@@ -337,6 +337,7 @@ func (p *InputPreparer) loadOrCreateSession(
 			return Session{}, false, sessionWorkdirUpdate{}, err
 		}
 		session := NewWithWorkdir(title, sessionWorkdir)
+		establishPreparedSessionVerificationProfile(&session)
 		created, err := p.store.CreateSession(ctx, CreateSessionInput{
 			ID:        session.ID,
 			Title:     session.Title,
@@ -402,6 +403,17 @@ func (p *InputPreparer) persistSessionWorkdirUpdate(ctx context.Context, pending
 		return err
 	}
 	return nil
+}
+
+// establishPreparedSessionVerificationProfile 在会话输入预处理阶段显式建立默认验收 profile。
+func establishPreparedSessionVerificationProfile(session *Session) {
+	if session == nil {
+		return
+	}
+	if session.TaskState.VerificationProfile.Valid() {
+		return
+	}
+	session.TaskState.VerificationProfile = VerificationProfileTaskOnly
 }
 
 // cleanupSavedAssets 在 Prepare 失败时尽力回收已落盘的附件，减少 existing session 残留垃圾文件。

@@ -5,11 +5,9 @@ import (
 	"strings"
 )
 
-const (
-	gitDiffVerifierName = "git_diff"
-)
+const gitDiffVerifierName = "git_diff"
 
-// GitDiffVerifier 校验工作区是否存在有效 diff。
+// GitDiffVerifier 校验工作区是否存在真实交付证据。
 type GitDiffVerifier struct {
 	Executor CommandExecutor
 }
@@ -19,20 +17,20 @@ func (v GitDiffVerifier) Name() string {
 	return gitDiffVerifierName
 }
 
-// VerifyFinal 执行 git diff 检查，确保 edit/fix/refactor 任务有真实改动。
+// VerifyFinal 执行 git status 检查，确保 edit/fix/refactor 任务有真实改动。
 func (v GitDiffVerifier) VerifyFinal(ctx context.Context, input FinalVerifyInput) (VerificationResult, error) {
 	executor := v.Executor
 	if executor == nil {
 		executor = PolicyCommandExecutor{}
 	}
 	cfg := input.VerificationConfig.Verifiers[gitDiffVerifierName]
-	command := strings.TrimSpace(cfg.Command)
-	if command == "" {
-		command = "git diff --name-only"
+	argv := compactStrings(cfg.Command)
+	if len(argv) == 0 {
+		argv = []string{"git", "status", "--porcelain", "--untracked-files=normal"}
 	}
 
 	result, err := executor.Execute(ctx, CommandExecutionRequest{
-		Command:       command,
+		Argv:          argv,
 		Workdir:       input.Workdir,
 		TimeoutSec:    cfg.TimeoutSec,
 		OutputCapByte: cfg.OutputCapBytes,
@@ -43,21 +41,19 @@ func (v GitDiffVerifier) VerifyFinal(ctx context.Context, input FinalVerifyInput
 			Name:       gitDiffVerifierName,
 			Status:     VerificationFail,
 			Summary:    err.Error(),
-			Reason:     "git diff command execution failed",
+			Reason:     "git status command execution failed",
 			ErrorClass: classifyCommandExecutionError(err),
-			Evidence: map[string]any{
-				"command": command,
-			},
+			Evidence:   commandEvidence(argv, result),
 		}, nil
 	}
 	if result.ExitCode != 0 {
 		return VerificationResult{
 			Name:       gitDiffVerifierName,
 			Status:     VerificationFail,
-			Summary:    "git diff command returned non-zero",
-			Reason:     "git diff command failed",
+			Summary:    "git status command returned non-zero",
+			Reason:     "git status command failed",
 			ErrorClass: ErrorClassUnknown,
-			Evidence:   commandEvidence(command, result),
+			Evidence:   commandEvidence(argv, result),
 		}, nil
 	}
 
@@ -65,19 +61,19 @@ func (v GitDiffVerifier) VerifyFinal(ctx context.Context, input FinalVerifyInput
 	if len(lines) == 0 {
 		return VerificationResult{
 			Name:     gitDiffVerifierName,
-			Status:   VerificationFail,
-			Summary:  "git diff is empty",
+			Status:   VerificationSoftBlock,
+			Summary:  "git status is empty",
 			Reason:   "no changed files detected",
-			Evidence: commandEvidence(command, result),
+			Evidence: commandEvidence(argv, result),
 		}, nil
 	}
-	evidence := commandEvidence(command, result)
+	evidence := commandEvidence(argv, result)
 	evidence["changed_files"] = lines
 	evidence["changed_files_count"] = len(lines)
 	return VerificationResult{
 		Name:     gitDiffVerifierName,
 		Status:   VerificationPass,
-		Summary:  "git diff contains changed files",
+		Summary:  "git status contains changed files",
 		Reason:   "workspace change detected",
 		Evidence: evidence,
 	}, nil

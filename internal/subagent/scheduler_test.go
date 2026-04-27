@@ -77,6 +77,10 @@ func (s *functionTodoStore) FailTodo(id string, reason string, expectedRevision 
 	return nil
 }
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func newSchedulerStore(t *testing.T, items []agentsession.TodoItem) *schedulerStore {
 	t.Helper()
 	session := agentsession.New("scheduler")
@@ -880,8 +884,8 @@ func TestSchedulerRunFailureModes(t *testing.T) {
 	t.Run("continue on error", func(t *testing.T) {
 		t.Parallel()
 		store := newSchedulerStore(t, []agentsession.TodoItem{
-			{ID: "a", Content: "a"},
-			{ID: "b", Content: "b"},
+			{ID: "a", Content: "a", Required: boolPtr(false)},
+			{ID: "b", Content: "b", Required: boolPtr(false)},
 		})
 		factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
 			_ = ctx
@@ -915,8 +919,8 @@ func TestSchedulerRunFailureModes(t *testing.T) {
 	t.Run("fail fast", func(t *testing.T) {
 		t.Parallel()
 		store := newSchedulerStore(t, []agentsession.TodoItem{
-			{ID: "a", Content: "a"},
-			{ID: "b", Content: "b"},
+			{ID: "a", Content: "a", Required: boolPtr(false)},
+			{ID: "b", Content: "b", Required: boolPtr(false)},
 		})
 		started := make(chan string, 2)
 		factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
@@ -1796,7 +1800,7 @@ func TestSchedulerRunCancellationWriteback(t *testing.T) {
 	t.Parallel()
 
 	store := newSchedulerStore(t, []agentsession.TodoItem{
-		{ID: "t1", Content: "task-1"},
+		{ID: "t1", Content: "task-1", Required: boolPtr(false)},
 	})
 	started := make(chan struct{}, 1)
 	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
@@ -1852,8 +1856,8 @@ func TestSchedulerRunClaimErrorCancelsRunningTodo(t *testing.T) {
 	t.Parallel()
 
 	baseStore := newSchedulerStore(t, []agentsession.TodoItem{
-		{ID: "a", Content: "task-a"},
-		{ID: "b", Content: "task-b"},
+		{ID: "a", Content: "task-a", Required: boolPtr(false)},
+		{ID: "b", Content: "task-b", Required: boolPtr(false)},
 	})
 	store := &schedulerStoreWithClaimError{
 		schedulerStore: baseStore,

@@ -165,6 +165,47 @@ context:
 	}
 }
 
+func TestMigrateContextBudgetConfigContentMigratesSafeVerifierCommandString(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+runtime:
+  verification:
+    verifiers:
+      test:
+        command: go test ./...
+`) + "\n")
+
+	out, changed, _, err := MigrateContextBudgetConfigContent(input)
+	if err != nil {
+		t.Fatalf("MigrateContextBudgetConfigContent() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected migration change")
+	}
+	text := string(out)
+	if !strings.Contains(text, "- go") || !strings.Contains(text, "- test") || !strings.Contains(text, "- ./...") {
+		t.Fatalf("expected argv migration, got:\n%s", text)
+	}
+}
+
+func TestMigrateContextBudgetConfigContentRejectsUnsafeVerifierCommandString(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+runtime:
+  verification:
+    verifiers:
+      test:
+        command: sh -c 'go test ./...'
+`) + "\n")
+
+	_, _, _, err := MigrateContextBudgetConfigContent(input)
+	if err == nil || !strings.Contains(err.Error(), "rewrite it as argv") {
+		t.Fatalf("expected unsupported shell syntax error, got %v", err)
+	}
+}
+
 func TestMigrateContextBudgetConfigFileCreatesBackup(t *testing.T) {
 	t.Parallel()
 

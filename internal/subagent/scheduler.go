@@ -765,24 +765,66 @@ func (s *Scheduler) cancelRunningTodos(state *schedulerState, cause error) {
 			OwnerID:       &ownerID,
 			FailureReason: &reason,
 		}
-		if _, _, err := s.updateTodoWithPatch(item, patch, "cancel running"); err != nil {
+		updated, changed, err := s.updateTodoWithPatch(item, patch, "cancel running")
+		if err == nil && changed {
+			s.emit(SchedulerEvent{
+				Type:    SchedulerEventCanceled,
+				TaskID:  item.ID,
+				Reason:  reason,
+				Running: len(state.running),
+				At:      s.cfg.Clock(),
+			})
+			s.emit(SchedulerEvent{
+				Type:    SchedulerEventSubAgentCanceled,
+				TaskID:  item.ID,
+				Reason:  reason,
+				Running: len(state.running),
+				At:      s.cfg.Clock(),
+			})
 			continue
 		}
-		s.emit(SchedulerEvent{
-			Type:    SchedulerEventCanceled,
-			TaskID:  item.ID,
-			Reason:  reason,
-			Running: len(state.running),
-			At:      s.cfg.Clock(),
-		})
-		s.emit(SchedulerEvent{
-			Type:    SchedulerEventSubAgentCanceled,
-			TaskID:  item.ID,
-			Reason:  reason,
-			Running: len(state.running),
-			At:      s.cfg.Clock(),
-		})
+		if err == nil {
+			// 可能是 revision conflict 导致 patch 未生效，尝试用最新状态 fallback
+			item = updated
+		}
+		if !s.failRunningTodoOnCancel(item, reason, len(state.running)) {
+			continue
+		}
 	}
+}
+
+// failRunningTodoOnCancel 在 canceled 语义不再合法时，将运行中的 todo 收敛到 failed 终态。
+func (s *Scheduler) failRunningTodoOnCancel(item agentsession.TodoItem, reason string, running int) bool {
+	status := agentsession.TodoStatusFailed
+	ownerType := ""
+	ownerID := ""
+	zeroRetryAt := time.Time{}
+	patch := agentsession.TodoPatch{
+		Status:        &status,
+		OwnerType:     &ownerType,
+		OwnerID:       &ownerID,
+		FailureReason: &reason,
+		NextRetryAt:   &zeroRetryAt,
+	}
+	_, changed, err := s.updateTodoWithPatch(item, patch, "fail running after cancel fallback")
+	if err != nil || !changed {
+		return false
+	}
+	s.emit(SchedulerEvent{
+		Type:    SchedulerEventFailed,
+		TaskID:  item.ID,
+		Reason:  reason,
+		Running: running,
+		At:      s.cfg.Clock(),
+	})
+	s.emit(SchedulerEvent{
+		Type:    SchedulerEventSubAgentFailed,
+		TaskID:  item.ID,
+		Reason:  reason,
+		Running: running,
+		At:      s.cfg.Clock(),
+	})
+	return true
 }
 
 // sortReadyTasks 按优先级与等待时间排序，兼顾高优先级与公平性。

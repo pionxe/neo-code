@@ -3600,7 +3600,7 @@ func TestResolveModelScopeGuidePathRejectsDirectory(t *testing.T) {
 func TestResolveModelScopeGuidePathReturnsEmptyWhenBaseDirMissing(t *testing.T) {
 	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
-	manager := config.NewManager(config.NewLoader("", cfg))
+	manager := config.NewManager(config.NewLoader(filepath.Join(t.TempDir(), "missing-config-root"), cfg))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}

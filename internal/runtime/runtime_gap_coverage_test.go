@@ -237,6 +237,26 @@ func TestRuntimeLoadOrCreateAndEmitBranches(t *testing.T) {
 		t.Fatalf("expected same workdir path to skip save, got workdir=%q saves=%d", got.Workdir, store.saves)
 	}
 
+	legacySession := newRuntimeSession("session-load-legacy-profile")
+	legacySession.Workdir = t.TempDir()
+	legacySession.TaskState.VerificationProfile = ""
+	store.sessions[legacySession.ID] = cloneSession(legacySession)
+	store.saves = 0
+	if got, err := service.loadOrCreateSession(context.Background(), legacySession.ID, "title", t.TempDir(), ""); err != nil {
+		t.Fatalf("loadOrCreateSession legacy profile normalize error = %v", err)
+	} else if got.TaskState.VerificationProfile != agentsession.VerificationProfileTaskOnly {
+		t.Fatalf("legacy verification profile = %q, want %q", got.TaskState.VerificationProfile, agentsession.VerificationProfileTaskOnly)
+	} else if store.saves != 1 {
+		t.Fatalf("expected legacy profile normalization to persist once, got saves=%d", store.saves)
+	}
+
+	service.sessionStore = newMemoryStore()
+	if created, err := service.loadOrCreateSession(context.Background(), "", "title", t.TempDir(), ""); err != nil {
+		t.Fatalf("loadOrCreateSession create error = %v", err)
+	} else if created.TaskState.VerificationProfile != agentsession.VerificationProfileTaskOnly {
+		t.Fatalf("created verification profile = %q, want %q", created.TaskState.VerificationProfile, agentsession.VerificationProfileTaskOnly)
+	}
+
 	fStore := &failingStore{Store: store, saveErr: errors.New("save failed"), failOnSave: 1, ignoreContextErr: true}
 	service.sessionStore = fStore
 	if _, err := service.loadOrCreateSession(context.Background(), session.ID, "title", t.TempDir(), ".."); err == nil {

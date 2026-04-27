@@ -4,26 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
-
-// verifierMetadataResult 统一生成 metadata 缺失时的 required/optional 结果。
-func verifierMetadataResult(name string, required bool, metadataKey string, skipSummary string) VerificationResult {
-	if !required {
-		return VerificationResult{
-			Name:    name,
-			Status:  VerificationPass,
-			Summary: skipSummary,
-			Reason:  "optional verifier skipped",
-		}
-	}
-	return VerificationResult{
-		Name:    name,
-		Status:  VerificationSoftBlock,
-		Summary: fmt.Sprintf("%s is required but missing", metadataKey),
-		Reason:  fmt.Sprintf("missing %s metadata", metadataKey),
-	}
-}
 
 // verificationDeniedResult 统一生成路径越界等安全拒绝结果。
 func verificationDeniedResult(name string, summary string, reason string, evidence map[string]any) VerificationResult {
@@ -37,79 +20,64 @@ func verificationDeniedResult(name string, summary string, reason string, eviden
 	}
 }
 
-// metadataStringSlice 从 metadata 中解析字符串列表。
-func metadataStringSlice(metadata map[string]any, key string) []string {
-	if len(metadata) == 0 {
-		return nil
-	}
-	raw, ok := metadata[key]
-	if !ok || raw == nil {
-		return nil
-	}
-	switch typed := raw.(type) {
-	case []string:
-		return compactStrings(typed)
-	case []any:
-		out := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if normalized := strings.TrimSpace(fmt.Sprintf("%v", item)); normalized != "" {
-				out = append(out, normalized)
-			}
+// collectArtifactTargets 汇总 required todo artifacts 与 task_state.key_artifacts。
+func collectArtifactTargets(input FinalVerifyInput) []string {
+	paths := make([]string, 0)
+	seen := make(map[string]struct{})
+	appendPath := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
 		}
-		return out
-	case string:
-		trimmed := strings.TrimSpace(typed)
-		if trimmed == "" {
-			return nil
+		if _, ok := seen[path]; ok {
+			return
 		}
-		return []string{trimmed}
-	default:
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	for _, path := range input.TaskState.KeyArtifacts {
+		appendPath(path)
+	}
+	for _, todo := range input.Todos {
+		if !todo.Required {
+			continue
+		}
+		for _, path := range todo.Artifacts {
+			appendPath(path)
+		}
+	}
+	if len(paths) == 0 {
 		return nil
 	}
+	return paths
 }
 
-// metadataStringMapSlice 从 metadata 中解析 map[string][]string。
-func metadataStringMapSlice(metadata map[string]any, key string) map[string][]string {
-	if len(metadata) == 0 {
-		return nil
-	}
-	raw, ok := metadata[key]
-	if !ok || raw == nil {
-		return nil
-	}
-	normalized := make(map[string][]string)
-	switch typed := raw.(type) {
-	case map[string][]string:
-		for path, values := range typed {
-			path = strings.TrimSpace(path)
-			if path == "" {
-				continue
-			}
-			for _, value := range values {
-				value = strings.TrimSpace(value)
-				if value == "" {
-					continue
-				}
-				normalized[path] = append(normalized[path], value)
-			}
+// collectContentCheckRules 收敛 todo.content_checks 为 artifact -> tokens 规则映射。
+func collectContentCheckRules(input FinalVerifyInput) (map[string][]string, error) {
+	rules := make(map[string][]string)
+	for _, todo := range input.Todos {
+		if !todo.Required {
+			continue
 		}
-	case map[string]any:
-		for path, value := range typed {
-			path = strings.TrimSpace(path)
-			if path == "" {
-				continue
+		for _, check := range todo.ContentChecks {
+			artifact := strings.TrimSpace(check.Artifact)
+			if artifact == "" {
+				return nil, fmt.Errorf("content check artifact is empty")
 			}
-			values := metadataStringSlice(map[string]any{"value": value}, "value")
-			if len(values) == 0 {
-				continue
+			contains := compactStrings(check.Contains)
+			if len(contains) == 0 {
+				return nil, fmt.Errorf("content check for %q is empty", artifact)
 			}
-			normalized[path] = values
+			rules[artifact] = append(rules[artifact], contains...)
 		}
 	}
-	if len(normalized) == 0 {
-		return nil
+	if len(rules) == 0 {
+		return nil, nil
 	}
-	return normalized
+	for artifact, tokens := range rules {
+		rules[artifact] = compactStrings(tokens)
+	}
+	return rules, nil
 }
 
 // compactStrings 会去除空白与空字符串，返回紧凑切片。
@@ -151,7 +119,14 @@ func resolvePathWithinWorkdir(workdir string, rawPath string) (string, error) {
 		return "", fmt.Errorf("path %q is outside workdir", rawPath)
 	}
 
-	// 对已存在路径追加真实路径校验，防止通过符号链接逃逸 workdir。
+	needsRealpathCheck, err := pathContainsSymlink(workdirAbs, resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("inspect path symlinks: %w", err)
+	}
+	if !needsRealpathCheck {
+		return resolvedPath, nil
+	}
+
 	workdirReal, err := filepath.EvalSymlinks(workdirAbs)
 	if err != nil {
 		workdirReal = workdirAbs
@@ -163,7 +138,6 @@ func resolvePathWithinWorkdir(workdir string, rawPath string) (string, error) {
 			return "", fmt.Errorf("path %q resolves outside workdir", rawPath)
 		}
 	case os.IsNotExist(err):
-		// 目标不存在时由上层 verifier 按 missing 处理；此处只做已存在路径的边界约束。
 	default:
 		return "", fmt.Errorf("resolve symlink path: %w", err)
 	}
@@ -172,12 +146,67 @@ func resolvePathWithinWorkdir(workdir string, rawPath string) (string, error) {
 
 // ensurePathWithinBase 校验目标路径仍位于基准目录内，避免路径穿越或边界越权。
 func ensurePathWithinBase(base string, target string) error {
-	rel, err := filepath.Rel(base, target)
-	if err != nil {
-		return fmt.Errorf("check path relation: %w", err)
+	normalizedBase := normalizeComparablePath(base)
+	normalizedTarget := normalizeComparablePath(target)
+	if normalizedBase == "" || normalizedTarget == "" {
+		return fmt.Errorf("empty comparable path")
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if normalizedTarget == normalizedBase {
+		return nil
+	}
+	prefix := normalizedBase
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+	if !strings.HasPrefix(normalizedTarget, prefix) {
 		return fmt.Errorf("outside base path")
 	}
 	return nil
+}
+
+// normalizeComparablePath 将路径规整为适合做“是否仍在基准目录内”判断的稳定形式。
+func normalizeComparablePath(path string) string {
+	normalized := filepath.Clean(strings.TrimSpace(path))
+	if runtime.GOOS == "windows" {
+		normalized = strings.TrimPrefix(normalized, `\\?\`)
+		normalized = strings.ToLower(normalized)
+	}
+	return normalized
+}
+
+// pathContainsSymlink 判断从 base 到 target 的现有路径段里是否包含 symlink。
+func pathContainsSymlink(base string, target string) (bool, error) {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return false, fmt.Errorf("check path relation: %w", err)
+	}
+	if rel == "." {
+		info, err := os.Lstat(target)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return info.Mode()&os.ModeSymlink != 0, nil
+	}
+
+	current := base
+	for _, segment := range strings.Split(rel, string(filepath.Separator)) {
+		if segment == "" || segment == "." {
+			continue
+		}
+		current = filepath.Join(current, segment)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }

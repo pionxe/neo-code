@@ -9,7 +9,7 @@ import (
 )
 
 // CurrentTodoVersion 表示当前 Todo 结构版本。
-const CurrentTodoVersion = 5
+const CurrentTodoVersion = 6
 
 // TodoStatus 表示 Todo 项的状态枚举。
 type TodoStatus string
@@ -63,25 +63,27 @@ const (
 
 // TodoItem 表示会话级结构化待办项。
 type TodoItem struct {
-	ID            string            `json:"id"`
-	Content       string            `json:"content"`
-	Status        TodoStatus        `json:"status"`
-	Required      *bool             `json:"required,omitempty"`
-	BlockedReason TodoBlockedReason `json:"blocked_reason,omitempty"`
-	Dependencies  []string          `json:"dependencies,omitempty"`
-	Priority      int               `json:"priority,omitempty"`
-	Executor      string            `json:"executor,omitempty"`
-	OwnerType     string            `json:"owner_type,omitempty"`
-	OwnerID       string            `json:"owner_id,omitempty"`
-	Acceptance    []string          `json:"acceptance,omitempty"`
-	Artifacts     []string          `json:"artifacts,omitempty"`
-	FailureReason string            `json:"failure_reason,omitempty"`
-	RetryCount    int               `json:"retry_count,omitempty"`
-	RetryLimit    int               `json:"retry_limit,omitempty"`
-	NextRetryAt   time.Time         `json:"next_retry_at,omitempty"`
-	Revision      int64             `json:"revision"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+	ID            string             `json:"id"`
+	Content       string             `json:"content"`
+	Status        TodoStatus         `json:"status"`
+	Required      *bool              `json:"required,omitempty"`
+	BlockedReason TodoBlockedReason  `json:"blocked_reason,omitempty"`
+	Dependencies  []string           `json:"dependencies,omitempty"`
+	Priority      int                `json:"priority,omitempty"`
+	Executor      string             `json:"executor,omitempty"`
+	OwnerType     string             `json:"owner_type,omitempty"`
+	OwnerID       string             `json:"owner_id,omitempty"`
+	Acceptance    []string           `json:"acceptance,omitempty"`
+	Artifacts     []string           `json:"artifacts,omitempty"`
+	Supersedes    []string           `json:"supersedes,omitempty"`
+	ContentChecks []TodoContentCheck `json:"content_checks,omitempty"`
+	FailureReason string             `json:"failure_reason,omitempty"`
+	RetryCount    int                `json:"retry_count,omitempty"`
+	RetryLimit    int                `json:"retry_limit,omitempty"`
+	NextRetryAt   time.Time          `json:"next_retry_at,omitempty"`
+	Revision      int64              `json:"revision"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
 }
 
 // TodoPatch 表示对 Todo 可选字段的更新补丁。
@@ -97,6 +99,8 @@ type TodoPatch struct {
 	OwnerID       *string
 	Acceptance    *[]string
 	Artifacts     *[]string
+	Supersedes    *[]string
+	ContentChecks *[]TodoContentCheck
 	FailureReason *string
 	RetryCount    *int
 	RetryLimit    *int
@@ -108,6 +112,10 @@ func (i TodoItem) Clone() TodoItem {
 	i.Dependencies = append([]string(nil), i.Dependencies...)
 	i.Acceptance = append([]string(nil), i.Acceptance...)
 	i.Artifacts = append([]string(nil), i.Artifacts...)
+	i.Supersedes = append([]string(nil), i.Supersedes...)
+	if len(i.ContentChecks) > 0 {
+		i.ContentChecks = cloneTodoContentChecks(i.ContentChecks)
+	}
 	if i.Required != nil {
 		required := *i.Required
 		i.Required = &required
@@ -440,6 +448,17 @@ func normalizeAndValidateTodos(items []TodoItem) ([]TodoItem, error) {
 				return nil, fmt.Errorf("session: todo %q references unknown dependency %q", item.ID, dependency)
 			}
 		}
+		for _, superseded := range item.Supersedes {
+			if superseded == item.ID {
+				return nil, fmt.Errorf("session: todo %q cannot supersede itself", item.ID)
+			}
+			if _, exists := ids[superseded]; !exists {
+				return nil, fmt.Errorf("session: todo %q references unknown superseded todo %q", item.ID, superseded)
+			}
+		}
+	}
+	if err := ensureCanceledRequiredTodosHaveReplacement(normalized); err != nil {
+		return nil, err
 	}
 	if err := detectCyclicDependencies(normalized); err != nil {
 		return nil, err
@@ -466,6 +485,8 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 	item.OwnerID = strings.TrimSpace(item.OwnerID)
 	item.Acceptance = normalizeTodoTextList(item.Acceptance)
 	item.Artifacts = normalizeTodoTextList(item.Artifacts)
+	item.Supersedes = normalizeTodoTextList(item.Supersedes)
+	item.ContentChecks = normalizeTodoContentChecks(item.ContentChecks)
 	item.FailureReason = strings.TrimSpace(item.FailureReason)
 	if item.RetryCount < 0 {
 		item.RetryCount = 0
@@ -628,6 +649,12 @@ func applyTodoPatch(item TodoItem, patch TodoPatch) (TodoItem, error) {
 	if patch.Artifacts != nil {
 		next.Artifacts = normalizeTodoTextList(*patch.Artifacts)
 	}
+	if patch.Supersedes != nil {
+		next.Supersedes = normalizeTodoTextList(*patch.Supersedes)
+	}
+	if patch.ContentChecks != nil {
+		next.ContentChecks = cloneTodoContentChecks(*patch.ContentChecks)
+	}
 	if patch.FailureReason != nil {
 		next.FailureReason = strings.TrimSpace(*patch.FailureReason)
 	}
@@ -665,6 +692,70 @@ func normalizeTodoBlockedReason(reason TodoBlockedReason) TodoBlockedReason {
 		return TodoBlockedReasonUnknown
 	}
 	return TodoBlockedReason(normalized)
+}
+
+// cloneTodoContentChecks 深拷贝内容校验规则，避免切片共享底层内存。
+func cloneTodoContentChecks(items []TodoContentCheck) []TodoContentCheck {
+	if len(items) == 0 {
+		return nil
+	}
+	cloned := make([]TodoContentCheck, len(items))
+	for idx, item := range items {
+		cloned[idx] = TodoContentCheck{
+			Artifact: strings.TrimSpace(item.Artifact),
+			Contains: append([]string(nil), item.Contains...),
+		}
+	}
+	return cloned
+}
+
+// normalizeTodoContentChecks 统一收敛内容校验规则，避免空规则和重复 token 漂入持久化状态。
+func normalizeTodoContentChecks(items []TodoContentCheck) []TodoContentCheck {
+	if len(items) == 0 {
+		return nil
+	}
+	normalized := make([]TodoContentCheck, 0, len(items))
+	for _, item := range items {
+		artifact := strings.TrimSpace(item.Artifact)
+		if artifact == "" {
+			continue
+		}
+		contains := normalizeTodoTextList(item.Contains)
+		normalized = append(normalized, TodoContentCheck{
+			Artifact: artifact,
+			Contains: contains,
+		})
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+// ensureCanceledRequiredTodosHaveReplacement 收紧 required todo 的取消语义，要求显式 replacement todo。
+func ensureCanceledRequiredTodosHaveReplacement(items []TodoItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	replacements := make(map[string]struct{})
+	for _, item := range items {
+		if !item.RequiredValue() || item.Status == TodoStatusCanceled {
+			continue
+		}
+		for _, superseded := range item.Supersedes {
+			replacements[superseded] = struct{}{}
+		}
+	}
+	for _, item := range items {
+		if !item.RequiredValue() || item.Status != TodoStatusCanceled {
+			continue
+		}
+		if _, ok := replacements[item.ID]; ok {
+			continue
+		}
+		return fmt.Errorf("session: required canceled todo %q must declare an explicit replacement", item.ID)
+	}
+	return nil
 }
 
 // isValidTodoBlockedReason 判断 blocked_reason 是否受支持。
@@ -758,4 +849,10 @@ func detectCyclicDependencies(items []TodoItem) error {
 		}
 	}
 	return nil
+}
+
+// TodoContentCheck 描述单个交付物的最小内容校验约束。
+type TodoContentCheck struct {
+	Artifact string   `json:"artifact,omitempty"`
+	Contains []string `json:"contains,omitempty"`
 }

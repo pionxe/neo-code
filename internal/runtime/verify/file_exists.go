@@ -5,11 +5,9 @@ import (
 	"os"
 )
 
-const (
-	fileExistsVerifierName = "file_exists"
-)
+const fileExistsVerifierName = "file_exists"
 
-// FileExistsVerifier 校验预期文件是否存在且可用。
+// FileExistsVerifier 校验结构化声明的交付文件是否存在且可用。
 type FileExistsVerifier struct{}
 
 // Name 返回 verifier 名称。
@@ -17,29 +15,30 @@ func (FileExistsVerifier) Name() string {
 	return fileExistsVerifierName
 }
 
-// VerifyFinal 校验 metadata 声明的 expected_files 是否存在并且非空文件。
+// VerifyFinal 校验 required todo artifacts 与 task_state.key_artifacts。
 func (FileExistsVerifier) VerifyFinal(_ context.Context, input FinalVerifyInput) (VerificationResult, error) {
-	cfg, exists := input.VerificationConfig.Verifiers[fileExistsVerifierName]
-	required := exists && cfg.Required
-	paths := metadataStringSlice(input.Metadata, "expected_files")
+	paths := collectArtifactTargets(input)
 	if len(paths) == 0 {
-		return verifierMetadataResult(
-			fileExistsVerifierName,
-			required,
-			"expected_files",
-			"no expected files configured, skip file existence check",
-		), nil
+		return VerificationResult{
+			Name:    fileExistsVerifierName,
+			Status:  VerificationSoftBlock,
+			Summary: "no artifact targets declared",
+			Reason:  "file existence targets are missing",
+		}, nil
 	}
 
 	missing := make([]string, 0)
 	empty := make([]string, 0)
 	dirs := make([]string, 0)
-	denied := make([]string, 0)
 	for _, path := range paths {
 		absPath, err := resolvePathWithinWorkdir(input.Workdir, path)
 		if err != nil {
-			denied = append(denied, path)
-			continue
+			return verificationDeniedResult(
+				fileExistsVerifierName,
+				"artifact path is outside workdir",
+				"artifact path denied by workdir policy",
+				map[string]any{"artifact": path},
+			), nil
 		}
 		info, err := os.Stat(absPath)
 		if err != nil {
@@ -56,35 +55,25 @@ func (FileExistsVerifier) VerifyFinal(_ context.Context, input FinalVerifyInput)
 	}
 
 	evidence := map[string]any{
-		"expected_files":  paths,
-		"missing_files":   missing,
-		"empty_files":     empty,
-		"directory_paths": dirs,
-		"denied_paths":    denied,
-	}
-	if len(denied) > 0 {
-		return verificationDeniedResult(
-			fileExistsVerifierName,
-			"expected files contain paths outside workdir",
-			"file existence path denied by workdir policy",
-			evidence,
-		), nil
+		"artifact_targets": paths,
+		"missing_files":    missing,
+		"empty_files":      empty,
+		"directory_paths":  dirs,
 	}
 	if len(missing) == 0 && len(empty) == 0 && len(dirs) == 0 {
 		return VerificationResult{
 			Name:     fileExistsVerifierName,
 			Status:   VerificationPass,
-			Summary:  "all expected files exist and are non-empty",
+			Summary:  "all artifact targets exist and are non-empty",
 			Reason:   "file existence check passed",
 			Evidence: evidence,
 		}, nil
 	}
 	return VerificationResult{
-		Name:       fileExistsVerifierName,
-		Status:     VerificationFail,
-		Summary:    "expected files are missing or invalid",
-		Reason:     "file existence check failed",
-		ErrorClass: ErrorClassUnknown,
-		Evidence:   evidence,
+		Name:     fileExistsVerifierName,
+		Status:   VerificationSoftBlock,
+		Summary:  "artifact targets are missing or invalid",
+		Reason:   "file existence check did not pass",
+		Evidence: evidence,
 	}, nil
 }

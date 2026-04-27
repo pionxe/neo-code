@@ -8,20 +8,6 @@ import (
 	"testing"
 )
 
-func TestVerifierMetadataResult(t *testing.T) {
-	t.Parallel()
-
-	optional := verifierMetadataResult("file_exists", false, "expected_files", "skip")
-	if optional.Status != VerificationPass || optional.Summary != "skip" {
-		t.Fatalf("unexpected optional result: %+v", optional)
-	}
-
-	required := verifierMetadataResult("file_exists", true, "expected_files", "skip")
-	if required.Status != VerificationSoftBlock || !strings.Contains(required.Summary, "expected_files") {
-		t.Fatalf("unexpected required result: %+v", required)
-	}
-}
-
 func TestVerificationDeniedResult(t *testing.T) {
 	t.Parallel()
 
@@ -31,65 +17,49 @@ func TestVerificationDeniedResult(t *testing.T) {
 	}
 }
 
-func TestMetadataStringSlice(t *testing.T) {
+func TestCollectArtifactTargets(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name string
-		meta map[string]any
-		key  string
-		want []string
-	}{
-		{name: "empty", meta: nil, key: "k", want: nil},
-		{name: "string slice", meta: map[string]any{"k": []string{" a ", "", "b"}}, key: "k", want: []string{"a", "b"}},
-		{name: "any slice", meta: map[string]any{"k": []any{" a ", 2, ""}}, key: "k", want: []string{"a", "2"}},
-		{name: "single string", meta: map[string]any{"k": "  a  "}, key: "k", want: []string{"a"}},
-		{name: "unsupported", meta: map[string]any{"k": 1}, key: "k", want: nil},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := metadataStringSlice(tc.meta, tc.key)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("metadataStringSlice() = %#v, want %#v", got, tc.want)
-			}
-		})
+	got := collectArtifactTargets(FinalVerifyInput{
+		TaskState: TaskStateSnapshot{KeyArtifacts: []string{"README.md", "README.md"}},
+		Todos: []TodoSnapshot{
+			{ID: "todo-1", Required: true, Artifacts: []string{"main.go"}},
+			{ID: "todo-2", Required: false, Artifacts: []string{"ignored.txt"}},
+		},
+	})
+	want := []string{"README.md", "main.go"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("collectArtifactTargets() = %#v, want %#v", got, want)
 	}
 }
 
-func TestMetadataStringMapSlice(t *testing.T) {
+func TestCollectContentCheckRules(t *testing.T) {
 	t.Parallel()
 
-	t.Run("map string slices", func(t *testing.T) {
-		t.Parallel()
-		got := metadataStringMapSlice(map[string]any{
-			"rules": map[string][]string{" a.txt ": []string{" x ", ""}},
-		}, "rules")
-		want := map[string][]string{"a.txt": []string{"x"}}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("metadataStringMapSlice() = %#v, want %#v", got, want)
-		}
+	got, err := collectContentCheckRules(FinalVerifyInput{
+		Todos: []TodoSnapshot{
+			{
+				ID:       "todo-1",
+				Required: true,
+				ContentChecks: []TodoContentCheckSnapshot{
+					{Artifact: "a.txt", Contains: []string{"hello", "world"}},
+				},
+			},
+		},
 	})
+	if err != nil {
+		t.Fatalf("collectContentCheckRules() error = %v", err)
+	}
+	want := map[string][]string{"a.txt": []string{"hello", "world"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("collectContentCheckRules() = %#v, want %#v", got, want)
+	}
 
-	t.Run("map any", func(t *testing.T) {
-		t.Parallel()
-		got := metadataStringMapSlice(map[string]any{
-			"rules": map[string]any{"a.txt": []any{" x ", 2}, " ": "ignored"},
-		}, "rules")
-		want := map[string][]string{"a.txt": []string{"x", "2"}}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("metadataStringMapSlice() = %#v, want %#v", got, want)
-		}
-	})
-
-	t.Run("invalid returns nil", func(t *testing.T) {
-		t.Parallel()
-		if got := metadataStringMapSlice(map[string]any{"rules": "bad"}, "rules"); got != nil {
-			t.Fatalf("expected nil, got %#v", got)
-		}
-	})
+	if _, err := collectContentCheckRules(FinalVerifyInput{
+		Todos: []TodoSnapshot{{ID: "todo-1", Required: true, ContentChecks: []TodoContentCheckSnapshot{{Artifact: "a.txt"}}}},
+	}); err == nil {
+		t.Fatal("expected empty contains validation error")
+	}
 }
 
 func TestResolvePathWithinWorkdir(t *testing.T) {

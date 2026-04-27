@@ -37,14 +37,15 @@ func newCompactSummaryGenerator(
 // tolerantSummaryResponse 使用 json.RawMessage 接收数组字段，容忍 LLM 返回 string 代替 []string。
 type tolerantSummaryResponse struct {
 	TaskState struct {
-		Goal            string          `json:"goal"`
-		Progress        json.RawMessage `json:"progress"`
-		OpenItems       json.RawMessage `json:"open_items"`
-		NextStep        string          `json:"next_step"`
-		Blockers        json.RawMessage `json:"blockers"`
-		KeyArtifacts    json.RawMessage `json:"key_artifacts"`
-		Decisions       json.RawMessage `json:"decisions"`
-		UserConstraints json.RawMessage `json:"user_constraints"`
+		VerificationProfile string          `json:"verification_profile"`
+		Goal                string          `json:"goal"`
+		Progress            json.RawMessage `json:"progress"`
+		OpenItems           json.RawMessage `json:"open_items"`
+		NextStep            string          `json:"next_step"`
+		Blockers            json.RawMessage `json:"blockers"`
+		KeyArtifacts        json.RawMessage `json:"key_artifacts"`
+		Decisions           json.RawMessage `json:"decisions"`
+		UserConstraints     json.RawMessage `json:"user_constraints"`
 	} `json:"task_state"`
 	DisplaySummary string `json:"display_summary"`
 }
@@ -156,14 +157,15 @@ func parseCompactSummaryOutput(content string) (contextcompact.SummaryOutput, er
 	output := contextcompact.SummaryOutput{
 		DisplaySummary: strings.TrimSpace(raw.DisplaySummary),
 		TaskState: agentsession.TaskState{
-			Goal:            task.Goal,
-			Progress:        progress,
-			OpenItems:       openItems,
-			NextStep:        task.NextStep,
-			Blockers:        blockers,
-			KeyArtifacts:    keyArtifacts,
-			Decisions:       decisions,
-			UserConstraints: userConstraints,
+			VerificationProfile: agentsession.VerificationProfile(task.VerificationProfile),
+			Goal:                task.Goal,
+			Progress:            progress,
+			OpenItems:           openItems,
+			NextStep:            task.NextStep,
+			Blockers:            blockers,
+			KeyArtifacts:        keyArtifacts,
+			Decisions:           decisions,
+			UserConstraints:     userConstraints,
 		},
 	}
 

@@ -318,6 +318,7 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 
 	newSession := agentsession.NewWithWorkdir("New Session", sessionWorkdir)
 	newSession.ID = sessionID
+	establishSessionVerificationProfile(&newSession)
 	created, createErr := s.sessionStore.CreateSession(ctx, createSessionInputFromSession(newSession))
 	if createErr == nil {
 		return created, nil

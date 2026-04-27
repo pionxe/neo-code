@@ -29,6 +29,7 @@ func (taskStateSource) Sections(ctx context.Context, input BuildInput) ([]prompt
 // renderTaskStateSection 把任务状态转成稳定顺序的文本段，供模型恢复长期任务上下文。
 func renderTaskStateSection(state agentsession.TaskState) promptSection {
 	lines := []string{
+		fmt.Sprintf("- verification_profile: %s", promptTaskStateValue(string(state.VerificationProfile))),
 		fmt.Sprintf("- goal: %s", promptTaskStateValue(state.Goal)),
 		fmt.Sprintf("- progress: %s", promptTaskStateListValue(state.Progress)),
 		fmt.Sprintf("- open_items: %s", promptTaskStateListValue(state.OpenItems)),

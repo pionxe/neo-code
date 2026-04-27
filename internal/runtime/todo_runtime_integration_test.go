@@ -27,7 +27,7 @@ func TestServiceRunTodoWriteToolCall(t *testing.T) {
 						{
 							ID:        "todo-call-1",
 							Name:      tools.ToolNameTodoWrite,
-							Arguments: `{"action":"add","item":{"id":"todo-1","content":"implement feature","priority":3}}`,
+							Arguments: `{"action":"add","item":{"id":"todo-1","content":"implement feature","priority":3,"required":false}}`,
 						},
 					},
 				},

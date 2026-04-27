@@ -16,7 +16,6 @@ import (
 const (
 	OpenAIName           = configpkg.OpenAIName
 	GeminiName           = configpkg.GeminiName
-	OpenLLName           = configpkg.OpenLLName
 	QiniuName            = configpkg.QiniuName
 	ModelScopeName       = configpkg.ModelScopeName
 	QiniuDefaultModel    = configpkg.QiniuDefaultModel
@@ -56,7 +55,6 @@ func TestSelectionServiceListProviderOptionsUsesCatalogModels(t *testing.T) {
 	expected := map[string]int{
 		OpenAIName:     2,
 		GeminiName:     2,
-		OpenLLName:     2,
 		QiniuName:      2,
 		ModelScopeName: 2,
 	}

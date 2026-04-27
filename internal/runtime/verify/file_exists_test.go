@@ -7,60 +7,60 @@ import (
 	"testing"
 )
 
-func assertVerifierStatus(t *testing.T, result VerificationResult, want VerificationStatus) {
-	t.Helper()
-	if result.Status != want {
-		t.Fatalf("status = %q, want %q", result.Status, want)
-	}
-}
-
-func assertPermissionDeniedClass(t *testing.T, result VerificationResult) {
-	t.Helper()
-	if result.ErrorClass != ErrorClassPermissionDenied {
-		t.Fatalf("error_class = %q, want %q", result.ErrorClass, ErrorClassPermissionDenied)
-	}
-}
-
-func TestFileExistsVerifierPathTraversalDenied(t *testing.T) {
+func TestFileExistsVerifier(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	workdir := filepath.Join(root, "work")
-	if err := os.MkdirAll(workdir, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	outside := filepath.Join(root, "secret.txt")
-	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	verifier := FileExistsVerifier{}
-	result, err := verifier.VerifyFinal(context.Background(), FinalVerifyInput{
-		Workdir:  workdir,
-		Metadata: map[string]any{"expected_files": []string{"../secret.txt"}},
+	t.Run("path outside workdir fails", func(t *testing.T) {
+		t.Parallel()
+		result, err := (FileExistsVerifier{}).VerifyFinal(context.Background(), FinalVerifyInput{
+			Workdir: t.TempDir(),
+			TaskState: TaskStateSnapshot{
+				KeyArtifacts: []string{"../secret.txt"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("VerifyFinal() error = %v", err)
+		}
+		if result.Status != VerificationFail {
+			t.Fatalf("status = %q, want fail", result.Status)
+		}
 	})
-	if err != nil {
-		t.Fatalf("VerifyFinal() error = %v", err)
-	}
-	assertVerifierStatus(t, result, VerificationFail)
-	assertPermissionDeniedClass(t, result)
-}
 
-func TestFileExistsVerifierSuccessWithinWorkdir(t *testing.T) {
-	t.Parallel()
-
-	workdir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workdir, "a.txt"), []byte("ok"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	verifier := FileExistsVerifier{}
-	result, err := verifier.VerifyFinal(context.Background(), FinalVerifyInput{
-		Workdir:  workdir,
-		Metadata: map[string]any{"expected_files": []string{"a.txt"}},
+	t.Run("missing artifact soft blocks", func(t *testing.T) {
+		t.Parallel()
+		workdir := t.TempDir()
+		result, err := (FileExistsVerifier{}).VerifyFinal(context.Background(), FinalVerifyInput{
+			Workdir: workdir,
+			TaskState: TaskStateSnapshot{
+				KeyArtifacts: []string{"a.txt"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("VerifyFinal() error = %v", err)
+		}
+		if result.Status != VerificationSoftBlock {
+			t.Fatalf("status = %q, want soft_block", result.Status)
+		}
 	})
-	if err != nil {
-		t.Fatalf("VerifyFinal() error = %v", err)
-	}
-	assertVerifierStatus(t, result, VerificationPass)
+
+	t.Run("required todo artifact passes when file exists", func(t *testing.T) {
+		t.Parallel()
+		workdir := t.TempDir()
+		path := filepath.Join(workdir, "a.txt")
+		if err := os.WriteFile(path, []byte("ok"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		result, err := (FileExistsVerifier{}).VerifyFinal(context.Background(), FinalVerifyInput{
+			Workdir: workdir,
+			Todos: []TodoSnapshot{
+				{ID: "todo-1", Required: true, Artifacts: []string{"a.txt"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("VerifyFinal() error = %v", err)
+		}
+		if result.Status != VerificationPass {
+			t.Fatalf("status = %q, want pass", result.Status)
+		}
+	})
 }

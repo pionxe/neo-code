@@ -45,7 +45,7 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 	if !strings.Contains(prompt.SystemPrompt, internalcompact.SummaryMarker) {
 		t.Fatalf("expected summary format in system prompt, got %q", prompt.SystemPrompt)
 	}
-	if !strings.Contains(prompt.SystemPrompt, `{"task_state":{"goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"..."}`) {
+	if !strings.Contains(prompt.SystemPrompt, `{"task_state":{"verification_profile":"","goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"..."}`) {
 		t.Fatalf("expected task state JSON contract in system prompt, got %q", prompt.SystemPrompt)
 	}
 	if !strings.Contains(prompt.SystemPrompt, internalcompact.FormatTemplate()) {
@@ -107,7 +107,7 @@ func TestBuildCompactPromptUsesEmptyJSONArraysWhenNoMessages(t *testing.T) {
 	t.Parallel()
 
 	prompt := BuildCompactPrompt(CompactPromptInput{})
-	if !strings.Contains(prompt.UserPrompt, "<current_task_state>\n{\n  \"goal\": \"\",") {
+	if !strings.Contains(prompt.UserPrompt, "<current_task_state>\n{\n  \"verification_profile\": \"\",") {
 		t.Fatalf("expected empty task state JSON block, got %q", prompt.UserPrompt)
 	}
 	if !strings.Contains(prompt.UserPrompt, "<archived_source_material>\n[]\n</archived_source_material>") {

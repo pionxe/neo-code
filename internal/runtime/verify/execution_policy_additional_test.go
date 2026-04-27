@@ -14,7 +14,7 @@ func TestPolicyCommandExecutorExecuteBranches(t *testing.T) {
 
 	t.Run("empty command denied", func(t *testing.T) {
 		t.Parallel()
-		_, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{Command: "  "})
+		_, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{Argv: nil})
 		if err == nil || !errors.Is(err, ErrVerificationExecutionDenied) {
 			t.Fatalf("expected ErrVerificationExecutionDenied, got %v", err)
 		}
@@ -24,7 +24,7 @@ func TestPolicyCommandExecutorExecuteBranches(t *testing.T) {
 		t.Parallel()
 		policy := config.StaticDefaults().Runtime.Verification.ExecutionPolicy
 		result, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{
-			Command: "go version",
+			Argv:    []string{"go", "version"},
 			Workdir: "/path/not/exist",
 			Policy:  policy,
 		})
@@ -35,10 +35,10 @@ func TestPolicyCommandExecutorExecuteBranches(t *testing.T) {
 
 	t.Run("command timeout", func(t *testing.T) {
 		t.Parallel()
-		timeoutCommand := "sh -c 'sleep 2'"
+		timeoutCommand := []string{"sh", "-c", "sleep 2"}
 		allowedCommand := "sh"
 		if runtime.GOOS == "windows" {
-			timeoutCommand = "powershell -NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds 2"
+			timeoutCommand = []string{"powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 2"}
 			allowedCommand = "powershell"
 		}
 		policy := config.VerificationExecutionPolicyConfig{
@@ -48,8 +48,8 @@ func TestPolicyCommandExecutorExecuteBranches(t *testing.T) {
 			DefaultOutputCap: 1024,
 		}
 		result, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{
-			Command: timeoutCommand,
-			Policy:  policy,
+			Argv:   timeoutCommand,
+			Policy: policy,
 		})
 		if err == nil || !errors.Is(err, ErrVerificationExecutionError) {
 			t.Fatalf("expected timeout execution error, got result=%+v err=%v", result, err)
@@ -61,10 +61,10 @@ func TestPolicyCommandExecutorExecuteBranches(t *testing.T) {
 
 	t.Run("non-zero exit code", func(t *testing.T) {
 		t.Parallel()
-		failCommand := "sh -c 'exit 7'"
+		failCommand := []string{"sh", "-c", "exit 7"}
 		allowedCommand := "sh"
 		if runtime.GOOS == "windows" {
-			failCommand = "go tool definitely-not-a-real-tool"
+			failCommand = []string{"go", "tool", "definitely-not-a-real-tool"}
 			allowedCommand = "go"
 		}
 		policy := config.VerificationExecutionPolicyConfig{
@@ -74,8 +74,8 @@ func TestPolicyCommandExecutorExecuteBranches(t *testing.T) {
 			DefaultOutputCap: 1024,
 		}
 		result, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{
-			Command: failCommand,
-			Policy:  policy,
+			Argv:   failCommand,
+			Policy: policy,
 		})
 		if err != nil {
 			t.Fatalf("expected nil err for exit status, got %v", err)
@@ -96,61 +96,68 @@ func TestExecutionPolicyHelpers(t *testing.T) {
 			AllowedCommands: []string{"go", "git"},
 			DeniedCommands:  []string{"rm"},
 		}
-		if ok, _ := isCommandAllowed("go", "go test ./...", policy); !ok {
+		if ok, _ := isCommandAllowed([]string{"go", "test", "./..."}, policy); !ok {
 			t.Fatalf("go should be allowed")
 		}
-		if ok, reason := isCommandAllowed("rm", "rm -rf .", policy); ok || reason == "" {
+		if ok, reason := isCommandAllowed([]string{"rm", "-rf", "."}, policy); ok || reason == "" {
 			t.Fatalf("rm should be denied")
 		}
-		if ok, _ := isCommandAllowed("go", "go test ./... && echo x", policy); ok {
-			t.Fatalf("metacharacter command should be denied")
-		}
-		if ok, _ := isCommandAllowed("python", "python -V", policy); ok {
+		if ok, _ := isCommandAllowed([]string{"python", "-V"}, policy); ok {
 			t.Fatalf("python should not pass allow list")
 		}
-		if ok, _ := isCommandAllowed("git", "git", policy); ok {
+		if ok, _ := isCommandAllowed([]string{"git"}, policy); ok {
 			t.Fatalf("git without subcommand should be denied")
 		}
-		if ok, _ := isCommandAllowed("git", "git checkout .", policy); ok {
+		if ok, _ := isCommandAllowed([]string{"git", "checkout", "."}, policy); ok {
 			t.Fatalf("git write subcommand should be denied")
 		}
-		if ok, _ := isCommandAllowed("git", "git diff --output=../leak.txt", policy); ok {
+		if ok, _ := isCommandAllowed([]string{"git", "diff", "--output=../leak.txt"}, policy); ok {
 			t.Fatalf("git output flag should be denied")
 		}
-		if ok, _ := isCommandAllowed("git", "git show -o ../leak.txt", policy); ok {
+		if ok, _ := isCommandAllowed([]string{"git", "show", "-o", "../leak.txt"}, policy); ok {
 			t.Fatalf("git short output flag should be denied")
 		}
-		if ok, _ := isCommandAllowed("git", "git diff -c core.pager=cat", policy); ok {
+		if ok, _ := isCommandAllowed([]string{"git", "diff", "-c", "core.pager=cat"}, policy); ok {
 			t.Fatalf("git -c override should be denied")
 		}
 	})
 
 	t.Run("basic parser helpers", func(t *testing.T) {
 		t.Parallel()
-		if commandHead("  ") != "" {
+		if commandHead(nil) != "" {
 			t.Fatalf("commandHead blank should be empty")
 		}
-		if commandHead("Go Test") != "go" {
+		if commandHead([]string{"Go", "Test"}) != "go" {
 			t.Fatalf("commandHead lower-case mismatch")
 		}
-		if gitSubcommand("git status") != "status" {
+		if gitSubcommand([]string{"git", "status"}) != "status" {
 			t.Fatalf("gitSubcommand mismatch")
 		}
-		if gitSubcommand("go test") != "" {
+		if gitSubcommand([]string{"go", "test"}) != "" {
 			t.Fatalf("gitSubcommand should be empty for non-git")
 		}
-		if denied, _ := hasDangerousGitArguments("git diff --output=tmp.txt"); !denied {
+		if denied, _ := hasDangerousGitArguments([]string{"git", "diff", "--output=tmp.txt"}); !denied {
 			t.Fatalf("expected dangerous git output argument to be denied")
 		}
-		if denied, _ := hasDangerousGitArguments("git status"); denied {
+		if denied, _ := hasDangerousGitArguments([]string{"git", "status"}); denied {
 			t.Fatalf("git status should not be denied by dangerous argument checker")
 		}
-		set := normalizedCommandSet([]string{" Go  ", "", "GIT status"})
+		set := normalizedCommandSet([]string{" Go  ", "", "GIT"})
 		if _, ok := set["go"]; !ok {
 			t.Fatalf("normalized set should include go")
 		}
 		if _, ok := set["git"]; !ok {
 			t.Fatalf("normalized set should include git")
+		}
+		spacedSet := normalizedCommandSet([]string{"go test ./...", " git status "})
+		if _, ok := spacedSet["go"]; !ok {
+			t.Fatalf("normalized set should parse command head from spaced go command")
+		}
+		if _, ok := spacedSet["git"]; !ok {
+			t.Fatalf("normalized set should parse command head from spaced git command")
+		}
+		if _, ok := spacedSet["go test ./..."]; ok {
+			t.Fatalf("normalized set should not retain entire shell-like command as key")
 		}
 		if got := firstPositive(-1, 0, 9, 10); got != 9 {
 			t.Fatalf("firstPositive() = %d, want 9", got)

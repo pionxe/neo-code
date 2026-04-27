@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -33,12 +32,11 @@ var readonlyGitSubcommands = map[string]struct{}{
 const (
 	defaultVerificationTimeoutSec = 120
 	defaultVerificationOutputCap  = 128 * 1024
-	shellMetacharacters           = ";|&`$<>()\n\r"
 )
 
 // CommandExecutionRequest 描述一次 verifier 命令执行请求。
 type CommandExecutionRequest struct {
-	Command       string
+	Argv          []string
 	Workdir       string
 	TimeoutSec    int
 	OutputCapByte int
@@ -66,13 +64,13 @@ type PolicyCommandExecutor struct{}
 
 // Execute 在白名单策略下执行 verifier 命令并返回结构化结果。
 func (PolicyCommandExecutor) Execute(ctx context.Context, req CommandExecutionRequest) (CommandExecutionResult, error) {
-	normalizedCommand := strings.TrimSpace(req.Command)
-	commandName := commandHead(normalizedCommand)
-	if normalizedCommand == "" || commandName == "" {
+	argv := compactStrings(req.Argv)
+	commandName := commandHead(argv)
+	if len(argv) == 0 || commandName == "" {
 		return CommandExecutionResult{}, fmt.Errorf("%w: empty command", ErrVerificationExecutionDenied)
 	}
 
-	allowed, reason := isCommandAllowed(commandName, normalizedCommand, req.Policy)
+	allowed, reason := isCommandAllowed(argv, req.Policy)
 	if !allowed {
 		return CommandExecutionResult{}, fmt.Errorf("%w: %s", ErrVerificationExecutionDenied, reason)
 	}
@@ -83,7 +81,7 @@ func (PolicyCommandExecutor) Execute(ctx context.Context, req CommandExecutionRe
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	cmd := shellCommand(runCtx, normalizedCommand)
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	if workdir := strings.TrimSpace(req.Workdir); workdir != "" {
 		cmd.Dir = workdir
 	}
@@ -122,79 +120,64 @@ func (PolicyCommandExecutor) Execute(ctx context.Context, req CommandExecutionRe
 		result.ExitCode = exitErr.ExitCode()
 		return result, nil
 	}
+	if errors.Is(runErr, exec.ErrNotFound) {
+		return result, fmt.Errorf("%w: command not found", ErrVerificationExecutionError)
+	}
 	return result, fmt.Errorf("%w: %v", ErrVerificationExecutionError, runErr)
 }
 
-// isCommandAllowed 判断命令是否符合 verification non-interactive 白名单策略。
-func isCommandAllowed(commandName string, raw string, policy config.VerificationExecutionPolicyConfig) (bool, string) {
-	if hasShellMetacharacter(raw) {
-		return false, "shell metacharacter is not allowed in verification command"
+// isCommandAllowed 判断 argv 是否符合 verification non-interactive 白名单策略。
+func isCommandAllowed(argv []string, policy config.VerificationExecutionPolicyConfig) (bool, string) {
+	commandName := commandHead(argv)
+	if commandName == "" {
+		return false, "command is empty"
 	}
-
 	if _, blocked := normalizedCommandSet(policy.DeniedCommands)[commandName]; blocked {
 		return false, fmt.Sprintf("command %q is denied by verification policy", commandName)
 	}
-
 	allowed := normalizedCommandSet(policy.AllowedCommands)
 	if len(allowed) > 0 {
 		if _, ok := allowed[commandName]; !ok {
 			return false, fmt.Sprintf("command %q is not in allowed_commands", commandName)
 		}
 	}
-
 	if commandName == "git" {
-		sub := gitSubcommand(raw)
+		sub := gitSubcommand(argv)
 		if sub == "" {
 			return false, "git subcommand is required"
 		}
 		if _, ok := readonlyGitSubcommands[sub]; !ok {
 			return false, fmt.Sprintf("git subcommand %q is not read-only", sub)
 		}
-		if denied, reason := hasDangerousGitArguments(raw); denied {
+		if denied, reason := hasDangerousGitArguments(argv); denied {
 			return false, reason
 		}
 	}
 	return true, ""
 }
 
-// hasShellMetacharacter 判断命令文本是否包含会触发 shell 解释的高风险元字符。
-func hasShellMetacharacter(command string) bool {
-	return strings.ContainsAny(command, shellMetacharacters)
-}
-
-// shellCommand 按平台构建执行命令，统一以非交互 shell 运行 verifier 指令。
-func shellCommand(ctx context.Context, command string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command)
-	}
-	return exec.CommandContext(ctx, "sh", "-lc", command)
-}
-
 // commandHead 返回命令首个 token（小写）。
-func commandHead(command string) string {
-	fields := commandFields(command)
-	if len(fields) == 0 {
+func commandHead(argv []string) string {
+	if len(argv) == 0 {
 		return ""
 	}
-	return fields[0]
+	return strings.ToLower(strings.TrimSpace(argv[0]))
 }
 
 // gitSubcommand 提取 git 命令的二级子命令（小写）。
-func gitSubcommand(command string) string {
-	fields := commandFields(command)
-	if len(fields) < 2 || fields[0] != "git" {
+func gitSubcommand(argv []string) string {
+	if len(argv) < 2 || commandHead(argv) != "git" {
 		return ""
 	}
-	return fields[1]
+	return strings.ToLower(strings.TrimSpace(argv[1]))
 }
 
 // hasDangerousGitArguments 校验只读 git 子命令是否携带可能产生写入副作用的参数。
-func hasDangerousGitArguments(command string) (bool, string) {
-	fields := commandFields(command)
-	if len(fields) < 2 || fields[0] != "git" {
+func hasDangerousGitArguments(argv []string) (bool, string) {
+	if len(argv) < 2 || commandHead(argv) != "git" {
 		return false, ""
 	}
-	args := fields[2:]
+	args := argv[2:]
 	for _, arg := range args {
 		switch {
 		case arg == "-o" || arg == "--output" || strings.HasPrefix(arg, "--output="):
@@ -218,20 +201,12 @@ func hasDangerousGitArguments(command string) (bool, string) {
 func normalizedCommandSet(commands []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(commands))
 	for _, command := range commands {
-		if normalized := commandHead(command); normalized != "" {
-			set[normalized] = struct{}{}
+		head := commandHead(strings.Fields(command))
+		if head != "" {
+			set[head] = struct{}{}
 		}
 	}
 	return set
-}
-
-// commandFields 返回规整后的命令 token 序列。
-func commandFields(command string) []string {
-	fields := strings.Fields(strings.TrimSpace(command))
-	for i, field := range fields {
-		fields[i] = strings.ToLower(strings.TrimSpace(field))
-	}
-	return fields
 }
 
 // firstPositive 返回首个大于 0 的值，否则回退到最后一个默认值。

@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// VerificationProfile 表示会话持有的结构化验收策略。
+type VerificationProfile string
+
+const (
+	VerificationProfileTaskOnly   VerificationProfile = "task_only"
+	VerificationProfileCreateFile VerificationProfile = "create_file"
+	VerificationProfileDocs       VerificationProfile = "docs"
+	VerificationProfileConfig     VerificationProfile = "config"
+	VerificationProfileEditCode   VerificationProfile = "edit_code"
+	VerificationProfileFixBug     VerificationProfile = "fix_bug"
+	VerificationProfileRefactor   VerificationProfile = "refactor"
+)
+
 const (
 	// taskStateMaxFieldChars 限制 TaskState 单值字段的最大字符数，避免异常大文本污染持久化与后续 prompt。
 	taskStateMaxFieldChars = 2000
@@ -16,15 +29,16 @@ const (
 
 // TaskState 表示会话级、可持久化的任务续航状态。
 type TaskState struct {
-	Goal            string    `json:"goal"`
-	Progress        []string  `json:"progress"`
-	OpenItems       []string  `json:"open_items"`
-	NextStep        string    `json:"next_step"`
-	Blockers        []string  `json:"blockers"`
-	KeyArtifacts    []string  `json:"key_artifacts"`
-	Decisions       []string  `json:"decisions"`
-	UserConstraints []string  `json:"user_constraints"`
-	LastUpdatedAt   time.Time `json:"last_updated_at"`
+	VerificationProfile VerificationProfile `json:"verification_profile,omitempty"`
+	Goal                string              `json:"goal"`
+	Progress            []string            `json:"progress"`
+	OpenItems           []string            `json:"open_items"`
+	NextStep            string              `json:"next_step"`
+	Blockers            []string            `json:"blockers"`
+	KeyArtifacts        []string            `json:"key_artifacts"`
+	Decisions           []string            `json:"decisions"`
+	UserConstraints     []string            `json:"user_constraints"`
+	LastUpdatedAt       time.Time           `json:"last_updated_at"`
 }
 
 // Clone 返回任务状态的深拷贝，避免切片字段共享底层存储。
@@ -40,7 +54,8 @@ func (s TaskState) Clone() TaskState {
 
 // Established 判断当前任务状态是否已经建立了可供续航使用的有效内容。
 func (s TaskState) Established() bool {
-	return strings.TrimSpace(s.Goal) != "" ||
+	return s.VerificationProfile.Valid() ||
+		strings.TrimSpace(s.Goal) != "" ||
 		len(s.Progress) > 0 ||
 		len(s.OpenItems) > 0 ||
 		strings.TrimSpace(s.NextStep) != "" ||
@@ -52,6 +67,7 @@ func (s TaskState) Established() bool {
 
 // NormalizeTaskState 统一收敛任务状态中的空白、重复项和零散文本格式。
 func NormalizeTaskState(state TaskState) TaskState {
+	state.VerificationProfile = normalizeVerificationProfile(state.VerificationProfile)
 	state.Goal = strings.TrimSpace(state.Goal)
 	state.NextStep = strings.TrimSpace(state.NextStep)
 	state.Progress = normalizeTaskStateList(state.Progress)
@@ -132,4 +148,29 @@ func truncateRunes(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit])
+}
+
+// Valid 判断 verification profile 是否属于受支持集合。
+func (p VerificationProfile) Valid() bool {
+	switch VerificationProfile(strings.ToLower(strings.TrimSpace(string(p)))) {
+	case VerificationProfileTaskOnly,
+		VerificationProfileCreateFile,
+		VerificationProfileDocs,
+		VerificationProfileConfig,
+		VerificationProfileEditCode,
+		VerificationProfileFixBug,
+		VerificationProfileRefactor:
+		return true
+	default:
+		return false
+	}
+}
+
+// normalizeVerificationProfile 规整 verification profile 文本，确保持久化与比较语义稳定。
+func normalizeVerificationProfile(profile VerificationProfile) VerificationProfile {
+	normalized := VerificationProfile(strings.ToLower(strings.TrimSpace(string(profile))))
+	if !normalized.Valid() {
+		return ""
+	}
+	return normalized
 }

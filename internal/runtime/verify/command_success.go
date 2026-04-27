@@ -7,11 +7,9 @@ import (
 	"strings"
 )
 
-const (
-	commandSuccessVerifierName = "command_success"
-)
+const commandSuccessVerifierName = "command_success"
 
-// CommandSuccessVerifier 负责执行配置命令并基于退出码做验证。
+// CommandSuccessVerifier 负责执行配置命令并基于退出码做验收。
 type CommandSuccessVerifier struct {
 	VerifierName string
 	Executor     CommandExecutor
@@ -34,44 +32,23 @@ func (v CommandSuccessVerifier) VerifyFinal(ctx context.Context, input FinalVeri
 		executor = PolicyCommandExecutor{}
 	}
 
-	cfg, exists := input.VerificationConfig.Verifiers[name]
-	if !exists {
+	cfg := input.VerificationConfig.Verifiers[name]
+	if len(cfg.Command) == 0 {
 		cfg = input.VerificationConfig.Verifiers[commandSuccessVerifierName]
 	}
-	command := strings.TrimSpace(cfg.Command)
-	if command == "" {
-		if cfg.Required {
-			status := VerificationSoftBlock
-			summary := "verification command is required but missing"
-			reason := "missing verifier command configuration"
-			errorClass := ErrorClassEnvMissing
-			if cfg.FailClosed {
-				status = VerificationFail
-			}
-			if cfg.FailOpen {
-				status = VerificationPass
-				summary = "verification command missing but ignored by fail_open policy"
-				reason = "optionalized by fail_open policy"
-				errorClass = ""
-			}
-			return VerificationResult{
-				Name:       name,
-				Status:     status,
-				Summary:    summary,
-				Reason:     reason,
-				ErrorClass: errorClass,
-			}, nil
-		}
+	argv := compactStrings(cfg.Command)
+	if len(argv) == 0 {
 		return VerificationResult{
-			Name:    name,
-			Status:  VerificationPass,
-			Summary: "verification command is not configured, skip",
-			Reason:  "optional verifier skipped",
+			Name:       name,
+			Status:     VerificationFail,
+			Summary:    "verification command is missing",
+			Reason:     "missing verifier command configuration",
+			ErrorClass: ErrorClassEnvMissing,
 		}, nil
 	}
 
 	result, err := executor.Execute(ctx, CommandExecutionRequest{
-		Command:       command,
+		Argv:          argv,
 		Workdir:       input.Workdir,
 		TimeoutSec:    cfg.TimeoutSec,
 		OutputCapByte: cfg.OutputCapBytes,
@@ -86,9 +63,7 @@ func (v CommandSuccessVerifier) VerifyFinal(ctx context.Context, input FinalVeri
 				Summary:    err.Error(),
 				Reason:     "verification command denied by execution policy",
 				ErrorClass: ErrorClassPermissionDenied,
-				Evidence: map[string]any{
-					"command": command,
-				},
+				Evidence:   commandEvidence(argv, result),
 			}, nil
 		default:
 			errorClass := classifyCommandExecutionError(err)
@@ -98,10 +73,8 @@ func (v CommandSuccessVerifier) VerifyFinal(ctx context.Context, input FinalVeri
 				Summary:    err.Error(),
 				Reason:     "verification command execution failed",
 				ErrorClass: errorClass,
-				Retryable:  errorClass == ErrorClassTimeout,
-				Evidence: map[string]any{
-					"command": command,
-				},
+				Retryable:  false,
+				Evidence:   commandEvidence(argv, result),
 			}, nil
 		}
 	}
@@ -112,24 +85,24 @@ func (v CommandSuccessVerifier) VerifyFinal(ctx context.Context, input FinalVeri
 			Status:   VerificationPass,
 			Summary:  "verification command succeeded",
 			Reason:   "command exit code is 0",
-			Evidence: commandEvidence(command, result),
+			Evidence: commandEvidence(argv, result),
 		}, nil
 	}
 	return VerificationResult{
 		Name:       name,
-		Status:     VerificationFail,
+		Status:     VerificationSoftBlock,
 		Summary:    fmt.Sprintf("verification command failed with exit code %d", result.ExitCode),
 		Reason:     "command exit code is non-zero",
 		ErrorClass: classifyCommandFailure(name, result),
 		Retryable:  true,
-		Evidence:   commandEvidence(command, result),
+		Evidence:   commandEvidence(argv, result),
 	}, nil
 }
 
 // commandEvidence 将命令执行结果收敛为可观测证据。
-func commandEvidence(command string, result CommandExecutionResult) map[string]any {
+func commandEvidence(argv []string, result CommandExecutionResult) map[string]any {
 	return map[string]any{
-		"command":      command,
+		"argv":         append([]string(nil), argv...),
 		"command_name": result.CommandName,
 		"exit_code":    result.ExitCode,
 		"timed_out":    result.TimedOut,
@@ -148,14 +121,14 @@ func classifyCommandExecutionError(err error) ErrorClass {
 		return ErrorClassTimeout
 	case strings.Contains(normalized, "not found"):
 		return ErrorClassCommandNotFound
-	case strings.Contains(normalized, "permission"):
+	case strings.Contains(normalized, "permission"), strings.Contains(normalized, "access is denied"):
 		return ErrorClassPermissionDenied
 	default:
 		return ErrorClassUnknown
 	}
 }
 
-// classifyCommandFailure 将命令失败按 verifier 语义映射到稳定错误分类。
+// classifyCommandFailure 将命令领域失败按 verifier 语义映射到稳定错误分类。
 func classifyCommandFailure(verifierName string, result CommandExecutionResult) ErrorClass {
 	if result.TimedOut {
 		return ErrorClassTimeout

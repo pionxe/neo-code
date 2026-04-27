@@ -399,11 +399,6 @@ const (
 
 	AnthropicDefaultBaseURL = "https://api.anthropic.com/v1"
 
-	OpenLLName             = "openll"
-	OpenLLDefaultBaseURL   = "https://www.openll.top/v1"
-	OpenLLDefaultModel     = "gpt-5.4"
-	OpenLLDefaultAPIKeyEnv = "AI_API_KEY"
-
 	QiniuName             = "qiniu"
 	QiniuDefaultBaseURL   = "https://api.qnaigc.com/v1"
 	QiniuDefaultModel     = "z-ai/glm-5.1"
@@ -450,11 +445,6 @@ func GeminiProvider() ProviderConfig {
 	}
 }
 
-// OpenLLProvider returns the builtin OpenLL provider definition.
-func OpenLLProvider() ProviderConfig {
-	return newBuiltinOpenAICompatProvider(OpenLLName, OpenLLDefaultBaseURL, OpenLLDefaultModel, OpenLLDefaultAPIKeyEnv)
-}
-
 // QiniuProvider returns the builtin Qiniu provider definition.
 func QiniuProvider() ProviderConfig {
 	return newBuiltinOpenAICompatProvider(QiniuName, QiniuDefaultBaseURL, QiniuDefaultModel, QiniuDefaultAPIKeyEnv)
@@ -470,7 +460,6 @@ func DefaultProviders() []ProviderConfig {
 	return []ProviderConfig{
 		OpenAIProvider(),
 		GeminiProvider(),
-		OpenLLProvider(),
 		QiniuProvider(),
 		ModelScopeProvider(),
 	}

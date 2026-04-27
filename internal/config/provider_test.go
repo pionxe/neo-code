@@ -624,11 +624,11 @@ func TestDefaultProvidersReturnsAllBuiltins(t *testing.T) {
 	t.Parallel()
 
 	providers := DefaultProviders()
-	if len(providers) != 5 {
-		t.Fatalf("expected 5 builtin providers, got %d", len(providers))
+	if len(providers) != 4 {
+		t.Fatalf("expected 4 builtin providers, got %d", len(providers))
 	}
 
-	expectedNames := []string{OpenAIName, GeminiName, OpenLLName, QiniuName, ModelScopeName}
+	expectedNames := []string{OpenAIName, GeminiName, QiniuName, ModelScopeName}
 	for i, provider := range providers {
 		if provider.Name != expectedNames[i] {
 			t.Fatalf("expected provider[%d] name %q, got %q", i, expectedNames[i], provider.Name)
@@ -677,28 +677,6 @@ func TestGeminiProviderConfig(t *testing.T) {
 	}
 	if provider.APIKeyEnv != GeminiDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", GeminiDefaultAPIKeyEnv, provider.APIKeyEnv)
-	}
-}
-
-func TestOpenLLProviderConfig(t *testing.T) {
-	t.Parallel()
-
-	provider := OpenLLProvider()
-
-	if provider.Name != OpenLLName {
-		t.Fatalf("expected name %q, got %q", OpenLLName, provider.Name)
-	}
-	if provider.Driver != "openaicompat" {
-		t.Fatalf("expected driver %q, got %q", "openaicompat", provider.Driver)
-	}
-	if provider.BaseURL != OpenLLDefaultBaseURL {
-		t.Fatalf("expected base URL %q, got %q", OpenLLDefaultBaseURL, provider.BaseURL)
-	}
-	if provider.Model != OpenLLDefaultModel {
-		t.Fatalf("expected default model %q, got %q", OpenLLDefaultModel, provider.Model)
-	}
-	if provider.APIKeyEnv != OpenLLDefaultAPIKeyEnv {
-		t.Fatalf("expected API key env %q, got %q", OpenLLDefaultAPIKeyEnv, provider.APIKeyEnv)
 	}
 }
 

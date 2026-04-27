@@ -60,16 +60,32 @@ type ToolResultLike struct {
 	Facts   map[string]any `json:"facts,omitempty"`
 }
 
+// TodoContentCheckSnapshot 表示 verifier 消费的结构化内容校验规则。
+type TodoContentCheckSnapshot struct {
+	Artifact string   `json:"artifact,omitempty"`
+	Contains []string `json:"contains,omitempty"`
+}
+
 // TodoSnapshot 表示 verifier 所需的 todo 快照。
 type TodoSnapshot struct {
-	ID            string `json:"id"`
-	Content       string `json:"content,omitempty"`
-	Status        string `json:"status,omitempty"`
-	Required      bool   `json:"required"`
-	BlockedReason string `json:"blocked_reason,omitempty"`
-	RetryCount    int    `json:"retry_count,omitempty"`
-	RetryLimit    int    `json:"retry_limit,omitempty"`
-	FailureReason string `json:"failure_reason,omitempty"`
+	ID            string                     `json:"id"`
+	Content       string                     `json:"content,omitempty"`
+	Status        string                     `json:"status,omitempty"`
+	Required      bool                       `json:"required"`
+	BlockedReason string                     `json:"blocked_reason,omitempty"`
+	Acceptance    []string                   `json:"acceptance,omitempty"`
+	Artifacts     []string                   `json:"artifacts,omitempty"`
+	Supersedes    []string                   `json:"supersedes,omitempty"`
+	ContentChecks []TodoContentCheckSnapshot `json:"content_checks,omitempty"`
+	RetryCount    int                        `json:"retry_count,omitempty"`
+	RetryLimit    int                        `json:"retry_limit,omitempty"`
+	FailureReason string                     `json:"failure_reason,omitempty"`
+}
+
+// TaskStateSnapshot 表示 verifier 所需的 task_state 结构化输入。
+type TaskStateSnapshot struct {
+	VerificationProfile string   `json:"verification_profile,omitempty"`
+	KeyArtifacts        []string `json:"key_artifacts,omitempty"`
 }
 
 // RuntimeStateSnapshot 表示 verifier 所需的 runtime 控制面快照。
@@ -90,8 +106,8 @@ type FinalVerifyInput struct {
 	Todos              []TodoSnapshot            `json:"todos,omitempty"`
 	LastAssistantFinal string                    `json:"last_assistant_final,omitempty"`
 	ToolResults        []ToolResultLike          `json:"tool_results,omitempty"`
+	TaskState          TaskStateSnapshot         `json:"task_state,omitempty"`
 	RuntimeState       RuntimeStateSnapshot      `json:"runtime_state,omitempty"`
-	Metadata           map[string]any            `json:"metadata,omitempty"`
 	VerificationConfig config.VerificationConfig `json:"verification_config,omitempty"`
 }
 
@@ -107,7 +123,11 @@ func NormalizeResult(result VerificationResult) VerificationResult {
 	if result.Status == "" {
 		result.Status = VerificationFail
 	}
-	if result.ErrorClass == "" {
+	if result.Status == VerificationPass {
+		result.ErrorClass = ""
+		return result
+	}
+	if result.Status == VerificationFail && result.ErrorClass == "" {
 		result.ErrorClass = ErrorClassUnknown
 	}
 	return result

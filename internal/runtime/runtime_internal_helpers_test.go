@@ -814,6 +814,7 @@ func TestSetMemoExtractorAndRunTriggersExtraction(t *testing.T) {
 func newRuntimeSession(id string) agentsession.Session {
 	session := agentsession.New("runtime test")
 	session.ID = id
+	session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
 	session.TokenInputTotal = 1
 	session.TokenOutputTotal = 2
 	return session

@@ -36,6 +36,13 @@ func TestInputPreparerPrepareTextOnly(t *testing.T) {
 	if len(result.SavedAssets) != 0 {
 		t.Fatalf("expected no saved assets, got %+v", result.SavedAssets)
 	}
+	loaded, err := store.LoadSession(context.Background(), result.SessionID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.TaskState.VerificationProfile != VerificationProfileTaskOnly {
+		t.Fatalf("verification profile = %q, want %q", loaded.TaskState.VerificationProfile, VerificationProfileTaskOnly)
+	}
 }
 
 func TestInputPreparerPrepareTextAndImage(t *testing.T) {

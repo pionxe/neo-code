@@ -1979,7 +1979,6 @@ func disableBuiltinProviderAPIKeys(t *testing.T) {
 	t.Helper()
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "")
 	t.Setenv(config.GeminiDefaultAPIKeyEnv, "")
-	t.Setenv(config.OpenLLDefaultAPIKeyEnv, "")
 	t.Setenv(config.QiniuDefaultAPIKeyEnv, "")
 }
 

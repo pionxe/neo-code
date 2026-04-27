@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ContextBudgetMigrationResult 汇总 config.yaml 预算配置迁移的执行结果。
+// ContextBudgetMigrationResult 汇总 config.yaml schema 升级的执行结果。
 type ContextBudgetMigrationResult struct {
 	Path    string
 	Changed bool
@@ -21,7 +21,7 @@ type ContextBudgetMigrationResult struct {
 }
 
 const (
-	// ContextBudgetMigrationNoteEnabledDeprecated 标记旧开关被废弃且预算门禁不可关闭。
+	// ContextBudgetMigrationNoteEnabledDeprecated 提示旧 enabled 开关已废弃。
 	ContextBudgetMigrationNoteEnabledDeprecated = "旧 context.auto_compact.enabled 已废弃，新预算门禁不可关闭"
 )
 
@@ -35,7 +35,7 @@ func UpgradeConfigSchema(path string) (ContextBudgetMigrationResult, error) {
 	return MigrateContextBudgetConfigFile(path, false)
 }
 
-// MigrateContextBudgetConfigFile 将 config.yaml 中的 context.auto_compact 迁移到 context.budget。
+// MigrateContextBudgetConfigFile 将 config.yaml 中的旧 schema 迁移到当前实现。
 func MigrateContextBudgetConfigFile(path string, dryRun bool) (ContextBudgetMigrationResult, error) {
 	if path == "" {
 		path = DefaultConfigPath()
@@ -76,7 +76,7 @@ func MigrateContextBudgetConfigFile(path string, dryRun bool) (ContextBudgetMigr
 	return result, nil
 }
 
-// MigrateContextBudgetConfigContent 将旧预算 YAML 块替换为当前预算 YAML 块，并返回迁移说明。
+// MigrateContextBudgetConfigContent 将旧 YAML schema 迁移为当前 schema，并返回迁移说明。
 func MigrateContextBudgetConfigContent(raw []byte) ([]byte, bool, []string, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return raw, false, nil, nil
@@ -127,6 +127,14 @@ func MigrateContextBudgetConfigContent(raw []byte) ([]byte, bool, []string, erro
 		}
 	}
 
+	verificationChanged, err := migrateVerificationConfig(doc)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if verificationChanged {
+		changed = true
+	}
+
 	if !changed {
 		return raw, false, nil, nil
 	}
@@ -136,6 +144,116 @@ func MigrateContextBudgetConfigContent(raw []byte) ([]byte, bool, []string, erro
 		return nil, false, nil, err
 	}
 	return out, true, notes, nil
+}
+
+// migrateVerificationConfig 清理已废弃的 verification 字段，并将安全的旧 command string 收敛成 argv。
+func migrateVerificationConfig(doc map[string]any) (bool, error) {
+	runtimeValue, ok := doc["runtime"]
+	if !ok {
+		return false, nil
+	}
+	runtimeMap, ok := migrationStringMap(runtimeValue)
+	if !ok {
+		return false, nil
+	}
+	verificationValue, ok := runtimeMap["verification"]
+	if !ok {
+		return false, nil
+	}
+	verificationMap, ok := migrationStringMap(verificationValue)
+	if !ok {
+		return false, nil
+	}
+
+	changed := false
+	for _, key := range []string{"enabled", "default_task_policy", "final_intercept", "max_retries", "hooks"} {
+		if _, exists := verificationMap[key]; exists {
+			delete(verificationMap, key)
+			changed = true
+		}
+	}
+
+	verifiersValue, ok := verificationMap["verifiers"]
+	if ok {
+		verifiersMap, ok := migrationStringMap(verifiersValue)
+		if ok {
+			for name, rawVerifier := range verifiersMap {
+				verifierMap, ok := migrationStringMap(rawVerifier)
+				if !ok {
+					continue
+				}
+				for _, key := range []string{"enabled", "required", "fail_open", "fail_closed"} {
+					if _, exists := verifierMap[key]; exists {
+						delete(verifierMap, key)
+						changed = true
+					}
+				}
+				commandChanged, err := migrateVerifierCommandField(verifierMap)
+				if err != nil {
+					return false, err
+				}
+				if commandChanged {
+					changed = true
+				}
+				verifiersMap[name] = verifierMap
+			}
+			verificationMap["verifiers"] = verifiersMap
+		}
+	}
+
+	runtimeMap["verification"] = verificationMap
+	doc["runtime"] = runtimeMap
+	return changed, nil
+}
+
+// migrateVerifierCommandField 将简单的旧 command string 迁移为 argv；含 shell 语义时直接报错。
+func migrateVerifierCommandField(verifierMap map[string]any) (bool, error) {
+	value, ok := verifierMap["command"]
+	if !ok {
+		return false, nil
+	}
+	command, ok := value.(string)
+	if !ok {
+		return false, nil
+	}
+	fields, err := parseLegacyVerificationCommand(command)
+	if err != nil {
+		return false, err
+	}
+	if len(fields) == 0 {
+		delete(verifierMap, "command")
+		return true, nil
+	}
+
+	args := make([]any, 0, len(fields))
+	for _, field := range fields {
+		args = append(args, field)
+	}
+	verifierMap["command"] = args
+	return true, nil
+}
+
+// parseLegacyVerificationCommand 仅接受不含 shell 语义的简单空白分隔命令。
+func parseLegacyVerificationCommand(command string) ([]string, error) {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if containsUnsafeLegacyVerifierCommandSyntax(trimmed) {
+		return nil, errors.New("runtime.verification.verifiers.command uses unsupported shell syntax; rewrite it as argv")
+	}
+	return strings.Fields(trimmed), nil
+}
+
+// containsUnsafeLegacyVerifierCommandSyntax 判断旧命令是否包含无法安全自动迁移的 shell 结构。
+func containsUnsafeLegacyVerifierCommandSyntax(command string) bool {
+	unsafeTokens := []string{"'", "\"", "`", "|", "&&", "||", ";", ">", "<", "$(", "\n", "\r"}
+	for _, token := range unsafeTokens {
+		if strings.Contains(command, token) {
+			return true
+		}
+	}
+	return false
 }
 
 // collectContextBudgetMigrationNotes 汇总迁移过程中需要提示给用户的行为变化说明。

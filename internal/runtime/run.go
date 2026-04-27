@@ -210,15 +210,28 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if err != nil {
 				return s.handleRunError(err)
 			}
-			if err := s.appendAssistantMessageAndSave(
-				ctx,
-				&state,
-				snapshot,
-				turnOutput.assistant,
-				reconciled.inputTokens,
-				reconciled.outputTokens,
-			); err != nil {
-				return s.handleRunError(err)
+			hasToolCalls := len(turnOutput.assistant.ToolCalls) > 0
+			if hasToolCalls {
+				if err := s.appendAssistantMessageAndSave(
+					ctx,
+					&state,
+					snapshot,
+					turnOutput.assistant,
+					reconciled.inputTokens,
+					reconciled.outputTokens,
+				); err != nil {
+					return s.handleRunError(err)
+				}
+			} else {
+				if err := s.persistAssistantTurnUsageAndMetadata(
+					ctx,
+					&state,
+					snapshot,
+					reconciled.inputTokens,
+					reconciled.outputTokens,
+				); err != nil {
+					return s.handleRunError(err)
+				}
 			}
 			s.emitLedgerReconciled(ctx, &state, turnOutput.usageObservation, reconciled)
 			s.emitTokenUsage(ctx, &state, reconciled)
@@ -227,16 +240,16 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			state.completion = collectCompletionState(
 				&state,
 				turnOutput.assistant,
-				len(turnOutput.assistant.ToolCalls) > 0,
+				hasToolCalls,
 			)
 			completionState, completed := controlplane.EvaluateCompletion(
 				state.completion,
-				len(turnOutput.assistant.ToolCalls) > 0,
+				hasToolCalls,
 			)
 			state.completion = completionState
 			state.mu.Unlock()
 
-			if len(turnOutput.assistant.ToolCalls) == 0 {
+			if !hasToolCalls {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
@@ -274,6 +287,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 				switch acceptanceDecision.Status {
 				case acceptance.AcceptanceAccepted:
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
+					}
 					s.emitRunScoped(ctx, EventVerificationCompleted, &state, VerificationCompletedPayload{
 						StopReason: acceptanceDecision.StopReason,
 					})
@@ -289,28 +305,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
 						return s.handleRunError(err)
 					}
-					state.mu.Lock()
-					progressInput := collectProgressInput(
-						controlplane.RunStateVerify,
-						state.session.TaskState.Clone(),
-						state.session.TaskState.Clone(),
-						cloneTodosForPersistence(state.session.Todos),
-						cloneTodosForPersistence(state.session.Todos),
-						toolExecutionSummary{},
-						snapshot.NoProgressStreakLimit,
-						snapshot.RepeatCycleStreakLimit,
-					)
-					state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
-					state.finalInterceptStreak = state.progress.LastScore.NoProgressStreak
-					currentScore := state.progress.LastScore
-					state.mu.Unlock()
-					s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 					break turnAttempt
 				case acceptance.AcceptanceIncomplete:
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
+					}
 					recordAcceptanceTerminal(&state, acceptanceDecision)
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				case acceptance.AcceptanceFailed:
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
+					}
 					s.emitRunScoped(ctx, EventVerificationFailed, &state, VerificationFailedPayload{
 						StopReason: acceptanceDecision.StopReason,
 						ErrorClass: acceptanceDecision.ErrorClass,
@@ -319,6 +325,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				default:
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
+					}
 					recordAcceptanceTerminal(&state, acceptanceDecision)
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
@@ -351,6 +360,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			)
 			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 			currentScore := state.progress.LastScore
+			if currentScore.HasBusinessProgress || currentScore.HasExplorationProgress {
+				state.pendingFinalProgress = true
+			}
 			state.mu.Unlock()
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})

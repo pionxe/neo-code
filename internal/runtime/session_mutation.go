@@ -42,6 +42,23 @@ func (s *Service) appendAssistantMessageAndSave(
 	inputTokens int,
 	outputTokens int,
 ) error {
+	if err := s.persistAssistantTurnUsageAndMetadata(ctx, state, snapshot, inputTokens, outputTokens); err != nil {
+		return err
+	}
+	if assistant.IsEmpty() {
+		return nil
+	}
+	return s.appendAssistantMessageOnlyAndSave(ctx, state, assistant)
+}
+
+// persistAssistantTurnUsageAndMetadata 仅持久化 provider/model 与 token 使用量，不写入 assistant 文本。
+func (s *Service) persistAssistantTurnUsageAndMetadata(
+	ctx context.Context,
+	state *runState,
+	snapshot TurnBudgetSnapshot,
+	inputTokens int,
+	outputTokens int,
+) error {
 	metadataChanged := state.session.Provider != snapshot.ProviderConfig.Name || state.session.Model != snapshot.Model
 	unknownUsageChanged := false
 	state.session.Provider = snapshot.ProviderConfig.Name
@@ -52,27 +69,33 @@ func (s *Service) appendAssistantMessageAndSave(
 		unknownUsageChanged = true
 	}
 
-	if !assistant.IsEmpty() {
-		state.session.Messages = append(state.session.Messages, assistant)
-		state.touchSession()
-		return s.sessionStore.AppendMessages(ctx, agentsession.AppendMessagesInput{
-			SessionID:        state.session.ID,
-			Messages:         []providertypes.Message{assistant},
-			UpdatedAt:        state.session.UpdatedAt,
-			Provider:         state.session.Provider,
-			Model:            state.session.Model,
-			Workdir:          state.session.Workdir,
-			TokenInputDelta:  inputTokens,
-			TokenOutputDelta: outputTokens,
-			HasUnknownUsage:  state.session.HasUnknownUsage,
-		})
-	}
-
 	if metadataChanged || unknownUsageChanged || inputTokens != 0 || outputTokens != 0 {
 		state.touchSession()
 		return s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session))
 	}
 	return nil
+}
+
+// appendAssistantMessageOnlyAndSave 仅把 assistant 消息写入 transcript，不重复累计 token 与元数据。
+func (s *Service) appendAssistantMessageOnlyAndSave(
+	ctx context.Context,
+	state *runState,
+	assistant providertypes.Message,
+) error {
+	if state == nil || assistant.IsEmpty() {
+		return nil
+	}
+	state.session.Messages = append(state.session.Messages, assistant)
+	state.touchSession()
+	return s.sessionStore.AppendMessages(ctx, agentsession.AppendMessagesInput{
+		SessionID:       state.session.ID,
+		Messages:        []providertypes.Message{assistant},
+		UpdatedAt:       state.session.UpdatedAt,
+		Provider:        state.session.Provider,
+		Model:           state.session.Model,
+		Workdir:         state.session.Workdir,
+		HasUnknownUsage: state.session.HasUnknownUsage,
+	})
 }
 
 // appendSystemMessageAndSave 将系统提醒消息追加到会话并持久化。

@@ -144,7 +144,7 @@ func (s *Service) runCompactForSession(
 
 	if result.Applied {
 		session.Messages = append([]providertypes.Message(nil), result.Messages...)
-		session.TaskState = result.TaskState.Clone()
+		session.TaskState = mergeCompactedTaskState(originalTaskState, result.TaskState)
 		session.TokenInputTotal = 0
 		session.TokenOutputTotal = 0
 		session.HasUnknownUsage = false
@@ -162,6 +162,15 @@ func (s *Service) runCompactForSession(
 
 	s.emit(ctx, EventCompactApplied, runID, session.ID, fromCompactResult(result))
 	return session, result, nil
+}
+
+// mergeCompactedTaskState 保留 compact 输出中的任务状态，同时避免丢失会话已建立的验收 profile。
+func mergeCompactedTaskState(original agentsession.TaskState, compacted agentsession.TaskState) agentsession.TaskState {
+	merged := compacted.Clone()
+	if !merged.VerificationProfile.Valid() && original.VerificationProfile.Valid() {
+		merged.VerificationProfile = original.VerificationProfile
+	}
+	return merged
 }
 
 // defaultCompactRunner 为 runtime 懒加载默认 compact runner。

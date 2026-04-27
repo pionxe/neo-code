@@ -123,7 +123,10 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: read config file: %w", err)
 	}
-
+	data, _, err = normalizeVerificationSchemaContent(data)
+	if err != nil {
+		return nil, fmt.Errorf("config: normalize verification schema: %w", err)
+	}
 	cfg, err := parseConfigWithContextDefaults(data, l.defaults.Context, l.defaults.Memo)
 	if err != nil {
 		return nil, fmt.Errorf("config: parse config file: %w", err)
@@ -198,6 +201,11 @@ func parseConfigWithContextDefaults(
 ) (*Config, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return &Config{}, nil
+	}
+
+	data, err := preprocessLegacyVerificationSchema(data)
+	if err != nil {
+		return nil, fmt.Errorf("config: preprocess legacy verification schema: %w", err)
 	}
 
 	resolvedMemo := defaultMemoConfig()
@@ -385,4 +393,179 @@ func fromPersistedMemoConfig(file persistedMemoConfig, defaults MemoConfig) Memo
 		out.ExtractRecentMessages = *file.ExtractRecentMessages
 	}
 	return out
+}
+
+// normalizeVerificationSchemaContent 在内存中预处理 verification schema，避免旧字段先于 strict decode 触发硬失败。
+func normalizeVerificationSchemaContent(raw []byte) ([]byte, bool, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return raw, false, nil
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, false, err
+	}
+	if doc == nil {
+		return raw, false, nil
+	}
+
+	changed, err := migrateVerificationConfig(doc)
+	if err != nil {
+		return nil, false, err
+	}
+	if !changed {
+		return raw, false, nil
+	}
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+// preprocessLegacyVerificationSchema 在 strict decode 前对 verification schema 做内存态预处理：
+// 删除废弃字段（enabled / final_intercept / default_task_policy），并将简单的字符串 command 安全迁移为 argv。
+// 若 command 包含 shell 元字符（引号、管道、重定向等），则显式报错要求手工改写为 argv。
+func preprocessLegacyVerificationSchema(data []byte) ([]byte, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	if len(root.Content) == 0 {
+		return data, nil
+	}
+	doc := root.Content[0]
+	if doc.Kind != yaml.MappingNode {
+		return data, nil
+	}
+
+	for i := 0; i < len(doc.Content); i += 2 {
+		if strings.TrimSpace(doc.Content[i].Value) != "runtime" {
+			continue
+		}
+		runtimeNode := doc.Content[i+1]
+		if runtimeNode.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j < len(runtimeNode.Content); j += 2 {
+			if strings.TrimSpace(runtimeNode.Content[j].Value) != "verification" {
+				continue
+			}
+			verificationNode := runtimeNode.Content[j+1]
+			if verificationNode.Kind != yaml.MappingNode {
+				continue
+			}
+			if err := cleanupLegacyVerificationNode(verificationNode); err != nil {
+				return nil, err
+			}
+			break
+		}
+		break
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&root); err != nil {
+		return nil, err
+	}
+	_ = enc.Close()
+	return buf.Bytes(), nil
+}
+
+// cleanupLegacyVerificationNode 清理 verification 节点下的废弃字段，并处理 legacy command string。
+func cleanupLegacyVerificationNode(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	var toRemove []int
+	for i := 0; i < len(node.Content); i += 2 {
+		key := strings.TrimSpace(node.Content[i].Value)
+		switch key {
+		case "enabled", "final_intercept", "default_task_policy":
+			toRemove = append(toRemove, i, i+1)
+		case "verifiers":
+			if err := cleanupLegacyVerifiersNode(node.Content[i+1]); err != nil {
+				return err
+			}
+		}
+	}
+	// 从后往前删除，避免索引偏移
+	for i := len(toRemove) - 1; i >= 0; i-- {
+		idx := toRemove[i]
+		if idx < len(node.Content) {
+			node.Content = append(node.Content[:idx], node.Content[idx+1:]...)
+		}
+	}
+	return nil
+}
+
+// cleanupLegacyVerifiersNode 遍历 verifiers 映射，删除废弃字段并将简单的字符串 command 迁移为 argv sequence。
+func cleanupLegacyVerifiersNode(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		verifierNode := node.Content[i+1]
+		if verifierNode.Kind != yaml.MappingNode {
+			continue
+		}
+		var toRemove []int
+		for j := 0; j < len(verifierNode.Content); j += 2 {
+			key := strings.TrimSpace(verifierNode.Content[j].Value)
+			if key == "enabled" || key == "required" {
+				toRemove = append(toRemove, j, j+1)
+				continue
+			}
+			if key != "command" {
+				continue
+			}
+			commandNode := verifierNode.Content[j+1]
+			if commandNode.Kind == yaml.ScalarNode {
+				val := strings.TrimSpace(commandNode.Value)
+				if val == "" {
+					continue
+				}
+				if containsShellMetacharacters(val) {
+					return fmt.Errorf("unsupported shell syntax in verifier command %q: rewrite it as argv", val)
+				}
+				tokens := strings.Fields(val)
+				if len(tokens) == 0 {
+					continue
+				}
+				// 将标量替换为序列
+				commandNode.Kind = yaml.SequenceNode
+				commandNode.Tag = "!!seq"
+				commandNode.Value = ""
+				commandNode.Content = make([]*yaml.Node, 0, len(tokens))
+				for _, t := range tokens {
+					commandNode.Content = append(commandNode.Content, &yaml.Node{
+						Kind:  yaml.ScalarNode,
+						Tag:   "!!str",
+						Value: t,
+					})
+				}
+			}
+		}
+		// 从后往前删除废弃字段
+		for k := len(toRemove) - 1; k >= 0; k-- {
+			idx := toRemove[k]
+			if idx < len(verifierNode.Content) {
+				verifierNode.Content = append(verifierNode.Content[:idx], verifierNode.Content[idx+1:]...)
+			}
+		}
+	}
+	return nil
+}
+
+// containsShellMetacharacters 判断字符串是否包含需要 shell 解释的元字符。
+func containsShellMetacharacters(s string) bool {
+	metachars := "'\"`$|&;<>(){}[]*?~\\"
+	for _, r := range s {
+		if strings.ContainsRune(metachars, r) {
+			return true
+		}
+	}
+	return false
 }

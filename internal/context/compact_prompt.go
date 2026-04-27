@@ -13,7 +13,7 @@ import (
 
 var compactSummarySystemPrompt = buildCompactSummarySystemPrompt()
 
-const compactTaskStateJSONContract = `{"task_state":{"goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"..."}`
+const compactTaskStateJSONContract = `{"task_state":{"verification_profile":"","goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"..."}`
 
 // CompactPromptInput contains the source material needed to build a compact summary prompt.
 type CompactPromptInput struct {
@@ -104,23 +104,25 @@ func buildCompactSummarySystemPrompt() string {
 func renderCompactPromptTaskState(state agentsession.TaskState) string {
 	state = agentsession.NormalizeTaskState(state)
 	payload := struct {
-		Goal            string   `json:"goal"`
-		Progress        []string `json:"progress"`
-		OpenItems       []string `json:"open_items"`
-		NextStep        string   `json:"next_step"`
-		Blockers        []string `json:"blockers"`
-		KeyArtifacts    []string `json:"key_artifacts"`
-		Decisions       []string `json:"decisions"`
-		UserConstraints []string `json:"user_constraints"`
+		VerificationProfile string   `json:"verification_profile"`
+		Goal                string   `json:"goal"`
+		Progress            []string `json:"progress"`
+		OpenItems           []string `json:"open_items"`
+		NextStep            string   `json:"next_step"`
+		Blockers            []string `json:"blockers"`
+		KeyArtifacts        []string `json:"key_artifacts"`
+		Decisions           []string `json:"decisions"`
+		UserConstraints     []string `json:"user_constraints"`
 	}{
-		Goal:            state.Goal,
-		Progress:        state.Progress,
-		OpenItems:       state.OpenItems,
-		NextStep:        state.NextStep,
-		Blockers:        state.Blockers,
-		KeyArtifacts:    state.KeyArtifacts,
-		Decisions:       state.Decisions,
-		UserConstraints: state.UserConstraints,
+		VerificationProfile: string(state.VerificationProfile),
+		Goal:                state.Goal,
+		Progress:            append([]string{}, state.Progress...),
+		OpenItems:           append([]string{}, state.OpenItems...),
+		NextStep:            state.NextStep,
+		Blockers:            append([]string{}, state.Blockers...),
+		KeyArtifacts:        append([]string{}, state.KeyArtifacts...),
+		Decisions:           append([]string{}, state.Decisions...),
+		UserConstraints:     append([]string{}, state.UserConstraints...),
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

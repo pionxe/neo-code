@@ -85,6 +85,9 @@ func (s *memoryStore) CreateSession(ctx context.Context, input agentsession.Crea
 	session.Provider = head.Provider
 	session.Model = head.Model
 	session.TaskState = head.TaskState.Clone()
+	if session.TaskState.VerificationProfile == "" {
+		session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
+	}
 	session.ActivatedSkills = agentsessionCloneSkillActivations(head.ActivatedSkills)
 	session.Todos = cloneTodosForPersistence(head.Todos)
 	session.TokenInputTotal = head.TokenInputTotal
@@ -4848,8 +4851,8 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateAdvisory(t *testing.T)
 		budgetGatePolicies[1] != provider.EstimateGateAdvisory {
 		t.Fatalf("expected advisory estimates, got %v", budgetGatePolicies)
 	}
-	if stopPayload.Reason != controlplane.StopReasonCompleted {
-		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)
+	if stopPayload.Reason != controlplane.StopReasonAccepted {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonAccepted, stopPayload.Reason)
 	}
 }
 
@@ -5015,8 +5018,8 @@ func TestServiceRunAllowsAfterNoOpProactiveCompactWhenEstimateAdvisory(t *testin
 	if len(budgetActions) != 2 || budgetActions[0] != "compact" || budgetActions[1] != "allow" {
 		t.Fatalf("expected budget actions [compact allow], got %v", budgetActions)
 	}
-	if stopPayload.Reason != controlplane.StopReasonCompleted {
-		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)
+	if stopPayload.Reason != controlplane.StopReasonAccepted {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonAccepted, stopPayload.Reason)
 	}
 }
 
@@ -5109,8 +5112,8 @@ func TestServiceRunBypassesBudgetGateWhenEstimateFails(t *testing.T) {
 	if !foundBudgetChecked {
 		t.Fatalf("expected budget_checked event")
 	}
-	if stopPayload.Reason != controlplane.StopReasonCompleted {
-		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)
+	if stopPayload.Reason != controlplane.StopReasonAccepted {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonAccepted, stopPayload.Reason)
 	}
 	assertNoEventType(t, events, EventError)
 }

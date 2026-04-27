@@ -4,18 +4,19 @@ import (
 	"context"
 	"testing"
 
-	"neo-code/internal/config"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/verify"
+	agentsession "neo-code/internal/session"
 )
 
 type staticPolicy struct {
 	verifiers []verify.FinalVerifier
+	err       error
 }
 
-func (p staticPolicy) ResolveVerifiers(input verify.FinalVerifyInput) []verify.FinalVerifier {
+func (p staticPolicy) ResolveVerifiers(input verify.FinalVerifyInput) ([]verify.FinalVerifier, error) {
 	_ = input
-	return p.verifiers
+	return p.verifiers, p.err
 }
 
 type staticVerifier struct {
@@ -30,289 +31,116 @@ func (v staticVerifier) VerifyFinal(ctx context.Context, input verify.FinalVerif
 	return v.result, nil
 }
 
-func TestEngineEvaluateFinalAggregation(t *testing.T) {
+func TestEngineEvaluateFinal(t *testing.T) {
 	t.Parallel()
 
 	makeInput := func() FinalAcceptanceInput {
 		return FinalAcceptanceInput{
 			CompletionGate: CompletionGateDecision{Passed: true},
 			VerificationInput: verify.FinalVerifyInput{
-				VerificationConfig: verifyEnabledConfig(),
+				TaskState: verify.TaskStateSnapshot{VerificationProfile: string(agentsession.VerificationProfileTaskOnly)},
 			},
 		}
 	}
 
-	t.Run("any fail -> failed", func(t *testing.T) {
+	t.Run("completion gate false returns continue", func(t *testing.T) {
 		t.Parallel()
-		engine := NewEngine(staticPolicy{
-			verifiers: []verify.FinalVerifier{
-				staticVerifier{name: "test", result: verify.VerificationResult{Name: "test", Status: verify.VerificationFail, ErrorClass: verify.ErrorClassTestFailure}},
-			},
+		decision, err := NewEngine(staticPolicy{}).EvaluateFinal(context.Background(), FinalAcceptanceInput{
+			CompletionGate: CompletionGateDecision{Passed: false},
 		})
-		decision, err := engine.EvaluateFinal(context.Background(), makeInput())
 		if err != nil {
 			t.Fatalf("EvaluateFinal() error = %v", err)
 		}
-		if decision.Status != AcceptanceFailed {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceFailed)
-		}
-		if decision.StopReason != controlplane.StopReasonVerificationFailed {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonVerificationFailed)
+		if decision.Status != AcceptanceContinue {
+			t.Fatalf("status = %q, want continue", decision.Status)
 		}
 	})
 
-	t.Run("fail keeps detailed stop reason from gate", func(t *testing.T) {
+	t.Run("invalid profile becomes structured failed decision", func(t *testing.T) {
 		t.Parallel()
-		engine := NewEngine(staticPolicy{
-			verifiers: []verify.FinalVerifier{
-				staticVerifier{
-					name: "build",
-					result: verify.VerificationResult{
-						Name:       "build",
-						Status:     verify.VerificationFail,
-						Reason:     "missing verifier command configuration",
-						ErrorClass: verify.ErrorClassEnvMissing,
-					},
-				},
-			},
-		})
-		decision, err := engine.EvaluateFinal(context.Background(), makeInput())
+		decision, err := NewEngine(staticPolicy{err: context.DeadlineExceeded}).EvaluateFinal(context.Background(), makeInput())
 		if err != nil {
 			t.Fatalf("EvaluateFinal() error = %v", err)
 		}
-		if decision.StopReason != controlplane.StopReasonVerificationConfigMissing {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonVerificationConfigMissing)
+		if decision.Status != AcceptanceFailed || decision.StopReason != controlplane.StopReasonVerificationConfigMissing {
+			t.Fatalf("unexpected decision: %+v", decision)
 		}
 	})
 
-	t.Run("any hard_block -> incomplete", func(t *testing.T) {
+	t.Run("soft block returns continue", func(t *testing.T) {
 		t.Parallel()
-		engine := NewEngine(staticPolicy{
-			verifiers: []verify.FinalVerifier{
-				staticVerifier{name: "todo", result: verify.VerificationResult{Name: "todo", Status: verify.VerificationHardBlock, WaitingExternal: true}},
-			},
-		})
-		decision, err := engine.EvaluateFinal(context.Background(), makeInput())
-		if err != nil {
-			t.Fatalf("EvaluateFinal() error = %v", err)
-		}
-		if decision.Status != AcceptanceIncomplete {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceIncomplete)
-		}
-		if decision.StopReason != controlplane.StopReasonTodoWaitingExternal {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonTodoWaitingExternal)
-		}
-	})
-
-	t.Run("any soft_block -> continue", func(t *testing.T) {
-		t.Parallel()
-		engine := NewEngine(staticPolicy{
+		decision, err := NewEngine(staticPolicy{
 			verifiers: []verify.FinalVerifier{
 				staticVerifier{name: "todo", result: verify.VerificationResult{Name: "todo", Status: verify.VerificationSoftBlock}},
 			},
-		})
-		decision, err := engine.EvaluateFinal(context.Background(), makeInput())
+		}).EvaluateFinal(context.Background(), makeInput())
 		if err != nil {
 			t.Fatalf("EvaluateFinal() error = %v", err)
 		}
 		if decision.Status != AcceptanceContinue {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceContinue)
+			t.Fatalf("status = %q, want continue", decision.Status)
 		}
 	})
 
-	t.Run("all pass -> accepted", func(t *testing.T) {
+	t.Run("hard block returns incomplete", func(t *testing.T) {
 		t.Parallel()
-		engine := NewEngine(staticPolicy{
+		decision, err := NewEngine(staticPolicy{
+			verifiers: []verify.FinalVerifier{
+				staticVerifier{name: "todo", result: verify.VerificationResult{Name: "todo", Status: verify.VerificationHardBlock, WaitingExternal: true}},
+			},
+		}).EvaluateFinal(context.Background(), makeInput())
+		if err != nil {
+			t.Fatalf("EvaluateFinal() error = %v", err)
+		}
+		if decision.Status != AcceptanceIncomplete || decision.StopReason != controlplane.StopReasonTodoWaitingExternal {
+			t.Fatalf("unexpected decision: %+v", decision)
+		}
+	})
+
+	t.Run("fail returns failed", func(t *testing.T) {
+		t.Parallel()
+		decision, err := NewEngine(staticPolicy{
+			verifiers: []verify.FinalVerifier{
+				staticVerifier{name: "build", result: verify.VerificationResult{Name: "build", Status: verify.VerificationFail, ErrorClass: verify.ErrorClassEnvMissing}},
+			},
+		}).EvaluateFinal(context.Background(), makeInput())
+		if err != nil {
+			t.Fatalf("EvaluateFinal() error = %v", err)
+		}
+		if decision.Status != AcceptanceFailed || decision.StopReason != controlplane.StopReasonVerificationConfigMissing {
+			t.Fatalf("unexpected decision: %+v", decision)
+		}
+	})
+
+	t.Run("all pass returns accepted", func(t *testing.T) {
+		t.Parallel()
+		decision, err := NewEngine(staticPolicy{
 			verifiers: []verify.FinalVerifier{
 				staticVerifier{name: "todo", result: verify.VerificationResult{Name: "todo", Status: verify.VerificationPass}},
 			},
-		})
-		decision, err := engine.EvaluateFinal(context.Background(), makeInput())
+		}).EvaluateFinal(context.Background(), makeInput())
 		if err != nil {
 			t.Fatalf("EvaluateFinal() error = %v", err)
 		}
 		if decision.Status != AcceptanceAccepted {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceAccepted)
-		}
-		if decision.StopReason != controlplane.StopReasonAccepted {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonAccepted)
+			t.Fatalf("status = %q, want accepted", decision.Status)
 		}
 	})
-}
 
-func TestEngineEvaluateFinalCompletionGateAndRetry(t *testing.T) {
-	t.Parallel()
-
-	engine := NewEngine(staticPolicy{
-		verifiers: []verify.FinalVerifier{
-			staticVerifier{name: "todo", result: verify.VerificationResult{Name: "todo", Status: verify.VerificationPass}},
-		},
-	})
-
-	t.Run("completion gate false -> continue", func(t *testing.T) {
+	t.Run("retry exhausted no longer overrides final decision", func(t *testing.T) {
 		t.Parallel()
-		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
-			CompletionGate: CompletionGateDecision{Passed: false},
-			VerificationInput: verify.FinalVerifyInput{
-				VerificationConfig: verifyEnabledConfig(),
+		input := makeInput()
+		input.VerificationInput.Todos = []verify.TodoSnapshot{{ID: "todo-1", Required: true, RetryCount: 1, RetryLimit: 1}}
+		decision, err := NewEngine(staticPolicy{
+			verifiers: []verify.FinalVerifier{
+				staticVerifier{name: "todo", result: verify.VerificationResult{Name: "todo", Status: verify.VerificationPass}},
 			},
-		})
+		}).EvaluateFinal(context.Background(), input)
 		if err != nil {
 			t.Fatalf("EvaluateFinal() error = %v", err)
 		}
-		if decision.Status != AcceptanceContinue {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceContinue)
+		if decision.Status != AcceptanceAccepted || decision.StopReason != controlplane.StopReasonAccepted {
+			t.Fatalf("unexpected decision: %+v", decision)
 		}
 	})
-
-	t.Run("completion gate false with no-progress exceeded -> incomplete", func(t *testing.T) {
-		t.Parallel()
-		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
-			CompletionGate:     CompletionGateDecision{Passed: false},
-			NoProgressExceeded: true,
-			VerificationInput: verify.FinalVerifyInput{
-				VerificationConfig: verifyEnabledConfig(),
-			},
-		})
-		if err != nil {
-			t.Fatalf("EvaluateFinal() error = %v", err)
-		}
-		if decision.Status != AcceptanceIncomplete {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceIncomplete)
-		}
-		if decision.StopReason != controlplane.StopReasonNoProgressAfterFinalIntercept {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonNoProgressAfterFinalIntercept)
-		}
-	})
-
-	t.Run("completion gate false with max turns reached -> incomplete", func(t *testing.T) {
-		t.Parallel()
-		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
-			CompletionGate:  CompletionGateDecision{Passed: false},
-			MaxTurnsReached: true,
-			MaxTurnsLimit:   7,
-			VerificationInput: verify.FinalVerifyInput{
-				VerificationConfig: verifyEnabledConfig(),
-			},
-		})
-		if err != nil {
-			t.Fatalf("EvaluateFinal() error = %v", err)
-		}
-		if decision.Status != AcceptanceIncomplete {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceIncomplete)
-		}
-		if decision.StopReason != controlplane.StopReasonMaxTurnExceededWithUnconvergedTodos {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonMaxTurnExceededWithUnconvergedTodos)
-		}
-	})
-
-	t.Run("retry exhausted overrides", func(t *testing.T) {
-		t.Parallel()
-		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
-			CompletionGate: CompletionGateDecision{Passed: true},
-			VerificationInput: verify.FinalVerifyInput{
-				VerificationConfig: verifyEnabledConfig(),
-				Todos: []verify.TodoSnapshot{
-					{ID: "todo-1", Required: true, RetryCount: 2, RetryLimit: 2},
-				},
-			},
-		})
-		if err != nil {
-			t.Fatalf("EvaluateFinal() error = %v", err)
-		}
-		if decision.Status != AcceptanceFailed {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceFailed)
-		}
-		if decision.StopReason != controlplane.StopReasonRetryExhausted {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonRetryExhausted)
-		}
-	})
-
-	t.Run("completion gate false and retry exhausted -> failed", func(t *testing.T) {
-		t.Parallel()
-		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
-			CompletionGate: CompletionGateDecision{Passed: false},
-			VerificationInput: verify.FinalVerifyInput{
-				VerificationConfig: verifyEnabledConfig(),
-				Todos: []verify.TodoSnapshot{
-					{ID: "todo-1", Required: true, RetryCount: 1, RetryLimit: 1},
-				},
-			},
-		})
-		if err != nil {
-			t.Fatalf("EvaluateFinal() error = %v", err)
-		}
-		if decision.Status != AcceptanceFailed {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceFailed)
-		}
-		if decision.StopReason != controlplane.StopReasonRetryExhausted {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonRetryExhausted)
-		}
-	})
-}
-
-func TestEngineEvaluateFinalHookFailurePolicy(t *testing.T) {
-	t.Parallel()
-
-	engine := NewEngine(staticPolicy{
-		verifiers: []verify.FinalVerifier{
-			staticVerifier{name: "todo", result: verify.VerificationResult{Name: "todo", Status: verify.VerificationPass}},
-		},
-	})
-
-	t.Run("fail_closed returns failed decision", func(t *testing.T) {
-		t.Parallel()
-		cfg := verifyEnabledConfig()
-		cfg.Hooks.BeforeCompletionDecision.Enabled = true
-		cfg.Hooks.BeforeCompletionDecision.FailurePolicy = "fail_closed"
-		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
-			CompletionGate: CompletionGateDecision{Passed: true},
-			VerificationInput: verify.FinalVerifyInput{
-				VerificationConfig: cfg,
-			},
-			MaxTurnsReached: true,
-			MaxTurnsLimit:   0,
-		})
-		if err != nil {
-			t.Fatalf("EvaluateFinal() error = %v", err)
-		}
-		if decision.Status != AcceptanceFailed {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceFailed)
-		}
-		if decision.StopReason != controlplane.StopReasonVerificationExecutionError {
-			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonVerificationExecutionError)
-		}
-	})
-
-	t.Run("fail_open ignores hook error", func(t *testing.T) {
-		t.Parallel()
-		cfg := verifyEnabledConfig()
-		cfg.Hooks.BeforeCompletionDecision.Enabled = true
-		cfg.Hooks.BeforeCompletionDecision.FailurePolicy = "fail_open"
-		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
-			CompletionGate: CompletionGateDecision{Passed: true},
-			VerificationInput: verify.FinalVerifyInput{
-				VerificationConfig: cfg,
-			},
-			MaxTurnsReached: true,
-			MaxTurnsLimit:   0,
-		})
-		if err != nil {
-			t.Fatalf("EvaluateFinal() error = %v", err)
-		}
-		if decision.Status != AcceptanceAccepted {
-			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceAccepted)
-		}
-	})
-}
-
-func verifyEnabledConfig() (cfg config.VerificationConfig) {
-	cfg = config.StaticDefaults().Runtime.Verification
-	cfg.Enabled = boolPtr(true)
-	return cfg
-}
-
-func boolPtr(value bool) *bool {
-	v := value
-	return &v
 }

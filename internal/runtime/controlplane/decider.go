@@ -26,7 +26,6 @@ type StopInput struct {
 	BudgetExceeded     bool
 	MaxTurnsReached    bool
 	MaxTurnsLimit      int
-	RetryExhausted     bool
 	VerificationFailed bool
 	FatalError         error
 	Completed          bool
@@ -54,9 +53,6 @@ func DecideStopReason(in StopInput) (StopReason, string) {
 			return StopReasonMaxTurnExceeded, fmt.Sprintf("runtime: max turn limit reached (%d)", in.MaxTurnsLimit)
 		}
 		return StopReasonMaxTurnExceeded, ""
-	}
-	if in.RetryExhausted {
-		return StopReasonRetryExhausted, ""
 	}
 	if in.VerificationFailed {
 		return StopReasonVerificationFailed, ""

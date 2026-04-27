@@ -54,7 +54,7 @@ func TestDecideStopReasonPriority(t *testing.T) {
 			in: StopInput{
 				Completed: true,
 			},
-			wantReason: StopReasonCompleted,
+			wantReason: StopReasonAccepted,
 		},
 		{
 			name: "context_canceled_maps_to_user_interrupt",
@@ -101,21 +101,16 @@ func TestDecideStopReasonDetails(t *testing.T) {
 	}
 
 	reason, detail = DecideStopReason(StopInput{
-		PreDecidedReason: StopReasonCompatibilityFallback,
-		PreDecidedDetail: "  fallback  ",
+		PreDecidedReason: StopReasonAccepted,
+		PreDecidedDetail: "  accepted  ",
 	})
-	if reason != StopReasonCompatibilityFallback || detail != "fallback" {
+	if reason != StopReasonAccepted || detail != "accepted" {
 		t.Fatalf("pre-decided mismatch, got (%q, %q)", reason, detail)
 	}
 
 	reason, detail = DecideStopReason(StopInput{MaxTurnsReached: true})
 	if reason != StopReasonMaxTurnExceeded || detail != "" {
 		t.Fatalf("max-turn no-limit mismatch, got (%q, %q)", reason, detail)
-	}
-
-	reason, detail = DecideStopReason(StopInput{RetryExhausted: true})
-	if reason != StopReasonRetryExhausted || detail != "" {
-		t.Fatalf("retry exhausted mismatch, got (%q, %q)", reason, detail)
 	}
 
 	reason, detail = DecideStopReason(StopInput{VerificationFailed: true})

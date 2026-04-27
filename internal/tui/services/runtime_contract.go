@@ -193,8 +193,6 @@ const (
 	StopReasonBudgetExceeded StopReason = "budget_exceeded"
 	// StopReasonMaxTurnExceeded 表示 runtime 达到最大轮次上限后的受控停止原因。
 	StopReasonMaxTurnExceeded StopReason = "max_turn_exceeded"
-	// StopReasonRetryExhausted 表示 todo 重试耗尽。
-	StopReasonRetryExhausted StopReason = "retry_exhausted"
 	// StopReasonVerificationFailed 表示验证失败。
 	StopReasonVerificationFailed StopReason = "verification_failed"
 	// StopReasonAccepted 表示双门控通过并被 acceptance 接受。
@@ -215,13 +213,6 @@ const (
 	StopReasonVerificationExecutionDenied StopReason = "verification_execution_denied"
 	// StopReasonVerificationExecutionError 表示 verification 命令执行异常。
 	StopReasonVerificationExecutionError StopReason = "verification_execution_error"
-	// StopReasonCompatibilityFallback 表示走兼容回退路径。
-	StopReasonCompatibilityFallback StopReason = "compatibility_fallback"
-
-	// StopReasonCompleted 兼容旧命名，等价 accepted。
-	StopReasonCompleted StopReason = StopReasonAccepted
-	// StopReasonMaxTurnsReached 兼容旧命名，等价 max_turn_exceeded。
-	StopReasonMaxTurnsReached StopReason = StopReasonMaxTurnExceeded
 )
 
 // StopReasonDecidedPayload 描述停止原因决策结果。

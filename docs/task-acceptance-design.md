@@ -1,38 +1,33 @@
 # Task Acceptance Design
 
-## 背景问题
-- 旧流程中，模型输出 final 且无 tool call 时，runtime 可能直接完成。
-- 这会导致“文本 final”与“任务真实完成”混淆。
+## 主链目标
+final acceptance 只保留一条主链：
 
-## 为什么模型 final 不能直接等于完成
-- final 仅代表模型主观结束意图，不代表 required todo、文件产物或验证命令已满足。
-- 真实完成必须由 runtime 验收层裁决。
+`session-owned verification profile -> completion gate -> verifier gate -> acceptance decision -> terminal decision`
 
-## completion / verification / acceptance 区分
-- `completion_gate`：判断当前回合是否可尝试收尾（必要非充分）。
-- `verification_gate`：由 verifier engine 判断任务是否满足验收条件。
-- `acceptance_decision`：聚合两者输出 `accepted/continue/incomplete/failed`。
+这条链只负责回答一件事：现在是否可以稳定结束任务。
 
-## 双门控模型
-- `completed = completion_gate.passed && verification_gate.passed`
-- 任一门未通过都不能直接 `agent_done`。
+## 结构化输入
+- verifier 集合只由 `session.TaskState.VerificationProfile` 决定。
+- `session.TaskState` 与 `session.TodoItem` 是唯一结构化验收输入来源。
+- `Acceptance` 只用于人类阅读，不参与机器判定。
+- `Artifacts`、`ContentChecks`、`Supersedes` 通过 session 契约驱动 `file_exists`、`content_match` 与 required todo replacement 语义。
 
-## 状态机
-- provider final -> `beforeAcceptFinal` -> verification -> acceptance_decided
-- `accepted` -> `agent_done`
-- `continue` -> 注入系统提醒继续推理
-- `incomplete/failed` -> 结束 run 并输出 stop reason
+## 决策规则
+- completion gate 未通过：`continue`
+- verifier 首个非 `pass` 为 `soft_block`：`continue`
+- verifier 首个非 `pass` 为 `hard_block`：`incomplete`
+- verifier 首个非 `pass` 为 `fail`：`failed`
+- 全部 verifier `pass`：`accepted`
 
-## StopReason 设计
-- stop reason 由 controlplane decider 统一输出。
-- 新增 `verification_failed`、`todo_not_converged`、`retry_exhausted` 等枚举。
+## Candidate Final
+- provider 返回 final 后，usage/provider/model 会先持久化。
+- assistant final 只作为 candidate final 暂存在内存。
+- 只有 `accepted`、`incomplete`、`failed` 才会把 candidate final 写入 `session.Messages`。
+- `continue` 时不会落盘 candidate final，只会追加 reminder。
 
-## 与 todo / subagent / runtime 的关系
-- todo 是 verifier 输入，不直接决定终态。
-- subagent 完成不等于主任务完成，仍需通过 verifier gate。
-- runtime 只消费 decider 输出，不再平行判定终态。
-
-## decider 单一裁决层
-- 终态只由 decider 输出。
-- events / TUI / persistence 统一消费 decider 决议。
-
+## 约束
+- 不再支持 compatibility fallback。
+- 不再支持通过 `runtime.verification.enabled=false` 或 `final_intercept=false` 跳过 verifier gate。
+- 不再支持 shell string verifier command。
+- 不再支持基于 task 文本的 verifier policy 推断。

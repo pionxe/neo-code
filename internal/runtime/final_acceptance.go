@@ -12,7 +12,7 @@ import (
 
 const finalContinueReminder = "There are unfinished required todos or unmet acceptance checks. Continue execution. Do not finalize yet."
 
-// beforeAcceptFinal 在 runtime 接受模型 final 前执行双门控验收。
+// beforeAcceptFinal 在 runtime 接受模型 final 前执行唯一的 completion/verifier/acceptance 闭环。
 func (s *Service) beforeAcceptFinal(
 	ctx context.Context,
 	state *runState,
@@ -25,11 +25,6 @@ func (s *Service) beforeAcceptFinal(
 	}
 
 	verificationCfg := snapshot.Config.Runtime.Verification.Clone()
-	if !verificationCfg.FinalInterceptValue() {
-		// final_intercept 关闭时仅绕过 verifier，不得绕过 completion gate。
-		verificationCfg.Enabled = boolPtrRuntime(false)
-	}
-
 	policy := acceptance.DefaultPolicy{
 		Executor: verify.PolicyCommandExecutor{},
 	}
@@ -39,7 +34,7 @@ func (s *Service) beforeAcceptFinal(
 	if maxNoProgress <= 0 {
 		maxNoProgress = 3
 	}
-	noProgressStreak := state.progress.LastScore.NoProgressStreak
+	noProgressStreak := state.finalInterceptStreak
 	if noProgressStreak < 0 {
 		noProgressStreak = 0
 	}
@@ -52,6 +47,7 @@ func (s *Service) beforeAcceptFinal(
 			maxTurnsLimit = resolvedMaxTurns
 		}
 	}
+
 	input := acceptance.FinalAcceptanceInput{
 		CompletionGate: acceptance.CompletionGateDecision{
 			Passed: completionPassed,
@@ -66,18 +62,16 @@ func (s *Service) beforeAcceptFinal(
 			Todos:              buildVerifyTodos(state.session.Todos),
 			LastAssistantFinal: renderPartsForVerification(assistant.Parts),
 			ToolResults:        nil,
+			TaskState:          buildVerifyTaskState(state.session.TaskState),
 			RuntimeState: verify.RuntimeStateSnapshot{
 				Turn:                 state.turn,
 				MaxTurns:             resolveRuntimeMaxTurns(snapshot.Config.Runtime),
 				MaxTurnsReached:      maxTurnsReached,
 				FinalInterceptStreak: noProgressStreak,
 			},
-			Metadata: map[string]any{
-				"task_type": inferTaskType(state),
-			},
 			VerificationConfig: verificationCfg,
 		},
-		NoProgressExceeded: maxNoProgress > 0 && noProgressStreak >= maxNoProgress,
+		NoProgressExceeded: noProgressStreak >= maxNoProgress,
 		MaxTurnsReached:    maxTurnsReached,
 		MaxTurnsLimit:      maxTurnsLimit,
 	}
@@ -86,8 +80,7 @@ func (s *Service) beforeAcceptFinal(
 	if err != nil {
 		return acceptance.AcceptanceDecision{}, err
 	}
-	// 继续分支复用 runtime progress 结果，避免把“final 被拦截”误判为“无进展”。
-	if decision.Status == acceptance.AcceptanceContinue && hasRuntimeProgress(state) {
+	if decision.Status == acceptance.AcceptanceContinue && state.pendingFinalProgress {
 		decision.HasProgress = true
 	}
 	return decision, nil
@@ -115,6 +108,10 @@ func buildVerifyTodos(items []agentsession.TodoItem) []verify.TodoSnapshot {
 			Status:        strings.TrimSpace(string(item.Status)),
 			Required:      item.RequiredValue(),
 			BlockedReason: string(item.BlockedReasonValue()),
+			Acceptance:    append([]string(nil), item.Acceptance...),
+			Artifacts:     append([]string(nil), item.Artifacts...),
+			Supersedes:    append([]string(nil), item.Supersedes...),
+			ContentChecks: buildVerifyTodoContentChecks(item.ContentChecks),
 			RetryCount:    item.RetryCount,
 			RetryLimit:    item.RetryLimit,
 			FailureReason: strings.TrimSpace(item.FailureReason),
@@ -123,7 +120,30 @@ func buildVerifyTodos(items []agentsession.TodoItem) []verify.TodoSnapshot {
 	return todos
 }
 
-// buildVerifyMessages 将会话消息压缩为 verifier 所需最小快照。
+// buildVerifyTodoContentChecks 将 session 内容校验规则转换为 verifier 快照。
+func buildVerifyTodoContentChecks(items []agentsession.TodoContentCheck) []verify.TodoContentCheckSnapshot {
+	if len(items) == 0 {
+		return nil
+	}
+	checks := make([]verify.TodoContentCheckSnapshot, 0, len(items))
+	for _, item := range items {
+		checks = append(checks, verify.TodoContentCheckSnapshot{
+			Artifact: strings.TrimSpace(item.Artifact),
+			Contains: append([]string(nil), item.Contains...),
+		})
+	}
+	return checks
+}
+
+// buildVerifyTaskState 将 task_state 中与验收相关的结构化字段投影给 verifier。
+func buildVerifyTaskState(state agentsession.TaskState) verify.TaskStateSnapshot {
+	return verify.TaskStateSnapshot{
+		VerificationProfile: string(state.VerificationProfile),
+		KeyArtifacts:        append([]string(nil), state.KeyArtifacts...),
+	}
+}
+
+// buildVerifyMessages 将会话消息压缩为 verifier 所需的最小快照。
 func buildVerifyMessages(messages []providertypes.Message) []verify.MessageLike {
 	if len(messages) == 0 {
 		return nil
@@ -157,72 +177,20 @@ func renderPartsForVerification(parts []providertypes.ContentPart) string {
 	return strings.Join(segments, "\n")
 }
 
-// inferTaskType 基于 task_id 与 task_state 文本推断当前任务类型。
-func inferTaskType(state *runState) string {
-	if state == nil {
-		return "unknown"
-	}
-	corpus := strings.ToLower(strings.TrimSpace(
-		state.taskID + " " + state.session.TaskState.Goal + " " + state.session.TaskState.NextStep,
-	))
-	switch {
-	case containsAny(corpus,
-		"fix bug", "bugfix", "修 bug", "修bug", "修复", "排查", "故障", "报错",
-	):
-		return "fix_bug"
-	case containsAny(corpus, "refactor", "重构", "代码整理", "结构优化"):
-		return "refactor"
-	case containsAny(corpus, "edit code", "modify code", "patch", "修改代码", "改代码", "代码调整", "打补丁"):
-		return "edit_code"
-	case containsAny(corpus, "create file", "scaffold", "创建文件", "新建文件", "新增文件", "脚手架"):
-		return "create_file"
-	case containsAny(corpus, "docs", "documentation", "文档", "readme", "说明文档"):
-		return "docs"
-	case containsAny(corpus, "config", "yaml", "json", "toml", "配置", "yml", "环境变量"):
-		return "config"
-	default:
-		return "unknown"
-	}
-}
-
-// containsAny 判断语料中是否包含任一关键字。
-func containsAny(corpus string, keywords ...string) bool {
-	for _, keyword := range keywords {
-		if strings.Contains(corpus, strings.TrimSpace(keyword)) {
-			return true
-		}
-	}
-	return false
-}
-
-// boolPtrRuntime 返回 bool 指针，便于在运行期快速构造配置快照字段。
-func boolPtrRuntime(value bool) *bool {
-	v := value
-	return &v
-}
-
-// applyAcceptanceResultProgress 根据 acceptance 输出更新 final 拦截熔断计数器。
+// applyAcceptanceResultProgress 根据 acceptance 输出更新 final 拦截计数唯一真相源。
 func applyAcceptanceResultProgress(state *runState, decision acceptance.AcceptanceDecision) {
 	if state == nil {
 		return
 	}
 	switch decision.Status {
 	case acceptance.AcceptanceContinue:
-		if decision.HasProgress {
+		if state.pendingFinalProgress {
 			state.finalInterceptStreak = 0
-			return
+		} else {
+			state.finalInterceptStreak++
 		}
-		state.finalInterceptStreak++
 	default:
 		state.finalInterceptStreak = 0
 	}
-}
-
-// hasRuntimeProgress 判断 runtime 当前快照是否存在业务或探索进展。
-func hasRuntimeProgress(state *runState) bool {
-	if state == nil {
-		return false
-	}
-	score := state.progress.LastScore
-	return score.HasBusinessProgress || score.HasExplorationProgress
+	state.pendingFinalProgress = false
 }

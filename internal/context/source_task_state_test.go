@@ -11,17 +11,19 @@ func TestRenderTaskStateSectionSanitizesValues(t *testing.T) {
 	t.Parallel()
 
 	section := renderTaskStateSection(agentsession.TaskState{
-		Goal:            "  finish\n\tmigration  ",
-		Progress:        []string{" first\nitem ", "\t", "second\x00item"},
-		OpenItems:       []string{" review\r\ncomment "},
-		NextStep:        "  run\t tests\r\nnow ",
-		Blockers:        []string{" none\x1fneeded "},
-		KeyArtifacts:    []string{" internal/context/source_task_state.go\t"},
-		Decisions:       []string{" keep\nsingle-line format "},
-		UserConstraints: []string{"  do-not\tmigrate\r\nold-data  "},
+		VerificationProfile: agentsession.VerificationProfileTaskOnly,
+		Goal:                "  finish\n\tmigration  ",
+		Progress:            []string{" first\nitem ", "\t", "second\x00item"},
+		OpenItems:           []string{" review\r\ncomment "},
+		NextStep:            "  run\t tests\r\nnow ",
+		Blockers:            []string{" none\x1fneeded "},
+		KeyArtifacts:        []string{" internal/context/source_task_state.go\t"},
+		Decisions:           []string{" keep\nsingle-line format "},
+		UserConstraints:     []string{"  do-not\tmigrate\r\nold-data  "},
 	})
 
 	want := strings.Join([]string{
+		"- verification_profile: task_only",
 		"- goal: finish\\nmigration",
 		"- progress: first\\nitem | second item",
 		"- open_items: review\\ncomment",
@@ -46,6 +48,7 @@ func TestRenderTaskStateSectionUsesNonePlaceholdersAndStableOrder(t *testing.T) 
 	section := renderTaskStateSection(agentsession.TaskState{})
 
 	want := strings.Join([]string{
+		"- verification_profile: none",
 		"- goal: none",
 		"- progress: none",
 		"- open_items: none",

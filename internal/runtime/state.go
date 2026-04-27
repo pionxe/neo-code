@@ -31,6 +31,7 @@ type runState struct {
 	maxTurnsReached         bool
 	maxTurnsLimit           int
 	finalInterceptStreak    int
+	pendingFinalProgress    bool
 	terminalStatus          controlplane.TerminalStatus
 	terminalStopReason      controlplane.StopReason
 	terminalStopDetail      string

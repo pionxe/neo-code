@@ -96,7 +96,7 @@ func TestLoaderLoadMalformedYAML(t *testing.T) {
 	writeLoaderConfig(t, loader, "providers:\n  - name: [\n")
 
 	_, err := loader.Load(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "parse config file") {
+	if err == nil || (!strings.Contains(err.Error(), "parse config file") && !strings.Contains(err.Error(), "normalize verification schema")) {
 		t.Fatalf("expected malformed yaml parse error, got %v", err)
 	}
 }
