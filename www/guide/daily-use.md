@@ -1,120 +1,120 @@
 ---
 title: 日常使用
-description: 工作区、会话、记忆、Skills 和子代理——每天会用到的操作。
+description: 从打开项目到完成任务，按 NeoCode 的真实工作流组织日常操作。
 ---
 
 # 日常使用
 
-## 工作区
+NeoCode 的日常使用通常是：打开项目、描述目标、观察 Agent 行动、确认权限、查看结果、必要时继续或压缩上下文。
 
-工作区决定 NeoCode 能读取和修改哪个项目。
+## 打开项目
 
-```text
-/cwd                     # 查看当前工作区
-/cwd /path/to/project    # 切换到另一个项目
-```
-
-也可以启动时指定：
+启动时指定工作区：
 
 ```bash
 neocode --workdir /path/to/project
 ```
 
-## 会话管理
-
-### 切换会话
+进入 NeoCode 后也可以查看或切换：
 
 ```text
-/session                 # 打开会话选择器
+/cwd
+/cwd /path/to/project
 ```
 
-### 压缩长会话
+工作区决定 NeoCode 能读取、搜索、编辑和执行命令的项目范围。切换到另一个项目时，建议新建会话，避免旧上下文混入。
 
-对话很长时，旧上下文可能干扰当前任务。先执行：
+## 描述任务
+
+直接用自然语言描述目标。复杂任务建议先让 NeoCode 阅读相关代码并给方案，再决定是否实现。
 
 ```text
-/compact
+请先阅读配置加载相关代码，给出最小修复方案。暂时不要改文件。
 ```
 
-### 什么时候新建会话
+确认方案后再继续：
+
+```text
+请按刚才的方案实现，并运行相关测试。
+```
+
+好的任务描述通常包含：
+
+- 目标：要修什么、加什么、解释什么
+- 范围：只看哪些文件或模块，哪些不要动
+- 验证：希望运行哪个测试或构建命令
+
+## 观察执行过程
+
+NeoCode 会在界面中展示 Agent 的回复、工具调用和执行状态。读取文件、搜索内容通常会自动执行；写文件或运行有风险的命令时，会出现权限确认。
+
+常用按键：
+
+| 按键 | 作用 |
+|---|---|
+| `Enter` | 发送输入 |
+| `Ctrl+J` | 输入换行 |
+| `Ctrl+W` | 取消当前 Agent 任务 |
+| `Ctrl+Q` | 打开 Slash 指令帮助 |
+| `Ctrl+N` | 新建会话 |
+| `Ctrl+O` | 打开工作区选择 |
+| `Ctrl+F` | 切换 Full Access 提示 |
+| `Ctrl+L` | 打开日志视图 |
+| `Tab` / `Shift+Tab` | 切换面板焦点 |
+
+## 确认权限
+
+当 NeoCode 请求写文件或执行命令时，你可以选择 Allow、Ask 或 Deny。
+
+| 选择 | 适合场景 |
+|---|---|
+| Allow | 已确认操作安全，希望减少重复确认 |
+| Ask | 默认选择，适合未知仓库或多文件修改 |
+| Deny | 不想让 Agent 执行当前操作 |
+
+更详细的风险判断见 [工具与权限](./tools-permissions)。
+
+## 继续、压缩或新建会话
 
 | 场景 | 建议 |
 |---|---|
-| 开始一个不相关的新任务 | 新建会话 |
-| 继续完善刚才的功能 | 继续当前会话 |
+| 继续同一个 bug、功能或文档任务 | 继续当前会话 |
+| 对话很长，回答开始重复或混入旧任务 | 执行 `/compact` |
+| 开始不相关的新任务 | `Ctrl+N` 新建会话 |
 | 切换到另一个项目 | 新建会话并切换工作区 |
-| 回复开始重复或跑偏 | 先 `/compact`，不行再新建会话 |
 
-## 记忆
-
-记忆适合保存跨会话都成立的偏好或项目事实。
+压缩后建议补一句当前目标：
 
 ```text
-/memo                              # 查看所有记忆
-/remember 我习惯用 powershell       # 保存一条记忆
-/forget powershell                  # 删除匹配的记忆
+继续刚才的文档更新，目标是补齐 Slash 指令和 AGENTS.md 的用户说明。
 ```
 
-适合保存：
-
-- 你常用的 Shell、测试命令或代码风格偏好
-- 当前项目的固定事实，例如主要语言、包管理器、测试入口
-- 不希望每次重复说明的个人偏好
-
-不适合保存：
-
-- 临时任务要求
-- 密钥、Token 或密码
-- 只对当前会话有效的上下文
-
-## Skills
-
-Skills 用来让 Agent 在当前会话按特定流程工作，例如“先读测试再改代码”或“审查时先列风险”。
-
-常用命令：
-
-```text
-/skills                  # 查看可用 Skills
-/skill use go-review     # 启用某个 Skill
-/skill off go-review     # 停用某个 Skill
-/skill active            # 查看当前已启用的 Skills
-```
-
-一句话判断：
-
-- 长期偏好或项目事实：用记忆
-- 当前任务的工作方式：用 Skill
-- 真实外部工具能力：用 [MCP](./mcp)
-
-## 子代理
-
-复杂任务里，NeoCode 可能会让子代理并行处理搜索、审查或验证。你通常不需要手动管理它们。
-
-如果你希望它主动拆分任务，可以直接说：
-
-```text
-请先用 researcher 角色梳理相关代码，再让 reviewer 角色检查方案风险。
-```
-
-## 常用命令速查
+## 常用 Slash 指令
 
 | 命令 | 作用 |
 |---|---|
-| `/help` | 查看所有命令 |
-| `/provider` | 切换 Provider |
-| `/model` | 切换模型 |
-| `/cwd` | 查看或切换工作区 |
+| `/help` | 查看所有 Slash 指令 |
+| `/cwd [path]` | 查看或切换工作区 |
 | `/session` | 切换会话 |
-| `/compact` | 压缩长会话 |
+| `/compact` | 压缩当前会话上下文 |
+| `/provider` | 切换 Provider |
+| `/provider add` | 添加自定义 Provider |
+| `/model` | 切换模型 |
 | `/memo` | 查看记忆 |
-| `/remember <text>` | 保存记忆 |
-| `/forget <keyword>` | 删除记忆 |
-| `/skills` | 查看 Skills |
-| `/exit` | 退出 |
+| `/remember <text>` | 保存长期偏好或稳定事实 |
+| `/forget <keyword>` | 删除匹配的记忆 |
+| `/skills` | 查看可用 Skills |
+| `/skill use <id>` | 启用 Skill |
+| `/skill off <id>` | 停用 Skill |
+| `/skill active` | 查看已启用 Skills |
+| `/clear` | 清空当前输入草稿 |
+| `/exit` | 退出 NeoCode |
+
+完整说明见 [Slash 指令](./slash-commands)。
 
 ## 下一步
 
-- 想配置模型和 Provider：[配置指南](./configuration)
-- 想了解 Agent 能做什么、权限怎么选：[工具与权限](./tools-permissions)
-- 想编写或启用 Skill：[Skills 使用](./skills)
-- 遇到问题：[排障与常见问题](./troubleshooting)
+- 想理解会话和上下文：[会话、上下文与工作区](./context-session-workspace)
+- 想让 Agent 遵守项目规则：[AGENTS.md 项目规则](./agents-md)
+- 想判断记忆、Skills、MCP 怎么选：[能力选择指南](./capability-choice)
+- 想看可复制任务示例：[使用示例](./examples)

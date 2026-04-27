@@ -1,25 +1,28 @@
 ---
 title: Skills
-description: Use SKILL.md files to codify workflow guidance for the current NeoCode session.
+description: Use SKILL.md to shape the workflow for the current task.
 ---
 
 # Skills
 
-Skills are reusable workflow instructions. They do not add tools or bypass approvals; they tell the agent how to approach a class of tasks.
+Skills are reusable workflow prompts. They do not add tools and do not bypass approvals. They tell the agent how to handle a type of task.
+
+If the rule belongs to the project, use [AGENTS.md](./agents-md). If it is a personal long-term preference, use memory. If the agent needs a real external tool, use [MCP](./mcp).
 
 ## When to use Skills
 
-| Goal | Recommendation |
+| Need | Use |
 |---|---|
-| Make code reviews follow a checklist | Use a Skill |
-| Make the agent read specific docs before editing | Use a Skill |
-| Require a specific output format for this task | Use a Skill |
-| Add a real callable external tool | Use [MCP](./mcp) |
-| Save long-term preferences or project facts | Use `/remember` memory |
+| Always list review risks first | Skill |
+| Read tests before editing | Skill |
+| Current task needs a fixed output shape | Skill |
+| Save project rules | `AGENTS.md` |
+| Save personal preferences | Memory |
+| Connect external tools | MCP |
 
-## Where Skills live
+## Location
 
-Local Skills are loaded from:
+Local Skills live under:
 
 ```text
 ~/.neocode/skills/
@@ -31,9 +34,7 @@ Recommended layout:
 ~/.neocode/skills/go-review/SKILL.md
 ```
 
-## Create a Skill
-
-Example:
+## Example Skill
 
 ```md
 ---
@@ -46,79 +47,55 @@ description: Review Go changes for correctness, boundaries, and tests.
 
 ## Instruction
 
-Read the related implementation and tests before reviewing. Focus on behavior regressions, error handling, edge cases, and test gaps. Output risks first, then a short summary.
+Read related implementation and tests before reviewing. Prioritize regressions, error handling, edge cases, and missing tests. List risks first, then give a short summary.
 ```
 
-Common fields:
-
-| Field | Description |
-|---|---|
-| `id` | Skill identifier |
-| `name` | Display name |
-| `description` | Short description shown in lists |
-
-The most important part is `Instruction`: state what to do first, what to focus on, and what output you expect.
-
-## Activate and deactivate
-
-Use these commands in NeoCode:
+## Enable and disable
 
 ```text
-/skills                  # View available Skills
-/skill use go-review     # Activate a Skill
-/skill off go-review     # Deactivate a Skill
-/skill active            # View active Skills
+/skills
+/skill use go-review
+/skill active
+/skill off go-review
 ```
 
-`/skill use <id>` affects only the current session. Use memory for long-term preferences that should apply every time.
+`/skill use <id>` affects the current session only.
 
-## Write a useful Instruction
+## Writing good instructions
 
-Avoid:
+Weak:
 
 ```md
 ## Instruction
 
-Please review more carefully.
+Review more carefully.
 ```
 
-Prefer:
+Better:
 
 ```md
 ## Instruction
 
-Read the related implementation and tests first. Output high-risk issues first, then test gaps, then a short summary. Do not request unrelated refactors.
+Read related implementation and tests first. Output high-risk findings, then test gaps, then a short summary. Do not request unrelated refactors.
 ```
-
-## Skills vs memory vs MCP
-
-| Capability | Solves | Adds tools |
-|---|---|---|
-| Skills | Current task workflow and output constraints | No |
-| Memory | Long-term preferences and project facts | No |
-| MCP | External callable tools | Yes |
 
 ## Common issues
 
-### `/skills` does not show my Skill
+### `/skills` cannot see my Skill
 
 Check:
 
-- The file is under `~/.neocode/skills/`
-- The filename is `SKILL.md`
+- It is under `~/.neocode/skills/`
+- The file name is `SKILL.md`
 - Frontmatter is valid YAML
 - `id` is not duplicated
 
-### Skill is active but has little effect
+### Can a Skill grant tool access?
 
-Make `Instruction` more specific. Define the reading order, focus areas, and output structure.
-
-### Can a Skill authorize tools?
-
-No. File writes, command execution, and other sensitive actions still use the normal approval flow.
+No. File writes and commands still follow normal approval flow.
 
 ## Next steps
 
-- Connect external tools: [MCP Tools](./mcp)
-- Save long-term preferences: [Daily Use](./daily-use)
-- Understand permission boundaries: [Tools & Permissions](./tools-permissions)
+- Unsure what to use: [Capability Guide](./capability-choice)
+- External tools: [MCP Tools](./mcp)
+- Project rules: [AGENTS.md Project Rules](./agents-md)

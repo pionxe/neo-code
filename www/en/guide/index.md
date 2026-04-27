@@ -1,40 +1,40 @@
 ---
 title: Getting Started
-description: Find what you need — install, daily use, or troubleshooting.
+description: NeoCode docs navigation from install to concepts and daily workflow.
 ---
 
 # Getting Started
 
-NeoCode is a local AI coding agent that runs in your terminal.
+NeoCode is a local terminal AI coding assistant. It works around your workspace, sessions, project rules, and tool approvals to help read code, edit code, add tests, and write docs.
 
-## New here?
+## New user path
 
-From zero to running in 3 minutes:
+1. [Install & First Run](./install)
+2. [Sessions, Context, and Workspace](./context-session-workspace)
+3. [Slash Commands](./slash-commands)
+4. [Usage Examples](./examples)
 
-1. [Install & First Run](./install) — get it running, set API key, first conversation
-2. [Usage Examples](./examples) — 4 copy-pasteable scenarios
-3. [Configuration](./configuration) — switch models, custom providers
+## Core concepts
+
+| Need | Read |
+|---|---|
+| `/compact`, `/cwd`, `/model`, and other commands | [Slash Commands](./slash-commands) |
+| Workspace, sessions, and context | [Sessions, Context, and Workspace](./context-session-workspace) |
+| Project-level agent rules | [AGENTS.md Project Rules](./agents-md) |
+| Memory vs Skills vs AGENTS.md vs MCP | [Capability Guide](./capability-choice) |
 
 ## Daily use
 
-Already using it? Look up operations and config:
-
-- [Daily Use](./daily-use) — session management, memory, skills, common commands
-- [Tools & Permissions](./tools-permissions) — what the agent can do, when it needs your approval
-- [Configuration](./configuration) — common config tasks
+- [Daily Use](./daily-use)
+- [Tools & Permissions](./tools-permissions)
+- [Configuration](./configuration)
 
 ## Extensions
 
-Connect NeoCode to your own workflow:
+- [Skills](./skills)
+- [MCP Tools](./mcp)
 
-- [MCP Tools](./mcp) — connect external tools, control exposure, and verify availability
-- [Skills](./skills) — codify workflow guidance and task constraints with `SKILL.md`
+## Troubleshooting
 
-## Something wrong?
-
-- [Troubleshooting](./troubleshooting) — 3-step diagnosis by symptom
-- [Update & Version](./update) — check version, upgrade
-
-## Advanced design
-
-If you are building integrations, modifying NeoCode, or checking architecture boundaries, start from [Reference](/reference/).
+- [Troubleshooting](./troubleshooting)
+- [Update & Version](./update)

@@ -1,120 +1,108 @@
 ---
 title: Daily Use
-description: Workspace, sessions, memory, Skills, and subagents for everyday NeoCode use.
+description: Daily NeoCode workflow from opening a project to finishing a task.
 ---
 
 # Daily Use
 
-## Workspace
+A normal NeoCode workflow is: open a project, describe the goal, watch agent activity, approve risky actions, review the result, then continue, compact, or start a new session.
 
-The workspace decides which project NeoCode can read and edit.
+## Open a project
 
-```text
-/cwd                     # Show current workspace
-/cwd /path/to/project    # Switch to another project
-```
-
-You can also set it at launch:
+Start in a workspace:
 
 ```bash
 neocode --workdir /path/to/project
 ```
 
-## Sessions
-
-### Switch sessions
+View or switch workspace inside NeoCode:
 
 ```text
-/session                 # Open the session picker
+/cwd
+/cwd /path/to/project
 ```
 
-### Compress long sessions
+The workspace controls which project NeoCode can read, search, edit, and run commands in. When switching projects, start a new session to avoid mixing context.
 
-When a conversation gets long, old context can interfere with the current task. Run:
+## Describe the task
+
+Use natural language for tasks. For complex work, ask NeoCode to inspect the code and propose a plan before editing.
 
 ```text
-/compact
+Please read the configuration loading code and propose the smallest fix. Do not edit files yet.
 ```
 
-### New session or continue?
+Then continue:
+
+```text
+Please implement that plan and run the related tests.
+```
+
+Good prompts include the goal, scope, and verification command.
+
+## Useful keys
+
+| Key | Action |
+|---|---|
+| `Enter` | Send input |
+| `Ctrl+J` | New line |
+| `Ctrl+W` | Cancel current agent task |
+| `Ctrl+Q` | Open slash command help |
+| `Ctrl+N` | New session |
+| `Ctrl+O` | Open workspace selector |
+| `Ctrl+F` | Full Access prompt |
+| `Ctrl+L` | Log viewer |
+| `Tab` / `Shift+Tab` | Move focus between panels |
+
+## Approvals
+
+NeoCode asks before file writes and risky commands.
+
+| Choice | Best for |
+|---|---|
+| Allow | Confirmed safe repeated operations |
+| Ask | Default choice for most work |
+| Deny | Wrong path, risky command, or uncontrolled scope |
+
+See [Tools & Permissions](./tools-permissions) for details.
+
+## Continue, compact, or start fresh
 
 | Scenario | Recommendation |
 |---|---|
-| Starting an unrelated task | New session |
-| Continuing the same feature | Continue current session |
-| Switching projects | New session and switch workspace |
-| Responses repeat or drift | Try `/compact`, then new session if needed |
+| Same bug, feature, or docs task | Continue current session |
+| Long conversation starts drifting | Run `/compact` |
+| New unrelated task | Use `Ctrl+N` |
+| Different project | New session and switch workspace |
 
-## Memory
+After compacting, restate the current goal briefly.
 
-Memory is for preferences or project facts that should carry across sessions.
-
-```text
-/memo                              # View all memories
-/remember I prefer powershell      # Save a memory
-/forget powershell                 # Delete matching memories
-```
-
-Good uses:
-
-- Your usual shell, test command, or code style preference
-- Stable project facts, such as language, package manager, or test entry point
-- Personal preferences you do not want to repeat
-
-Avoid storing:
-
-- Temporary task instructions
-- Secrets, tokens, or passwords
-- Context that only matters in the current session
-
-## Skills
-
-Skills make the agent follow a workflow in the current session, such as "read tests before editing" or "list review risks first".
-
-Common commands:
-
-```text
-/skills                  # View available Skills
-/skill use go-review     # Activate a Skill
-/skill off go-review     # Deactivate a Skill
-/skill active            # View active Skills
-```
-
-Quick rule:
-
-- Long-term preference or project fact: use memory
-- Current task workflow: use a Skill
-- Real external tool capability: use [MCP](./mcp)
-
-## Subagents
-
-For complex tasks, NeoCode may use subagents for search, review, or checks. You usually do not need to manage them.
-
-If you want it to split the task, say:
-
-```text
-Please have a researcher review the related code first, then have a reviewer check the plan for risks.
-```
-
-## Common commands
+## Common slash commands
 
 | Command | Purpose |
 |---|---|
-| `/help` | Show all commands |
-| `/provider` | Switch provider |
-| `/model` | Switch model |
-| `/cwd` | View or switch workspace |
+| `/help` | Show slash commands |
+| `/cwd [path]` | View or switch workspace |
 | `/session` | Switch session |
-| `/compact` | Compress a long session |
+| `/compact` | Compact current session context |
+| `/provider` | Switch provider |
+| `/provider add` | Add a custom provider |
+| `/model` | Switch model |
 | `/memo` | View memory |
-| `/remember <text>` | Save memory |
-| `/forget <keyword>` | Delete memory |
+| `/remember <text>` | Save a long-term preference or fact |
+| `/forget <keyword>` | Delete matching memory |
 | `/skills` | View Skills |
-| `/exit` | Exit |
+| `/skill use <id>` | Activate a Skill |
+| `/skill off <id>` | Deactivate a Skill |
+| `/skill active` | Show active Skills |
+| `/clear` | Clear current draft |
+| `/exit` | Exit NeoCode |
+
+Full details: [Slash Commands](./slash-commands).
 
 ## Next steps
 
-- Configure models and providers: [Configuration](./configuration)
-- Understand approvals: [Tools & Permissions](./tools-permissions)
-- Write or activate a Skill: [Skills](./skills)
-- Something wrong: [Troubleshooting](./troubleshooting)
+- Sessions and context: [Sessions, Context, and Workspace](./context-session-workspace)
+- Project rules: [AGENTS.md Project Rules](./agents-md)
+- Capability choices: [Capability Guide](./capability-choice)
+- Copyable prompts: [Usage Examples](./examples)

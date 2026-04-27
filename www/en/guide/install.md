@@ -7,12 +7,11 @@ description: From installation to your first conversation in 3 minutes.
 
 ## 1. Requirements
 
-- At least one API key (OpenAI, Gemini, OpenLL, Qiniu, or ModelScope)
-- Go 1.25+ if running from source
+- macOS, Linux, or Windows
+- A terminal such as PowerShell or your system default terminal
+- At least one API key: OpenAI, Gemini, OpenLL, Qiniu, or ModelScope
 
 ## 2. Install
-
-### One-line install (recommended)
 
 macOS / Linux:
 
@@ -24,14 +23,6 @@ Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
-```
-
-### Run from source
-
-```bash
-git clone https://github.com/1024XEngineer/neo-code.git
-cd neo-code
-go run ./cmd/neocode
 ```
 
 ## 3. Set API key
@@ -50,8 +41,6 @@ Windows PowerShell:
 $env:OPENAI_API_KEY = "your_key_here"
 ```
 
-Other providers:
-
 | Provider | Environment variable |
 |---|---|
 | OpenAI | `OPENAI_API_KEY` |
@@ -66,53 +55,58 @@ Other providers:
 neocode
 ```
 
-You will enter the terminal interface. Type in the input box at the bottom to start a conversation.
-To open a specific workspace:
+Open a specific project:
 
 ```bash
 neocode --workdir /path/to/your/project
 ```
 
+Type natural language in the input box to chat. Type `/` to see local control commands.
+
 ## 5. First conversation
 
-Need a starting prompt? Try:
+Try:
 
 ```text
-Read the current project directory structure and give a module summary
+Read the current project directory structure, summarize module responsibilities, and point out which files I should read first.
 ```
+
+Then:
 
 ```text
 Based on that structure, find the test entry point and the main business entry point.
 ```
 
-The agent will use file reading and search tools automatically. When it needs to write files or run commands, NeoCode will ask for approval.
+The agent uses file reading and search tools automatically. NeoCode asks before file writes or risky commands.
 
-## 6. Common `/` commands
+## 6. Add AGENTS.md for long-term projects
 
-Inside NeoCode, use `/` commands for common actions:
+For maintained projects, add `AGENTS.md` at the repository root:
 
-| Command | Action |
-|---|---|
-| `/help` | Show all commands |
-| `/provider` | Switch provider |
-| `/provider add` | Add a custom provider |
-| `/model` | Switch model |
-| `/compact` | Compress long session context |
-| `/clear` | Clear the current draft |
-| `/cwd [path]` | View/switch workspace |
-| `/session` | Switch session |
-| `/memo` | View memory index |
-| `/remember <text>` | Save memory |
-| `/forget <keyword>` | Delete memory |
-| `/skills` | View available skills |
-| `/exit` | Exit NeoCode |
+```md
+# Project Rules
 
-## Installation issues?
+- Run `go test ./...` after changing Go code
+- Keep Chinese docs in Chinese
+- Do not write API keys to config files
+```
 
-See [Troubleshooting](./troubleshooting)
+See [AGENTS.md Project Rules](./agents-md).
+
+## Run from source
+
+Use source builds for development or debugging. Go 1.25+ is required.
+
+```bash
+git clone https://github.com/1024XEngineer/neo-code.git
+cd neo-code
+go build ./...
+go run ./cmd/neocode
+```
 
 ## Next steps
 
-- More usage scenarios: [Usage examples](./examples)
-- Switch models or add custom providers: [Configuration](./configuration)
-- Daily operations: [Daily use](./daily-use)
+- Local commands: [Slash Commands](./slash-commands)
+- Workspace and sessions: [Sessions, Context, and Workspace](./context-session-workspace)
+- More prompts: [Usage Examples](./examples)
+- Installation issues: [Troubleshooting](./troubleshooting)

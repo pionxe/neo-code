@@ -1,42 +1,38 @@
 ---
 title: Usage Examples
-description: Four copy-pasteable scenarios to help you get comfortable with NeoCode quickly.
+description: Copyable NeoCode prompts that state goal, scope, and verification clearly.
 ---
 
 # Usage Examples
 
-You can paste these examples directly into a NeoCode session. Replace `{...}` with real paths, logs, or requirements from your project.
+Paste these examples into a NeoCode session and replace `{...}` with real paths, logs, or requirements.
 
----
-
-## Scenario 1: Understand an unfamiliar project
-
-**Goal**: You opened a project and want a quick overview of its structure and main modules.
-
-**Prompt**:
+## 1. Understand an unfamiliar project
 
 ```text
 Please read the current project directory structure, explain what each main directory is responsible for, and point out which files I should read first to understand the main flow.
 ```
 
-**Expected behavior**:
+## 2. Read project rules first
 
-- Scan the project tree and key files
-- Summarize module responsibilities and entry points
-- If the project is large, give an overview first and ask before going deeper
+```text
+Please read the visible AGENTS.md and README in the current workspace, then summarize the collaboration rules you should follow.
+```
 
-**Approval tips**:
+## 3. Plan before editing
 
-- File reads and search are usually safe to allow
-- If it wants to run a command, check that the command is only inspecting project structure
+```text
+I want to add this feature: {feature description}.
+Please read the related code first, then propose the smallest implementation plan, files to change, and verification command. Do not edit files yet.
+```
 
----
+Then:
 
-## Scenario 2: Find and fix a bug
+```text
+Please implement that plan, keep the existing code style, and add necessary tests.
+```
 
-**Goal**: You have an error or failing test log and want NeoCode to find the cause and fix it.
-
-**Prompt (step 1)**:
+## 4. Find and fix a bug
 
 ```text
 I see the following failure. Please locate the root cause and propose a fix:
@@ -44,90 +40,55 @@ I see the following failure. Please locate the root cause and propose a fix:
 {test log}
 ```
 
-**Prompt (step 2)**:
+Then:
 
 ```text
-Please apply the fix you proposed, then explain what changed and how to verify it.
+Please apply the proposed fix and run the smallest relevant tests. If tests fail, analyze and continue fixing.
 ```
 
-**Expected behavior**:
-
-- Read relevant source and tests
-- Find the failing logic
-- Modify only the needed files
-- Suggest or run the relevant tests
-
-**Approval tips**:
-
-- Choose **Ask** or **Allow** for file edits
-- Test commands are usually safe to allow
-- Reject or ask for explanation before deletes, resets, or broad rewrites
-
----
-
-## Scenario 3: Add tests for a function
-
-**Goal**: Add tests for a function or module.
-
-**Prompt**:
+## 5. Add tests
 
 ```text
 Please add unit tests for {function name} in {source file}. Cover the happy path, empty input, and error return. Put the tests in {test file}.
 ```
 
-**Verification**:
+## 6. Save a long-term preference
 
 ```text
-Please run the related tests. If any fail, analyze and fix them.
+/remember I prefer reading tests before editing code
+/memo
 ```
 
-**Expected behavior**:
+Memory is for stable preferences, not secrets or one-off task instructions.
 
-- Read the target function and existing test style
-- Generate tests that match the project
-- Run the smallest relevant test scope
-
-**Approval tips**:
-
-- Check the file path before allowing test writes
-- Allow the project's existing test command
-
----
-
-## Scenario 4: Add a small feature
-
-**Goal**: Add a clear feature to an existing project.
-
-**Prompt (design phase)**:
+## 7. Activate a Skill
 
 ```text
-I want to add this feature: {feature description}. Please read the related code first, then propose the smallest implementation plan and the files that need changes.
+/skills
+/skill use go-review
 ```
 
-**Prompt (implementation phase)**:
+Then:
 
 ```text
-Please implement the plan, keep the existing code style, and add necessary tests.
+Please review the current changes. Prioritize behavior regressions, edge cases, and missing tests.
 ```
 
-**Expected behavior**:
+## 8. Continue after compaction
 
-- Identify the feature entry point and impact
-- Propose a short implementation plan
-- Modify only relevant files
-- Add tests and report verification
+```text
+/compact
+```
 
-**Approval tips**:
+Then restate the current goal:
 
-- Keep **Ask** for multi-file changes
-- Allow build or test commands
-- If it proposes unrelated refactors, ask it to narrow the change
-
----
+```text
+Continue the previous fix. The current goal is to make go test ./internal/config pass with minimal changes.
+```
 
 ## Next steps
 
-- Permission decisions: [Tools & Permissions](./tools-permissions)
-- Configure models and providers: [Configuration](./configuration)
-- Daily operations: [Daily Use](./daily-use)
-- Something wrong: [Troubleshooting](./troubleshooting)
+- Permissions: [Tools & Permissions](./tools-permissions)
+- Slash commands: [Slash Commands](./slash-commands)
+- Configuration: [Configuration](./configuration)
+- Daily workflow: [Daily Use](./daily-use)

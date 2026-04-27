@@ -1,32 +1,30 @@
 ---
 title: Tools & Permissions
-description: What the agent can do, when it needs your approval, and how to choose.
+description: What the agent can do and how to choose Allow, Ask, or Deny.
 ---
 
 # Tools & Permissions
 
+NeoCode uses tools to interact with your project. Read-only actions usually run automatically. File writes, edits, and risky commands ask for approval.
+
 ## What the agent can do
 
-The agent interacts with your project through tools. Read-only operations run automatically; writes and commands need your approval.
-
-| Capability | Tool | Needs approval |
+| Capability | Tool | Usually asks? |
 |---|---|---|
 | Read files | `filesystem_read_file` | No |
-| Search file contents | `filesystem_grep` | No |
+| Search file content | `filesystem_grep` | No |
 | Search file paths | `filesystem_glob` | No |
 | Write files | `filesystem_write_file` | Yes |
 | Edit files | `filesystem_edit` | Yes |
 | Run commands | `bash` | Depends on risk |
 | Fetch web pages | `webfetch` | No |
 | Manage task list | `todo_write` | No |
-| Save/read/delete memories | `memo_*` | No |
-| Launch subagent | `spawn_subagent` | No |
+| Manage memory | `memo_*` | No |
+| Start subagents | `spawn_subagent` | No |
 
-External tools registered via MCP also appear in the list, namespaced as `mcp.<server-id>.<tool>`. See [MCP Tools](./mcp) for setup.
+MCP tools use names like `mcp.<server-id>.<tool>`. See [MCP Tools](./mcp).
 
-## Permission approval
-
-When the agent requests a file write or command execution, NeoCode shows a confirmation prompt:
+## Approval choices
 
 ```text
 ◆ NEO wants to run: filesystem_write_file
@@ -36,44 +34,50 @@ When the agent requests a file write or command execution, NeoCode shows a confi
   [Allow] [Ask] [Deny]
 ```
 
-- **Allow**: Approve and remember — future identical operations won't ask again
-- **Ask**: Ask every time (default)
-- **Deny**: Reject this request
+| Choice | Meaning | Best for |
+|---|---|---|
+| Allow | Approve and remember the same decision | Confirmed safe repeated operations |
+| Ask | Keep asking next time | Default for most tasks |
+| Deny | Block this action | Wrong path, risky command, or uncontrolled scope |
 
-### How to choose
+## How to decide
 
-| Your situation | Recommendation |
+| Scenario | Recommendation |
 |---|---|
-| Continuous refactoring, workspace is safe | Allow — fewer interruptions |
-| Reading an unknown repo, observing first | Ask — confirm each time |
-| Involves directories you don't want changed or high-risk commands | Deny — block immediately |
+| Reading and searching files | Usually allow |
+| Small code or test edits | Ask, then allow after checking paths |
+| Existing test command | Usually allow |
+| Deletes, Git reset, broad rewrites | Ask for explanation first |
+| Secrets or local config | Deny |
 
-### Full Access mode
+## Full Access
 
-Press `!` to enable Full Access, which skips all permission approvals.
+`Ctrl+F` opens the Full Access risk prompt. When enabled, tool approvals are auto-approved.
 
 ::: warning
-Full Access skips all approvals, including destructive operations. Make sure you understand the risks before enabling it.
+Use Full Access only when you understand the task risk, trust the workspace, and accept file or command side effects.
 :::
 
-## Command risk classification
-
-Bash commands aren't all treated the same — NeoCode classifies them by risk:
+## Command risk
 
 | Category | Examples | Handling |
 |---|---|---|
-| Read-only | `git status`, `git log`, `ls` | Auto-approved |
-| Local mutation | `git commit`, `go build` | Needs approval |
-| Remote interaction | `git push`, `git fetch` | Needs approval |
-| Destructive | `git reset --hard`, `rm` | Needs approval |
-| Unknown | Compound commands, parse failures | Needs approval |
+| Read-only | `git status`, `git log`, `ls` | Auto-allow |
+| Local changes | `git commit`, `go build` | Ask |
+| Remote interaction | `git push`, `git fetch` | Ask |
+| Destructive | `git reset --hard`, `rm` | Ask |
+| Unknown | Compound commands, parse failures | Ask |
 
-## File operation scope
+## File scope
 
-All file operations are restricted to the current workspace. Path traversal and symlink escapes are blocked.
+File operations are limited to the current workspace by default.
+
+```text
+/cwd
+```
 
 ## Next steps
 
-- Configure tool parameters: [Configuration](./configuration)
-- Daily operations: [Daily use](./daily-use)
-- Connect external tools: [MCP Tools](./mcp)
+- Daily workflow: [Daily Use](./daily-use)
+- Slash commands: [Slash Commands](./slash-commands)
+- External tools: [MCP Tools](./mcp)

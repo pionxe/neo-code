@@ -71,6 +71,7 @@ export default defineConfig({
         nav: [
           { text: "快速开始", link: "/guide/" },
           { text: "日常使用", link: "/guide/daily-use" },
+          { text: "核心概念", link: "/guide/slash-commands" },
           { text: "排障", link: "/guide/troubleshooting" },
           { text: "进阶与设计", link: "/reference/" },
           { text: "GitHub", link: repoUrl },
@@ -83,6 +84,15 @@ export default defineConfig({
                 { text: "总览", link: "/guide/" },
                 { text: "安装与首次运行", link: "/guide/install" },
                 { text: "使用示例", link: "/guide/examples" },
+              ],
+            },
+            {
+              text: "核心概念",
+              items: [
+                { text: "Slash 指令", link: "/guide/slash-commands" },
+                { text: "AGENTS.md 项目规则", link: "/guide/agents-md" },
+                { text: "会话、上下文与工作区", link: "/guide/context-session-workspace" },
+                { text: "能力选择指南", link: "/guide/capability-choice" },
               ],
             },
             {
@@ -123,6 +133,7 @@ export default defineConfig({
               items: [
                 { text: "快速开始", link: "/guide/" },
                 { text: "安装与首次运行", link: "/guide/install" },
+                { text: "Slash 指令", link: "/guide/slash-commands" },
                 { text: "日常使用", link: "/guide/daily-use" },
                 { text: "排障", link: "/guide/troubleshooting" },
               ],
@@ -159,6 +170,7 @@ export default defineConfig({
         nav: [
           { text: "Getting Started", link: "/en/guide/" },
           { text: "Daily Use", link: "/en/guide/daily-use" },
+          { text: "Concepts", link: "/en/guide/slash-commands" },
           { text: "Troubleshooting", link: "/en/guide/troubleshooting" },
           { text: "Reference", link: "/reference/" },
           { text: "GitHub", link: repoUrl },
@@ -171,6 +183,15 @@ export default defineConfig({
                 { text: "Getting Started", link: "/en/guide/" },
                 { text: "Install & First Run", link: "/en/guide/install" },
                 { text: "Usage Examples", link: "/en/guide/examples" },
+              ],
+            },
+            {
+              text: "Core Concepts",
+              items: [
+                { text: "Slash Commands", link: "/en/guide/slash-commands" },
+                { text: "AGENTS.md Project Rules", link: "/en/guide/agents-md" },
+                { text: "Sessions, Context, Workspace", link: "/en/guide/context-session-workspace" },
+                { text: "Capability Guide", link: "/en/guide/capability-choice" },
               ],
             },
             {

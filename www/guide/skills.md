@@ -1,21 +1,24 @@
 ---
 title: Skills 使用
-description: 用 SKILL.md 固化工作流提示，让 Agent 在当前会话中按指定方式工作。
+description: 用 SKILL.md 固化当前任务的工作流提示，让 Agent 按指定方式处理任务。
 ---
 
 # Skills 使用
 
 Skills 是可复用的工作流提示。它不会新增工具，也不会绕过权限；它只是告诉 Agent 这类任务应该怎么做。
 
+如果规则属于整个项目，优先写进 [AGENTS.md](./agents-md)。如果只是你的个人长期偏好，优先用 `/remember`。如果需要调用真实外部工具，使用 [MCP](./mcp)。
+
 ## 什么时候用 Skills
 
 | 你想做的事 | 建议 |
 |---|---|
-| 代码审查时固定检查清单 | 用 Skill |
-| 每次改代码前先读指定文档 | 用 Skill |
-| 当前任务需要特定输出格式 | 用 Skill |
-| 接入真实外部工具 | 用 [MCP](./mcp) |
-| 保存长期偏好或项目事实 | 用 `/remember` 记忆 |
+| 代码审查时固定先列风险 | 用 Skill |
+| 改代码前固定先读测试 | 用 Skill |
+| 当前任务需要特定输出结构 | 用 Skill |
+| 保存团队项目规则 | 用 `AGENTS.md` |
+| 保存个人长期偏好 | 用记忆 |
+| 接入外部工具 | 用 MCP |
 
 ## Skills 放在哪里
 
@@ -53,7 +56,7 @@ description: Review Go changes for correctness, boundaries, and tests.
 
 | 字段 | 说明 |
 |---|---|
-| `id` | Skill 标识 |
+| `id` | Skill 标识，启用和停用时使用 |
 | `name` | 展示名称 |
 | `description` | 简短说明，用于列表中识别用途 |
 
@@ -64,13 +67,13 @@ description: Review Go changes for correctness, boundaries, and tests.
 在 NeoCode 里使用：
 
 ```text
-/skills                  # 查看可用 Skills
-/skill use go-review     # 启用某个 Skill
-/skill off go-review     # 停用某个 Skill
-/skill active            # 查看已启用 Skills
+/skills
+/skill use go-review
+/skill active
+/skill off go-review
 ```
 
-`/skill use <id>` 只影响当前会话。需要每次都生效的长期偏好，更适合写进记忆。
+`/skill use <id>` 只影响当前会话。需要每次都生效的长期偏好，更适合写进记忆；需要跟项目一起维护的规则，更适合写进 `AGENTS.md`。
 
 ## 写好 Instruction
 
@@ -89,14 +92,6 @@ description: Review Go changes for correctness, boundaries, and tests.
 
 先阅读相关实现和测试，再审查改动。输出时先列高风险问题，再列测试缺口，最后给简短总结。不要要求无关重构。
 ```
-
-## Skills vs 记忆 vs MCP
-
-| 能力 | 解决什么问题 | 是否新增工具 |
-|---|---|---|
-| Skills | 当前任务的工作流和输出约束 | 否 |
-| 记忆 | 长期偏好和项目事实 | 否 |
-| MCP | 外部可调用工具 | 是 |
 
 ## 常见问题
 
@@ -119,6 +114,6 @@ description: Review Go changes for correctness, boundaries, and tests.
 
 ## 下一步
 
+- 不确定该用什么能力：[能力选择指南](./capability-choice)
 - 想接入外部工具：[MCP 工具接入](./mcp)
-- 想保存长期偏好：[日常使用](./daily-use)
-- 想理解权限边界：[工具与权限](./tools-permissions)
+- 想保存项目级规则：[AGENTS.md 项目规则](./agents-md)
