@@ -240,15 +240,17 @@ func buildHTTPDaemonWakeIntent(request *http.Request) (protocol.WakeIntent, erro
 	workdir := popWakeQueryParam(params, "workdir")
 	switch action {
 	case protocol.WakeActionRun:
-		if strings.TrimSpace(params["prompt"]) == "" {
+		if strings.TrimSpace(sessionID) == "" && strings.TrimSpace(params["prompt"]) == "" {
 			return protocol.WakeIntent{}, errors.New("missing required query: prompt")
 		}
 	case protocol.WakeActionReview:
-		if strings.TrimSpace(params["path"]) == "" {
-			return protocol.WakeIntent{}, errors.New("missing required query: path")
-		}
-		if strings.TrimSpace(sessionID) == "" && strings.TrimSpace(workdir) == "" {
-			return protocol.WakeIntent{}, errors.New("missing required query: workdir or session_id")
+		if strings.TrimSpace(sessionID) == "" {
+			if strings.TrimSpace(params["path"]) == "" {
+				return protocol.WakeIntent{}, errors.New("missing required query: path")
+			}
+			if strings.TrimSpace(workdir) == "" {
+				return protocol.WakeIntent{}, errors.New("missing required query: workdir or session_id")
+			}
 		}
 	}
 	if len(params) == 0 {

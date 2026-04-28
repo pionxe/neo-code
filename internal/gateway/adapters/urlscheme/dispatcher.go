@@ -35,6 +35,7 @@ const (
 	defaultGatewayLaunchTimeout = 3 * time.Second
 	// defaultGatewayLaunchRetryInterval 是拉起后拨号重试间隔。
 	defaultGatewayLaunchRetryInterval = 100 * time.Millisecond
+	wakeReviewStartupPromptTemplate   = "请审查文件 %s"
 )
 
 var dispatchRequestCounter uint64
@@ -201,7 +202,10 @@ func (d *Dispatcher) DispatchWakeIntent(ctx context.Context, request WakeDispatc
 			if d.launchTerminalFn == nil {
 				return DispatchResult{}, newDispatchError(ErrorCodeInternal, "terminal launcher is unavailable")
 			}
-			launchCommand := fmt.Sprintf("neocode --session %s", sessionID)
+			launchCommand, launchCommandErr := buildWakeLaunchCommand(intent, sessionID)
+			if launchCommandErr != nil {
+				return DispatchResult{}, newDispatchError(ErrorCodeInternal, launchCommandErr.Error())
+			}
 			if launchErr := d.launchTerminalFn(launchCommand); launchErr != nil {
 				if errors.Is(launchErr, launcher.ErrTerminalUnsupported) {
 					return DispatchResult{}, newDispatchError(ErrorCodeNotSupported, launchErr.Error())
@@ -248,6 +252,45 @@ func normalizeWakeDispatchIntent(intent protocol.WakeIntent) (protocol.WakeInten
 		intent.Params = nil
 	}
 	return intent, nil
+}
+
+// buildWakeLaunchCommand 构造终端拉起命令，并在首次点击时附带一次性启动输入参数。
+func buildWakeLaunchCommand(intent protocol.WakeIntent, sessionID string) (string, error) {
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return "", errors.New("wake response session_id is empty")
+	}
+	command := fmt.Sprintf("neocode --session %s", normalizedSessionID)
+	if strings.TrimSpace(intent.SessionID) != "" {
+		return command, nil
+	}
+	payload, err := buildWakeStartupPayload(intent)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s --wake-input-b64 %s", command, payload), nil
+}
+
+// buildWakeStartupPayload 将首次点击的 wake intent 转换为 TUI 启动后自动提交所需负载。
+func buildWakeStartupPayload(intent protocol.WakeIntent) (string, error) {
+	action := strings.ToLower(strings.TrimSpace(intent.Action))
+	text := ""
+	switch action {
+	case protocol.WakeActionRun:
+		text = strings.TrimSpace(intent.Params["prompt"])
+	case protocol.WakeActionReview:
+		path := strings.TrimSpace(intent.Params["path"])
+		if path != "" {
+			text = fmt.Sprintf(wakeReviewStartupPromptTemplate, path)
+		}
+	}
+	if text == "" {
+		return "", fmt.Errorf("wake.%s startup input is empty", action)
+	}
+	return protocol.EncodeWakeStartupInput(protocol.WakeStartupInput{
+		Text:    text,
+		Workdir: strings.TrimSpace(intent.Workdir),
+	})
 }
 
 // buildWakeOpenURLRPCRequest 将 WakeIntent 编码为 JSON-RPC 请求。

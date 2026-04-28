@@ -59,6 +59,27 @@ func TestBuildHTTPDaemonWakeIntentReviewAllowsSessionIDWithoutWorkdir(t *testing
 	}
 }
 
+func TestBuildHTTPDaemonWakeIntentRunAllowsSessionIDWithoutPrompt(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://neocode:18921/run?session_id=s-7",
+		http.NoBody,
+	)
+	intent, err := buildHTTPDaemonWakeIntent(request)
+	if err != nil {
+		t.Fatalf("buildHTTPDaemonWakeIntent() error = %v", err)
+	}
+	if intent.Action != protocol.WakeActionRun {
+		t.Fatalf("action = %q, want %q", intent.Action, protocol.WakeActionRun)
+	}
+	if intent.SessionID != "s-7" {
+		t.Fatalf("session_id = %q, want %q", intent.SessionID, "s-7")
+	}
+	if intent.Params["prompt"] != "" {
+		t.Fatalf("prompt = %q, want empty", intent.Params["prompt"])
+	}
+}
+
 func TestBuildHTTPDaemonWakeIntentRejectsMissingPathForReview(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://neocode:18921/review", http.NoBody)
 	_, err := buildHTTPDaemonWakeIntent(request)

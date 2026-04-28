@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	neturl "net/url"
 	"os"
 	"strings"
 
@@ -17,6 +19,7 @@ var (
 	runDaemonInstallCommand   = defaultDaemonInstallCommandRunner
 	runDaemonUninstallCommand = defaultDaemonUninstallCommandRunner
 	runDaemonStatusCommand    = defaultDaemonStatusCommandRunner
+	runDaemonEncodeCommand    = defaultDaemonEncodeCommandRunner
 
 	serveHTTPDaemon     = urlscheme.ServeHTTPDaemon
 	installHTTPDaemon   = urlscheme.InstallHTTPDaemon
@@ -38,6 +41,15 @@ type daemonStatusCommandOptions struct {
 	ListenAddress string
 }
 
+type daemonEncodeCommandOptions struct {
+	Action        string
+	Prompt        string
+	Path          string
+	Workdir       string
+	SessionID     string
+	ListenAddress string
+}
+
 // newDaemonCommand 创建 daemon 命令组，承载 HTTP 唤醒服务与自启动管理能力。
 func newDaemonCommand() *cobra.Command {
 	command := &cobra.Command{
@@ -55,6 +67,7 @@ func newDaemonCommand() *cobra.Command {
 		newDaemonInstallCommand(),
 		newDaemonUninstallCommand(),
 		newDaemonStatusCommand(),
+		newDaemonEncodeCommand(),
 	)
 	return command
 }
@@ -159,6 +172,84 @@ func newDaemonStatusCommand() *cobra.Command {
 	return command
 }
 
+// newDaemonEncodeCommand 创建 daemon encode 子命令组。
+func newDaemonEncodeCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:           "encode",
+		Short:         "Generate clickable HTTP wake URL",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+	}
+	command.AddCommand(
+		newDaemonEncodeRunCommand(),
+		newDaemonEncodeReviewCommand(),
+	)
+	return command
+}
+
+// newDaemonEncodeRunCommand 创建 daemon encode run 子命令。
+func newDaemonEncodeRunCommand() *cobra.Command {
+	options := &daemonEncodeCommandOptions{Action: "run"}
+	command := &cobra.Command{
+		Use:           "run",
+		Short:         "Encode wake run URL",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDaemonEncodeCommand(cmd.Context(), daemonEncodeCommandOptions{
+				Action:        "run",
+				Prompt:        strings.TrimSpace(options.Prompt),
+				Workdir:       strings.TrimSpace(options.Workdir),
+				SessionID:     strings.TrimSpace(options.SessionID),
+				ListenAddress: strings.TrimSpace(options.ListenAddress),
+			})
+		},
+	}
+	command.Flags().StringVar(&options.Prompt, "prompt", "", "run prompt text")
+	command.Flags().StringVar(&options.Workdir, "workdir", "", "workspace absolute path")
+	command.Flags().StringVar(&options.SessionID, "session-id", "", "existing session id for resume-only wake")
+	command.Flags().StringVar(
+		&options.ListenAddress,
+		"listen",
+		urlscheme.DefaultHTTPDaemonListenAddress,
+		"http daemon listen address",
+	)
+	return command
+}
+
+// newDaemonEncodeReviewCommand 创建 daemon encode review 子命令。
+func newDaemonEncodeReviewCommand() *cobra.Command {
+	options := &daemonEncodeCommandOptions{Action: "review"}
+	command := &cobra.Command{
+		Use:           "review",
+		Short:         "Encode wake review URL",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDaemonEncodeCommand(cmd.Context(), daemonEncodeCommandOptions{
+				Action:        "review",
+				Path:          strings.TrimSpace(options.Path),
+				Workdir:       strings.TrimSpace(options.Workdir),
+				SessionID:     strings.TrimSpace(options.SessionID),
+				ListenAddress: strings.TrimSpace(options.ListenAddress),
+			})
+		},
+	}
+	command.Flags().StringVar(&options.Path, "path", "", "review file path")
+	command.Flags().StringVar(&options.Workdir, "workdir", "", "workspace absolute path")
+	command.Flags().StringVar(&options.SessionID, "session-id", "", "existing session id for resume-only wake")
+	command.Flags().StringVar(
+		&options.ListenAddress,
+		"listen",
+		urlscheme.DefaultHTTPDaemonListenAddress,
+		"http daemon listen address",
+	)
+	return command
+}
+
 // defaultDaemonServeCommandRunner 启动 HTTP daemon 主循环。
 func defaultDaemonServeCommandRunner(ctx context.Context, options daemonServeCommandOptions) error {
 	if serveHTTPDaemon == nil {
@@ -238,4 +329,77 @@ func defaultDaemonStatusCommandRunner(ctx context.Context, options daemonStatusC
 		"autostart_mode":         status.AutostartMode,
 		"hosts_alias_configured": status.HostsAliasConfigured,
 	})
+}
+
+// defaultDaemonEncodeCommandRunner 生成 URL 编码后的 daemon 唤醒链接，并输出单行 URL。
+func defaultDaemonEncodeCommandRunner(_ context.Context, options daemonEncodeCommandOptions) error {
+	urlText, err := buildDaemonEncodedWakeURL(options)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(os.Stdout, urlText)
+	return nil
+}
+
+// buildDaemonEncodedWakeURL 按 action 组装标准化的可点击 HTTP 唤醒链接。
+func buildDaemonEncodedWakeURL(options daemonEncodeCommandOptions) (string, error) {
+	action := strings.ToLower(strings.TrimSpace(options.Action))
+	if action != "run" && action != "review" {
+		return "", fmt.Errorf("unsupported encode action: %s", options.Action)
+	}
+
+	sessionID := strings.TrimSpace(options.SessionID)
+	workdir := strings.TrimSpace(options.Workdir)
+	query := neturl.Values{}
+	switch action {
+	case "run":
+		prompt := strings.TrimSpace(options.Prompt)
+		if sessionID == "" && prompt == "" {
+			return "", errors.New("missing required flag: --prompt")
+		}
+		if prompt != "" {
+			query.Set("prompt", prompt)
+		}
+	case "review":
+		path := strings.TrimSpace(options.Path)
+		if sessionID == "" && path == "" {
+			return "", errors.New("missing required flag: --path")
+		}
+		if sessionID == "" && workdir == "" {
+			return "", errors.New("missing required flag: --workdir (or provide --session-id)")
+		}
+		if path != "" {
+			query.Set("path", path)
+		}
+	}
+
+	if workdir != "" {
+		query.Set("workdir", workdir)
+	}
+	if sessionID != "" {
+		query.Set("session_id", sessionID)
+	}
+
+	hostPort := daemonEncodeHostPort(options.ListenAddress)
+	return (&neturl.URL{
+		Scheme:   "http",
+		Host:     hostPort,
+		Path:     "/" + action,
+		RawQuery: query.Encode(),
+	}).String(), nil
+}
+
+// daemonEncodeHostPort 将监听地址归一为对外文档可点击的 neocode 域名地址。
+func daemonEncodeHostPort(listenAddress string) string {
+	normalized := strings.TrimSpace(listenAddress)
+	if normalized == "" {
+		normalized = urlscheme.DefaultHTTPDaemonListenAddress
+	}
+	if _, port, err := net.SplitHostPort(normalized); err == nil && strings.TrimSpace(port) != "" {
+		return net.JoinHostPort(urlscheme.DaemonHostsAlias, strings.TrimSpace(port))
+	}
+	if strings.IndexByte(normalized, ':') < 0 && normalized != "" {
+		return net.JoinHostPort(urlscheme.DaemonHostsAlias, normalized)
+	}
+	return net.JoinHostPort(urlscheme.DaemonHostsAlias, "18921")
 }
