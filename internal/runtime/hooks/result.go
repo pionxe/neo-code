@@ -18,6 +18,7 @@ const (
 type HookResult struct {
 	HookID     string
 	Point      HookPoint
+	Scope      HookScope
 	Status     HookResultStatus
 	Message    string
 	Error      string

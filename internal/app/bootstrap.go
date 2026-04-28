@@ -212,6 +212,9 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 			return resolution.PromptBudget, string(resolution.Source), nil
 		},
 	))
+	if err := agentruntime.ConfigureRuntimeHooks(runtimeSvc, cfg); err != nil {
+		return RuntimeBundle{}, err
+	}
 
 	// 注入记忆提取钩子：当 AutoExtract 启用且 memoSvc 可用时，ReAct 循环完成后异步提取记忆。
 	if memoSvc != nil && cfg.Memo.AutoExtract {

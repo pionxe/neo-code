@@ -103,8 +103,10 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 	if s.Scope == "" {
 		s.Scope = HookScopeInternal
 	}
-	if s.Scope != HookScopeInternal {
-		return HookSpec{}, wrapInvalidSpec("scope %q is not supported in P0", s.Scope)
+	switch s.Scope {
+	case HookScopeInternal, HookScopeUser:
+	default:
+		return HookSpec{}, wrapInvalidSpec("scope %q is not supported", s.Scope)
 	}
 	if s.Kind == "" {
 		s.Kind = HookKindFunction

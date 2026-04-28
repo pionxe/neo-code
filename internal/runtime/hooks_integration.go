@@ -60,6 +60,7 @@ func (e *hookRuntimeEventEmitter) EmitHookEvent(ctx context.Context, event runti
 			Kind:       string(event.Kind),
 			Mode:       string(event.Mode),
 			Status:     string(event.Status),
+			Message:    strings.TrimSpace(event.Message),
 			StartedAt:  event.StartedAt,
 			DurationMS: event.DurationMS,
 			Error:      event.Error,
@@ -85,7 +86,9 @@ func (s *Service) runHookPoint(
 		Turn:      hookTurnFromState(state),
 		Phase:     hookPhaseFromState(state),
 	})
-	return s.hookExecutor.Run(scopedCtx, point, input)
+	output := s.hookExecutor.Run(scopedCtx, point, input)
+	s.recordUserHookAnnotations(state, output)
+	return output
 }
 
 func withRuntimeHookEnvelope(ctx context.Context, envelope hookRuntimeEnvelope) context.Context {
@@ -167,4 +170,28 @@ func findHookBlockMessage(output runtimehooks.RunOutput) string {
 		return "hook blocked by " + blockedBy
 	}
 	return "hook blocked"
+}
+
+// recordUserHookAnnotations 将 user hook 产生的消息缓存到运行态注释缓冲区，供后续观测链路消费。
+func (s *Service) recordUserHookAnnotations(state *runState, output runtimehooks.RunOutput) {
+	if state == nil || len(output.Results) == 0 {
+		return
+	}
+	notes := make([]string, 0, len(output.Results))
+	for _, result := range output.Results {
+		if result.Scope != runtimehooks.HookScopeUser {
+			continue
+		}
+		message := strings.TrimSpace(result.Message)
+		if message == "" {
+			continue
+		}
+		notes = append(notes, message)
+	}
+	if len(notes) == 0 {
+		return
+	}
+	state.mu.Lock()
+	state.hookAnnotations = append(state.hookAnnotations, notes...)
+	state.mu.Unlock()
 }

@@ -28,6 +28,7 @@ type HookEvent struct {
 	Status     HookResultStatus
 	StartedAt  time.Time
 	DurationMS int64
+	Message    string
 	Error      string
 }
 

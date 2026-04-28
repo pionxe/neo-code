@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -59,7 +60,11 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 		Results: make([]HookResult, 0, len(specs)),
 	}
 	for _, spec := range specs {
-		result := e.runOne(ctx, spec, input.Clone())
+		hookInput := input.Clone()
+		if spec.Scope == HookScopeUser {
+			hookInput = sanitizeUserHookContext(hookInput)
+		}
+		result := e.runOne(ctx, spec, hookInput)
 		output.Results = append(output.Results, result)
 
 		if result.Status == HookResultBlock {
@@ -99,6 +104,9 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 	if result.StartedAt.IsZero() {
 		result.StartedAt = startedAt
 	}
+	if result.Scope == "" {
+		result.Scope = spec.Scope
+	}
 	if result.DurationMS <= 0 {
 		result.DurationMS = durationMS
 	}
@@ -115,6 +123,7 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 			Status:     result.Status,
 			StartedAt:  result.StartedAt,
 			DurationMS: result.DurationMS,
+			Message:    strings.TrimSpace(result.Message),
 		})
 	case HookResultFailed:
 		e.emitBestEffort(ctx, HookEvent{
@@ -127,6 +136,7 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 			Status:     result.Status,
 			StartedAt:  result.StartedAt,
 			DurationMS: result.DurationMS,
+			Message:    strings.TrimSpace(result.Message),
 			Error:      result.Error,
 		})
 	}
@@ -155,6 +165,7 @@ func (e *Executor) callHandler(
 		return HookResult{
 			HookID:    spec.ID,
 			Point:     spec.Point,
+			Scope:     spec.Scope,
 			Status:    HookResultFailed,
 			Message:   err,
 			Error:     err,
@@ -189,6 +200,7 @@ func (e *Executor) callHandler(
 		return HookResult{
 			HookID:    spec.ID,
 			Point:     spec.Point,
+			Scope:     spec.Scope,
 			Status:    HookResultFailed,
 			Message:   err,
 			Error:     err,
@@ -200,6 +212,7 @@ func (e *Executor) callHandler(
 			return HookResult{
 				HookID:    spec.ID,
 				Point:     spec.Point,
+				Scope:     spec.Scope,
 				Status:    HookResultFailed,
 				Message:   err,
 				Error:     err,
@@ -208,6 +221,7 @@ func (e *Executor) callHandler(
 		}
 		outcome.result.HookID = spec.ID
 		outcome.result.Point = spec.Point
+		outcome.result.Scope = spec.Scope
 		if outcome.result.Status == "" {
 			outcome.result.Status = HookResultPass
 		}
@@ -218,6 +232,7 @@ func (e *Executor) callHandler(
 			return HookResult{
 				HookID:    spec.ID,
 				Point:     spec.Point,
+				Scope:     spec.Scope,
 				Status:    HookResultFailed,
 				Message:   err,
 				Error:     err,
@@ -234,6 +249,38 @@ func (e *Executor) callHandler(
 		}
 		return outcome.result
 	}
+}
+
+func sanitizeUserHookContext(input HookContext) HookContext {
+	sanitized := HookContext{
+		RunID:     strings.TrimSpace(input.RunID),
+		SessionID: strings.TrimSpace(input.SessionID),
+	}
+	if len(input.Metadata) == 0 {
+		return sanitized
+	}
+	allowedMetadataKeys := map[string]struct{}{
+		"point":                   {},
+		"tool_call_id":            {},
+		"tool_name":               {},
+		"is_error":                {},
+		"error_class":             {},
+		"result_content_preview":  {},
+		"result_metadata_present": {},
+		"execution_error":         {},
+		"workdir":                 {},
+	}
+	for key, value := range input.Metadata {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		if _, ok := allowedMetadataKeys[normalizedKey]; !ok {
+			continue
+		}
+		if sanitized.Metadata == nil {
+			sanitized.Metadata = make(map[string]any, len(input.Metadata))
+		}
+		sanitized.Metadata[normalizedKey] = cloneMetadataValue(value)
+	}
+	return sanitized
 }
 
 func (e *Executor) tryAcquireSlot() bool {

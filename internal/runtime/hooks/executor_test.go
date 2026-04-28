@@ -661,3 +661,46 @@ func TestExecutorRunSetsFailedEventErrorOnInvalidStatus(t *testing.T) {
 		t.Fatalf("events[1].Error is empty")
 	}
 }
+
+func TestExecutorSanitizeUserHookContext(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 100*time.Millisecond)
+	var captured HookContext
+	if err := registry.Register(HookSpec{
+		ID:    "user-hook",
+		Point: HookPointBeforeToolCall,
+		Scope: HookScopeUser,
+		Handler: func(_ context.Context, input HookContext) HookResult {
+			captured = input
+			return HookResult{Status: HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	_ = executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{
+		RunID:     "run-1",
+		SessionID: "session-1",
+		Metadata: map[string]any{
+			"tool_name":        "bash",
+			"tool_arguments":   "--secret-token=abc",
+			"capability_token": "should-not-leak",
+			"workdir":          "/tmp/work",
+		},
+	})
+
+	if strings.TrimSpace(captured.RunID) != "run-1" || strings.TrimSpace(captured.SessionID) != "session-1" {
+		t.Fatalf("unexpected run/session: %+v", captured)
+	}
+	if got := captured.Metadata["tool_name"]; got != "bash" {
+		t.Fatalf("tool_name = %v, want bash", got)
+	}
+	if _, exists := captured.Metadata["tool_arguments"]; exists {
+		t.Fatal("tool_arguments should be stripped for user hook context")
+	}
+	if _, exists := captured.Metadata["capability_token"]; exists {
+		t.Fatal("capability_token should be stripped for user hook context")
+	}
+}

@@ -267,3 +267,69 @@ func TestRunBeforeCompletionDecisionHookBlockIsObservedOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestUserHookEventCarriesScopeAndMessage(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-user-hook-message")
+	store.sessions[session.ID] = cloneSession(session)
+
+	toolManager := &stubToolManager{
+		result: tools.ToolResult{Name: "bash", Content: "ok"},
+	}
+	service := &Service{
+		sessionStore:   store,
+		toolManager:    toolManager,
+		approvalBroker: approvalflow.NewBroker(),
+		events:         make(chan RuntimeEvent, 32),
+	}
+	state := newRunState("run-user-hook-message", session)
+
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "user-note-hook",
+		Point: runtimehooks.HookPointBeforeToolCall,
+		Scope: runtimehooks.HookScopeUser,
+		Handler: func(_ context.Context, _ runtimehooks.HookContext) runtimehooks.HookResult {
+			return runtimehooks.HookResult{
+				Status:  runtimehooks.HookResultPass,
+				Message: "user warning note",
+			}
+		},
+	}); err != nil {
+		t.Fatalf("register hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	_, _, err := service.executeOneToolCall(
+		context.Background(),
+		&state,
+		TurnBudgetSnapshot{Workdir: t.TempDir(), ToolTimeout: time.Second},
+		providertypes.ToolCall{ID: "call-user-hook", Name: "bash", Arguments: `{"command":"echo hi"}`},
+		&sync.Mutex{},
+		func() bool { return false },
+	)
+	if err != nil {
+		t.Fatalf("executeOneToolCall() error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	finishedIndex := eventIndex(events, EventHookFinished)
+	if finishedIndex < 0 {
+		t.Fatalf("expected hook_finished event")
+	}
+	payload, ok := events[finishedIndex].Payload.(HookEventPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want HookEventPayload", events[finishedIndex].Payload)
+	}
+	if payload.Scope != string(runtimehooks.HookScopeUser) {
+		t.Fatalf("payload.Scope = %q, want %q", payload.Scope, runtimehooks.HookScopeUser)
+	}
+	if payload.Message != "user warning note" {
+		t.Fatalf("payload.Message = %q, want %q", payload.Message, "user warning note")
+	}
+	if len(state.hookAnnotations) == 0 || state.hookAnnotations[0] != "user warning note" {
+		t.Fatalf("hook annotations = %v, want contains user warning note", state.hookAnnotations)
+	}
+}
