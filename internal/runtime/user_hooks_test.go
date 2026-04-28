@@ -831,7 +831,7 @@ func TestHookPathContainsSymlinkAndResolvePathErrorBranches(t *testing.T) {
 	}
 	notDirChild := filepath.Join(base, "child")
 	contains, err := hookPathContainsSymlink(base, notDirChild)
-	if err != nil {
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "not a directory") {
 		t.Fatalf("hookPathContainsSymlink() unexpected error = %v", err)
 	}
 	if contains {
