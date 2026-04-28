@@ -189,10 +189,14 @@ func (d *Dispatcher) DispatchWakeIntent(ctx context.Context, request WakeDispatc
 	switch responseFrame.Type {
 	case gateway.FrameTypeAck:
 		terminalLaunched := false
-		if strings.EqualFold(strings.TrimSpace(intent.Action), protocol.WakeActionRun) {
+		normalizedWakeAction := strings.ToLower(strings.TrimSpace(intent.Action))
+		if normalizedWakeAction == protocol.WakeActionRun || normalizedWakeAction == protocol.WakeActionReview {
 			sessionID := strings.TrimSpace(responseFrame.SessionID)
 			if sessionID == "" {
-				return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, "wake.run response missing session_id")
+				return DispatchResult{}, newDispatchError(
+					ErrorCodeUnexpectedResponse,
+					fmt.Sprintf("wake.%s response missing session_id", normalizedWakeAction),
+				)
 			}
 			if d.launchTerminalFn == nil {
 				return DispatchResult{}, newDispatchError(ErrorCodeInternal, "terminal launcher is unavailable")
