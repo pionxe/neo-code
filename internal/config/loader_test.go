@@ -101,6 +101,80 @@ func TestLoaderLoadMalformedYAML(t *testing.T) {
 	}
 }
 
+func TestLoaderLoadRuntimeHooksConfig(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+runtime:
+  hooks:
+    enabled: true
+    user_hooks_enabled: true
+    default_timeout_sec: 3
+    default_failure_policy: warn_only
+    items:
+      - id: warn-bash
+        enabled: true
+        point: before_tool_call
+        scope: user
+        kind: builtin
+        mode: sync
+        handler: warn_on_tool_call
+        priority: 100
+        timeout_sec: 2
+        failure_policy: warn_only
+        params:
+          tool_name: bash
+          message: "bash is called"
+`
+	writeLoaderConfig(t, loader, raw)
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("cfg is nil")
+	}
+	if !cfg.Runtime.Hooks.IsEnabled() || !cfg.Runtime.Hooks.IsUserHooksEnabled() {
+		t.Fatalf("unexpected hook switches: %+v", cfg.Runtime.Hooks)
+	}
+	if len(cfg.Runtime.Hooks.Items) != 1 {
+		t.Fatalf("len(items)=%d, want 1", len(cfg.Runtime.Hooks.Items))
+	}
+	item := cfg.Runtime.Hooks.Items[0]
+	if item.Handler != "warn_on_tool_call" {
+		t.Fatalf("handler=%q, want warn_on_tool_call", item.Handler)
+	}
+}
+
+func TestLoaderRejectsUnsupportedRuntimeHookHandler(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+runtime:
+  hooks:
+    items:
+      - id: invalid-handler
+        point: before_tool_call
+        scope: user
+        kind: builtin
+        mode: sync
+        handler: shell_exec
+`
+	writeLoaderConfig(t, loader, raw)
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "runtime.hooks.items[0]") {
+		t.Fatalf("expected runtime hooks validation error, got %v", err)
+	}
+}
+
 func TestLoaderRejectsLegacyWorkdirKey(t *testing.T) {
 	t.Parallel()
 
