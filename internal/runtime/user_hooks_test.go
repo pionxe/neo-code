@@ -2,8 +2,11 @@ package runtime
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	gruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -282,4 +285,273 @@ func (e *countingHookExecutor) Run(
 
 func runtimeBoolPtr(value bool) *bool {
 	return &value
+}
+
+func TestConfigureRuntimeHooksAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	if err := ConfigureRuntimeHooks(nil, *config.StaticDefaults()); err != nil {
+		t.Fatalf("ConfigureRuntimeHooks(nil) error = %v", err)
+	}
+
+	service := &Service{events: make(chan RuntimeEvent, 1)}
+	cfg := *config.StaticDefaults()
+	cfg.Runtime.Hooks.Items = []config.RuntimeHookItemConfig{
+		{
+			ID:      "disabled-item",
+			Enabled: runtimeBoolPtr(false),
+			Point:   "before_tool_call",
+			Scope:   "user",
+			Kind:    "builtin",
+			Mode:    "sync",
+			Handler: "warn_on_tool_call",
+			Params:  map[string]any{"tool_name": "bash"},
+		},
+	}
+	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
+		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
+	}
+	if service.hookExecutor != nil {
+		t.Fatalf("expected no executor when no enabled items")
+	}
+
+	cfg.Runtime.Hooks.Items[0].Enabled = runtimeBoolPtr(true)
+	cfg.Runtime.Hooks.Items[0].Handler = "unsupported"
+	if err := configureRuntimeHooksFromConfig(service, cfg); err == nil {
+		t.Fatal("expected invalid handler error")
+	}
+
+	if got := mapRuntimeHookFailurePolicy("fail_closed"); got != runtimehooks.FailurePolicyFailClosed {
+		t.Fatalf("unexpected failure policy: %q", got)
+	}
+	if got := mapRuntimeHookFailurePolicy("warn_only"); got != runtimehooks.FailurePolicyFailOpen {
+		t.Fatalf("unexpected warn_only mapping: %q", got)
+	}
+	if got := mapRuntimeHookFailurePolicy("unknown"); got != runtimehooks.FailurePolicyFailOpen {
+		t.Fatalf("unexpected default mapping: %q", got)
+	}
+
+	if unwrapBaseHookExecutor(nil) != nil {
+		t.Fatal("expected nil unwrap")
+	}
+	base := &countingHookExecutor{}
+	composed := &userComposedHookExecutor{base: base}
+	if unwrapBaseHookExecutor(composed) != base {
+		t.Fatal("expected unwrap composed base executor")
+	}
+}
+
+func TestUserComposedHookExecutorBranches(t *testing.T) {
+	t.Parallel()
+
+	baseBlocked := &countingHookExecutor{output: runtimehooks.RunOutput{Blocked: true, BlockedBy: "base"}}
+	userCalled := &countingHookExecutor{output: runtimehooks.RunOutput{Results: []runtimehooks.HookResult{{HookID: "user"}}}}
+	exec := &userComposedHookExecutor{base: baseBlocked, user: userCalled}
+	out := exec.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if !out.Blocked || out.BlockedBy != "base" {
+		t.Fatalf("expected base block to short-circuit, got %+v", out)
+	}
+	if userCalled.calls.Load() != 0 {
+		t.Fatalf("expected user executor not called when base blocked")
+	}
+
+	exec = &userComposedHookExecutor{
+		base: &countingHookExecutor{output: runtimehooks.RunOutput{}},
+		user: &countingHookExecutor{output: runtimehooks.RunOutput{Results: []runtimehooks.HookResult{{HookID: "u1"}}}},
+	}
+	out = exec.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if len(out.Results) != 1 || out.Results[0].HookID != "u1" {
+		t.Fatalf("expected user-only result, got %+v", out.Results)
+	}
+
+	exec = &userComposedHookExecutor{
+		base: &countingHookExecutor{output: runtimehooks.RunOutput{Results: []runtimehooks.HookResult{{HookID: "b1"}}}},
+		user: &countingHookExecutor{output: runtimehooks.RunOutput{}},
+	}
+	out = exec.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if len(out.Results) != 1 || out.Results[0].HookID != "b1" {
+		t.Fatalf("expected base-only result, got %+v", out.Results)
+	}
+
+	exec = &userComposedHookExecutor{
+		base: &countingHookExecutor{output: runtimehooks.RunOutput{Results: []runtimehooks.HookResult{{HookID: "b1"}}}},
+		user: &countingHookExecutor{output: runtimehooks.RunOutput{
+			Results:   []runtimehooks.HookResult{{HookID: "u1"}},
+			Blocked:   true,
+			BlockedBy: "u1",
+		}},
+	}
+	out = exec.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if !out.Blocked || out.BlockedBy != "u1" || len(out.Results) != 2 {
+		t.Fatalf("expected merged blocked output, got %+v", out)
+	}
+}
+
+func TestUserHookHelperBranches(t *testing.T) {
+	t.Parallel()
+
+	if got := readHookParamString(nil, "k"); got != "" {
+		t.Fatalf("expected empty from nil map, got %q", got)
+	}
+	if got := readHookParamString(map[string]any{"k": 12}, "k"); got != "12" {
+		t.Fatalf("expected fmt string, got %q", got)
+	}
+	if got := readHookParamStringSlice(nil, "k"); got != nil {
+		t.Fatalf("expected nil slice, got %+v", got)
+	}
+	if got := readHookParamStringSlice(map[string]any{"k": []string{"a"}}, "k"); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("unexpected []string conversion: %+v", got)
+	}
+	gotAny := readHookParamStringSlice(map[string]any{"k": []any{" a ", nil, 3}}, "k")
+	if len(gotAny) != 2 || gotAny[0] != "a" || gotAny[1] != "3" {
+		t.Fatalf("unexpected []any conversion: %+v", gotAny)
+	}
+	if got := readHookParamStringSlice(map[string]any{"k": "bad"}, "k"); got != nil {
+		t.Fatalf("expected unsupported type -> nil, got %+v", got)
+	}
+
+	normalized := normalizeHookParamStringSlice([]string{" BASH ", "", " Filesystem "})
+	if len(normalized) != 2 || normalized[0] != "bash" || normalized[1] != "filesystem" {
+		t.Fatalf("unexpected normalized values: %+v", normalized)
+	}
+
+	meta := runtimehooks.HookContext{Metadata: map[string]any{"tool_name": 123, "workdir": " /tmp/x "}}
+	if got := readHookContextMetadataString(meta, " TOOL_NAME "); got != "123" {
+		t.Fatalf("unexpected metadata conversion: %q", got)
+	}
+	if got := readHookContextMetadataString(runtimehooks.HookContext{}, "k"); got != "" {
+		t.Fatalf("expected empty metadata read, got %q", got)
+	}
+	if got := resolveHookWorkdir(meta, "fallback"); strings.TrimSpace(got) != "/tmp/x" {
+		t.Fatalf("expected metadata workdir, got %q", got)
+	}
+	if got := resolveHookWorkdir(runtimehooks.HookContext{}, "  fallback "); got != "fallback" {
+		t.Fatalf("expected fallback workdir, got %q", got)
+	}
+}
+
+func TestUserHookHandlersAndPathChecks(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+
+	if _, err := buildUserBuiltinHookHandler("require_file_exists", map[string]any{}, workdir); err == nil {
+		t.Fatal("expected missing path error")
+	}
+	if _, err := buildUserBuiltinHookHandler("warn_on_tool_call", map[string]any{}, workdir); err == nil {
+		t.Fatal("expected missing tool target error")
+	}
+	if _, err := buildUserBuiltinHookHandler("add_context_note", map[string]any{}, workdir); err == nil {
+		t.Fatal("expected missing note/message error")
+	}
+	if _, err := buildUserBuiltinHookHandler("unknown", map[string]any{}, workdir); err == nil {
+		t.Fatal("expected unsupported handler error")
+	}
+
+	warnHandler, err := buildUserBuiltinHookHandler("warn_on_tool_call", map[string]any{
+		"tool_names": []any{"Bash", "filesystem"},
+	}, workdir)
+	if err != nil {
+		t.Fatalf("build warn handler: %v", err)
+	}
+	result := warnHandler(context.Background(), runtimehooks.HookContext{Metadata: map[string]any{"tool_name": "bash"}})
+	if result.Message == "" {
+		t.Fatalf("expected default warn message for matched tool")
+	}
+	result = warnHandler(context.Background(), runtimehooks.HookContext{})
+	if result.Message != "" {
+		t.Fatalf("expected empty message when no tool_name metadata, got %q", result.Message)
+	}
+
+	noteHandler, err := buildUserBuiltinHookHandler("add_context_note", map[string]any{"message": "note-via-message"}, workdir)
+	if err != nil {
+		t.Fatalf("build note handler: %v", err)
+	}
+	if result := noteHandler(context.Background(), runtimehooks.HookContext{}); result.Message != "note-via-message" {
+		t.Fatalf("unexpected note message: %+v", result)
+	}
+
+	sub := filepath.Join(workdir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	dirPath := filepath.Join(workdir, "dir-only")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("mkdir dir-only: %v", err)
+	}
+	handler, err := buildUserBuiltinHookHandler("require_file_exists", map[string]any{"path": "dir-only"}, workdir)
+	if err != nil {
+		t.Fatalf("build require_file_exists dir handler: %v", err)
+	}
+	dirResult := handler(context.Background(), runtimehooks.HookContext{Metadata: map[string]any{"workdir": workdir}})
+	if dirResult.Status != runtimehooks.HookResultFailed || !strings.Contains(dirResult.Message, "directory") {
+		t.Fatalf("expected directory failure, got %+v", dirResult)
+	}
+
+	if _, err := resolveHookPathWithinWorkdir("", "a.txt"); err == nil {
+		t.Fatal("expected empty workdir error")
+	}
+	if _, err := resolveHookPathWithinWorkdir(workdir, " "); err == nil {
+		t.Fatal("expected empty path error")
+	}
+	if err := ensureHookPathWithinBase(workdir, filepath.Join(workdir, "sub", "f.txt")); err != nil {
+		t.Fatalf("expected in-base path allowed: %v", err)
+	}
+	if err := ensureHookPathWithinBase(workdir, filepath.Clean(filepath.Join(workdir, ".."))); err == nil {
+		t.Fatal("expected outside base path rejection")
+	}
+	if err := ensureHookPathWithinBase("", "x"); err == nil {
+		t.Fatal("expected empty comparable path rejection")
+	}
+	if changed := normalizeHookComparablePath(`\\?\C:\Temp\Demo`); gruntime.GOOS == "windows" && strings.HasPrefix(changed, `\\?\`) {
+		t.Fatalf("expected windows prefix normalized, got %q", changed)
+	}
+
+	symlinkPath := filepath.Join(workdir, "link-to-sub")
+	if err := os.Symlink(sub, symlinkPath); err == nil {
+		contains, checkErr := hookPathContainsSymlink(workdir, filepath.Join(symlinkPath, "f.txt"))
+		if checkErr != nil {
+			t.Fatalf("hookPathContainsSymlink() error = %v", checkErr)
+		}
+		if !contains {
+			t.Fatalf("expected symlink path detection to be true")
+		}
+	} else if !errors.Is(err, os.ErrPermission) && !strings.Contains(strings.ToLower(err.Error()), "operation not permitted") {
+		t.Fatalf("symlink creation error: %v", err)
+	}
+
+	contains, err := hookPathContainsSymlink(workdir, filepath.Join(workdir, "missing", "file.txt"))
+	if err != nil {
+		t.Fatalf("hookPathContainsSymlink missing path error = %v", err)
+	}
+	if contains {
+		t.Fatal("expected missing path to report no symlink")
+	}
+
+	if _, err := resolveHookPathWithinWorkdir(workdir, "../x"); err == nil {
+		t.Fatal("expected path traversal rejection")
+	}
+}
+
+func TestHookPathContainsSymlinkAndResolvePathErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	file := filepath.Join(workdir, "file.txt")
+	if err := os.WriteFile(file, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if _, err := resolveHookPathWithinWorkdir(workdir, file); err != nil {
+		t.Fatalf("resolveHookPathWithinWorkdir(abs) error = %v", err)
+	}
+
+	base := filepath.Join(workdir, "base-file")
+	if err := os.WriteFile(base, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write base file: %v", err)
+	}
+	notDirChild := filepath.Join(base, "child")
+	_, err := hookPathContainsSymlink(base, notDirChild)
+	if err == nil || !strings.Contains(fmt.Sprintf("%v", err), "not a directory") {
+		t.Fatalf("expected lstat not-directory error, got %v", err)
+	}
 }

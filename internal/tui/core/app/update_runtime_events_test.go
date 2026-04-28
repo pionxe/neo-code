@@ -189,6 +189,94 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventAcceptanceDecided]; !ok {
 		t.Fatalf("expected acceptance_decided handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventHookStarted]; !ok {
+		t.Fatalf("expected hook_started handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventHookFinished]; !ok {
+		t.Fatalf("expected hook_finished handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventHookFailed]; !ok {
+		t.Fatalf("expected hook_failed handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventHookBlocked]; !ok {
+		t.Fatalf("expected hook_blocked handler to be registered")
+	}
+}
+
+func TestRuntimeEventHookHandlers(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	if runtimeEventHookStartedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}) {
+		t.Fatalf("expected invalid hook_started payload to return false")
+	}
+	if runtimeEventHookFinishedHandler(&app, agentruntime.RuntimeEvent{Payload: 123}) {
+		t.Fatalf("expected invalid hook_finished payload to return false")
+	}
+	if runtimeEventHookFailedHandler(&app, agentruntime.RuntimeEvent{Payload: true}) {
+		t.Fatalf("expected invalid hook_failed payload to return false")
+	}
+	if runtimeEventHookBlockedHandler(&app, agentruntime.RuntimeEvent{Payload: 1.23}) {
+		t.Fatalf("expected invalid hook_blocked payload to return false")
+	}
+
+	runtimeEventHookStartedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.HookEventPayload{HookID: "  ", Point: " "},
+	})
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Hook started" || !strings.Contains(last.Detail, "unknown_hook @ unknown_point") {
+		t.Fatalf("unexpected hook started activity: %+v", last)
+	}
+
+	runtimeEventHookFinishedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.HookEventPayload{
+			HookID:     "h1",
+			Status:     "pass",
+			DurationMS: 12,
+			Message:    "note",
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Hook finished: h1" || !strings.Contains(last.Detail, "pass (12ms) · note") {
+		t.Fatalf("unexpected hook finished activity: %+v", last)
+	}
+	runtimeEventHookFinishedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.HookEventPayload{HookID: " ", Status: " ", DurationMS: 0},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Hook finished: unknown_hook" || !strings.Contains(last.Detail, "pass (0ms)") {
+		t.Fatalf("unexpected hook finished default activity: %+v", last)
+	}
+
+	runtimeEventHookFailedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.HookEventPayload{HookID: "hook-1", Error: "boom", Message: "warn"},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Hook failed: hook-1" || !strings.Contains(last.Detail, "warn · boom") || !last.IsError {
+		t.Fatalf("unexpected hook failed activity: %+v", last)
+	}
+	runtimeEventHookFailedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.HookEventPayload{HookID: " ", Error: " ", Message: " "},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Hook failed: unknown_hook" || !strings.Contains(last.Detail, "hook execution failed") || !last.IsError {
+		t.Fatalf("unexpected hook failed default activity: %+v", last)
+	}
+
+	runtimeEventHookBlockedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.HookBlockedPayload{HookID: "h2", Point: "before_tool_call", Reason: "blocked", Enforced: true},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Hook blocked: h2 @ before_tool_call" || last.Detail != "blocked" || !last.IsError {
+		t.Fatalf("unexpected hook blocked activity: %+v", last)
+	}
+	runtimeEventHookBlockedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.HookBlockedPayload{HookID: " ", Point: " ", Reason: " ", Enforced: false},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Hook block observed: unknown_hook @ unknown_point" || last.Detail != "hook returned block" || last.IsError {
+		t.Fatalf("unexpected hook blocked default activity: %+v", last)
+	}
 }
 
 func TestShouldHandleRuntimeEventFiltersBySessionAndRun(t *testing.T) {
