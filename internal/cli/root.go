@@ -91,6 +91,7 @@ func NewRootCommand() *cobra.Command {
 	_ = settings.BindPFlag("session", cmd.PersistentFlags().Lookup("session"))
 	cmd.AddCommand(
 		newGatewayCommand(),
+		newDaemonCommand(),
 		newMigrateCommand(),
 		newURLRegisterCommand(),
 		newURLDispatchCommand(),

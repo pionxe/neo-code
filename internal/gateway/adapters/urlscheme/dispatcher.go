@@ -20,32 +20,40 @@ import (
 )
 
 const (
-	// ErrorCodeGatewayUnavailable 表示无法连接本地网关进程。
+	// ErrorCodeGatewayUnavailable 表示网关不可达。
 	ErrorCodeGatewayUnavailable = "gateway_unreachable"
-	// ErrorCodeUnexpectedResponse 表示网关返回了不符合预期的帧结构。
+	// ErrorCodeUnexpectedResponse 表示网关响应结构不符合预期。
 	ErrorCodeUnexpectedResponse = "unexpected_response"
-	// ErrorCodeNotSupported 表示当前平台暂未实现目标能力。
+	// ErrorCodeNotSupported 表示当前平台或能力不支持。
 	ErrorCodeNotSupported = "not_supported"
-	// ErrorCodeInternal 表示调度器内部错误。
+	// ErrorCodeInternal 表示内部错误。
 	ErrorCodeInternal = "internal_error"
-	// defaultDispatchIOTimeout 表示单次调度读写超时时间。
+
+	// defaultDispatchIOTimeout 是 URL 派发读写超时时间。
 	defaultDispatchIOTimeout = 10 * time.Second
-	// defaultGatewayLaunchTimeout 表示自动拉起网关后等待可连通的最长时间。
+	// defaultGatewayLaunchTimeout 是自动拉起网关后的就绪等待时间。
 	defaultGatewayLaunchTimeout = 3 * time.Second
-	// defaultGatewayLaunchRetryInterval 表示等待网关可连通时的轮询间隔。
+	// defaultGatewayLaunchRetryInterval 是拉起后拨号重试间隔。
 	defaultGatewayLaunchRetryInterval = 100 * time.Millisecond
 )
 
 var dispatchRequestCounter uint64
 
-// DispatchRequest 表示 URL Scheme 调度输入参数。
+// DispatchRequest 表示基于原始 URL 的派发请求。
 type DispatchRequest struct {
 	RawURL        string
 	ListenAddress string
 	AuthToken     string
 }
 
-// DispatchResult 表示 URL Scheme 调度输出。
+// WakeDispatchRequest 表示基于已标准化 WakeIntent 的派发请求。
+type WakeDispatchRequest struct {
+	Intent        protocol.WakeIntent
+	ListenAddress string
+	AuthToken     string
+}
+
+// DispatchResult 表示 URL Scheme 派发结果。
 type DispatchResult struct {
 	ListenAddress    string               `json:"listen_address"`
 	Request          gateway.MessageFrame `json:"request"`
@@ -53,13 +61,13 @@ type DispatchResult struct {
 	TerminalLaunched bool                 `json:"terminal_launched,omitempty"`
 }
 
-// DispatchError 表示调度过程中的结构化错误。
+// DispatchError 表示 URL 派发错误。
 type DispatchError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// Error 返回调度错误文本。
+// Error 将 DispatchError 转成 error 字符串。
 func (e *DispatchError) Error() string {
 	if e == nil {
 		return ""
@@ -67,7 +75,7 @@ func (e *DispatchError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
-// Dispatcher 负责将 neocode:// URL 转发到网关本地控制面。
+// Dispatcher 负责将 Wake 请求通过 IPC 转发到网关。
 type Dispatcher struct {
 	resolveListenAddressFn func(string) (string, error)
 	dialFn                 func(address string) (net.Conn, error)
@@ -81,7 +89,7 @@ type Dispatcher struct {
 	logger                 *log.Logger
 }
 
-// NewDispatcher 创建默认 URL Scheme 调度器。
+// NewDispatcher 构建默认的 URL 派发器。
 func NewDispatcher() *Dispatcher {
 	return &Dispatcher{
 		resolveListenAddressFn: transport.ResolveListenAddress,
@@ -101,19 +109,40 @@ func NewDispatcher() *Dispatcher {
 	}
 }
 
-// Dispatch 将 URL 映射为 wake.openUrl 请求，并通过 IPC 转发到网关。
+// Dispatch 解析 neocode:// URL 后派发 wake.openUrl 请求。
 func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (DispatchResult, error) {
 	intent, err := protocol.ParseNeoCodeURL(request.RawURL)
 	if err != nil {
 		return DispatchResult{}, toDispatchError(err)
 	}
+	return d.DispatchWakeIntent(ctx, WakeDispatchRequest{
+		Intent:        intent,
+		ListenAddress: request.ListenAddress,
+		AuthToken:     request.AuthToken,
+	})
+}
 
-	listenAddress, err := d.resolveListenAddressFn(request.ListenAddress)
+// DispatchWakeIntent 直接派发 WakeIntent，避免 URL 二次编解码。
+func (d *Dispatcher) DispatchWakeIntent(ctx context.Context, request WakeDispatchRequest) (DispatchResult, error) {
+	intent, err := normalizeWakeDispatchIntent(request.Intent)
+	if err != nil {
+		return DispatchResult{}, err
+	}
+
+	resolveListenAddressFn := d.resolveListenAddressFn
+	if resolveListenAddressFn == nil {
+		resolveListenAddressFn = transport.ResolveListenAddress
+	}
+	listenAddress, err := resolveListenAddressFn(request.ListenAddress)
 	if err != nil {
 		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("resolve listen address: %v", err))
 	}
 
-	requestID := d.requestIDFn()
+	requestIDFn := d.requestIDFn
+	if requestIDFn == nil {
+		requestIDFn = nextDispatchRequestID
+	}
+	requestID := requestIDFn()
 	conn, err := d.dialGatewayWithFallback(ctx, listenAddress, requestID, request.AuthToken)
 	if err != nil {
 		return DispatchResult{}, err
@@ -146,20 +175,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		Workdir:   intent.Workdir,
 		Payload:   intent,
 	}
-
-	requestIDRaw, err := marshalJSONRawMessage(requestFrame.RequestID)
+	rpcRequest, err := buildWakeOpenURLRPCRequest(requestFrame.RequestID, intent)
 	if err != nil {
-		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode request id: %v", err))
-	}
-	requestParamsRaw, err := marshalJSONRawMessage(intent)
-	if err != nil {
-		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode request params: %v", err))
-	}
-	rpcRequest := protocol.JSONRPCRequest{
-		JSONRPC: protocol.JSONRPCVersion,
-		ID:      requestIDRaw,
-		Method:  protocol.MethodWakeOpenURL,
-		Params:  requestParamsRaw,
+		return DispatchResult{}, err
 	}
 
 	if err := ensureDispatchContextActive(ctx); err != nil {
@@ -194,10 +212,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		if strings.EqualFold(strings.TrimSpace(intent.Action), protocol.WakeActionRun) {
 			sessionID := strings.TrimSpace(responseFrame.SessionID)
 			if sessionID == "" {
-				return DispatchResult{}, newDispatchError(
-					ErrorCodeUnexpectedResponse,
-					"wake.run response missing session_id",
-				)
+				return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, "wake.run response missing session_id")
 			}
 			if d.launchTerminalFn == nil {
 				return DispatchResult{}, newDispatchError(ErrorCodeInternal, "terminal launcher is unavailable")
@@ -226,13 +241,56 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		}
 		return DispatchResult{}, newDispatchError(responseFrame.Error.Code, responseFrame.Error.Message)
 	default:
-		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("unsupported response frame type: %s", responseFrame.Type))
+		return DispatchResult{}, newDispatchError(
+			ErrorCodeUnexpectedResponse,
+			fmt.Sprintf("unsupported response frame type: %s", responseFrame.Type),
+		)
 	}
 }
 
-// authenticate 在同一连接上发送 gateway.authenticate，建立连接级认证态。
+// normalizeWakeDispatchIntent 统一整理并校验 daemon/url-dispatch 共用的意图数据。
+func normalizeWakeDispatchIntent(intent protocol.WakeIntent) (protocol.WakeIntent, error) {
+	normalizedAction := strings.ToLower(strings.TrimSpace(intent.Action))
+	if !protocol.IsSupportedWakeAction(normalizedAction) {
+		return protocol.WakeIntent{}, newDispatchError(
+			gateway.ErrorCodeInvalidAction.String(),
+			fmt.Sprintf("invalid wake action: %s", strings.TrimSpace(intent.Action)),
+		)
+	}
+	intent.Action = normalizedAction
+	intent.SessionID = strings.TrimSpace(intent.SessionID)
+	intent.Workdir = strings.TrimSpace(intent.Workdir)
+	if len(intent.Params) == 0 {
+		intent.Params = nil
+	}
+	return intent, nil
+}
+
+// buildWakeOpenURLRPCRequest 将 WakeIntent 编码为 JSON-RPC 请求。
+func buildWakeOpenURLRPCRequest(requestID string, intent protocol.WakeIntent) (protocol.JSONRPCRequest, error) {
+	requestIDRaw, err := marshalJSONRawMessage(requestID)
+	if err != nil {
+		return protocol.JSONRPCRequest{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode request id: %v", err))
+	}
+	requestParamsRaw, err := marshalJSONRawMessage(intent)
+	if err != nil {
+		return protocol.JSONRPCRequest{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode request params: %v", err))
+	}
+	return protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      requestIDRaw,
+		Method:  protocol.MethodWakeOpenURL,
+		Params:  requestParamsRaw,
+	}, nil
+}
+
+// authenticate 在连接上执行 gateway.authenticate 建立连接级认证态。
 func (d *Dispatcher) authenticate(ctx context.Context, conn net.Conn, token string) error {
-	authRequestID := d.requestIDFn() + "-auth"
+	requestIDFn := d.requestIDFn
+	if requestIDFn == nil {
+		requestIDFn = nextDispatchRequestID
+	}
+	authRequestID := requestIDFn() + "-auth"
 	authRequestIDRaw, err := marshalJSONRawMessage(authRequestID)
 	if err != nil {
 		return newDispatchError(ErrorCodeInternal, fmt.Sprintf("encode authenticate id: %v", err))
@@ -270,7 +328,7 @@ func (d *Dispatcher) authenticate(ctx context.Context, conn net.Conn, token stri
 	return nil
 }
 
-// callRPC 在已建立连接上执行一次 JSON-RPC 调用，统一处理上下文取消与编解码错误映射。
+// callRPC 在已建立连接上发送并接收单次 JSON-RPC 请求。
 func (d *Dispatcher) callRPC(ctx context.Context, conn net.Conn, request protocol.JSONRPCRequest) (protocol.JSONRPCResponse, error) {
 	if err := ensureDispatchContextActive(ctx); err != nil {
 		return protocol.JSONRPCResponse{}, toDispatchError(err)
@@ -310,14 +368,18 @@ type launchDecisionLogEntry struct {
 	Message       string `json:"message,omitempty"`
 }
 
-// dialGatewayWithFallback 先尝试直连网关，若失败且启用了自动拉起则按约定发现顺序拉起后重拨一次。
+// dialGatewayWithFallback 首拨失败时仅执行一次拉起回退并重拨。
 func (d *Dispatcher) dialGatewayWithFallback(
 	ctx context.Context,
 	listenAddress string,
 	requestID string,
 	authToken string,
 ) (net.Conn, error) {
-	connection, err := d.dialFn(listenAddress)
+	dialFn := d.dialFn
+	if dialFn == nil {
+		dialFn = transport.Dial
+	}
+	connection, err := dialFn(listenAddress)
 	if err == nil {
 		return connection, nil
 	}
@@ -330,7 +392,7 @@ func (d *Dispatcher) dialGatewayWithFallback(
 			fmt.Sprintf("dial gateway failed: %v; launch gateway failed: %v", err, launchErr),
 		)
 	}
-	retriedConnection, retryErr := d.dialFn(listenAddress)
+	retriedConnection, retryErr := dialFn(listenAddress)
 	if retryErr != nil {
 		return nil, newDispatchError(
 			ErrorCodeGatewayUnavailable,
@@ -340,7 +402,7 @@ func (d *Dispatcher) dialGatewayWithFallback(
 	return retriedConnection, nil
 }
 
-// launchGateway 按固定发现顺序拉起网关，并在单次回退窗口内等待网关可连通。
+// launchGateway 通过 launcher 启动网关并等待就绪。
 func (d *Dispatcher) launchGateway(ctx context.Context, listenAddress string, requestID string, authToken string) error {
 	if err := ensureDispatchContextActive(ctx); err != nil {
 		return err
@@ -394,7 +456,7 @@ func (d *Dispatcher) launchGateway(ctx context.Context, listenAddress string, re
 	return nil
 }
 
-// validateRPCFrameResponse 统一校验 JSON-RPC 基础字段并解码结果帧，保持调度与鉴权分支一致。
+// validateRPCFrameResponse 校验 RPC 响应并解析为 MessageFrame。
 func validateRPCFrameResponse(
 	response protocol.JSONRPCResponse,
 	expectedID json.RawMessage,
@@ -430,7 +492,7 @@ func validateRPCFrameResponse(
 	return frame, nil
 }
 
-// buildGatewayLaunchArgs 构造自动拉起参数，确保子进程监听地址与调度重拨地址一致。
+// buildGatewayLaunchArgs 在原有参数后补充 --listen。
 func buildGatewayLaunchArgs(baseArgs []string, listenAddress string) []string {
 	args := append([]string(nil), baseArgs...)
 	normalizedListenAddress := strings.TrimSpace(listenAddress)
@@ -440,7 +502,7 @@ func buildGatewayLaunchArgs(baseArgs []string, listenAddress string) []string {
 	return append(args, "--listen", normalizedListenAddress)
 }
 
-// waitGatewayReady 在单次回退窗口内轮询网关连通性，超时后返回确定性错误。
+// waitGatewayReady 轮询等待网关可达。
 func (d *Dispatcher) waitGatewayReady(ctx context.Context, listenAddress string) error {
 	nowFn := d.nowFn
 	if nowFn == nil {
@@ -449,6 +511,10 @@ func (d *Dispatcher) waitGatewayReady(ctx context.Context, listenAddress string)
 	sleepFn := d.sleepFn
 	if sleepFn == nil {
 		sleepFn = time.Sleep
+	}
+	dialFn := d.dialFn
+	if dialFn == nil {
+		dialFn = transport.Dial
 	}
 
 	startTime := nowFn()
@@ -467,7 +533,7 @@ func (d *Dispatcher) waitGatewayReady(ctx context.Context, listenAddress string)
 		if err := ensureDispatchContextActive(ctx); err != nil {
 			return err
 		}
-		connection, err := d.dialFn(listenAddress)
+		connection, err := dialFn(listenAddress)
 		if err == nil {
 			_ = connection.Close()
 			return nil
@@ -479,7 +545,7 @@ func (d *Dispatcher) waitGatewayReady(ctx context.Context, listenAddress string)
 	}
 }
 
-// emitLaunchDecisionLog 输出 launcher 决策日志，采用字段白名单断言友好的结构化 JSON。
+// emitLaunchDecisionLog 输出结构化 launcher 决策日志。
 func (d *Dispatcher) emitLaunchDecisionLog(entry launchDecisionLogEntry) {
 	if d == nil || d.logger == nil {
 		return
@@ -492,7 +558,7 @@ func (d *Dispatcher) emitLaunchDecisionLog(entry launchDecisionLogEntry) {
 	d.logger.Print(string(raw))
 }
 
-// newLaunchDecisionLogEntry 构造统一的网关拉起日志字段，避免各分支重复拼装。
+// newLaunchDecisionLogEntry 生成统一字段的 launcher 决策日志记录。
 func newLaunchDecisionLogEntry(
 	requestID string,
 	listenAddress string,
@@ -516,7 +582,7 @@ func newLaunchDecisionLogEntry(
 	}
 }
 
-// emitLaunchFailureLog 输出统一的启动失败日志，保持失败分支字段稳定。
+// emitLaunchFailureLog 输出 launcher 失败决策日志。
 func (d *Dispatcher) emitLaunchFailureLog(
 	requestID string,
 	listenAddress string,
@@ -535,7 +601,7 @@ func (d *Dispatcher) emitLaunchFailureLog(
 	))
 }
 
-// resolveAuthMode 归一化调度鉴权模式，便于日志与兼容性测试稳定断言。
+// resolveAuthMode 返回日志维度所需的认证模式值。
 func resolveAuthMode(authToken string) string {
 	if strings.TrimSpace(authToken) == "" {
 		return "disabled"
@@ -543,12 +609,12 @@ func resolveAuthMode(authToken string) string {
 	return "required"
 }
 
-// Dispatch 使用默认调度器执行 URL 转发。
+// Dispatch 是便捷入口，直接创建默认 Dispatcher 执行派发。
 func Dispatch(ctx context.Context, request DispatchRequest) (DispatchResult, error) {
 	return NewDispatcher().Dispatch(ctx, request)
 }
 
-// applyDispatchDeadline 为调度连接设置统一超时控制。
+// applyDispatchDeadline 为连接设置派发 IO 截止时间。
 func applyDispatchDeadline(conn net.Conn, ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -559,7 +625,7 @@ func applyDispatchDeadline(conn net.Conn, ctx context.Context) error {
 	return conn.SetDeadline(time.Now().Add(defaultDispatchIOTimeout))
 }
 
-// ensureDispatchContextActive 在网络读写前检查上下文是否已取消，避免进入无意义阻塞 I/O。
+// ensureDispatchContextActive 检查派发上下文是否已取消。
 func ensureDispatchContextActive(ctx context.Context) error {
 	if ctx == nil {
 		return nil
@@ -567,7 +633,7 @@ func ensureDispatchContextActive(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// watchDispatchCancellation 监听上下文取消信号，并通过收紧连接 deadline 立刻中断阻塞 I/O。
+// watchDispatchCancellation 在上下文取消时打断连接阻塞 IO。
 func watchDispatchCancellation(ctx context.Context, conn net.Conn) func() {
 	if ctx == nil {
 		return func() {}
@@ -586,7 +652,7 @@ func watchDispatchCancellation(ctx context.Context, conn net.Conn) func() {
 	}
 }
 
-// toDispatchErrorFromJSONRPC 将 JSON-RPC 错误对象映射为 url-dispatch 稳定错误。
+// toDispatchErrorFromJSONRPC 将 JSON-RPC 错误映射为稳定 DispatchError。
 func toDispatchErrorFromJSONRPC(rpcError *protocol.JSONRPCError) error {
 	if rpcError == nil {
 		return newDispatchError(ErrorCodeUnexpectedResponse, "gateway returned empty rpc error payload")
@@ -603,7 +669,7 @@ func toDispatchErrorFromJSONRPC(rpcError *protocol.JSONRPCError) error {
 	return newDispatchError(code, message)
 }
 
-// mapJSONRPCCodeToDispatchCode 为缺少 gateway_code 的响应提供兜底错误码映射。
+// mapJSONRPCCodeToDispatchCode 将标准 JSON-RPC code 映射为稳定派发错误码。
 func mapJSONRPCCodeToDispatchCode(code int) string {
 	switch code {
 	case protocol.JSONRPCCodeMethodNotFound:
@@ -617,7 +683,7 @@ func mapJSONRPCCodeToDispatchCode(code int) string {
 	}
 }
 
-// decodeResponseFrameResult 将 JSON-RPC result 安全解码回 MessageFrame。
+// decodeResponseFrameResult 解析 RPC result 为 MessageFrame。
 func decodeResponseFrameResult(result json.RawMessage) (gateway.MessageFrame, error) {
 	var frame gateway.MessageFrame
 	if err := json.Unmarshal(result, &frame); err != nil {
@@ -626,12 +692,12 @@ func decodeResponseFrameResult(result json.RawMessage) (gateway.MessageFrame, er
 	return frame, nil
 }
 
-// rawJSONMessageEqual 比较两段 JSON 原文在去除首尾空白后的字节是否一致。
+// rawJSONMessageEqual 在忽略两端空白后比较 JSON RawMessage。
 func rawJSONMessageEqual(left, right json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(left), bytes.TrimSpace(right))
 }
 
-// marshalJSONRawMessage 将任意对象编码为 json.RawMessage，便于构造 JSON-RPC 请求字段。
+// marshalJSONRawMessage 将任意对象编码为 json.RawMessage。
 func marshalJSONRawMessage(payload any) (json.RawMessage, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -640,7 +706,7 @@ func marshalJSONRawMessage(payload any) (json.RawMessage, error) {
 	return json.RawMessage(raw), nil
 }
 
-// toDispatchError 将不同来源错误转换为统一结构化错误。
+// toDispatchError 将任意错误转换为稳定 DispatchError。
 func toDispatchError(err error) error {
 	if err == nil {
 		return nil
@@ -659,13 +725,13 @@ func toDispatchError(err error) error {
 	return newDispatchError(ErrorCodeInternal, err.Error())
 }
 
-// nextDispatchRequestID 生成 url-dispatch 请求唯一标识。
+// nextDispatchRequestID 生成 url-dispatch 请求 ID。
 func nextDispatchRequestID() string {
 	sequence := atomic.AddUint64(&dispatchRequestCounter, 1)
 	return fmt.Sprintf("wake-%d", sequence)
 }
 
-// newDispatchError 创建结构化调度错误。
+// newDispatchError 构建稳定的 DispatchError。
 func newDispatchError(code, message string) *DispatchError {
 	return &DispatchError{
 		Code:    code,
