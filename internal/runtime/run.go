@@ -270,6 +270,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if completionHookOutput.Blocked {
 					s.emitRunScoped(ctx, EventHookBlocked, &state, HookBlockedPayload{
 						HookID:   strings.TrimSpace(completionHookOutput.BlockedBy),
+						Source:   string(findHookBlockSource(completionHookOutput)),
 						Point:    string(runtimehooks.HookPointBeforeCompletionDecision),
 						Reason:   findHookBlockMessage(completionHookOutput),
 						Enforced: false,

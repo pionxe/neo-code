@@ -76,6 +76,41 @@ func TestRegistryRegisterDuplicateID(t *testing.T) {
 	}
 }
 
+func TestRegistryRegisterAllowsCrossSourceSameID(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	handler := func(context.Context, HookContext) HookResult { return HookResult{Status: HookResultPass} }
+	if err := registry.Register(HookSpec{
+		ID:      "same-id",
+		Point:   HookPointBeforeToolCall,
+		Scope:   HookScopeUser,
+		Source:  HookSourceUser,
+		Handler: handler,
+	}); err != nil {
+		t.Fatalf("register user hook: %v", err)
+	}
+	if err := registry.Register(HookSpec{
+		ID:      "same-id",
+		Point:   HookPointBeforeToolCall,
+		Scope:   HookScopeRepo,
+		Source:  HookSourceRepo,
+		Handler: handler,
+	}); err != nil {
+		t.Fatalf("register repo hook: %v", err)
+	}
+	resolved := registry.Resolve(HookPointBeforeToolCall)
+	if len(resolved) != 2 {
+		t.Fatalf("resolved len = %d, want 2", len(resolved))
+	}
+	if err := registry.Remove("same-id"); err != nil {
+		t.Fatalf("remove by id: %v", err)
+	}
+	if got := len(registry.Resolve(HookPointBeforeToolCall)); got != 0 {
+		t.Fatalf("resolved len after remove = %d, want 0", got)
+	}
+}
+
 func TestRegistryRegisterRejectsUnsupportedPoint(t *testing.T) {
 	t.Parallel()
 

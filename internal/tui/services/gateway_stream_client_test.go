@@ -95,6 +95,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookBlockedPayload(t *
 			"payload_version":    runtimeEventPayloadVersion,
 			"payload": map[string]any{
 				"hook_id":      "block-before-tool",
+				"source":       "repo",
 				"point":        "before_tool_call",
 				"tool_call_id": "call-2",
 				"tool_name":    "bash",
@@ -115,6 +116,9 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookBlockedPayload(t *
 	if payload.HookID != "block-before-tool" || payload.Point != "before_tool_call" || payload.ToolName != "bash" || !payload.Enforced {
 		t.Fatalf("unexpected hook blocked payload: %#v", payload)
 	}
+	if payload.Source != "repo" {
+		t.Fatalf("payload.Source = %q, want repo", payload.Source)
+	}
 }
 
 func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookLifecyclePayload(t *testing.T) {
@@ -132,6 +136,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookLifecyclePayload(t
 				"status":      "pass",
 				"duration_ms": 9,
 				"scope":       "internal",
+				"source":      "internal",
 				"kind":        "function",
 				"mode":        "sync",
 				"started_at":  "2026-04-20T10:30:00Z",
@@ -151,6 +156,9 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookLifecyclePayload(t
 	if payload.HookID != "observe-after-tool" || payload.Point != "after_tool_result" || payload.Status != "pass" || payload.DurationMS != 9 {
 		t.Fatalf("unexpected hook lifecycle payload: %#v", payload)
 	}
+	if payload.Source != "internal" {
+		t.Fatalf("payload.Source = %q, want internal", payload.Source)
+	}
 }
 
 func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookEventPayloadMessage(t *testing.T) {
@@ -166,6 +174,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookEventPayloadMessag
 				"hook_id":     "warn-before-tool",
 				"point":       "before_tool_call",
 				"scope":       "user",
+				"source":      "user",
 				"kind":        "function",
 				"mode":        "sync",
 				"status":      "pass",
@@ -184,8 +193,39 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookEventPayloadMessag
 	if !ok {
 		t.Fatalf("event.Payload type = %T, want HookEventPayload", event.Payload)
 	}
-	if payload.Scope != "user" || payload.Message != "tool call warning" {
+	if payload.Scope != "user" || payload.Source != "user" || payload.Message != "tool call warning" {
 		t.Fatalf("unexpected hook event payload: %#v", payload)
+	}
+}
+
+func TestDecodeRuntimeEventFromGatewayNotificationRestoresRepoHookLifecyclePayload(t *testing.T) {
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-repo-hooks",
+		RunID:     "run-repo-hooks",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventRepoHooksLoaded),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"workspace":        "/tmp/workspace",
+				"hooks_path":       "/tmp/workspace/.neocode/hooks.yaml",
+				"trust_store_path": "/home/user/.neocode/trusted-workspaces.json",
+				"hook_count":       2,
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
+	}
+	payload, ok := event.Payload.(RepoHooksLifecyclePayload)
+	if !ok {
+		t.Fatalf("event.Payload type = %T, want RepoHooksLifecyclePayload", event.Payload)
+	}
+	if payload.Workspace != "/tmp/workspace" || payload.HookCount != 2 {
+		t.Fatalf("unexpected repo hooks lifecycle payload: %#v", payload)
 	}
 }
 

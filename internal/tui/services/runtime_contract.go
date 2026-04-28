@@ -307,6 +307,7 @@ type HookEventPayload struct {
 	HookID     string    `json:"hook_id"`
 	Point      string    `json:"point"`
 	Scope      string    `json:"scope"`
+	Source     string    `json:"source"`
 	Kind       string    `json:"kind"`
 	Mode       string    `json:"mode"`
 	Status     string    `json:"status,omitempty"`
@@ -319,6 +320,7 @@ type HookEventPayload struct {
 // HookBlockedPayload 描述 hook 阻断事件。
 type HookBlockedPayload struct {
 	HookID     string `json:"hook_id"`
+	Source     string `json:"source,omitempty"`
 	Point      string `json:"point"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	ToolName   string `json:"tool_name,omitempty"`
@@ -326,42 +328,61 @@ type HookBlockedPayload struct {
 	Enforced   bool   `json:"enforced"`
 }
 
+// RepoHooksTrustStoreInvalidPayload 描述 trust store 不可用时的降级信息。
+type RepoHooksTrustStoreInvalidPayload struct {
+	TrustStorePath string `json:"trust_store_path"`
+	Reason         string `json:"reason"`
+}
+
+// RepoHooksLifecyclePayload 描述 repo hooks 发现/加载/跳过等生命周期信息。
+type RepoHooksLifecyclePayload struct {
+	Workspace      string `json:"workspace"`
+	HooksPath      string `json:"hooks_path,omitempty"`
+	TrustStorePath string `json:"trust_store_path,omitempty"`
+	HookCount      int    `json:"hook_count,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+}
+
 const (
-	EventUserMessage               EventType = "user_message"
-	EventAgentChunk                EventType = "agent_chunk"
-	EventAgentDone                 EventType = "agent_done"
-	EventToolStart                 EventType = "tool_start"
-	EventToolResult                EventType = "tool_result"
-	EventToolChunk                 EventType = "tool_chunk"
-	EventRunCanceled               EventType = "run_canceled"
-	EventError                     EventType = "error"
-	EventToolCallThinking          EventType = "tool_call_thinking"
-	EventPermissionRequested       EventType = "permission_requested"
-	EventPermissionResolved        EventType = "permission_resolved"
-	EventCompactStart              EventType = "compact_start"
-	EventCompactApplied            EventType = "compact_applied"
-	EventCompactError              EventType = "compact_error"
-	EventTokenUsage                EventType = "token_usage"
-	EventSkillActivated            EventType = "skill_activated"
-	EventSkillDeactivated          EventType = "skill_deactivated"
-	EventSkillMissing              EventType = "skill_missing"
-	EventPhaseChanged              EventType = "phase_changed"
-	EventProgressEvaluated         EventType = "progress_evaluated"
-	EventStopReasonDecided         EventType = "stop_reason_decided"
-	EventVerificationStarted       EventType = "verification_started"
-	EventVerificationStageFinished EventType = "verification_stage_finished"
-	EventVerificationFinished      EventType = "verification_finished"
-	EventVerificationCompleted     EventType = "verification_completed"
-	EventVerificationFailed        EventType = "verification_failed"
-	EventAcceptanceDecided         EventType = "acceptance_decided"
-	EventTodoUpdated               EventType = "todo_updated"
-	EventTodoConflict              EventType = "todo_conflict"
-	EventTodoSummaryInjected       EventType = "todo_summary_injected"
-	EventInputNormalized           EventType = "input_normalized"
-	EventAssetSaved                EventType = "asset_saved"
-	EventAssetSaveFailed           EventType = "asset_save_failed"
-	EventHookStarted               EventType = "hook_started"
-	EventHookFinished              EventType = "hook_finished"
-	EventHookFailed                EventType = "hook_failed"
-	EventHookBlocked               EventType = "hook_blocked"
+	EventUserMessage                EventType = "user_message"
+	EventAgentChunk                 EventType = "agent_chunk"
+	EventAgentDone                  EventType = "agent_done"
+	EventToolStart                  EventType = "tool_start"
+	EventToolResult                 EventType = "tool_result"
+	EventToolChunk                  EventType = "tool_chunk"
+	EventRunCanceled                EventType = "run_canceled"
+	EventError                      EventType = "error"
+	EventToolCallThinking           EventType = "tool_call_thinking"
+	EventPermissionRequested        EventType = "permission_requested"
+	EventPermissionResolved         EventType = "permission_resolved"
+	EventCompactStart               EventType = "compact_start"
+	EventCompactApplied             EventType = "compact_applied"
+	EventCompactError               EventType = "compact_error"
+	EventTokenUsage                 EventType = "token_usage"
+	EventSkillActivated             EventType = "skill_activated"
+	EventSkillDeactivated           EventType = "skill_deactivated"
+	EventSkillMissing               EventType = "skill_missing"
+	EventPhaseChanged               EventType = "phase_changed"
+	EventProgressEvaluated          EventType = "progress_evaluated"
+	EventStopReasonDecided          EventType = "stop_reason_decided"
+	EventVerificationStarted        EventType = "verification_started"
+	EventVerificationStageFinished  EventType = "verification_stage_finished"
+	EventVerificationFinished       EventType = "verification_finished"
+	EventVerificationCompleted      EventType = "verification_completed"
+	EventVerificationFailed         EventType = "verification_failed"
+	EventAcceptanceDecided          EventType = "acceptance_decided"
+	EventTodoUpdated                EventType = "todo_updated"
+	EventTodoConflict               EventType = "todo_conflict"
+	EventTodoSummaryInjected        EventType = "todo_summary_injected"
+	EventInputNormalized            EventType = "input_normalized"
+	EventAssetSaved                 EventType = "asset_saved"
+	EventAssetSaveFailed            EventType = "asset_save_failed"
+	EventHookStarted                EventType = "hook_started"
+	EventHookFinished               EventType = "hook_finished"
+	EventHookFailed                 EventType = "hook_failed"
+	EventHookBlocked                EventType = "hook_blocked"
+	EventRepoHooksDiscovered        EventType = "repo_hooks_discovered"
+	EventRepoHooksLoaded            EventType = "repo_hooks_loaded"
+	EventRepoHooksSkippedUntrusted  EventType = "repo_hooks_skipped_untrusted"
+	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
 )

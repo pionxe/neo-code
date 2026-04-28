@@ -121,14 +121,17 @@ func (s *Service) executeOneToolCall(
 	})
 	if beforeToolHookOutput.Blocked {
 		reason := findHookBlockMessage(beforeToolHookOutput)
+		blockSource := findHookBlockSource(beforeToolHookOutput)
 		result := tools.NewErrorResult(call.Name, hookErrorClassBlocked, reason, map[string]any{
-			"hook_id": beforeToolHookOutput.BlockedBy,
-			"point":   string(runtimehooks.HookPointBeforeToolCall),
+			"hook_id":     beforeToolHookOutput.BlockedBy,
+			"hook_source": string(blockSource),
+			"point":       string(runtimehooks.HookPointBeforeToolCall),
 		})
 		result.ToolCallID = call.ID
 		result.ErrorClass = hookErrorClassBlocked
 		s.emitRunScoped(ctx, EventHookBlocked, state, HookBlockedPayload{
 			HookID:     strings.TrimSpace(beforeToolHookOutput.BlockedBy),
+			Source:     string(blockSource),
 			Point:      string(runtimehooks.HookPointBeforeToolCall),
 			ToolCallID: strings.TrimSpace(call.ID),
 			ToolName:   strings.TrimSpace(call.Name),

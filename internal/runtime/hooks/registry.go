@@ -43,12 +43,13 @@ func (r *Registry) Register(spec HookSpec) error {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.hooks[normalized.ID]; exists {
-		return fmt.Errorf("%w: %s", ErrHookAlreadyExists, normalized.ID)
+	key := registryHookKey(normalized.Source, normalized.ID)
+	if _, exists := r.hooks[key]; exists {
+		return fmt.Errorf("%w: %s:%s", ErrHookAlreadyExists, normalized.Source, normalized.ID)
 	}
 
 	r.seq++
-	r.hooks[normalized.ID] = registryEntry{
+	r.hooks[key] = registryEntry{
 		spec: normalized,
 		seq:  r.seq,
 	}
@@ -67,10 +68,16 @@ func (r *Registry) Remove(id string) error {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.hooks[id]; !exists {
+	removed := false
+	for key, entry := range r.hooks {
+		if strings.EqualFold(strings.TrimSpace(entry.spec.ID), id) {
+			delete(r.hooks, key)
+			removed = true
+		}
+	}
+	if !removed {
 		return fmt.Errorf("%w: %s", ErrHookNotFound, id)
 	}
-	delete(r.hooks, id)
 	return nil
 }
 
@@ -109,4 +116,8 @@ func (r *Registry) Resolve(point HookPoint) []HookSpec {
 		out = append(out, entry.spec)
 	}
 	return out
+}
+
+func registryHookKey(source HookSource, id string) string {
+	return strings.ToLower(strings.TrimSpace(string(source))) + "\x00" + strings.ToLower(strings.TrimSpace(id))
 }

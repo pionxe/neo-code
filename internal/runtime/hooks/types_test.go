@@ -79,7 +79,17 @@ func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 			spec: HookSpec{
 				ID:      "hook-1",
 				Point:   HookPointBeforeToolCall,
+				Scope:   HookScope("external"),
+				Handler: handler,
+			},
+		},
+		{
+			name: "unsupported source",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPointBeforeToolCall,
 				Scope:   HookScopeRepo,
+				Source:  HookSource("external"),
 				Handler: handler,
 			},
 		},

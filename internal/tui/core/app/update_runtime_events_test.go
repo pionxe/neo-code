@@ -195,6 +195,18 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventHookBlocked]; !ok {
 		t.Fatalf("expected hook_blocked handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRepoHooksDiscovered]; !ok {
+		t.Fatalf("expected repo_hooks_discovered handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRepoHooksLoaded]; !ok {
+		t.Fatalf("expected repo_hooks_loaded handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRepoHooksSkippedUntrusted]; !ok {
+		t.Fatalf("expected repo_hooks_skipped_untrusted handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRepoHooksTrustStoreInvalid]; !ok {
+		t.Fatalf("expected repo_hooks_trust_store_invalid handler to be registered")
+	}
 }
 
 func TestRuntimeEventHookHandlers(t *testing.T) {
@@ -223,13 +235,14 @@ func TestRuntimeEventHookHandlers(t *testing.T) {
 	runtimeEventHookFinishedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.HookEventPayload{
 			HookID:     "h1",
+			Source:     "user",
 			Status:     "pass",
 			DurationMS: 12,
 			Message:    "note",
 		},
 	})
 	last = app.activities[len(app.activities)-1]
-	if last.Title != "Hook finished: h1" || !strings.Contains(last.Detail, "pass (12ms) · note") {
+	if last.Title != "Hook finished: user:h1" || !strings.Contains(last.Detail, "pass (12ms) · note") {
 		t.Fatalf("unexpected hook finished activity: %+v", last)
 	}
 	runtimeEventHookFinishedHandler(&app, agentruntime.RuntimeEvent{
@@ -241,10 +254,10 @@ func TestRuntimeEventHookHandlers(t *testing.T) {
 	}
 
 	runtimeEventHookFailedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.HookEventPayload{HookID: "hook-1", Error: "boom", Message: "warn"},
+		Payload: agentruntime.HookEventPayload{HookID: "hook-1", Source: "repo", Error: "boom", Message: "warn"},
 	})
 	last = app.activities[len(app.activities)-1]
-	if last.Title != "Hook failed: hook-1" || !strings.Contains(last.Detail, "warn · boom") || !last.IsError {
+	if last.Title != "Hook failed: repo:hook-1" || !strings.Contains(last.Detail, "warn · boom") || !last.IsError {
 		t.Fatalf("unexpected hook failed activity: %+v", last)
 	}
 	runtimeEventHookFailedHandler(&app, agentruntime.RuntimeEvent{
@@ -256,10 +269,16 @@ func TestRuntimeEventHookHandlers(t *testing.T) {
 	}
 
 	runtimeEventHookBlockedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.HookBlockedPayload{HookID: "h2", Point: "before_tool_call", Reason: "blocked", Enforced: true},
+		Payload: agentruntime.HookBlockedPayload{
+			HookID:   "h2",
+			Source:   "repo",
+			Point:    "before_tool_call",
+			Reason:   "blocked",
+			Enforced: true,
+		},
 	})
 	last = app.activities[len(app.activities)-1]
-	if last.Title != "Hook blocked: h2 @ before_tool_call" || last.Detail != "blocked" || !last.IsError {
+	if last.Title != "Hook blocked: repo:h2 @ before_tool_call" || last.Detail != "blocked" || !last.IsError {
 		t.Fatalf("unexpected hook blocked activity: %+v", last)
 	}
 	runtimeEventHookBlockedHandler(&app, agentruntime.RuntimeEvent{
@@ -268,6 +287,54 @@ func TestRuntimeEventHookHandlers(t *testing.T) {
 	last = app.activities[len(app.activities)-1]
 	if last.Title != "Hook block observed: unknown_hook @ unknown_point" || last.Detail != "hook returned block" || last.IsError {
 		t.Fatalf("unexpected hook blocked default activity: %+v", last)
+	}
+}
+
+func TestRuntimeEventRepoHookLifecycleHandlers(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	if runtimeEventRepoHooksDiscoveredHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}) {
+		t.Fatalf("expected invalid discovered payload to return false")
+	}
+	runtimeEventRepoHooksDiscoveredHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.RepoHooksLifecyclePayload{Workspace: "/ws/a", HooksPath: "/ws/a/.neocode/hooks.yaml"},
+	})
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Repo hooks discovered" || !strings.Contains(last.Detail, "hooks.yaml") {
+		t.Fatalf("unexpected discovered activity: %+v", last)
+	}
+
+	if runtimeEventRepoHooksLoadedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}) {
+		t.Fatalf("expected invalid loaded payload to return false")
+	}
+	runtimeEventRepoHooksLoadedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.RepoHooksLifecyclePayload{Workspace: "/ws/a", HookCount: 2},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Repo hooks loaded" || !strings.Contains(last.Detail, "hooks=2") {
+		t.Fatalf("unexpected loaded activity: %+v", last)
+	}
+
+	if runtimeEventRepoHooksSkippedUntrustedHandler(&app, agentruntime.RuntimeEvent{Payload: true}) {
+		t.Fatalf("expected invalid skipped payload to return false")
+	}
+	runtimeEventRepoHooksSkippedUntrustedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.RepoHooksLifecyclePayload{Reason: "workspace is not trusted"},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Repo hooks skipped (untrusted)" || last.Detail != "workspace is not trusted" {
+		t.Fatalf("unexpected skipped activity: %+v", last)
+	}
+
+	if runtimeEventRepoHooksTrustStoreInvalidHandler(&app, agentruntime.RuntimeEvent{Payload: 3.14}) {
+		t.Fatalf("expected invalid trust_store_invalid payload to return false")
+	}
+	runtimeEventRepoHooksTrustStoreInvalidHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.RepoHooksTrustStoreInvalidPayload{Reason: "trust store is missing"},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Repo hooks trust store invalid" || last.Detail != "trust store is missing" {
+		t.Fatalf("unexpected trust_store_invalid activity: %+v", last)
 	}
 }
 

@@ -31,36 +31,16 @@ func configureRuntimeHooksFromConfig(service *Service, cfg config.Config) error 
 		service.SetHookExecutor(nil)
 		return nil
 	}
-	if !hooksCfg.IsUserHooksEnabled() {
-		service.SetHookExecutor(baseExecutor)
-		return nil
-	}
 
-	registry := runtimehooks.NewRegistry()
-	registered := 0
-	for index, item := range hooksCfg.Items {
-		if !item.IsEnabled() {
-			continue
-		}
-		spec, err := buildUserHookSpec(item, cfg.Workdir)
-		if err != nil {
-			return fmt.Errorf("runtime.hooks.items[%d]: %w", index, err)
-		}
-		if err := registry.Register(spec); err != nil {
-			return fmt.Errorf("runtime.hooks.items[%d]: %w", index, err)
-		}
-		registered++
+	userExecutor, err := buildUserHookExecutor(service, cfg, hooksCfg)
+	if err != nil {
+		return err
 	}
-	if registered == 0 {
-		service.SetHookExecutor(baseExecutor)
-		return nil
+	repoExecutor, err := buildRepoHookExecutor(service, cfg, hooksCfg)
+	if err != nil {
+		return err
 	}
-	userExecutor := runtimehooks.NewExecutor(
-		registry,
-		newHookRuntimeEventEmitter(service),
-		time.Duration(hooksCfg.DefaultTimeoutSec)*time.Second,
-	)
-	service.SetHookExecutor(&userComposedHookExecutor{base: baseExecutor, user: userExecutor})
+	service.SetHookExecutor(composeRuntimeHookExecutors(baseExecutor, userExecutor, repoExecutor))
 	return nil
 }
 
@@ -91,6 +71,7 @@ func (e *userComposedHookExecutor) Run(
 	if userOutput.Blocked {
 		combined.Blocked = true
 		combined.BlockedBy = userOutput.BlockedBy
+		combined.BlockedSource = userOutput.BlockedSource
 	}
 	return combined
 }
@@ -99,7 +80,55 @@ func unwrapBaseHookExecutor(executor HookExecutor) HookExecutor {
 	if composed, ok := executor.(*userComposedHookExecutor); ok {
 		return composed.base
 	}
+	if composed, ok := executor.(*repoComposedHookExecutor); ok {
+		return unwrapBaseHookExecutor(composed.base)
+	}
 	return executor
+}
+
+// repoComposedHookExecutor 将 repo hooks 串联到既有执行链末端，保持 internal -> user -> repo 顺序。
+type repoComposedHookExecutor struct {
+	base HookExecutor
+	repo HookExecutor
+}
+
+func (e *repoComposedHookExecutor) Run(
+	ctx context.Context,
+	point runtimehooks.HookPoint,
+	input runtimehooks.HookContext,
+) runtimehooks.RunOutput {
+	baseOutput := runHookExecutorSafely(e.base, ctx, point, input)
+	if baseOutput.Blocked {
+		return baseOutput
+	}
+	repoOutput := runHookExecutorSafely(e.repo, ctx, point, input)
+	if len(baseOutput.Results) == 0 {
+		return repoOutput
+	}
+	if len(repoOutput.Results) == 0 {
+		return baseOutput
+	}
+	combined := runtimehooks.RunOutput{
+		Results: append(append([]runtimehooks.HookResult{}, baseOutput.Results...), repoOutput.Results...),
+	}
+	if repoOutput.Blocked {
+		combined.Blocked = true
+		combined.BlockedBy = repoOutput.BlockedBy
+		combined.BlockedSource = repoOutput.BlockedSource
+	}
+	return combined
+}
+
+// composeRuntimeHookExecutors 将 internal/user/repo 三段执行器按固定顺序串联。
+func composeRuntimeHookExecutors(base HookExecutor, user HookExecutor, repo HookExecutor) HookExecutor {
+	composed := base
+	if user != nil {
+		composed = &userComposedHookExecutor{base: composed, user: user}
+	}
+	if repo != nil {
+		composed = &repoComposedHookExecutor{base: composed, repo: repo}
+	}
+	return composed
 }
 
 func runHookExecutorSafely(
@@ -116,6 +145,31 @@ func runHookExecutorSafely(
 
 // buildUserHookSpec 将 user builtin hook 配置转换为 runtime 可执行 HookSpec。
 func buildUserHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
+	return buildConfiguredHookSpec(
+		item,
+		defaultWorkdir,
+		runtimehooks.HookScopeUser,
+		runtimehooks.HookSourceUser,
+	)
+}
+
+// buildRepoHookSpec 将 repo builtin hook 配置转换为 runtime 可执行 HookSpec。
+func buildRepoHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
+	return buildConfiguredHookSpec(
+		item,
+		defaultWorkdir,
+		runtimehooks.HookScopeRepo,
+		runtimehooks.HookSourceRepo,
+	)
+}
+
+// buildConfiguredHookSpec 按给定 scope/source 构建 builtin hook 执行定义。
+func buildConfiguredHookSpec(
+	item config.RuntimeHookItemConfig,
+	defaultWorkdir string,
+	scope runtimehooks.HookScope,
+	source runtimehooks.HookSource,
+) (runtimehooks.HookSpec, error) {
 	handler, err := buildUserBuiltinHookHandler(strings.TrimSpace(item.Handler), item.Params, defaultWorkdir)
 	if err != nil {
 		return runtimehooks.HookSpec{}, err
@@ -123,7 +177,8 @@ func buildUserHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string)
 	return runtimehooks.HookSpec{
 		ID:            strings.TrimSpace(item.ID),
 		Point:         runtimehooks.HookPoint(strings.TrimSpace(item.Point)),
-		Scope:         runtimehooks.HookScopeUser,
+		Scope:         scope,
+		Source:        source,
 		Kind:          runtimehooks.HookKindFunction,
 		Mode:          runtimehooks.HookModeSync,
 		Priority:      item.Priority,

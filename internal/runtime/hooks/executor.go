@@ -61,7 +61,7 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 	}
 	for _, spec := range specs {
 		hookInput := input.Clone()
-		if spec.Scope == HookScopeUser {
+		if spec.Scope == HookScopeUser || spec.Scope == HookScopeRepo {
 			hookInput = sanitizeUserHookContext(hookInput)
 		}
 		result := e.runOne(ctx, spec, hookInput)
@@ -70,11 +70,13 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 		if result.Status == HookResultBlock {
 			output.Blocked = true
 			output.BlockedBy = spec.ID
+			output.BlockedSource = spec.Source
 			break
 		}
 		if result.Status == HookResultFailed && spec.FailurePolicy == FailurePolicyFailClosed {
 			output.Blocked = true
 			output.BlockedBy = spec.ID
+			output.BlockedSource = spec.Source
 			break
 		}
 	}
@@ -88,6 +90,7 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 		HookID:    spec.ID,
 		Point:     spec.Point,
 		Scope:     spec.Scope,
+		Source:    spec.Source,
 		Kind:      spec.Kind,
 		Mode:      spec.Mode,
 		StartedAt: startedAt,
@@ -107,6 +110,9 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 	if result.Scope == "" {
 		result.Scope = spec.Scope
 	}
+	if result.Source == "" {
+		result.Source = spec.Source
+	}
 	if result.DurationMS <= 0 {
 		result.DurationMS = durationMS
 	}
@@ -118,6 +124,7 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 			HookID:     spec.ID,
 			Point:      spec.Point,
 			Scope:      spec.Scope,
+			Source:     spec.Source,
 			Kind:       spec.Kind,
 			Mode:       spec.Mode,
 			Status:     result.Status,
@@ -131,6 +138,7 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 			HookID:     spec.ID,
 			Point:      spec.Point,
 			Scope:      spec.Scope,
+			Source:     spec.Source,
 			Kind:       spec.Kind,
 			Mode:       spec.Mode,
 			Status:     result.Status,
@@ -166,6 +174,7 @@ func (e *Executor) callHandler(
 			HookID:    spec.ID,
 			Point:     spec.Point,
 			Scope:     spec.Scope,
+			Source:    spec.Source,
 			Status:    HookResultFailed,
 			Message:   err,
 			Error:     err,
@@ -201,6 +210,7 @@ func (e *Executor) callHandler(
 			HookID:    spec.ID,
 			Point:     spec.Point,
 			Scope:     spec.Scope,
+			Source:    spec.Source,
 			Status:    HookResultFailed,
 			Message:   err,
 			Error:     err,
@@ -213,6 +223,7 @@ func (e *Executor) callHandler(
 				HookID:    spec.ID,
 				Point:     spec.Point,
 				Scope:     spec.Scope,
+				Source:    spec.Source,
 				Status:    HookResultFailed,
 				Message:   err,
 				Error:     err,
@@ -222,6 +233,7 @@ func (e *Executor) callHandler(
 		outcome.result.HookID = spec.ID
 		outcome.result.Point = spec.Point
 		outcome.result.Scope = spec.Scope
+		outcome.result.Source = spec.Source
 		if outcome.result.Status == "" {
 			outcome.result.Status = HookResultPass
 		}
@@ -233,6 +245,7 @@ func (e *Executor) callHandler(
 				HookID:    spec.ID,
 				Point:     spec.Point,
 				Scope:     spec.Scope,
+				Source:    spec.Source,
 				Status:    HookResultFailed,
 				Message:   err,
 				Error:     err,

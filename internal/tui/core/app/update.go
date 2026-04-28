@@ -1950,6 +1950,22 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventHookFinished:                             runtimeEventHookFinishedHandler,
 	tuiservices.EventHookFailed:                               runtimeEventHookFailedHandler,
 	tuiservices.EventHookBlocked:                              runtimeEventHookBlockedHandler,
+	tuiservices.EventRepoHooksDiscovered:                      runtimeEventRepoHooksDiscoveredHandler,
+	tuiservices.EventRepoHooksLoaded:                          runtimeEventRepoHooksLoadedHandler,
+	tuiservices.EventRepoHooksSkippedUntrusted:                runtimeEventRepoHooksSkippedUntrustedHandler,
+	tuiservices.EventRepoHooksTrustStoreInvalid:               runtimeEventRepoHooksTrustStoreInvalidHandler,
+}
+
+func hookActivityLabel(source string, hookID string) string {
+	normalizedID := strings.TrimSpace(hookID)
+	if normalizedID == "" {
+		normalizedID = "unknown_hook"
+	}
+	normalizedSource := strings.TrimSpace(source)
+	if normalizedSource == "" {
+		return normalizedID
+	}
+	return normalizedSource + ":" + normalizedID
 }
 
 func runtimeEventHookStartedHandler(a *App, event tuiservices.RuntimeEvent) bool {
@@ -1957,15 +1973,12 @@ func runtimeEventHookStartedHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if !ok {
 		return false
 	}
-	hookID := strings.TrimSpace(payload.HookID)
-	if hookID == "" {
-		hookID = "unknown_hook"
-	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
 	point := strings.TrimSpace(payload.Point)
 	if point == "" {
 		point = "unknown_point"
 	}
-	a.appendActivity("hook", "Hook started", hookID+" @ "+point, false)
+	a.appendActivity("hook", "Hook started", hookLabel+" @ "+point, false)
 	return false
 }
 
@@ -1974,10 +1987,7 @@ func runtimeEventHookFinishedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	if !ok {
 		return false
 	}
-	hookID := strings.TrimSpace(payload.HookID)
-	if hookID == "" {
-		hookID = "unknown_hook"
-	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
 	status := strings.TrimSpace(payload.Status)
 	if status == "" {
 		status = "pass"
@@ -1986,7 +1996,7 @@ func runtimeEventHookFinishedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	if message := strings.TrimSpace(payload.Message); message != "" {
 		detail = detail + " · " + message
 	}
-	a.appendActivity("hook", "Hook finished: "+hookID, detail, false)
+	a.appendActivity("hook", "Hook finished: "+hookLabel, detail, false)
 	return false
 }
 
@@ -1995,10 +2005,7 @@ func runtimeEventHookFailedHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	if !ok {
 		return false
 	}
-	hookID := strings.TrimSpace(payload.HookID)
-	if hookID == "" {
-		hookID = "unknown_hook"
-	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
 	detail := strings.TrimSpace(payload.Error)
 	if detail == "" {
 		detail = "hook execution failed"
@@ -2006,7 +2013,7 @@ func runtimeEventHookFailedHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	if message := strings.TrimSpace(payload.Message); message != "" {
 		detail = message + " · " + detail
 	}
-	a.appendActivity("hook", "Hook failed: "+hookID, detail, true)
+	a.appendActivity("hook", "Hook failed: "+hookLabel, detail, true)
 	return false
 }
 
@@ -2015,10 +2022,7 @@ func runtimeEventHookBlockedHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if !ok {
 		return false
 	}
-	hookID := strings.TrimSpace(payload.HookID)
-	if hookID == "" {
-		hookID = "unknown_hook"
-	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
 	point := strings.TrimSpace(payload.Point)
 	if point == "" {
 		point = "unknown_point"
@@ -2027,11 +2031,60 @@ func runtimeEventHookBlockedHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if reason == "" {
 		reason = "hook returned block"
 	}
-	title := "Hook blocked: " + hookID + " @ " + point
+	title := "Hook blocked: " + hookLabel + " @ " + point
 	if !payload.Enforced {
-		title = "Hook block observed: " + hookID + " @ " + point
+		title = "Hook block observed: " + hookLabel + " @ " + point
 	}
 	a.appendActivity("hook", title, reason, payload.Enforced)
+	return false
+}
+
+func runtimeEventRepoHooksDiscoveredHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RepoHooksLifecyclePayload)
+	if !ok {
+		return false
+	}
+	detail := strings.TrimSpace(payload.HooksPath)
+	if detail == "" {
+		detail = strings.TrimSpace(payload.Workspace)
+	}
+	a.appendActivity("hook", "Repo hooks discovered", detail, false)
+	return false
+}
+
+func runtimeEventRepoHooksLoadedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RepoHooksLifecyclePayload)
+	if !ok {
+		return false
+	}
+	detail := fmt.Sprintf("workspace=%s, hooks=%d", strings.TrimSpace(payload.Workspace), payload.HookCount)
+	a.appendActivity("hook", "Repo hooks loaded", detail, false)
+	return false
+}
+
+func runtimeEventRepoHooksSkippedUntrustedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RepoHooksLifecyclePayload)
+	if !ok {
+		return false
+	}
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "workspace is not trusted"
+	}
+	a.appendActivity("hook", "Repo hooks skipped (untrusted)", reason, false)
+	return false
+}
+
+func runtimeEventRepoHooksTrustStoreInvalidHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RepoHooksTrustStoreInvalidPayload)
+	if !ok {
+		return false
+	}
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "trust store is invalid"
+	}
+	a.appendActivity("hook", "Repo hooks trust store invalid", reason, false)
 	return false
 }
 

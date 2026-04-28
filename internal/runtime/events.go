@@ -232,6 +232,7 @@ type HookEventPayload struct {
 	HookID     string    `json:"hook_id"`
 	Point      string    `json:"point"`
 	Scope      string    `json:"scope"`
+	Source     string    `json:"source"`
 	Kind       string    `json:"kind"`
 	Mode       string    `json:"mode"`
 	Status     string    `json:"status,omitempty"`
@@ -244,11 +245,27 @@ type HookEventPayload struct {
 // HookBlockedPayload 描述 hook 阻断事件负载。
 type HookBlockedPayload struct {
 	HookID     string `json:"hook_id"`
+	Source     string `json:"source,omitempty"`
 	Point      string `json:"point"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	ToolName   string `json:"tool_name,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	Enforced   bool   `json:"enforced"`
+}
+
+// RepoHooksTrustStoreInvalidPayload 描述 trust store 不可用时的降级信息。
+type RepoHooksTrustStoreInvalidPayload struct {
+	TrustStorePath string `json:"trust_store_path"`
+	Reason         string `json:"reason"`
+}
+
+// RepoHooksLifecyclePayload 描述 repo hooks 发现/加载/跳过等生命周期信息。
+type RepoHooksLifecyclePayload struct {
+	Workspace      string `json:"workspace"`
+	HooksPath      string `json:"hooks_path,omitempty"`
+	TrustStorePath string `json:"trust_store_path,omitempty"`
+	HookCount      int    `json:"hook_count,omitempty"`
+	Reason         string `json:"reason,omitempty"`
 }
 
 const (
@@ -334,6 +351,14 @@ const (
 	EventHookFailed EventType = "hook_failed"
 	// EventHookBlocked 表示某个 hook 返回 block（是否生效由 payload.enforced 决定）。
 	EventHookBlocked EventType = "hook_blocked"
+	// EventRepoHooksDiscovered 表示检测到仓库 hooks 配置文件。
+	EventRepoHooksDiscovered EventType = "repo_hooks_discovered"
+	// EventRepoHooksLoaded 表示仓库 hooks 已加载并进入执行链。
+	EventRepoHooksLoaded EventType = "repo_hooks_loaded"
+	// EventRepoHooksSkippedUntrusted 表示仓库未信任导致 repo hooks 被跳过。
+	EventRepoHooksSkippedUntrusted EventType = "repo_hooks_skipped_untrusted"
+	// EventRepoHooksTrustStoreInvalid 表示 trust store 缺失或损坏，已降级为 untrusted。
+	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。

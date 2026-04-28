@@ -19,6 +19,7 @@ type HookResult struct {
 	HookID     string
 	Point      HookPoint
 	Scope      HookScope
+	Source     HookSource
 	Status     HookResultStatus
 	Message    string
 	Error      string
@@ -28,7 +29,8 @@ type HookResult struct {
 
 // RunOutput 是一次点位执行的聚合结果。
 type RunOutput struct {
-	Results   []HookResult
-	Blocked   bool
-	BlockedBy string
+	Results       []HookResult
+	Blocked       bool
+	BlockedBy     string
+	BlockedSource HookSource
 }

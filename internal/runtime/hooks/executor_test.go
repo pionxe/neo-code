@@ -704,3 +704,44 @@ func TestExecutorSanitizeUserHookContext(t *testing.T) {
 		t.Fatal("capability_token should be stripped for user hook context")
 	}
 }
+
+func TestExecutorSanitizeRepoHookContext(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 100*time.Millisecond)
+	var captured HookContext
+	if err := registry.Register(HookSpec{
+		ID:     "repo-hook",
+		Point:  HookPointBeforeToolCall,
+		Scope:  HookScopeRepo,
+		Source: HookSourceRepo,
+		Handler: func(_ context.Context, input HookContext) HookResult {
+			captured = input
+			return HookResult{Status: HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	_ = executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{
+		RunID:     "run-1",
+		SessionID: "session-1",
+		Metadata: map[string]any{
+			"tool_name":        "bash",
+			"tool_arguments":   "--secret-token=abc",
+			"capability_token": "should-not-leak",
+			"workdir":          "/tmp/work",
+		},
+	})
+
+	if got := captured.Metadata["tool_name"]; got != "bash" {
+		t.Fatalf("tool_name = %v, want bash", got)
+	}
+	if _, exists := captured.Metadata["tool_arguments"]; exists {
+		t.Fatal("tool_arguments should be stripped for repo hook context")
+	}
+	if _, exists := captured.Metadata["capability_token"]; exists {
+		t.Fatal("capability_token should be stripped for repo hook context")
+	}
+}

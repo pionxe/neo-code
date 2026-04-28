@@ -23,6 +23,7 @@ type HookEvent struct {
 	HookID     string
 	Point      HookPoint
 	Scope      HookScope
+	Source     HookSource
 	Kind       HookKind
 	Mode       HookMode
 	Status     HookResultStatus

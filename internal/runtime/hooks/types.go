@@ -18,7 +18,7 @@ const (
 	HookPointBeforeCompletionDecision HookPoint = "before_completion_decision"
 )
 
-// HookScope 描述 hook 的来源作用域。
+// HookScope 描述 hook 的权限/上下文裁剪等级。
 type HookScope string
 
 const (
@@ -28,6 +28,18 @@ const (
 	HookScopeUser HookScope = "user"
 	// HookScopeRepo 表示仓库配置 hook（P3 预留）。
 	HookScopeRepo HookScope = "repo"
+)
+
+// HookSource 描述 hook 的配置来源。
+type HookSource string
+
+const (
+	// HookSourceInternal 表示运行时内部注册来源。
+	HookSourceInternal HookSource = "internal"
+	// HookSourceUser 表示全局用户配置来源。
+	HookSourceUser HookSource = "user"
+	// HookSourceRepo 表示仓库级配置来源。
+	HookSourceRepo HookSource = "repo"
 )
 
 // HookKind 描述 hook 处理器类型。
@@ -76,6 +88,7 @@ type HookSpec struct {
 	ID            string
 	Point         HookPoint
 	Scope         HookScope
+	Source        HookSource
 	Kind          HookKind
 	Mode          HookMode
 	Priority      int
@@ -104,9 +117,17 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 		s.Scope = HookScopeInternal
 	}
 	switch s.Scope {
-	case HookScopeInternal, HookScopeUser:
+	case HookScopeInternal, HookScopeUser, HookScopeRepo:
 	default:
 		return HookSpec{}, wrapInvalidSpec("scope %q is not supported", s.Scope)
+	}
+	if s.Source == "" {
+		s.Source = HookSource(strings.TrimSpace(string(s.Scope)))
+	}
+	switch s.Source {
+	case HookSourceInternal, HookSourceUser, HookSourceRepo:
+	default:
+		return HookSpec{}, wrapInvalidSpec("source %q is not supported", s.Source)
 	}
 	if s.Kind == "" {
 		s.Kind = HookKindFunction

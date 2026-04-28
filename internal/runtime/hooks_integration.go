@@ -57,6 +57,7 @@ func (e *hookRuntimeEventEmitter) EmitHookEvent(ctx context.Context, event runti
 			HookID:     event.HookID,
 			Point:      string(event.Point),
 			Scope:      string(event.Scope),
+			Source:     string(event.Source),
 			Kind:       string(event.Kind),
 			Mode:       string(event.Mode),
 			Status:     string(event.Status),
@@ -172,14 +173,31 @@ func findHookBlockMessage(output runtimehooks.RunOutput) string {
 	return "hook blocked"
 }
 
-// recordUserHookAnnotations 将 user hook 产生的消息缓存到运行态注释缓冲区，供后续观测链路消费。
+// findHookBlockSource 返回本次阻断命中的来源标签，优先从阻断结果回推，其次回退输出字段。
+func findHookBlockSource(output runtimehooks.RunOutput) runtimehooks.HookSource {
+	if !output.Blocked {
+		return ""
+	}
+	for _, result := range output.Results {
+		if !strings.EqualFold(strings.TrimSpace(result.HookID), strings.TrimSpace(output.BlockedBy)) {
+			continue
+		}
+		if result.Source != "" {
+			return result.Source
+		}
+		break
+	}
+	return output.BlockedSource
+}
+
+// recordUserHookAnnotations 将 user/repo hook 产生的消息缓存到运行态注释缓冲区，供后续观测链路消费。
 func (s *Service) recordUserHookAnnotations(state *runState, output runtimehooks.RunOutput) {
 	if state == nil || len(output.Results) == 0 {
 		return
 	}
 	notes := make([]string, 0, len(output.Results))
 	for _, result := range output.Results {
-		if result.Scope != runtimehooks.HookScopeUser {
+		if result.Scope != runtimehooks.HookScopeUser && result.Scope != runtimehooks.HookScopeRepo {
 			continue
 		}
 		message := strings.TrimSpace(result.Message)
