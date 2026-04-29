@@ -398,6 +398,38 @@ func TestHookIntegrationHelpersBranches(t *testing.T) {
 	}); got != "hook blocked" {
 		t.Fatalf("findHookBlockMessage() default fallback = %q", got)
 	}
+	if got := findHookBlockSource(runtimehooks.RunOutput{}); got != "" {
+		t.Fatalf("findHookBlockSource() for non-blocked output = %q, want empty", got)
+	}
+	if got := findHookBlockSource(runtimehooks.RunOutput{
+		Blocked:   true,
+		BlockedBy: "hook-src-1",
+		Results: []runtimehooks.HookResult{
+			{HookID: "hook-src-1", Source: runtimehooks.HookSourceRepo},
+		},
+	}); got != runtimehooks.HookSourceRepo {
+		t.Fatalf("findHookBlockSource() from result = %q, want %q", got, runtimehooks.HookSourceRepo)
+	}
+	if got := findHookBlockSource(runtimehooks.RunOutput{
+		Blocked:       true,
+		BlockedBy:     "hook-src-2",
+		BlockedSource: runtimehooks.HookSourceUser,
+		Results: []runtimehooks.HookResult{
+			{HookID: "other", Source: runtimehooks.HookSourceRepo},
+		},
+	}); got != runtimehooks.HookSourceUser {
+		t.Fatalf("findHookBlockSource() fallback = %q, want %q", got, runtimehooks.HookSourceUser)
+	}
+	if got := findHookBlockSource(runtimehooks.RunOutput{
+		Blocked:       true,
+		BlockedBy:     "hook-src-3",
+		BlockedSource: runtimehooks.HookSourceInternal,
+		Results: []runtimehooks.HookResult{
+			{HookID: "hook-src-3", Source: ""},
+		},
+	}); got != runtimehooks.HookSourceInternal {
+		t.Fatalf("findHookBlockSource() matched empty source fallback = %q, want %q", got, runtimehooks.HookSourceInternal)
+	}
 
 	wrapped := withRuntimeHookEnvelope(nil, hookRuntimeEnvelope{RunID: "run-1"})
 	envelope, ok := runtimeHookEnvelopeFromContext(wrapped)
@@ -437,6 +469,42 @@ func TestHookIntegrationHelpersBranches(t *testing.T) {
 	}
 	if got := hookTurnFromState(nil); got != turnUnspecified {
 		t.Fatalf("hookTurnFromState(nil) = %d, want %d", got, turnUnspecified)
+	}
+}
+
+func TestRecordUserHookAnnotationsBranches(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.recordUserHookAnnotations(nil, runtimehooks.RunOutput{
+		Results: []runtimehooks.HookResult{
+			{Scope: runtimehooks.HookScopeUser, Message: "should ignore when state nil"},
+		},
+	})
+
+	state := newRunState("run-anno", newRuntimeSession("session-anno"))
+	service.recordUserHookAnnotations(&state, runtimehooks.RunOutput{})
+	service.recordUserHookAnnotations(&state, runtimehooks.RunOutput{
+		Results: []runtimehooks.HookResult{
+			{Scope: runtimehooks.HookScopeInternal, Message: "ignore internal"},
+			{Scope: runtimehooks.HookScopeUser, Message: "   "},
+		},
+	})
+	if len(state.hookAnnotations) != 0 {
+		t.Fatalf("unexpected annotations for non-user/repo or empty message: %v", state.hookAnnotations)
+	}
+
+	service.recordUserHookAnnotations(&state, runtimehooks.RunOutput{
+		Results: []runtimehooks.HookResult{
+			{Scope: runtimehooks.HookScopeUser, Message: "user note"},
+			{Scope: runtimehooks.HookScopeRepo, Message: "repo note"},
+		},
+	})
+	if len(state.hookAnnotations) != 2 {
+		t.Fatalf("annotations len = %d, want 2", len(state.hookAnnotations))
+	}
+	if state.hookAnnotations[0] != "user note" || state.hookAnnotations[1] != "repo note" {
+		t.Fatalf("annotations = %v, want [user note repo note]", state.hookAnnotations)
 	}
 }
 
@@ -506,6 +574,72 @@ func TestHookRuntimeEventEmitterBranches(t *testing.T) {
 	}
 	if payload.HookID != "hook-evt" || payload.Point != string(runtimehooks.HookPointAfterToolResult) || payload.DurationMS != 12 {
 		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestRunHookPointUsesInputEnvelopeWhenStateMissing(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 8),
+	}
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-pre-compact",
+		Point: runtimehooks.HookPointPreCompact,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register pre_compact hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	output := service.runHookPoint(context.Background(), nil, runtimehooks.HookPointPreCompact, runtimehooks.HookContext{
+		RunID:     "run-envelope",
+		SessionID: "session-envelope",
+		Metadata: map[string]any{
+			"workdir": t.TempDir(),
+		},
+	})
+	if output.Blocked {
+		t.Fatalf("runHookPoint() should not block, got %+v", output)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	startedIndex := eventIndex(events, EventHookStarted)
+	if startedIndex < 0 {
+		t.Fatalf("expected hook_started event")
+	}
+	if got := events[startedIndex].RunID; got != "run-envelope" {
+		t.Fatalf("hook_started run_id = %q, want %q", got, "run-envelope")
+	}
+	if got := events[startedIndex].SessionID; got != "session-envelope" {
+		t.Fatalf("hook_started session_id = %q, want %q", got, "session-envelope")
+	}
+}
+
+func TestRunHookPointReturnsEmptyWhenServiceOrExecutorMissing(t *testing.T) {
+	t.Parallel()
+
+	var nilService *Service
+	if out := nilService.runHookPoint(
+		context.Background(),
+		nil,
+		runtimehooks.HookPointBeforeToolCall,
+		runtimehooks.HookContext{RunID: "run-x", SessionID: "session-x"},
+	); out.Blocked || len(out.Results) != 0 {
+		t.Fatalf("nil service should return empty output, got %+v", out)
+	}
+
+	service := &Service{events: make(chan RuntimeEvent, 1)}
+	if out := service.runHookPoint(
+		context.Background(),
+		nil,
+		runtimehooks.HookPointBeforeToolCall,
+		runtimehooks.HookContext{RunID: "run-y", SessionID: "session-y"},
+	); out.Blocked || len(out.Results) != 0 {
+		t.Fatalf("service without executor should return empty output, got %+v", out)
 	}
 }
 
@@ -924,4 +1058,126 @@ func TestRunSubAgentTaskSubagentStartHookBlockEnforced(t *testing.T) {
 	events := collectRuntimeEvents(service.Events())
 	assertEventContains(t, events, EventHookBlocked)
 	assertNoEventType(t, events, EventSubAgentStarted)
+}
+
+func TestRunSubAgentTaskEmitsStopHookWhenResultUnavailableAfterStepError(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(nil, nil, nil, nil, nil)
+	service.SetSubAgentFactory(stubSubAgentFactory{
+		create: func(role subagent.Role) (subagent.WorkerRuntime, error) {
+			return &stubSubAgentWorker{
+				stepResult: subagent.StepResult{
+					State: subagent.StateRunning,
+					Done:  false,
+				},
+				stepErr:   errors.New("step failed"),
+				resultErr: errors.New("result unavailable"),
+			}, nil
+		},
+	})
+
+	var stopCalled bool
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-subagent-stop-on-step-err",
+		Point: runtimehooks.HookPointSubAgentStop,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			stopCalled = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register subagent_stop hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	result, err := service.RunSubAgentTask(context.Background(), SubAgentTaskInput{
+		RunID:     "sub-run-stop-on-step-err",
+		SessionID: "session-stop-on-step-err",
+		Role:      subagent.RoleCoder,
+		Task: subagent.Task{
+			ID:   "task-stop-on-step-err",
+			Goal: "goal",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "step failed") {
+		t.Fatalf("RunSubAgentTask() error = %v, want step failed", err)
+	}
+	if result.State != subagent.StateFailed {
+		t.Fatalf("result.State = %q, want %q", result.State, subagent.StateFailed)
+	}
+	if result.StopReason != subagent.StopReasonError {
+		t.Fatalf("result.StopReason = %q, want %q", result.StopReason, subagent.StopReasonError)
+	}
+	if !stopCalled {
+		t.Fatal("expected subagent_stop hook to be triggered on step error + result unavailable")
+	}
+}
+
+func TestRunSubAgentTaskEmitsStopHookWhenResultUnavailableAfterDone(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(nil, nil, nil, nil, nil)
+	service.SetSubAgentFactory(stubSubAgentFactory{
+		create: func(role subagent.Role) (subagent.WorkerRuntime, error) {
+			return &stubSubAgentWorker{
+				stepResult: subagent.StepResult{
+					State: subagent.StateRunning,
+					Done:  true,
+				},
+				resultErr: errors.New("result unavailable after done"),
+			}, nil
+		},
+	})
+
+	var stopCalled bool
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-subagent-stop-on-done-result-err",
+		Point: runtimehooks.HookPointSubAgentStop,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			stopCalled = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register subagent_stop hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	result, err := service.RunSubAgentTask(context.Background(), SubAgentTaskInput{
+		RunID:     "sub-run-stop-on-done-result-err",
+		SessionID: "session-stop-on-done-result-err",
+		Role:      subagent.RoleCoder,
+		Task: subagent.Task{
+			ID:   "task-stop-on-done-result-err",
+			Goal: "goal",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "result unavailable after done") {
+		t.Fatalf("RunSubAgentTask() error = %v, want result unavailable after done", err)
+	}
+	if result.State != subagent.StateFailed {
+		t.Fatalf("result.State = %q, want %q", result.State, subagent.StateFailed)
+	}
+	if result.StopReason != subagent.StopReasonError {
+		t.Fatalf("result.StopReason = %q, want %q", result.StopReason, subagent.StopReasonError)
+	}
+	if !stopCalled {
+		t.Fatal("expected subagent_stop hook to be triggered on done+result unavailable path")
+	}
+}
+
+func TestEmitSubAgentStopHookNilServiceNoop(t *testing.T) {
+	t.Parallel()
+
+	emitSubAgentStopHook(nil, context.Background(), SubAgentTaskInput{
+		RunID:     "run-nil-stop-hook",
+		SessionID: "session-nil-stop-hook",
+	}, subagent.Result{
+		Role:       subagent.RoleCoder,
+		TaskID:     "task-nil-stop-hook",
+		State:      subagent.StateFailed,
+		StopReason: subagent.StopReasonError,
+		Error:      "noop",
+	})
 }

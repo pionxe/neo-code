@@ -119,8 +119,10 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 			result, resultErr := worker.Result()
 			if resultErr != nil {
+				fallback := fallbackSubAgentResult(input.Role, task.ID, subagent.StateFailed, subagent.StopReasonError, stepErr)
 				emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, stepErr)
-				return subagent.Result{}, stepErr
+				emitSubAgentStopHook(s, ctx, input, fallback)
+				return fallback, stepErr
 			}
 			emitSubAgentTerminal(s, ctx, input, result)
 			emitSubAgentStopHook(s, ctx, input, result)
@@ -133,8 +135,10 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 		result, err := worker.Result()
 		if err != nil {
+			fallback := fallbackSubAgentResult(input.Role, task.ID, subagent.StateFailed, subagent.StopReasonError, err)
 			emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, err)
-			return subagent.Result{}, err
+			emitSubAgentStopHook(s, ctx, input, fallback)
+			return fallback, err
 		}
 		emitSubAgentTerminal(s, ctx, input, result)
 		emitSubAgentStopHook(s, ctx, input, result)
