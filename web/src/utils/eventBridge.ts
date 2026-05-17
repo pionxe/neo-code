@@ -17,9 +17,6 @@ import {
   type TokenUsage,
   type VerificationCompletedPayload,
   type VerificationFailedPayload,
-  type VerificationFinishedPayload,
-  type VerificationStageFinishedPayload,
-  type VerificationStartedPayload,
   type ToolDiffPayload,
 } from "@/api/protocol";
 import { type GatewayAPI } from "@/api/gateway";
@@ -990,56 +987,6 @@ export function handleGatewayEvent(
         reason !== "invalid_transition"
       ) {
         uiStore.showToast(`Todo conflict: ${reason}`, "info");
-      }
-      break;
-    }
-
-    case EventType.VerificationStarted: {
-      const payload = eventPayload as VerificationStartedPayload | undefined;
-      if (!payload) break;
-      // completion gate 已拦截（典型场景: pending_todo），verifier 不会真正运行；
-      // 跳过创建 verification chat message，避免出现 "0/1 passed" 误导。
-      // 该状态由下游 AcceptanceDecided → AcceptanceMessage 完整呈现。
-      if (payload.completion_passed === false) {
-        break;
-      }
-      const recordId = insightStore.startVerification(payload);
-      const history = useRuntimeInsightStore.getState().verificationHistory;
-      const record =
-        history.length > 0 ? history[history.length - 1] : undefined;
-      if (record) {
-        const msgId = `msg_${Date.now()}_verify_${recordId.slice(0, 8)}`;
-        _latestVerificationMsgId = msgId;
-        chatStore.addMessage({
-          id: msgId,
-          role: "assistant",
-          type: "verification",
-          content: "",
-          verificationData: record,
-          timestamp: Date.now(),
-        });
-      }
-      chatStore.setPhase("verification");
-      uiStore.showToast("Verification started", "info");
-      break;
-    }
-
-    case EventType.VerificationStageFinished: {
-      const payload = eventPayload as
-        | VerificationStageFinishedPayload
-        | undefined;
-      if (payload) {
-        insightStore.upsertVerificationStage(payload);
-        syncLatestVerificationToChat();
-      }
-      break;
-    }
-
-    case EventType.VerificationFinished: {
-      const payload = eventPayload as VerificationFinishedPayload | undefined;
-      if (payload) {
-        insightStore.finishVerification(payload);
-        syncLatestVerificationToChat();
       }
       break;
     }

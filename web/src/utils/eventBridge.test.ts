@@ -697,27 +697,6 @@ describe("eventBridge", () => {
     );
   });
 
-  it("VerificationStageFinished upserts verifier status", () => {
-    const api = createMockGatewayAPI();
-    handleGatewayEvent(
-      {
-        type: EventType.VerificationStageFinished,
-        payload: {
-          payload: {
-            runtime_event_type: EventType.VerificationStageFinished,
-            payload: { name: "test", status: "passed", summary: "ok" },
-          },
-        },
-        session_id: "sess-1",
-        run_id: "run-1",
-      },
-      api,
-    );
-
-    expect(
-      useRuntimeInsightStore.getState().verificationStages.test.status,
-    ).toBe("passed");
-  });
 
   it("AcceptanceDecided stores acceptance decision", () => {
     const api = createMockGatewayAPI();
@@ -1401,110 +1380,8 @@ describe("eventBridge", () => {
     expect(useUIStore.getState().fileChanges).toHaveLength(0);
   });
 
-  it("VerificationStarted creates a verification ChatMessage", () => {
-    const api = createMockGatewayAPI();
-    handleGatewayEvent(
-      {
-        type: EventType.VerificationStarted,
-        payload: {
-          payload: {
-            runtime_event_type: EventType.VerificationStarted,
-            payload: { completion_passed: true },
-          },
-        },
-        session_id: "sess-1",
-        run_id: "run-1",
-      },
-      api,
-    );
 
-    const verifyMsg = useChatStore
-      .getState()
-      .messages.find((m) => m.type === "verification");
-    expect(verifyMsg).toBeDefined();
-    expect(verifyMsg?.verificationData?.status).toBe("running");
-    expect(useRuntimeInsightStore.getState().verificationHistory).toHaveLength(
-      1,
-    );
-  });
 
-  it("VerificationStageFinished updates the verification message", () => {
-    const api = createMockGatewayAPI();
-    handleGatewayEvent(
-      {
-        type: EventType.VerificationStarted,
-        payload: {
-          payload: {
-            runtime_event_type: EventType.VerificationStarted,
-            payload: { completion_passed: true },
-          },
-        },
-        session_id: "sess-1",
-        run_id: "run-1",
-      },
-      api,
-    );
-    handleGatewayEvent(
-      {
-        type: EventType.VerificationStageFinished,
-        payload: {
-          payload: {
-            runtime_event_type: EventType.VerificationStageFinished,
-            payload: { name: "lint", status: "passed", summary: "all good" },
-          },
-        },
-        session_id: "sess-1",
-        run_id: "run-1",
-      },
-      api,
-    );
-
-    const verifyMsg = useChatStore
-      .getState()
-      .messages.find((m) => m.type === "verification");
-    expect(verifyMsg?.verificationData?.stages.lint.status).toBe("passed");
-    expect(verifyMsg?.verificationData?.stages.lint.summary).toBe("all good");
-  });
-
-  it("VerificationFinished updates history and chat message", () => {
-    const api = createMockGatewayAPI();
-    handleGatewayEvent(
-      {
-        type: EventType.VerificationStarted,
-        payload: {
-          payload: {
-            runtime_event_type: EventType.VerificationStarted,
-            payload: { completion_passed: true },
-          },
-        },
-        session_id: "sess-1",
-        run_id: "run-1",
-      },
-      api,
-    );
-    handleGatewayEvent(
-      {
-        type: EventType.VerificationFinished,
-        payload: {
-          payload: {
-            runtime_event_type: EventType.VerificationFinished,
-            payload: { acceptance_status: "accepted" },
-          },
-        },
-        session_id: "sess-1",
-        run_id: "run-1",
-      },
-      api,
-    );
-
-    const verifyMsg = useChatStore
-      .getState()
-      .messages.find((m) => m.type === "verification");
-    expect(verifyMsg?.verificationData?.status).toBe("finished");
-    expect(
-      useRuntimeInsightStore.getState().verificationHistory[0].status,
-    ).toBe("finished");
-  });
 
   it("AcceptanceDecided creates an acceptance ChatMessage", () => {
     const api = createMockGatewayAPI();

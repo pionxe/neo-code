@@ -100,7 +100,7 @@ Gateway 对外暴露三个端点：JSON-RPC（请求/响应）、SSE（服务端
 
 Runtime 收到请求后，进入 ReAct 循环——推理（Reasoning）和行动（Acting）交替进行。
 
-以下 flowchart 展示了 ReAct 循环的完整判断逻辑和退出条件。注意：模型的 `end_turn` **不等于真正结束**——它只是一个 candidate final，必须通过 Completion Gate 和 Verifier Gate 的验收才能被系统接受：
+以下 flowchart 展示了 ReAct 循环的完整判断逻辑和退出条件。注意：模型的 `end_turn` **不等于真正结束**——它只是一个 candidate final，必须通过 Completion Gate 和 Accept Gate Hook 的验收才能被系统接受：
 
 ```mermaid
 flowchart TD
@@ -119,7 +119,7 @@ flowchart TD
     J --> B
 
     D -->|"end_turn（candidate final）"| CG["Completion Gate\nTodo 是否收敛？"]
-    CG --> VG["Verifier Gate\n按 VerificationProfile 运行 verifier"]
+    CG --> HK["Accept Gate Hook\n用户配置的验收脚本"]
     VG --> AS{"AcceptanceService\n汇总裁决"}
     AS -->|"accepted"| K["输出结果，循环结束"]
     AS -->|"continue（soft_block / todo 未收敛）"| HINT["注入 continue hint\n告知模型哪些验收未通过"]
@@ -145,9 +145,9 @@ flowchart TD
 
 **验收流程三阶段：**
 
-1. **Completion Gate**：检查 Todo 收敛状态。如果还有 required todo 未完成，直接阻塞，不运行后续 verifier。
-2. **Verifier Gate**：按 Session 持有的 `VerificationProfile`（如 `edit_code` → `todo_convergence + git_diff + build + test + typecheck`）解析出 verifier 列表，通过 Orchestrator 顺序执行，首个非 pass 结果短路。
-3. **AcceptanceService**：汇总 Completion Gate、Verifier Gate 和 Decider 的信号，产出唯一的终态裁决。
+1. **Completion Gate**：系统预检：检查 Todo 收敛状态和输出可见性。如果还有 required todo 未完成或无可见输出，直接阻塞。
+2. **Accept Gate Hook**：用户或仓库配置的 accept_gate hook，可运行命令脚本或内置 handler，对模型输出进行客观验收。
+3. **AcceptanceService**：汇总 Completion Gate、Accept Gate Hook 和 continue 预算的信号，产出唯一的终态裁决。
 
 **四种裁决结果：**
 
