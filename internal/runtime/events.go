@@ -5,7 +5,6 @@ import (
 
 	"neo-code/internal/runtime/acceptgate"
 	"neo-code/internal/runtime/controlplane"
-	"neo-code/internal/runtime/verify"
 )
 
 // EventType 标识 runtime 事件类型。
@@ -68,18 +67,18 @@ type VerificationStartedPayload struct {
 
 // VerificationStageFinishedPayload 描述单个 verifier 阶段完成事件。
 type VerificationStageFinishedPayload struct {
-	Name       string                    `json:"name"`
-	Status     verify.VerificationStatus `json:"status"`
-	Summary    string                    `json:"summary,omitempty"`
-	Reason     string                    `json:"reason,omitempty"`
-	ErrorClass verify.ErrorClass         `json:"error_class,omitempty"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Summary    string `json:"summary,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	ErrorClass string `json:"error_class,omitempty"`
 }
 
 // VerificationFinishedPayload 描述整体验证流程结束事件。
 type VerificationFinishedPayload struct {
 	AcceptanceStatus string                  `json:"acceptance_status"`
 	StopReason       controlplane.StopReason `json:"stop_reason,omitempty"`
-	ErrorClass       verify.ErrorClass       `json:"error_class,omitempty"`
+	ErrorClass       string                  `json:"error_class,omitempty"`
 }
 
 // VerificationCompletedPayload 描述验证通过并可完成的事件。
@@ -90,7 +89,7 @@ type VerificationCompletedPayload struct {
 // VerificationFailedPayload 描述验证失败事件。
 type VerificationFailedPayload struct {
 	StopReason controlplane.StopReason `json:"stop_reason,omitempty"`
-	ErrorClass verify.ErrorClass       `json:"error_class,omitempty"`
+	ErrorClass string                  `json:"error_class,omitempty"`
 }
 
 // AcceptanceDecidedPayload 描述 acceptance engine 决议结果。
