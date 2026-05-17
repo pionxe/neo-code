@@ -984,7 +984,62 @@ func TestPermissionQueuedRequestDoesNotOverrideActiveCardBeforeResolve(t *testin
 	}
 }
 
-func TestPermissionActionFallsBackToCurrentPendingRequestWhenStale(t *testing.T) {
+func TestPermissionQueueSwitchPrefersNewestPendingAfterResolve(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-queue-newest", "run-queue-newest", "chat-queue-newest", "执行审批新队列优先任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue-newest", "run-queue-newest", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-newest-1",
+			"reason":     "审批一",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue-newest", "run-queue-newest", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-newest-2",
+			"reason":     "审批二",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue-newest", "run-queue-newest", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-newest-3",
+			"reason":     "审批三",
+		},
+	})
+	time.Sleep(80 * time.Millisecond)
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-newest-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("handle first card action: %v", err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	lastPendingRequestID := ""
+	for _, message := range msgs {
+		if message.kind == "update_pending_perm_card" && message.updatedPendingCard != nil {
+			lastPendingRequestID = message.updatedPendingCard.RequestID
+		}
+	}
+	if lastPendingRequestID == "" {
+		t.Fatalf("expected pending switch update after resolving first approval, msgs=%#v", msgs)
+	}
+	if lastPendingRequestID != "perm-newest-3" {
+		t.Fatalf("pending switch should prefer newest request, got %q; msgs=%#v", lastPendingRequestID, msgs)
+	}
+}
+
+func TestPermissionActionStrictlyIgnoresStaleCallbackWithoutFallback(t *testing.T) {
 	adapter := newTestAdapter(t)
 	if err := adapter.bindThenRun(context.Background(), "session-stale", "run-stale", "chat-stale", "执行审批回退任务"); err != nil {
 		t.Fatalf("bindThenRun: %v", err)
@@ -1043,36 +1098,26 @@ func TestPermissionActionFallsBackToCurrentPendingRequestWhenStale(t *testing.T)
 		CardID:    permissionCardID,
 		Decision:  "reject",
 	}); err != nil {
-		t.Fatalf("resolve stale permission should fallback: %v", err)
+		t.Fatalf("resolve stale permission should be ignored in strict mode: %v", err)
 	}
 	time.Sleep(30 * time.Millisecond)
 
 	calls := gateway.snapshotCalls()
 	resolveStale := 0
-	resolveFallback := 0
+	resolveUnexpectedFallback := 0
 	for _, call := range calls {
 		if call == "resolve:perm-stale-1:reject" {
 			resolveStale++
 		}
 		if call == "resolve:perm-stale-2:reject" {
-			resolveFallback++
+			resolveUnexpectedFallback++
 		}
 	}
-	if resolveStale == 0 || resolveFallback == 0 {
-		t.Fatalf("expected stale+fallback resolve calls, got %#v", calls)
+	if resolveStale != 0 {
+		t.Fatalf("stale callback should not call resolve in strict mode, got %#v", calls)
 	}
-
-	msgs := adapterTestMessenger(adapter).snapshot()
-	foundRejected := false
-	for _, message := range msgs {
-		if message.kind == "update_perm_card" && message.resolvedCard != nil &&
-			message.resolvedCard.RequestID == "perm-stale-2" && !message.resolvedCard.Approved {
-			foundRejected = true
-			break
-		}
-	}
-	if !foundRejected {
-		t.Fatalf("expected fallback request resolved card update, msgs=%#v", msgs)
+	if resolveUnexpectedFallback != 0 {
+		t.Fatalf("stale callback must not fallback-resolve next pending request, got %#v", calls)
 	}
 }
 
@@ -1131,11 +1176,11 @@ func TestPermissionActionIgnoresAlreadyResolvedRequestOnOpaquePrimaryError(t *te
 	gateway.mu.Unlock()
 
 	err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
-		EventID:   "evt-opaque-fallback",
-		RequestID: "perm-opaque-1",
-		Decision:  "allow_once",
+		EventID:    "evt-opaque-fallback",
+		RequestID:  "perm-opaque-1",
+		Decision:   "allow_once",
 		ActionType: "permission",
-		CardID:    permissionCardID,
+		CardID:     permissionCardID,
 	})
 	if err != nil {
 		t.Fatalf("resolve opaque stale permission should be ignored: %v", err)
@@ -1155,6 +1200,125 @@ func TestPermissionActionIgnoresAlreadyResolvedRequestOnOpaquePrimaryError(t *te
 	for _, call := range calls {
 		if call == "resolve:perm-opaque-2:allow_once" {
 			t.Fatalf("stale callback must not fallback-resolve next pending request, got %#v", calls)
+		}
+	}
+}
+
+func TestPermissionCallbackStrictRejectsNonActiveRequest(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-strict-active", "run-strict-active", "chat-strict-active", "执行严格回调任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-strict-active", "run-strict-active", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-strict-active-1",
+			"reason":     "审批一",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-strict-active", "run-strict-active", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-strict-active-2",
+			"reason":     "审批二",
+		},
+	})
+	time.Sleep(60 * time.Millisecond)
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-strict-active-2",
+		Decision:  "reject",
+	}); err != nil {
+		t.Fatalf("strict callback for non-active request should be ignored: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	calls := adapterTestGateway(adapter).snapshotCalls()
+	for _, call := range calls {
+		if call == "resolve:perm-strict-active-2:reject" {
+			t.Fatalf("non-active request must not be resolved in strict mode, calls=%#v", calls)
+		}
+	}
+}
+
+func TestPermissionCallbackStrictRejectsCardRunMismatch(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-strict-card", "run-strict-card", "chat-strict-card", "执行严格回调任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-strict-card", "run-strict-card", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-strict-card-1",
+			"reason":     "审批一",
+		},
+	})
+	time.Sleep(40 * time.Millisecond)
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-strict-card-1",
+		CardID:    "perm-card-unrelated",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("strict callback with card mismatch should be ignored: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	calls := adapterTestGateway(adapter).snapshotCalls()
+	for _, call := range calls {
+		if call == "resolve:perm-strict-card-1:allow_once" {
+			t.Fatalf("card mismatch must not call resolve, calls=%#v", calls)
+		}
+	}
+}
+
+func TestPermissionCallbackStrictRejectsNonDisplayingPendingState(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-strict-state", "run-strict-state", "chat-strict-state", "执行严格回调任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-strict-state", "run-strict-state", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-strict-state-1",
+			"reason":     "审批一",
+		},
+	})
+	time.Sleep(40 * time.Millisecond)
+
+	runKey := runBindingKey("session-strict-state", "run-strict-state")
+	adapter.mu.Lock()
+	if fsm := adapter.approvalFSMByRun[runKey]; fsm != nil {
+		node := fsm.Requests["perm-strict-state-1"]
+		node.State = approvalRequestStateQueued
+		fsm.Requests["perm-strict-state-1"] = node
+	}
+	adapter.mu.Unlock()
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-strict-state-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("strict callback with non-displaying state should be ignored: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	calls := adapterTestGateway(adapter).snapshotCalls()
+	for _, call := range calls {
+		if call == "resolve:perm-strict-state-1:allow_once" {
+			t.Fatalf("non-displaying-pending state must not call resolve, calls=%#v", calls)
 		}
 	}
 }
@@ -1341,16 +1505,32 @@ func TestUpdateApprovalStatusFinalizesHistoricalPermissionCards(t *testing.T) {
 		},
 	}
 	adapter.activeRuns[key] = binding
-	adapter.requestRuns["perm-history-1"] = key
-	adapter.permissionCards["perm-history-1"] = "perm-card-current"
-	adapter.runPermissionCards[key] = "perm-card-current"
-	adapter.permissionCardRuns["perm-card-current"] = key
-	adapter.permissionCardRuns["perm-card-old"] = key
+	adapter.approvalFSMByRun[key] = &approvalFSMState{
+		Generation:      1,
+		Version:         1,
+		CardID:          "perm-card-current",
+		ActiveRequestID: "perm-history-1",
+		Requests: map[string]approvalRequestNode{
+			"perm-history-1": {
+				RequestID:  "perm-history-1",
+				ToolName:   "filesystem_write_file",
+				Operation:  "write_file",
+				Target:     "1.txt",
+				Reason:     "需要写文件权限",
+				Decision:   "pending",
+				State:      approvalRequestStateDisplayingPending,
+				UpdatedVer: 1,
+			},
+		},
+	}
+	adapter.approvalRequestRunIndex[approvalRequestScopedKey(key, "perm-history-1")] = key
+	adapter.approvalRequestIDRunIndex["perm-history-1"] = key
+	adapter.approvalCardRunIndex["perm-card-current"] = key
+	adapter.approvalCardRunIndex["perm-card-old"] = key
 	adapter.runPermissionCardHistory[key] = map[string]struct{}{
 		"perm-card-current": {},
 		"perm-card-old":     {},
 	}
-	adapter.runPermissionActiveRequest[key] = "perm-history-1"
 	adapter.mu.Unlock()
 
 	adapter.updateApprovalStatus("perm-history-1", "allow_once")
@@ -1398,15 +1578,32 @@ func TestRunTerminalFinalizesPermissionCardUsingRunScopedCardFallback(t *testing
 		},
 	}
 	adapter.activeRuns[key] = binding
-	adapter.runPermissionCards[key] = "perm-card-fallback"
-	adapter.permissionCardRuns["perm-card-fallback"] = key
-	adapter.permissionCardRuns["perm-card-stale"] = key
+	adapter.approvalFSMByRun[key] = &approvalFSMState{
+		Generation:      1,
+		Version:         1,
+		CardID:          "perm-card-fallback",
+		ActiveRequestID: "",
+		Requests: map[string]approvalRequestNode{
+			"perm-terminal-1": {
+				RequestID:  "perm-terminal-1",
+				ToolName:   "filesystem_write_file",
+				Operation:  "write_file",
+				Target:     "1.txt",
+				Reason:     "需要写文件权限",
+				Decision:   "allow_once",
+				State:      approvalRequestStateResolvedApproved,
+				UpdatedVer: 1,
+			},
+		},
+	}
+	adapter.approvalRequestRunIndex[approvalRequestScopedKey(key, "perm-terminal-1")] = key
+	adapter.approvalRequestIDRunIndex["perm-terminal-1"] = key
+	adapter.approvalCardRunIndex["perm-card-fallback"] = key
+	adapter.approvalCardRunIndex["perm-card-stale"] = key
 	adapter.runPermissionCardHistory[key] = map[string]struct{}{
 		"perm-card-fallback": {},
 		"perm-card-stale":    {},
 	}
-	delete(adapter.permissionCards, "perm-terminal-1")
-	delete(adapter.requestRuns, "perm-terminal-1")
 	adapter.mu.Unlock()
 
 	adapter.markRunTerminal(sessionID, runID, "success", "done", "")
@@ -1627,6 +1824,18 @@ func TestRunProgressInternalEventsAreNotUserFacing(t *testing.T) {
 
 func TestCardCallbackDedupeResolveOnce(t *testing.T) {
 	adapter := newTestAdapter(t)
+	adapter.trackSession("session-card-dedupe", "run-card-dedupe", "chat-card-dedupe", "card dedupe task")
+	adapter.processPermissionRequested(
+		context.Background(),
+		"session-card-dedupe",
+		"run-card-dedupe",
+		"chat-card-dedupe",
+		"perm-2",
+		"filesystem_write_file",
+		"write_file",
+		"dedupe.txt",
+		"需要审批",
+	)
 	body := `{"action":{"value":{"request_id":"perm-2","decision":"allow_once"}},"token":"verify"}`
 	for i := 0; i < 2; i++ {
 		request := signedRequest(t, adapter.cfg.SigningSecret, body)
@@ -1643,6 +1852,18 @@ func TestCardCallbackDedupeResolveOnce(t *testing.T) {
 
 func TestCardCallbackResolveFailureReturns500(t *testing.T) {
 	adapter := newTestAdapter(t)
+	adapter.trackSession("session-card-failure", "run-card-failure", "chat-card-failure", "card failure task")
+	adapter.processPermissionRequested(
+		context.Background(),
+		"session-card-failure",
+		"run-card-failure",
+		"chat-card-failure",
+		"perm-3",
+		"filesystem_write_file",
+		"write_file",
+		"failure.txt",
+		"需要审批",
+	)
 	gateway := adapterTestGateway(adapter)
 	gateway.mu.Lock()
 	gateway.resolveErr = assertErr("deny")
@@ -1922,9 +2143,17 @@ func TestEnsureRunCardUpdatesExistingCard(t *testing.T) {
 func TestTryHandleTextPermissionHandlesApprovalCommands(t *testing.T) {
 	adapter := newTestAdapter(t)
 	adapter.trackSession("session-approve", "run-approve", "chat-approve", "approve task")
-	adapter.mu.Lock()
-	adapter.requestRuns["perm-approve"] = "session-approve|run-approve"
-	adapter.mu.Unlock()
+	adapter.processPermissionRequested(
+		context.Background(),
+		"session-approve",
+		"run-approve",
+		"chat-approve",
+		"perm-approve",
+		"filesystem_write_file",
+		"write_file",
+		"approve.txt",
+		"需要审批",
+	)
 
 	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-approve", "允许 perm-approve")
 	if err != nil || !handled {
@@ -1942,9 +2171,17 @@ func TestTryHandleTextPermissionHandlesApprovalCommands(t *testing.T) {
 func TestTryHandleTextPermissionHandlesRejectCommand(t *testing.T) {
 	adapter := newTestAdapter(t)
 	adapter.trackSession("session-reject-ok", "run-reject-ok", "chat-reject-ok", "reject task")
-	adapter.mu.Lock()
-	adapter.requestRuns["perm-reject-ok"] = "session-reject-ok|run-reject-ok"
-	adapter.mu.Unlock()
+	adapter.processPermissionRequested(
+		context.Background(),
+		"session-reject-ok",
+		"run-reject-ok",
+		"chat-reject-ok",
+		"perm-reject-ok",
+		"filesystem_write_file",
+		"write_file",
+		"reject-ok.txt",
+		"需要审批",
+	)
 
 	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-reject-ok", "拒绝 perm-reject-ok")
 	if err != nil || !handled {
@@ -1959,18 +2196,17 @@ func TestTryHandleTextPermissionHandlesRejectCommand(t *testing.T) {
 func TestTryHandleTextPermissionRejectFailureRepliesRetryable(t *testing.T) {
 	adapter := newTestAdapter(t)
 	adapter.trackSession("session-reject", "run-reject", "chat-reject", "reject task")
-	adapter.mu.Lock()
-	adapter.requestRuns["perm-reject"] = "session-reject|run-reject"
-	adapter.activeRuns["session-reject|run-reject"] = sessionBinding{
-		SessionID:      "session-reject",
-		RunID:          "run-reject",
-		ChatID:         "chat-reject",
-		TaskName:       "reject task",
-		Status:         "running",
-		ApprovalStatus: "pending",
-		Result:         "pending",
-	}
-	adapter.mu.Unlock()
+	adapter.processPermissionRequested(
+		context.Background(),
+		"session-reject",
+		"run-reject",
+		"chat-reject",
+		"perm-reject",
+		"filesystem_write_file",
+		"write_file",
+		"reject.txt",
+		"需要审批",
+	)
 	gateway := adapterTestGateway(adapter)
 	gateway.mu.Lock()
 	gateway.resolveErr = assertErr("boom")
