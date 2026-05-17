@@ -4,6 +4,7 @@ import { useChatStore } from './useChatStore'
 import { useSessionStore } from './useSessionStore'
 import { useUIStore } from './useUIStore'
 import { useGatewayStore } from './useGatewayStore'
+import { useRuntimeInsightStore } from './useRuntimeInsightStore'
 
 function flushPromises() {
 	return new Promise((resolve) => setTimeout(resolve, 0))
@@ -32,12 +33,16 @@ describe('useWorkspaceStore', () => {
 		useUIStore.setState({
 			showToast: vi.fn(),
 			clearFileChanges: vi.fn(),
+			clearCheckpointRollbackUndo: vi.fn(),
 			resetPreviewTabs: vi.fn(),
 			setSearchQuery: vi.fn(),
 		} as any)
 		useGatewayStore.setState({
 			setCurrentRunId: vi.fn(),
 			notifyProviderChanged: vi.fn(),
+		} as any)
+		useRuntimeInsightStore.setState({
+			reset: vi.fn(),
 		} as any)
 	})
 
@@ -80,7 +85,9 @@ describe('useWorkspaceStore', () => {
 
 		expect(useChatStore.getState().clearMessages).toHaveBeenCalled()
 		expect(useSessionStore.getState().resetForWorkspaceSwitch).toHaveBeenCalled()
+		expect(useRuntimeInsightStore.getState().reset).toHaveBeenCalled()
 		expect(useUIStore.getState().clearFileChanges).toHaveBeenCalled()
+		expect(useUIStore.getState().clearCheckpointRollbackUndo).toHaveBeenCalled()
 		expect(useUIStore.getState().resetPreviewTabs).toHaveBeenCalled()
 		expect(gatewayAPI.switchWorkspace).toHaveBeenCalledWith('w2')
 		expect(useGatewayStore.getState().notifyProviderChanged).toHaveBeenCalled()
@@ -122,6 +129,31 @@ describe('useWorkspaceStore', () => {
 
 		await useWorkspaceStore.getState().createWorkspace('/x', gatewayAPI)
 		expect(showToast).toHaveBeenCalledWith('Failed to create workspace', 'error')
+	})
+
+	it('createWorkspace clears runtime insight and rollback undo before switching', async () => {
+		const gatewayAPI = {
+			createWorkspace: vi.fn().mockResolvedValue({
+				payload: {
+					workspace: {
+						hash: 'w-new',
+						path: '/new',
+						name: 'New',
+						created_at: '1',
+						updated_at: '1',
+					},
+				},
+			}),
+			switchWorkspace: vi.fn().mockResolvedValue(undefined),
+		} as any
+		const fetchSessions = useSessionStore.getState().fetchSessions as any
+
+		await useWorkspaceStore.getState().createWorkspace('/new', gatewayAPI, 'New')
+
+		expect(useRuntimeInsightStore.getState().reset).toHaveBeenCalled()
+		expect(useUIStore.getState().clearCheckpointRollbackUndo).toHaveBeenCalled()
+		expect(gatewayAPI.switchWorkspace).toHaveBeenCalledWith('w-new')
+		expect(fetchSessions).toHaveBeenCalledWith(gatewayAPI, true)
 	})
 
 	it('deleteWorkspace switches to remaining first workspace when current is removed', async () => {

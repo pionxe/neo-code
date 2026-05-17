@@ -262,6 +262,7 @@ export async function reloadSessionAfterCheckpointRestore(
 
 let _fetchSessionsPromise: Promise<void> | null = null
 let _fetchSessionsSeq = 0
+let _switchSessionSeq = 0
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   projects: [],
@@ -290,6 +291,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (prevAbort) {
       prevAbort.abort()
     }
+    const switchSeq = ++_switchSessionSeq
     const abortCtrl = new AbortController()
     set({ _switchAbort: abortCtrl, loading: true })
 
@@ -308,13 +310,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
       // 3. Bind stream (events will be discarded due to isTransitioning)
       await gatewayAPI.bindStream({ session_id: sessionId, channel: 'all' })
+      if (abortCtrl.signal.aborted || switchSeq !== _switchSessionSeq || get()._switchAbort !== abortCtrl) return
 
       // 4. Load historical messages (concurrently fetch todos + runtime snapshot)
       const sessionFrame = await loadSessionWithInsights(gatewayAPI, sessionId)
+      if (abortCtrl.signal.aborted || switchSeq !== _switchSessionSeq || get()._switchAbort !== abortCtrl) return
       const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
 
       // Check if this request was superseded
-      if (abortCtrl.signal.aborted) return
+      if (abortCtrl.signal.aborted || switchSeq !== _switchSessionSeq || get()._switchAbort !== abortCtrl) return
 
       // 5. Load messages and stop transitioning
       if (sessionData.messages && sessionData.messages.length > 0) {
@@ -326,7 +330,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       useChatStore.getState().setAgentMode(restoredMode)
       chatStore.setTransitioning(false)
     } catch (err) {
-      if (abortCtrl.signal.aborted) return
+      if (abortCtrl.signal.aborted || switchSeq !== _switchSessionSeq || get()._switchAbort !== abortCtrl) return
       console.error('switchSession failed:', err)
       // Revert to previous session and re-bind its stream
       set({ currentSessionId: prevSessionId })
@@ -335,7 +339,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       useChatStore.getState().setTransitioning(false)
     } finally {
-      if (get()._switchAbort === abortCtrl) {
+      if (switchSeq === _switchSessionSeq && get()._switchAbort === abortCtrl) {
         set({ loading: false, _switchAbort: null })
       }
     }
@@ -379,9 +383,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   resetForWorkspaceSwitch: () => {
+    const currentAbort = get()._switchAbort
+    if (currentAbort) {
+      currentAbort.abort()
+    }
     _fetchSessionsPromise = null
     _fetchSessionsSeq += 1
-    set({ _initialBindDone: false, loading: false })
+    _switchSessionSeq += 1
+    set({ _initialBindDone: false, loading: false, _switchAbort: null })
   },
 
   removeSessionLocally: (sessionId) => {

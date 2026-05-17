@@ -187,6 +187,68 @@ describe('useSessionStore', () => {
     expect(useChatStore.getState().isTransitioning).toBe(false)
   })
 
+  it('resetForWorkspaceSwitch aborts in-flight switchSession and blocks stale writeback', async () => {
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    let resolveLoad!: (value: any) => void
+    const mockLoadSession = vi.fn().mockImplementation(
+      () => new Promise((resolve) => { resolveLoad = resolve }),
+    )
+    const mockAPI = { bindStream: mockBindStream, loadSession: mockLoadSession } as any
+
+    const switchPromise = useSessionStore.getState().switchSession('sess-old', mockAPI)
+    await Promise.resolve()
+
+    useSessionStore.getState().resetForWorkspaceSwitch()
+
+    resolveLoad({
+      payload: {
+        messages: [{ role: 'assistant', content: 'stale payload', tool_calls: [] }],
+        agent_mode: 'plan',
+      },
+    })
+    await switchPromise
+
+    expect(useChatStore.getState().messages).toHaveLength(0)
+    expect(useChatStore.getState().agentMode).toBe('build')
+  })
+
+  it('switchSession applies only latest request when older request resolves later', async () => {
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    let resolveLoadA!: (value: any) => void
+    let resolveLoadB!: (value: any) => void
+    const mockLoadSession = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveLoadA = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveLoadB = resolve }))
+    const mockAPI = { bindStream: mockBindStream, loadSession: mockLoadSession } as any
+
+    const switchA = useSessionStore.getState().switchSession('sess-a', mockAPI)
+    await Promise.resolve()
+    const switchB = useSessionStore.getState().switchSession('sess-b', mockAPI)
+    await Promise.resolve()
+
+    resolveLoadB({
+      payload: {
+        messages: [{ role: 'assistant', content: 'new payload', tool_calls: [] }],
+        agent_mode: 'plan',
+      },
+    })
+    await switchB
+
+    resolveLoadA({
+      payload: {
+        messages: [{ role: 'assistant', content: 'old payload', tool_calls: [] }],
+        agent_mode: 'build',
+      },
+    })
+    await switchA
+
+    expect(useSessionStore.getState().currentSessionId).toBe('sess-b')
+    expect(useChatStore.getState().messages).toHaveLength(1)
+    expect(useChatStore.getState().messages[0].content).toBe('new payload')
+    expect(useChatStore.getState().agentMode).toBe('plan')
+  })
+
   it('fetchSessions auto-selects first session and binds stream', async () => {
     const setMessagesSpy = vi.spyOn(useChatStore.getState(), 'setMessages')
     const addMessageSpy = vi.spyOn(useChatStore.getState(), 'addMessage')

@@ -5,6 +5,7 @@ import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 
 /** 工作区记录 */
 export interface Workspace {
@@ -101,7 +102,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     })
     useSessionStore.getState().resetForWorkspaceSwitch()
     useGatewayStore.getState().setCurrentRunId('')
+    useRuntimeInsightStore.getState().reset()
     useUIStore.getState().clearFileChanges()
+    useUIStore.getState().clearCheckpointRollbackUndo()
     useUIStore.getState().resetPreviewTabs()
     useUIStore.getState().setSearchQuery('')
 
@@ -144,7 +147,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     })
     useSessionStore.getState().resetForWorkspaceSwitch()
     useGatewayStore.getState().setCurrentRunId('')
+    useRuntimeInsightStore.getState().reset()
     useUIStore.getState().clearFileChanges()
+    useUIStore.getState().clearCheckpointRollbackUndo()
     useUIStore.getState().resetPreviewTabs()
     useUIStore.getState().setSearchQuery('')
 
