@@ -1872,6 +1872,41 @@ func TestResolveListFilesRootSessionNotFound(t *testing.T) {
 	}
 }
 
+func TestResolveListFilesRootFallsBackWhenSessionWorkdirEmpty(t *testing.T) {
+	cfgRoot := t.TempDir()
+	loaderStore := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		session:                agentsession.Session{Workdir: " \t "},
+	}
+	cfgMgr := &configManagerStub{cfg: config.Config{Workdir: cfgRoot}}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, loaderStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	root, err := bridge.resolveListFilesRoot(context.Background(), gateway.ListFilesInput{SessionID: "s-1"})
+	if err != nil {
+		t.Fatalf("resolve with empty session workdir should not error: %v", err)
+	}
+	if root != filepath.Clean(cfgRoot) {
+		t.Fatalf("root = %q, want %q", root, filepath.Clean(cfgRoot))
+	}
+}
+
+func TestResolveListFilesRootPropagatesUnexpectedSessionLoadError(t *testing.T) {
+	cfgRoot := t.TempDir()
+	loaderStore := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		loadErr:                errors.New("load failed"),
+	}
+	cfgMgr := &configManagerStub{cfg: config.Config{Workdir: cfgRoot}}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, loaderStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	_, err := bridge.resolveListFilesRoot(context.Background(), gateway.ListFilesInput{SessionID: "s-1"})
+	if err == nil || err.Error() != "load failed" {
+		t.Fatalf("expected load failed error, got %v", err)
+	}
+}
+
 func TestResolveListFilesRootRejectsSessionWorkdirEscapingWorkspaceRoot(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	outsideRoot := t.TempDir()
@@ -1886,6 +1921,92 @@ func TestResolveListFilesRootRejectsSessionWorkdirEscapingWorkspaceRoot(t *testi
 	_, err := bridge.resolveListFilesRoot(context.Background(), gateway.ListFilesInput{SessionID: "s-1"})
 	if err == nil || !strings.Contains(err.Error(), "escapes current workspace root") {
 		t.Fatalf("expected workspace boundary error, got %v", err)
+	}
+}
+
+func TestIsPathWithinRoot(t *testing.T) {
+	root := t.TempDir()
+	insideDir := filepath.Join(root, "inside")
+	if err := os.MkdirAll(insideDir, 0o755); err != nil {
+		t.Fatalf("mkdir inside dir: %v", err)
+	}
+
+	if !isPathWithinRoot(root, root) {
+		t.Fatal("expected workspace root to be accepted as its own boundary")
+	}
+	if !isPathWithinRoot(insideDir, root) {
+		t.Fatal("expected child dir to be accepted")
+	}
+
+	outsideRoot := t.TempDir()
+	if isPathWithinRoot(outsideRoot, root) {
+		t.Fatal("expected unrelated path to be rejected")
+	}
+
+	linkPath := filepath.Join(root, "linked-outside")
+	if err := os.Symlink(outsideRoot, linkPath); err != nil {
+		t.Fatalf("symlink outside: %v", err)
+	}
+	if isPathWithinRoot(linkPath, root) {
+		t.Fatal("expected symlink escaping workspace root to be rejected")
+	}
+}
+
+func TestResolveWorkspaceRootForFileAccess(t *testing.T) {
+	configuredRoot := t.TempDir()
+	cfgMgr := &configManagerStub{cfg: config.Config{Workdir: configuredRoot}}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	root, err := bridge.resolveWorkspaceRootForFileAccess()
+	if err != nil {
+		t.Fatalf("resolve configured workspace root: %v", err)
+	}
+	if root != filepath.Clean(configuredRoot) {
+		t.Fatalf("root = %q, want %q", root, filepath.Clean(configuredRoot))
+	}
+
+	bridgeNoConfig, _ := newGatewayRuntimePortBridge(
+		context.Background(),
+		&runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)},
+		testSessionStore,
+		&configManagerStub{cfg: config.Config{Workdir: " \t "}},
+		nil,
+	)
+	defer bridgeNoConfig.Close()
+
+	root, err = bridgeNoConfig.resolveWorkspaceRootForFileAccess()
+	if err != nil {
+		t.Fatalf("resolve cwd fallback workspace root: %v", err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	absWd, err := filepath.Abs(wd)
+	if err != nil {
+		t.Fatalf("abs wd: %v", err)
+	}
+	if root != filepath.Clean(absWd) {
+		t.Fatalf("root = %q, want %q", root, filepath.Clean(absWd))
+	}
+}
+
+func TestLoadStoredSessionRejectsUnavailableOrUnsupportedSessionStore(t *testing.T) {
+	bridgeNilStore, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, nil)
+	defer bridgeNilStore.Close()
+
+	_, err := bridgeNilStore.loadStoredSession(context.Background(), "s-1")
+	if err == nil || !strings.Contains(err.Error(), "session store is unavailable") {
+		t.Fatalf("expected unavailable store error, got %v", err)
+	}
+
+	bridgeUnsupported, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, &bridgeSessionStoreStub{})
+	defer bridgeUnsupported.Close()
+
+	_, err = bridgeUnsupported.loadStoredSession(context.Background(), "s-1")
+	if err == nil || !strings.Contains(err.Error(), "does not support load session") {
+		t.Fatalf("expected unsupported loader error, got %v", err)
 	}
 }
 
