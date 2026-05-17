@@ -168,6 +168,25 @@ describe('useSessionStore', () => {
     expect(useChatStore.getState().messages[0].role).toBe('user')
   })
 
+  it('switchSession keeps transitioning true until loadSession finishes', async () => {
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    let resolveLoad!: (value: any) => void
+    const mockLoadSession = vi.fn().mockImplementation(
+      () => new Promise((resolve) => { resolveLoad = resolve }),
+    )
+    const mockAPI = { bindStream: mockBindStream, loadSession: mockLoadSession } as any
+
+    const switchPromise = useSessionStore.getState().switchSession('sess-2', mockAPI)
+    await Promise.resolve()
+
+    expect(useChatStore.getState().isTransitioning).toBe(true)
+
+    resolveLoad({ payload: { messages: [] } })
+    await switchPromise
+
+    expect(useChatStore.getState().isTransitioning).toBe(false)
+  })
+
   it('fetchSessions auto-selects first session and binds stream', async () => {
     const setMessagesSpy = vi.spyOn(useChatStore.getState(), 'setMessages')
     const addMessageSpy = vi.spyOn(useChatStore.getState(), 'addMessage')
@@ -215,6 +234,56 @@ describe('useSessionStore', () => {
 
     expect(useSessionStore.getState().currentSessionId).toBe('sess-b')
     expect(mockBindStream).not.toHaveBeenCalled()
+  })
+
+  it('fetchSessions ignores stale late response from an older request', async () => {
+    let resolveFirst!: (value: any) => void
+    let resolveSecond!: (value: any) => void
+    const mockListSessions = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { resolveFirst = resolve }),
+      )
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { resolveSecond = resolve }),
+      )
+    const mockAPI = {
+      listSessions: mockListSessions,
+      bindStream: vi.fn().mockResolvedValue({}),
+      loadSession: vi.fn().mockResolvedValue({ payload: { messages: [] } }),
+    } as any
+
+    useSessionStore.setState({ currentSessionId: 'sess-keep' })
+
+    const firstRequest = useSessionStore.getState().fetchSessions(mockAPI, true)
+    const secondRequest = useSessionStore.getState().fetchSessions(mockAPI, true)
+
+    resolveSecond({
+      payload: {
+        sessions: [{
+          id: 'sess-new',
+          title: 'New',
+          created_at: '2026-05-10T01:00:00Z',
+          updated_at: '2026-05-10T01:00:00Z',
+        }],
+      },
+    })
+    await secondRequest
+
+    resolveFirst({
+      payload: {
+        sessions: [{
+          id: 'sess-old',
+          title: 'Old',
+          created_at: '2026-05-09T01:00:00Z',
+          updated_at: '2026-05-09T01:00:00Z',
+        }],
+      },
+    })
+    await firstRequest
+
+    const sessions = useSessionStore.getState().projects.flatMap((project) => project.sessions)
+    expect(sessions.map((session) => session.id)).toEqual(['sess-new'])
   })
 
   it('fetchSessions uses the newer of created_at/updated_at as display time', async () => {

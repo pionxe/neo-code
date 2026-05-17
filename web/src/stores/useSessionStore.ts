@@ -261,6 +261,7 @@ export async function reloadSessionAfterCheckpointRestore(
 }
 
 let _fetchSessionsPromise: Promise<void> | null = null
+let _fetchSessionsSeq = 0
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   projects: [],
@@ -295,10 +296,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const prevSessionId = get().currentSessionId
 
     try {
-      // 1. Set transitioning flag and clear messages FIRST (before bindStream)
+      // 1. Clear messages first, then enter transitioning state to keep event drop window effective
       const chatStore = useChatStore.getState()
-      chatStore.setTransitioning(true)
       chatStore.clearMessages()
+      chatStore.setTransitioning(true)
       useRuntimeInsightStore.getState().reset()
       useUIStore.getState().clearCheckpointRollbackUndo()
 
@@ -379,6 +380,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   resetForWorkspaceSwitch: () => {
     _fetchSessionsPromise = null
+    _fetchSessionsSeq += 1
     set({ _initialBindDone: false, loading: false })
   },
 
@@ -393,24 +395,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // 去重：若已有 fetch 在进行中，复用同一 promise（force 跳过去重）
     if (!force && _fetchSessionsPromise) return _fetchSessionsPromise
 
-    _fetchSessionsPromise = (async () => {
+    const requestSeq = ++_fetchSessionsSeq
+    const fetchPromise = (async () => {
       set({ loading: true })
       try {
         const result = await gatewayAPI.listSessions()
+        if (requestSeq !== _fetchSessionsSeq) return
         const sessions = result.payload.sessions
         const projects = mapSessionsToProjects(sessions)
         set({ projects, loading: false })
 
         const state = get()
+        if (requestSeq !== _fetchSessionsSeq) return
         if (!isValidSessionId(state.currentSessionId) && sessions.length > 0) {
           const firstSession = sessions[0]
           set({ currentSessionId: firstSession.id })
           try {
             await gatewayAPI.bindStream({ session_id: firstSession.id, channel: 'all' })
+            if (requestSeq !== _fetchSessionsSeq) return
             set({ _initialBindDone: true })
 
             // Load historical messages for the auto-selected session (concurrently fetch todos + runtime snapshot)
             const sessionFrame = await loadSessionWithInsights(gatewayAPI, firstSession.id)
+            if (requestSeq !== _fetchSessionsSeq) return
             const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
             if (sessionData.messages && sessionData.messages.length > 0) {
               const mapped = mapHistoryMessages(sessionData.messages)
@@ -419,18 +426,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
             useChatStore.getState().setAgentMode(restoredMode)
           } catch (err) {
+            if (requestSeq !== _fetchSessionsSeq) return
             console.error('Auto bindStream or loadSession failed:', err)
             useUIStore.getState().showToast('Failed to load session', 'error')
           }
         }
       } catch (err) {
+        if (requestSeq !== _fetchSessionsSeq) return
         console.error('fetchSessions failed:', err)
         set({ projects: [], loading: false })
       } finally {
-        _fetchSessionsPromise = null
+        if (requestSeq === _fetchSessionsSeq) {
+          _fetchSessionsPromise = null
+        }
       }
     })()
 
-    return _fetchSessionsPromise
+    _fetchSessionsPromise = fetchPromise
+    return fetchPromise
   },
 }))

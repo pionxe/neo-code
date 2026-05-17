@@ -102,6 +102,65 @@ describe("eventBridge", () => {
     expect(useChatStore.getState().messages[0].content).toBe("Hello");
   });
 
+  it("drops stale session events after session switch for tool and chunk updates", () => {
+    const api = createMockGatewayAPI();
+    useSessionStore.setState({ currentSessionId: "sess-new" } as any);
+
+    handleGatewayEvent(
+      {
+        type: EventType.ToolStart,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.ToolStart,
+            payload: {
+              name: "filesystem_write_file",
+              id: "tc-old",
+              arguments: '{"path":"stale.txt"}',
+            },
+          },
+        },
+        session_id: "sess-old",
+        run_id: "run-old",
+      },
+      api,
+    );
+
+    handleGatewayEvent(
+      {
+        type: EventType.ToolDiff,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.ToolDiff,
+            payload: {
+              tool_name: "filesystem_write_file",
+              file_path: "stale.txt",
+              diff: "--- a/stale.txt\n+++ b/stale.txt\n@@ -0,0 +1 @@\n+old\n",
+              was_new: true,
+            },
+          },
+        },
+        session_id: "sess-old",
+        run_id: "run-old",
+      },
+      api,
+    );
+
+    handleGatewayEvent(
+      {
+        type: EventType.AgentChunk,
+        payload: {
+          payload: { runtime_event_type: EventType.AgentChunk, payload: "stale chunk" },
+        },
+        session_id: "sess-old",
+        run_id: "run-old",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().messages).toHaveLength(0);
+    expect(useUIStore.getState().fileChanges).toHaveLength(0);
+  });
+
   it("AgentDone finalizes message from parts array", () => {
     const api = createMockGatewayAPI();
     const store = useChatStore.getState();

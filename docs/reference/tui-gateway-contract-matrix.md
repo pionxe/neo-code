@@ -64,3 +64,9 @@ Primary gateway codes used for UI mapping:
 - No multi-version payload decoding.
 - No alias method fallback.
 - No legacy field fallback in event payload.
+
+## Workspace Boundary For File Preview
+
+- For `gateway.listFiles`, `gateway.readFile`, `gateway.listGitDiffFiles`, and `gateway.readGitDiffFile`, server-side root resolution is always constrained by the current workspace boundary.
+- Request-level `workdir` is kept for protocol compatibility, but runtime implementation does not trust it as an override root.
+- When a stored session workdir is outside the current workspace root, the request is rejected with a controlled boundary error.

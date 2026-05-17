@@ -42,6 +42,7 @@ function mapAPIWorkspace(w: APIWorkspace): Workspace {
 }
 
 let _fetchWorkspacesPromise: Promise<void> | null = null
+let _workspaceSwitchSeq = 0
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
@@ -88,6 +89,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
 
     set({ loading: true })
+    const switchSeq = ++_workspaceSwitchSeq
 
     // 先清空所有前端状态（防止重连 handler 读到旧 sessionId 竞态）
     useChatStore.getState().clearMessages()
@@ -105,17 +107,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
     try {
       await gatewayAPI.switchWorkspace(hash)
+      if (switchSeq !== _workspaceSwitchSeq) return
       set({ currentWorkspaceHash: hash })
       useGatewayStore.getState().notifyProviderChanged()
 
       // 加载新工作区的会话列表
       await useSessionStore.getState().fetchSessions(gatewayAPI, true)
     } catch (err) {
+      if (switchSeq !== _workspaceSwitchSeq) return
       console.error('switchWorkspace failed:', err)
       useUIStore.getState().showToast('Failed to switch workspace', 'error')
     } finally {
-      useChatStore.getState().setTransitioning(false)
-      set({ loading: false })
+      if (switchSeq === _workspaceSwitchSeq) {
+        useChatStore.getState().setTransitioning(false)
+        set({ loading: false })
+      }
     }
   },
 
@@ -126,6 +132,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
 
     set({ loading: true })
+    const switchSeq = ++_workspaceSwitchSeq
 
     // 先清空所有前端状态（与 switchWorkspace 保持一致）
     useChatStore.getState().clearMessages()
@@ -143,6 +150,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
     try {
       const result = await gatewayAPI.createWorkspace(path, name)
+      if (switchSeq !== _workspaceSwitchSeq) return
       const w = mapAPIWorkspace(result.payload.workspace)
       set((state) => ({
         workspaces: [w, ...state.workspaces.filter((x) => x.hash !== w.hash)],
@@ -150,19 +158,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
       // 通知后端切换到新工作区
       await gatewayAPI.switchWorkspace(w.hash)
+      if (switchSeq !== _workspaceSwitchSeq) return
       set({ currentWorkspaceHash: w.hash })
       useGatewayStore.getState().notifyProviderChanged()
 
       // 加载新工作区的会话列表
       await useSessionStore.getState().fetchSessions(gatewayAPI, true)
+      if (switchSeq !== _workspaceSwitchSeq) return
       useUIStore.getState().showToast('Workspace created', 'success')
     } catch (err) {
+      if (switchSeq !== _workspaceSwitchSeq) return
       console.error('createWorkspace failed:', err)
       set({ loading: false })
       useUIStore.getState().showToast('Failed to create workspace', 'error')
     } finally {
-      useChatStore.getState().setTransitioning(false)
-      set({ loading: false })
+      if (switchSeq === _workspaceSwitchSeq) {
+        useChatStore.getState().setTransitioning(false)
+        set({ loading: false })
+      }
     }
   },
 

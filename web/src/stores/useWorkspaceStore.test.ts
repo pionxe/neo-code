@@ -88,6 +88,31 @@ describe('useWorkspaceStore', () => {
 		expect(useWorkspaceStore.getState().currentWorkspaceHash).toBe('w2')
 	})
 
+	it('switchWorkspace ignores stale late response from an older switch request', async () => {
+		let resolveA!: () => void
+		let resolveB!: () => void
+		const gatewayAPI = {
+			switchWorkspace: vi
+				.fn()
+				.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveA = resolve }))
+				.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveB = resolve })),
+		} as any
+		const fetchSessions = useSessionStore.getState().fetchSessions as any
+
+		const switchA = useWorkspaceStore.getState().switchWorkspace('wA', gatewayAPI)
+		const switchB = useWorkspaceStore.getState().switchWorkspace('wB', gatewayAPI)
+
+		resolveB()
+		await switchB
+		expect(useWorkspaceStore.getState().currentWorkspaceHash).toBe('wB')
+
+		resolveA()
+		await switchA
+		expect(useWorkspaceStore.getState().currentWorkspaceHash).toBe('wB')
+		expect(fetchSessions).toHaveBeenCalledTimes(1)
+		expect(fetchSessions).toHaveBeenCalledWith(gatewayAPI, true)
+	})
+
 	it('createWorkspace failure reports toast', async () => {
 		const showToast = vi.fn()
 		useUIStore.setState({ showToast } as any)
