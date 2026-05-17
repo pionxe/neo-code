@@ -222,6 +222,47 @@ describe('useWorkspaceStore', () => {
 		expect(showToast).toHaveBeenCalledWith('Failed to create workspace', 'error')
 	})
 
+	it('renameWorkspace updates the matching workspace name', async () => {
+		const gatewayAPI = {
+			renameWorkspace: vi.fn().mockResolvedValue(undefined),
+		} as any
+		useWorkspaceStore.setState({
+			workspaces: [
+				{ hash: 'w1', path: '/1', name: 'Old', createdAt: '1', updatedAt: '1' },
+				{ hash: 'w2', path: '/2', name: 'Keep', createdAt: '1', updatedAt: '1' },
+			],
+		} as any)
+
+		await useWorkspaceStore.getState().renameWorkspace('w1', 'New', gatewayAPI)
+
+		expect(gatewayAPI.renameWorkspace).toHaveBeenCalledWith('w1', 'New')
+		expect(useWorkspaceStore.getState().workspaces.map((w) => w.name)).toEqual(['New', 'Keep'])
+	})
+
+	it('renameWorkspace failure reports toast', async () => {
+		const showToast = vi.fn()
+		useUIStore.setState({ showToast } as any)
+		const gatewayAPI = {
+			renameWorkspace: vi.fn().mockRejectedValue(new Error('boom')),
+		} as any
+
+		await useWorkspaceStore.getState().renameWorkspace('w1', 'New', gatewayAPI)
+
+		expect(showToast).toHaveBeenCalledWith('Failed to rename workspace', 'error')
+	})
+
+	it('deleteWorkspace failure reports toast', async () => {
+		const showToast = vi.fn()
+		useUIStore.setState({ showToast } as any)
+		const gatewayAPI = {
+			deleteWorkspace: vi.fn().mockRejectedValue(new Error('boom')),
+		} as any
+
+		await useWorkspaceStore.getState().deleteWorkspace('w1', gatewayAPI)
+
+		expect(showToast).toHaveBeenCalledWith('Failed to delete workspace', 'error')
+	})
+
 	it('deleteWorkspace switches to remaining first workspace when current is removed', async () => {
 		const switchWorkspace = vi.spyOn(useWorkspaceStore.getState(), 'switchWorkspace')
 		useWorkspaceStore.setState({
