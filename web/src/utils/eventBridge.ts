@@ -540,7 +540,6 @@ function normalizeUserQuestionRequestedPayload(
 const CRITICAL_EVENTS = new Set<string>([EventType.Error]);
 const SESSION_AGNOSTIC_EVENTS = new Set<string>([
   EventType.Error,
-  EventType.InputNormalized,
 ]);
 
 function strField(payload: unknown, key: string): string {

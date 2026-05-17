@@ -21,6 +21,7 @@ function createMockGatewayAPI(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   resetEventBridgeCursors();
   useChatStore.setState({
     messages: [],
@@ -159,6 +160,83 @@ describe("eventBridge", () => {
 
     expect(useChatStore.getState().messages).toHaveLength(0);
     expect(useUIStore.getState().fileChanges).toHaveLength(0);
+  });
+
+  it("drops stale InputNormalized events after session switch", () => {
+    const clearFileChangesSpy = vi.spyOn(
+      useUIStore.getState(),
+      "clearFileChanges",
+    );
+    const setCurrentRunIdSpy = vi.spyOn(
+      useGatewayStore.getState(),
+      "setCurrentRunId",
+    );
+    const listSessions = vi.fn().mockResolvedValue({ payload: { sessions: [] } });
+    const api = createMockGatewayAPI({ listSessions });
+    useSessionStore.setState({ currentSessionId: "sess-new" } as any);
+    useGatewayStore.setState({ currentRunId: "run-current" } as any);
+
+    handleGatewayEvent(
+      {
+        type: EventType.InputNormalized,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.InputNormalized,
+            payload: {
+              session_id: "sess-old",
+              run_id: "run-old",
+            },
+          },
+        },
+        session_id: "sess-old",
+        run_id: "run-old",
+      },
+      api,
+    );
+
+    expect(useSessionStore.getState().currentSessionId).toBe("sess-new");
+    expect(useGatewayStore.getState().currentRunId).toBe("run-current");
+    expect(setCurrentRunIdSpy).not.toHaveBeenCalled();
+    expect(clearFileChangesSpy).not.toHaveBeenCalled();
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+
+  it("accepts InputNormalized when there is no current session yet", async () => {
+    const clearFileChangesSpy = vi.spyOn(
+      useUIStore.getState(),
+      "clearFileChanges",
+    );
+    const setCurrentRunIdSpy = vi.spyOn(
+      useGatewayStore.getState(),
+      "setCurrentRunId",
+    );
+    const listSessions = vi.fn().mockResolvedValue({ payload: { sessions: [] } });
+    const api = createMockGatewayAPI({ listSessions });
+
+    handleGatewayEvent(
+      {
+        type: EventType.InputNormalized,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.InputNormalized,
+            payload: {
+              session_id: "sess-first",
+              run_id: "run-first",
+            },
+          },
+        },
+        session_id: "sess-first",
+        run_id: "run-first",
+      },
+      api,
+    );
+
+    expect(useSessionStore.getState().currentSessionId).toBe("sess-first");
+    expect(setCurrentRunIdSpy).toHaveBeenCalledWith("run-first");
+    expect(clearFileChangesSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(listSessions).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("AgentDone finalizes message from parts array", () => {
