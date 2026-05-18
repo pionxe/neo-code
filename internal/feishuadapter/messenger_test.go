@@ -351,6 +351,82 @@ func TestBuildStatusCardAndHelpers(t *testing.T) {
 	}
 }
 
+func TestBuildStatusCardWithApprovalRecordsAndProgress(t *testing.T) {
+	card := buildStatusCard(StatusCardPayload{
+		TaskName: "deploy",
+		Status:   "interrupted",
+		Result:   "pending",
+		Elapsed:  "12s",
+		Summary:  "处理中断",
+		ApprovalRecords: []ApprovalRecord{
+			{ToolName: "bash", Decision: "allow_once"},
+			{ToolName: "git", Decision: "reject"},
+		},
+		PendingCount:    1,
+		ProgressLines:   []string{"拉取代码", " ", "执行部署"},
+		AsyncRewakeHint: "等待重试",
+	})
+	raw, err := json.Marshal(card)
+	if err != nil {
+		t.Fatalf("marshal status card: %v", err)
+	}
+	content := string(raw)
+	if !strings.Contains(content, "处理中断") || !strings.Contains(content, "等待重试") ||
+		!strings.Contains(content, "**过程**") || !strings.Contains(content, "拉取代码") ||
+		!strings.Contains(content, "执行部署") || !strings.Contains(content, "2/2 已审批") {
+		t.Fatalf("status card content = %s, want approval/progress/summary sections", content)
+	}
+
+	iconCases := map[string][2]string{
+		"running":     {"⚙️", "indigo"},
+		"pending":     {"⏳", "yellow"},
+		"approved":    {"✅", "green"},
+		"rejected":    {"❌", "red"},
+		"interrupted": {"⏹️", "orange"},
+		"allow_once":  {"✅", "green"},
+		"deny":        {"❌", "red"},
+	}
+	for status, want := range iconCases {
+		icon, color := statusIconAndColor(status)
+		if icon != want[0] || color != want[1] {
+			t.Fatalf("status %q icon/color = %q/%q, want %q/%q", status, icon, color, want[0], want[1])
+		}
+	}
+}
+
+func TestBuildUserQuestionCardFallbacksAndKinds(t *testing.T) {
+	multiChoice := buildUserQuestionCard(UserQuestionCardPayload{
+		RequestID: "ask-multi",
+		Kind:      "multi_choice",
+		AllowSkip: true,
+	})
+	rawMulti, err := json.Marshal(multiChoice)
+	if err != nil {
+		t.Fatalf("marshal multi choice card: %v", err)
+	}
+	multiContent := string(rawMulti)
+	if !strings.Contains(multiContent, "请回答问题") || !strings.Contains(multiContent, "回答 ask-multi") ||
+		!strings.Contains(multiContent, "跳过") {
+		t.Fatalf("multi choice card = %s, want fallback title, reply hint and skip action", multiContent)
+	}
+
+	textCard := buildUserQuestionCard(UserQuestionCardPayload{
+		RequestID: "ask-text",
+		Kind:      "text",
+	})
+	rawText, err := json.Marshal(textCard)
+	if err != nil {
+		t.Fatalf("marshal text card: %v", err)
+	}
+	textContent := string(rawText)
+	if !strings.Contains(textContent, "回答 ask-text") {
+		t.Fatalf("text card = %s, want text reply hint", textContent)
+	}
+	if strings.Contains(textContent, "\"tag\":\"action\"") {
+		t.Fatalf("text card = %s, did not expect action block without options or skip", textContent)
+	}
+}
+
 func TestSendAndUpdateUserQuestionCard(t *testing.T) {
 	client := &queuedHTTPClient{
 		responses: []queuedHTTPResponse{
@@ -507,5 +583,45 @@ func TestUpdatePermissionCardAndResolvedCardHelpers(t *testing.T) {
 	title, _ := timeoutHeader["title"].(map[string]string)
 	if title["content"] != "用户问题" {
 		t.Fatalf("timeout title = %#v, want default title", timeoutHeader["title"])
+	}
+}
+
+func TestUpdatePendingPermissionCardUsesPatch(t *testing.T) {
+	client := &queuedHTTPClient{
+		responses: []queuedHTTPResponse{
+			{status: 200, body: `{"code":0,"msg":"ok","tenant_access_token":"token","expire":7200}`},
+			{status: 200, body: `{"code":0,"msg":"ok","data":{"message_id":"updated"}}`},
+		},
+	}
+	messenger := NewFeishuMessenger("app", "secret", client)
+	err := messenger.UpdatePendingPermissionCard(context.Background(), "perm-card", PermissionCardPayload{
+		RequestID: "perm-1",
+		ToolName:  "bash",
+		Operation: "exec",
+		Target:    "pwd",
+		Message:   "需要审批",
+	})
+	if err != nil {
+		t.Fatalf("update pending permission card: %v", err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.requests))
+	}
+	if client.requests[1].Method != http.MethodPatch {
+		t.Fatalf("update method = %s, want PATCH", client.requests[1].Method)
+	}
+	if !strings.Contains(string(client.bodies[1]), "perm-1") || !strings.Contains(string(client.bodies[1]), "allow_once") {
+		t.Fatalf("update body = %s, want pending permission card content", string(client.bodies[1]))
+	}
+}
+
+func TestDeleteMessageSkipsBlankMessageID(t *testing.T) {
+	client := &queuedHTTPClient{}
+	messenger := NewFeishuMessenger("app", "secret", client)
+	if err := messenger.DeleteMessage(context.Background(), "  "); err != nil {
+		t.Fatalf("delete blank message id: %v", err)
+	}
+	if len(client.requests) != 0 {
+		t.Fatalf("expected no http requests for blank message id, got %d", len(client.requests))
 	}
 }

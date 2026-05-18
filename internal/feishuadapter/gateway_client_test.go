@@ -124,6 +124,13 @@ func TestGatewayRPCClientDelegatesRPCMethods(t *testing.T) {
 	if err := client.Run(ctx, "session-1", "run-1", "hello"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
+	canceled, err := client.CancelRun(ctx, "session-1", "run-1")
+	if err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+	if canceled {
+		t.Fatal("expected empty rpc result to decode canceled=false")
+	}
 	if err := client.ResolvePermission(ctx, "perm-1", "allow_once"); err != nil {
 		t.Fatalf("resolve permission: %v", err)
 	}
@@ -154,6 +161,7 @@ func TestGatewayRPCClientDelegatesRPCMethods(t *testing.T) {
 		protocol.MethodGatewayAuthenticate,
 		protocol.MethodGatewayBindStream,
 		protocol.MethodGatewayRun,
+		protocol.MethodGatewayCancel,
 		protocol.MethodGatewayResolvePermission,
 		protocol.MethodGatewayUserQuestionAnswer,
 		protocol.MethodGatewayPing,
