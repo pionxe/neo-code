@@ -2193,6 +2193,41 @@ func TestTryHandleTextPermissionHandlesRejectCommand(t *testing.T) {
 	}
 }
 
+func TestTryHandleTextPermissionRepliesIgnoredWhenRequestNotActive(t *testing.T) {
+	adapter := newTestAdapter(t)
+	adapter.trackSession("session-text-ignored", "run-text-ignored", "chat-text-ignored", "text ignored task")
+	adapter.processPermissionRequested(
+		context.Background(),
+		"session-text-ignored",
+		"run-text-ignored",
+		"chat-text-ignored",
+		"perm-text-ignored",
+		"filesystem_write_file",
+		"write_file",
+		"text-ignored.txt",
+		"需要审批",
+	)
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		ActionType: "permission",
+		RequestID:  "perm-text-ignored",
+		Decision:   "allow_once",
+	}); err != nil {
+		t.Fatalf("resolve permission before text retry: %v", err)
+	}
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-text-ignored", "允许 perm-text-ignored")
+	if err != nil || !handled {
+		t.Fatalf("allow stale command = handled:%v err:%v", handled, err)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 || msgs[len(msgs)-1].text != "审批未命中当前待处理请求，已忽略。" {
+		t.Fatalf("unexpected stale allow reply: %#v", msgs)
+	}
+	if adapterTestGateway(adapter).resolveCount != 1 {
+		t.Fatalf("resolve count = %d, want 1", adapterTestGateway(adapter).resolveCount)
+	}
+}
+
 func TestTryHandleTextPermissionRejectFailureRepliesRetryable(t *testing.T) {
 	adapter := newTestAdapter(t)
 	adapter.trackSession("session-reject", "run-reject", "chat-reject", "reject task")
@@ -2219,6 +2254,60 @@ func TestTryHandleTextPermissionRejectFailureRepliesRetryable(t *testing.T) {
 	msgs := adapterTestMessenger(adapter).snapshot()
 	if len(msgs) == 0 || msgs[len(msgs)-1].text != "审批提交失败，请稍后重试。" {
 		t.Fatalf("unexpected failure reply: %#v", msgs)
+	}
+}
+
+func TestApprovalOutboxPreflightDropsStaleOperation(t *testing.T) {
+	adapter := newTestAdapter(t)
+	adapter.trackSession("session-outbox-stale", "run-outbox-stale", "chat-outbox-stale", "outbox stale task")
+	adapter.processPermissionRequested(
+		context.Background(),
+		"session-outbox-stale",
+		"run-outbox-stale",
+		"chat-outbox-stale",
+		"perm-outbox-stale",
+		"filesystem_write_file",
+		"write_file",
+		"outbox-stale.txt",
+		"需要审批",
+	)
+
+	runKey := runBindingKey("session-outbox-stale", "run-outbox-stale")
+	adapter.mu.RLock()
+	fsm := adapter.approvalFSMByRun[runKey]
+	if fsm == nil {
+		adapter.mu.RUnlock()
+		t.Fatal("expected approval fsm for stale outbox test")
+	}
+	cardID := strings.TrimSpace(fsm.CardID)
+	generation := fsm.Generation
+	staleVersion := fsm.Version - 1
+	adapter.mu.RUnlock()
+	if cardID == "" {
+		t.Fatal("expected permission card id for stale outbox test")
+	}
+
+	before := len(adapterTestMessenger(adapter).snapshot())
+	adapter.executeApprovalOutbox(context.Background(), []approvalOutboxOperation{
+		{
+			RunKey:     runKey,
+			Generation: generation,
+			Version:    staleVersion,
+			Kind:       approvalOutboxUpdatePendingCard,
+			CardID:     cardID,
+			RequestID:  "perm-outbox-stale",
+			PendingCard: PermissionCardPayload{
+				RequestID: "perm-outbox-stale",
+				ToolName:  "filesystem_write_file",
+				Operation: "write_file",
+				Target:    "outbox-stale.txt",
+				Message:   "stale should drop",
+			},
+		},
+	})
+	after := len(adapterTestMessenger(adapter).snapshot())
+	if after != before {
+		t.Fatalf("stale outbox should be dropped before send, before=%d after=%d", before, after)
 	}
 }
 

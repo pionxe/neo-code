@@ -332,17 +332,16 @@ func (a *Adapter) HandleCardAction(ctx context.Context, event FeishuCardActionEv
 		if !isApprovalApprovedDecision(decision) && !isApprovalRejectedDecision(decision) {
 			return nil
 		}
-		resolvedRequestID, err := a.resolvePermissionStrict(callCtx, requestID, strings.TrimSpace(event.CardID), decision)
+		resolved, err := a.applyPermissionDecisionStrict(callCtx, requestID, strings.TrimSpace(event.CardID), decision)
 		if err != nil {
 			a.safeLog("resolve permission failed: %v", err)
 			return err
 		}
-		if strings.TrimSpace(resolvedRequestID) == "" {
+		if !resolved {
 			// 严格状态机下不匹配的回调直接忽略。
 			succeeded = true
 			return nil
 		}
-		a.updateApprovalStatus(resolvedRequestID, decision)
 	case "user_question":
 		status := strings.TrimSpace(strings.ToLower(event.Status))
 		if status == "" {
@@ -408,6 +407,24 @@ func (a *Adapter) resolvePermissionStrict(
 	return normalizedRequestID, nil
 }
 
+// applyPermissionDecisionStrict 执行严格审批决议；返回是否真正提交并完成状态迁移。
+func (a *Adapter) applyPermissionDecisionStrict(
+	ctx context.Context,
+	requestID string,
+	cardID string,
+	decision string,
+) (bool, error) {
+	resolvedRequestID, err := a.resolvePermissionStrict(ctx, requestID, cardID, decision)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(resolvedRequestID) == "" {
+		return false, nil
+	}
+	a.updateApprovalStatus(resolvedRequestID, decision)
+	return true, nil
+}
+
 // validatePermissionCallbackStrict 按严格状态机校验审批回调是否命中当前 active pending 请求。
 func (a *Adapter) validatePermissionCallbackStrict(requestID string, cardID string) (string, bool) {
 	normalizedRequestID := strings.TrimSpace(requestID)
@@ -419,7 +436,7 @@ func (a *Adapter) validatePermissionCallbackStrict(requestID string, cardID stri
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	runKeyByRequest := strings.TrimSpace(a.approvalRequestIDRunIndex[normalizedRequestID])
+	runKeyByRequest := strings.TrimSpace(a.resolveApprovalRunKeyByRequestLocked(normalizedRequestID))
 	runKeyByCard := strings.TrimSpace(a.approvalCardRunIndex[normalizedCardID])
 	runKey := runKeyByRequest
 	if runKey == "" {
@@ -1105,6 +1122,9 @@ func (a *Adapter) transitionPermissionRequested(
 // executeApprovalOutbox 执行审批状态机迁移后产生的网络副作用，并做 generation/version 确认。
 func (a *Adapter) executeApprovalOutbox(ctx context.Context, ops []approvalOutboxOperation) {
 	for _, op := range ops {
+		if !a.shouldExecuteApprovalOutbox(op) {
+			continue
+		}
 		var err error
 		switch op.Kind {
 		case approvalOutboxUpdateStatusCard:
@@ -1148,23 +1168,65 @@ func (a *Adapter) executeApprovalOutbox(ctx context.Context, ops []approvalOutbo
 	}
 }
 
+// shouldExecuteApprovalOutbox 在发送副作用前进行代际/版本栅栏校验，避免旧 outbox 覆写新状态。
+func (a *Adapter) shouldExecuteApprovalOutbox(op approvalOutboxOperation) bool {
+	currentGeneration, currentVersion, ok := a.snapshotApprovalFSMVersion(op.RunKey)
+	if !ok {
+		return false
+	}
+	if currentGeneration != op.Generation || currentVersion != op.Version {
+		a.safeLog(
+			"approval outbox stale preflight dropped kind=%s run_key=%s op_gen=%d op_ver=%d current_gen=%d current_ver=%d",
+			op.Kind,
+			op.RunKey,
+			op.Generation,
+			op.Version,
+			currentGeneration,
+			currentVersion,
+		)
+		return false
+	}
+	return true
+}
+
+// snapshotApprovalFSMVersion 获取当前 run 对应审批状态机的 generation/version 快照。
+func (a *Adapter) snapshotApprovalFSMVersion(runKey string) (int64, int64, bool) {
+	normalizedRunKey := strings.TrimSpace(runKey)
+	if normalizedRunKey == "" {
+		return 0, 0, false
+	}
+	a.mu.RLock()
+	fsm := a.approvalFSMByRun[normalizedRunKey]
+	if fsm == nil {
+		a.mu.RUnlock()
+		return 0, 0, false
+	}
+	generation := fsm.Generation
+	version := fsm.Version
+	a.mu.RUnlock()
+	return generation, version, true
+}
+
 // confirmApprovalOutbox 校验副作用确认是否仍匹配当前 FSM 代际与版本。
 func (a *Adapter) confirmApprovalOutbox(op approvalOutboxOperation) {
 	a.mu.RLock()
 	fsm := a.approvalFSMByRun[op.RunKey]
-	a.mu.RUnlock()
 	if fsm == nil {
+		a.mu.RUnlock()
 		return
 	}
-	if fsm.Generation != op.Generation || fsm.Version != op.Version {
+	currentGeneration := fsm.Generation
+	currentVersion := fsm.Version
+	a.mu.RUnlock()
+	if currentGeneration != op.Generation || currentVersion != op.Version {
 		a.safeLog(
 			"approval outbox stale dropped kind=%s run_key=%s op_gen=%d op_ver=%d current_gen=%d current_ver=%d",
 			op.Kind,
 			op.RunKey,
 			op.Generation,
 			op.Version,
-			fsm.Generation,
-			fsm.Version,
+			currentGeneration,
+			currentVersion,
 		)
 	}
 }
@@ -1270,6 +1332,52 @@ func containsApprovalRequest(pending []string, requestID string) bool {
 		}
 	}
 	return false
+}
+
+// resolveApprovalRunKeyByRequestLocked 在持锁状态下解析 request_id 对应 runKey，避免跨 run request_id 冲突误判。
+func (a *Adapter) resolveApprovalRunKeyByRequestLocked(requestID string) string {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return ""
+	}
+	runKey := strings.TrimSpace(a.approvalRequestIDRunIndex[normalizedRequestID])
+	if runKey != "" {
+		if fsm := a.approvalFSMByRun[runKey]; fsm != nil {
+			if _, exists := fsm.Requests[normalizedRequestID]; exists {
+				if strings.TrimSpace(a.approvalRequestRunIndex[approvalRequestScopedKey(runKey, normalizedRequestID)]) == runKey {
+					return runKey
+				}
+			}
+		}
+	}
+	suffix := "|" + normalizedRequestID
+	selectedRunKey := ""
+	selectedActive := false
+	for scopedKey, candidateRunKey := range a.approvalRequestRunIndex {
+		if !strings.HasSuffix(strings.TrimSpace(scopedKey), suffix) {
+			continue
+		}
+		normalizedRunKey := strings.TrimSpace(candidateRunKey)
+		if normalizedRunKey == "" {
+			continue
+		}
+		fsm := a.approvalFSMByRun[normalizedRunKey]
+		if fsm == nil {
+			continue
+		}
+		if _, exists := fsm.Requests[normalizedRequestID]; !exists {
+			continue
+		}
+		isActive := strings.TrimSpace(fsm.ActiveRequestID) == normalizedRequestID
+		if selectedRunKey == "" || (isActive && !selectedActive) {
+			selectedRunKey = normalizedRunKey
+			selectedActive = isActive
+		}
+		if selectedActive {
+			break
+		}
+	}
+	return selectedRunKey
 }
 
 // buildPendingPermissionPayloadFromNode 按请求节点构造待审批卡片载荷。
@@ -1383,12 +1491,13 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	if normalizedDecision == "" {
 		return
 	}
-	runKey := strings.TrimSpace(a.approvalRequestIDRunIndex[normalizedRequestID])
-	if runKey == "" {
-		return
-	}
 
 	a.mu.Lock()
+	runKey := strings.TrimSpace(a.resolveApprovalRunKeyByRequestLocked(normalizedRequestID))
+	if runKey == "" {
+		a.mu.Unlock()
+		return
+	}
 	fsm := a.approvalFSMByRun[runKey]
 	binding, ok := a.activeRuns[runKey]
 	if !ok || fsm == nil {
@@ -1723,14 +1832,14 @@ func (a *Adapter) tryHandleTextAction(ctx context.Context, chatID string, text s
 		if requestID == "" {
 			return true, nil
 		}
-		err := a.HandleCardAction(ctx, FeishuCardActionEvent{
-			ActionType: "permission",
-			RequestID:  requestID,
-			Decision:   "allow_once",
-		})
+		resolved, err := a.applyPermissionDecisionStrict(ctx, requestID, "", "allow_once")
 		if err != nil {
 			_ = a.messenger.SendText(context.Background(), chatID, "审批提交失败，请稍后重试。")
 			return true, err
+		}
+		if !resolved {
+			_ = a.messenger.SendText(context.Background(), chatID, "审批未命中当前待处理请求，已忽略。")
+			return true, nil
 		}
 		_ = a.messenger.SendText(context.Background(), chatID, "审批已提交：允许一次。")
 		return true, nil
@@ -1739,14 +1848,14 @@ func (a *Adapter) tryHandleTextAction(ctx context.Context, chatID string, text s
 		if requestID == "" {
 			return true, nil
 		}
-		err := a.HandleCardAction(ctx, FeishuCardActionEvent{
-			ActionType: "permission",
-			RequestID:  requestID,
-			Decision:   "reject",
-		})
+		resolved, err := a.applyPermissionDecisionStrict(ctx, requestID, "", "reject")
 		if err != nil {
 			_ = a.messenger.SendText(context.Background(), chatID, "审批提交失败，请稍后重试。")
 			return true, err
+		}
+		if !resolved {
+			_ = a.messenger.SendText(context.Background(), chatID, "审批未命中当前待处理请求，已忽略。")
+			return true, nil
 		}
 		_ = a.messenger.SendText(context.Background(), chatID, "审批已提交：拒绝。")
 		return true, nil
