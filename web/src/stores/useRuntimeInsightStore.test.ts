@@ -38,6 +38,29 @@ describe('useRuntimeInsightStore', () => {
 
     store.failVerification({ stop_reason: 'error', error_class: 'TestError' })
     expect(useRuntimeInsightStore.getState().verificationFailed?.error_class).toBe('TestError')
+    expect(useRuntimeInsightStore.getState().verificationCompleted).toBeNull()
+  })
+
+  it('clears a stale failed terminal state when verification later completes', () => {
+    const store = useRuntimeInsightStore.getState()
+
+    store.failVerification({ stop_reason: 'error', error_class: 'TestError' })
+    store.completeVerification({ stop_reason: 'accepted' })
+
+    const state = useRuntimeInsightStore.getState()
+    expect(state.verificationCompleted?.stop_reason).toBe('accepted')
+    expect(state.verificationFailed).toBeNull()
+  })
+
+  it('clears a stale completed terminal state when verification later fails', () => {
+    const store = useRuntimeInsightStore.getState()
+
+    store.completeVerification({ stop_reason: 'accepted' })
+    store.failVerification({ stop_reason: 'error', error_class: 'TestError' })
+
+    const state = useRuntimeInsightStore.getState()
+    expect(state.verificationFailed?.error_class).toBe('TestError')
+    expect(state.verificationCompleted).toBeNull()
   })
 
   it('resets all insight state', () => {

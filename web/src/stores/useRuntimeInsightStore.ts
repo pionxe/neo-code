@@ -81,8 +81,14 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
   setCheckpointDiff: (checkpointDiff) => set({ checkpointDiff }),
   addCheckpointEvent: (event) => set((s) => ({ checkpointEvents: [...s.checkpointEvents, event] })),
   setCheckpointWarning: (checkpointWarning) => set({ checkpointWarning }),
-  completeVerification: (verificationCompleted) => set({ verificationCompleted }),
-  failVerification: (verificationFailed) => set({ verificationFailed }),
+  completeVerification: (verificationCompleted) => set({
+    verificationCompleted,
+    verificationFailed: null,
+  }),
+  failVerification: (verificationFailed) => set({
+    verificationFailed,
+    verificationCompleted: null,
+  }),
   setAcceptanceDecision: (acceptanceDecision) => set({ acceptanceDecision }),
   setTodoSnapshot: (todoSnapshot) => set((s) => {
     const items = todoSnapshot?.items ?? []
