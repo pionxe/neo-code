@@ -3,6 +3,7 @@ import { mapHistoryMessages, useSessionStore } from './useSessionStore'
 import { useChatStore } from './useChatStore'
 import { useGatewayStore } from './useGatewayStore'
 import { useRuntimeInsightStore } from './useRuntimeInsightStore'
+import { useUIStore } from './useUIStore'
 
 beforeEach(() => {
   useSessionStore.setState((useSessionStore.getInitialState?.() ?? { projects: [], currentSessionId: '', currentProjectId: '', loading: false }) as any)
@@ -115,6 +116,19 @@ describe('useSessionStore', () => {
     expect(useSessionStore.getState().currentSessionId).toBe('')
   })
 
+  it('createSession is blocked while generating', () => {
+    const showToast = vi.fn()
+    useChatStore.setState({ isGenerating: true } as any)
+    useUIStore.setState({ showToast } as any)
+    useSessionStore.setState({ currentSessionId: 'sess-1', currentProjectId: 'group-1' })
+
+    useSessionStore.getState().createSession()
+
+    expect(useSessionStore.getState().currentSessionId).toBe('sess-1')
+    expect(useSessionStore.getState().currentProjectId).toBe('group-1')
+    expect(showToast).toHaveBeenCalledWith('Cannot start a new session while generating; stop the current run first.', 'info')
+  })
+
   it('prepareNewChat also clears state and does not set temp id', () => {
     useSessionStore.setState({ currentSessionId: 'sess-1' })
     useChatStore.getState().addMessage({ id: '1', role: 'user', content: 'hello', type: 'text', timestamp: 1 })
@@ -124,6 +138,19 @@ describe('useSessionStore', () => {
     expect(useChatStore.getState().messages).toHaveLength(0)
     expect(useSessionStore.getState().currentSessionId).toBe('')
     expect(useSessionStore.getState().currentProjectId).toBe('')
+  })
+
+  it('prepareNewChat is blocked while generating', () => {
+    const showToast = vi.fn()
+    useChatStore.setState({ isGenerating: true } as any)
+    useUIStore.setState({ showToast } as any)
+    useSessionStore.setState({ currentSessionId: 'sess-1', currentProjectId: 'group-1' })
+
+    useSessionStore.getState().prepareNewChat()
+
+    expect(useSessionStore.getState().currentSessionId).toBe('sess-1')
+    expect(useSessionStore.getState().currentProjectId).toBe('group-1')
+    expect(showToast).toHaveBeenCalledWith('Cannot start a new session while generating; stop the current run first.', 'info')
   })
 
   it('initializeActiveSession binds stream for valid session id', async () => {
@@ -146,6 +173,20 @@ describe('useSessionStore', () => {
     expect(mockBindStream).not.toHaveBeenCalled()
   })
 
+  it('initializeActiveSession shows toast when bindStream fails', async () => {
+    const showToast = vi.fn()
+    const mockBindStream = vi.fn().mockRejectedValue(new Error('bind failed'))
+    const mockAPI = { bindStream: mockBindStream } as any
+    useUIStore.setState({ showToast } as any)
+
+    useSessionStore.setState({ currentSessionId: 'sess-1', _initialBindDone: false } as any)
+    await useSessionStore.getState().initializeActiveSession(mockAPI)
+
+    expect(mockBindStream).toHaveBeenCalledWith({ session_id: 'sess-1', channel: 'all' })
+    expect(useSessionStore.getState()._initialBindDone).toBe(false)
+    expect(showToast).toHaveBeenCalledWith('Failed to bind event stream; real-time messages may not arrive.', 'error')
+  })
+
   it('switchSession binds stream and loads session data', async () => {
     const setMessagesSpy = vi.spyOn(useChatStore.getState(), 'setMessages')
     const addMessageSpy = vi.spyOn(useChatStore.getState(), 'addMessage')
@@ -166,6 +207,87 @@ describe('useSessionStore', () => {
     expect(addMessageSpy).not.toHaveBeenCalled()
     expect(useChatStore.getState().messages).toHaveLength(1)
     expect(useChatStore.getState().messages[0].role).toBe('user')
+  })
+
+  it('switchSession keeps transitioning true until loadSession finishes', async () => {
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    let resolveLoad!: (value: any) => void
+    const mockLoadSession = vi.fn().mockImplementation(
+      () => new Promise((resolve) => { resolveLoad = resolve }),
+    )
+    const mockAPI = { bindStream: mockBindStream, loadSession: mockLoadSession } as any
+
+    const switchPromise = useSessionStore.getState().switchSession('sess-2', mockAPI)
+    await Promise.resolve()
+
+    expect(useChatStore.getState().isTransitioning).toBe(true)
+
+    resolveLoad({ payload: { messages: [] } })
+    await switchPromise
+
+    expect(useChatStore.getState().isTransitioning).toBe(false)
+  })
+
+  it('resetForWorkspaceSwitch aborts in-flight switchSession and blocks stale writeback', async () => {
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    let resolveLoad!: (value: any) => void
+    const mockLoadSession = vi.fn().mockImplementation(
+      () => new Promise((resolve) => { resolveLoad = resolve }),
+    )
+    const mockAPI = { bindStream: mockBindStream, loadSession: mockLoadSession } as any
+
+    const switchPromise = useSessionStore.getState().switchSession('sess-old', mockAPI)
+    await Promise.resolve()
+
+    useSessionStore.getState().resetForWorkspaceSwitch()
+
+    resolveLoad({
+      payload: {
+        messages: [{ role: 'assistant', content: 'stale payload', tool_calls: [] }],
+        agent_mode: 'plan',
+      },
+    })
+    await switchPromise
+
+    expect(useChatStore.getState().messages).toHaveLength(0)
+    expect(useChatStore.getState().agentMode).toBe('build')
+  })
+
+  it('switchSession applies only latest request when older request resolves later', async () => {
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    let resolveLoadA!: (value: any) => void
+    let resolveLoadB!: (value: any) => void
+    const mockLoadSession = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveLoadA = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveLoadB = resolve }))
+    const mockAPI = { bindStream: mockBindStream, loadSession: mockLoadSession } as any
+
+    const switchA = useSessionStore.getState().switchSession('sess-a', mockAPI)
+    await Promise.resolve()
+    const switchB = useSessionStore.getState().switchSession('sess-b', mockAPI)
+    await Promise.resolve()
+
+    resolveLoadB({
+      payload: {
+        messages: [{ role: 'assistant', content: 'new payload', tool_calls: [] }],
+        agent_mode: 'plan',
+      },
+    })
+    await switchB
+
+    resolveLoadA({
+      payload: {
+        messages: [{ role: 'assistant', content: 'old payload', tool_calls: [] }],
+        agent_mode: 'build',
+      },
+    })
+    await switchA
+
+    expect(useSessionStore.getState().currentSessionId).toBe('sess-b')
+    expect(useChatStore.getState().messages).toHaveLength(1)
+    expect(useChatStore.getState().messages[0].content).toBe('new payload')
+    expect(useChatStore.getState().agentMode).toBe('plan')
   })
 
   it('fetchSessions auto-selects first session and binds stream', async () => {
@@ -215,6 +337,92 @@ describe('useSessionStore', () => {
 
     expect(useSessionStore.getState().currentSessionId).toBe('sess-b')
     expect(mockBindStream).not.toHaveBeenCalled()
+  })
+
+  it('fetchSessions ignores stale late response from an older request', async () => {
+    let resolveFirst!: (value: any) => void
+    let resolveSecond!: (value: any) => void
+    const mockListSessions = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { resolveFirst = resolve }),
+      )
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { resolveSecond = resolve }),
+      )
+    const mockAPI = {
+      listSessions: mockListSessions,
+      bindStream: vi.fn().mockResolvedValue({}),
+      loadSession: vi.fn().mockResolvedValue({ payload: { messages: [] } }),
+    } as any
+
+    useSessionStore.setState({ currentSessionId: 'sess-keep' })
+
+    const firstRequest = useSessionStore.getState().fetchSessions(mockAPI, true)
+    const secondRequest = useSessionStore.getState().fetchSessions(mockAPI, true)
+
+    resolveSecond({
+      payload: {
+        sessions: [{
+          id: 'sess-new',
+          title: 'New',
+          created_at: '2026-05-10T01:00:00Z',
+          updated_at: '2026-05-10T01:00:00Z',
+        }],
+      },
+    })
+    await secondRequest
+
+    resolveFirst({
+      payload: {
+        sessions: [{
+          id: 'sess-old',
+          title: 'Old',
+          created_at: '2026-05-09T01:00:00Z',
+          updated_at: '2026-05-09T01:00:00Z',
+        }],
+      },
+    })
+    await firstRequest
+
+    const sessions = useSessionStore.getState().projects.flatMap((project) => project.sessions)
+    expect(sessions.map((session) => session.id)).toEqual(['sess-new'])
+  })
+
+  it('fetchSessions shows toast when auto bind or load fails', async () => {
+    const showToast = vi.fn()
+    useUIStore.setState({ showToast } as any)
+    const mockListSessions = vi.fn().mockResolvedValue({
+      payload: {
+        sessions: [{
+          id: 'sess-a',
+          title: 'Alpha',
+          created_at: '2026-05-09T01:00:00Z',
+          updated_at: '2026-05-09T02:00:00Z',
+        }],
+      },
+    })
+    const mockBindStream = vi.fn().mockRejectedValue(new Error('bind failed'))
+    const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream } as any
+
+    await useSessionStore.getState().fetchSessions(mockAPI)
+
+    expect(useSessionStore.getState().currentSessionId).toBe('sess-a')
+    expect(showToast).toHaveBeenCalledWith('Failed to load session', 'error')
+  })
+
+  it('fetchSessions clears projects when listSessions fails', async () => {
+    useSessionStore.setState({
+      projects: [{ id: 'group', name: 'Group', sessions: [{ id: 'sess-1', title: 'A', time: '2026-05-10T00:00:00.000Z' }] }],
+    } as any)
+    const mockAPI = {
+      listSessions: vi.fn().mockRejectedValue(new Error('list failed')),
+    } as any
+
+    await useSessionStore.getState().fetchSessions(mockAPI, true)
+
+    expect(useSessionStore.getState().projects).toEqual([])
+    expect(useSessionStore.getState().loading).toBe(false)
   })
 
   it('fetchSessions uses the newer of created_at/updated_at as display time', async () => {
@@ -286,5 +494,40 @@ describe('useSessionStore', () => {
 
     const insightStore = useRuntimeInsightStore.getState()
     expect(insightStore.todoSnapshot?.items?.[0].id).toBe('t1')
+  })
+
+  it('removeSessionLocally prunes empty groups', () => {
+    useSessionStore.setState({
+      projects: [
+        {
+          id: 'group-a',
+          name: 'A',
+          sessions: [
+            { id: 'sess-1', title: 'One', time: '2026-05-10T00:00:00.000Z' },
+          ],
+        },
+        {
+          id: 'group-b',
+          name: 'B',
+          sessions: [
+            { id: 'sess-2', title: 'Two', time: '2026-05-10T00:00:00.000Z' },
+            { id: 'sess-3', title: 'Three', time: '2026-05-10T00:00:00.000Z' },
+          ],
+        },
+      ],
+    } as any)
+
+    useSessionStore.getState().removeSessionLocally('sess-1')
+    useSessionStore.getState().removeSessionLocally('sess-2')
+
+    expect(useSessionStore.getState().projects).toEqual([
+      {
+        id: 'group-b',
+        name: 'B',
+        sessions: [
+          { id: 'sess-3', title: 'Three', time: '2026-05-10T00:00:00.000Z' },
+        ],
+      },
+    ])
   })
 })

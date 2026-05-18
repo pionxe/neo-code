@@ -21,6 +21,7 @@ vi.mock('@/context/RuntimeProvider', () => ({
 
 describe('Sidebar ProviderModal', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     cleanup()
     mockGatewayAPI = {
       listMCPServers: vi.fn().mockResolvedValue({
@@ -130,6 +131,7 @@ describe('Sidebar ProviderModal', () => {
     useWorkspaceStore.setState({
       workspaces: [],
       currentWorkspaceHash: '',
+      changing: false,
       switchWorkspace: vi.fn(),
       renameWorkspace: vi.fn(),
       deleteWorkspace: vi.fn(),
@@ -326,6 +328,50 @@ describe('Sidebar ProviderModal', () => {
       expect(chevronFor(workspaceOne)).not.toHaveClass('expanded')
       expect(chevronFor(workspaceTwo)).toHaveClass('expanded')
     })
+  })
+
+  it('disables workspace actions while a workspace change is in flight', () => {
+    useWorkspaceStore.setState({
+      workspaces: [
+        { hash: 'w1', path: '/workspace-one', name: 'Workspace One', createdAt: '1', updatedAt: '1' },
+        { hash: 'w2', path: '/workspace-two', name: 'Workspace Two', createdAt: '1', updatedAt: '1' },
+      ],
+      currentWorkspaceHash: 'w1',
+      changing: true,
+      switchWorkspace: vi.fn(),
+    } as any)
+
+    const { container } = render(<Sidebar />)
+
+    expect(screen.getByRole('button', { name: /Workspace One/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Workspace Two/i })).toBeDisabled()
+
+    const addWorkspaceButton = container.querySelector('.sidebar-section-header .btn')
+    expect(addWorkspaceButton).toBeInstanceOf(HTMLButtonElement)
+    expect(addWorkspaceButton as HTMLButtonElement).toBeDisabled()
+  })
+
+  it('switches another workspace but does not re-switch the current workspace', async () => {
+    const switchWorkspace = vi.fn().mockResolvedValue(undefined)
+    useWorkspaceStore.setState({
+      workspaces: [
+        { hash: 'w1', path: '/workspace-one', name: 'Workspace One', createdAt: '1', updatedAt: '1' },
+        { hash: 'w2', path: '/workspace-two', name: 'Workspace Two', createdAt: '1', updatedAt: '1' },
+      ],
+      currentWorkspaceHash: 'w1',
+      changing: false,
+      switchWorkspace,
+    } as any)
+
+    render(<Sidebar />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Workspace Two/i }))
+    await waitFor(() => {
+      expect(switchWorkspace).toHaveBeenCalledWith('w2', mockGatewayAPI)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Workspace One/i }))
+    expect(switchWorkspace).toHaveBeenCalledTimes(1)
   })
 
   it('immediately dispatches collapsed-rail actions', async () => {

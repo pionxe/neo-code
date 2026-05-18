@@ -1972,34 +1972,82 @@ func isRuntimeNotFoundError(err error) bool {
 	return errors.Is(err, agentsession.ErrSessionNotFound) || errors.Is(err, os.ErrNotExist)
 }
 
-// resolveListFilesRoot 按请求、会话、全局配置的优先级确定文件树根目录。
+// resolveListFilesRoot 解析文件预览根目录并强制收敛在当前工作区边界内。
+// 兼容保留请求中的 workdir 字段，但实现层不会信任该字段，避免客户端绕过边界。
 func (b *gatewayRuntimePortBridge) resolveListFilesRoot(
 	ctx context.Context,
 	input gateway.ListFilesInput,
 ) (string, error) {
-	root := strings.TrimSpace(input.Workdir)
-	if root == "" && strings.TrimSpace(input.SessionID) != "" && b.sessionStore != nil {
+	workspaceRoot, err := b.resolveWorkspaceRootForFileAccess()
+	if err != nil {
+		return "", err
+	}
+
+	root := workspaceRoot
+	if strings.TrimSpace(input.SessionID) != "" && b.sessionStore != nil {
 		session, err := b.loadStoredSession(ctx, strings.TrimSpace(input.SessionID))
 		if err != nil && !isRuntimeNotFoundError(err) {
 			return "", err
 		}
-		root = strings.TrimSpace(session.Workdir)
-	}
-	if root == "" {
-		root = strings.TrimSpace(b.currentConfig().Workdir)
-	}
-	if root == "" {
-		var err error
-		root, err = os.Getwd()
-		if err != nil {
-			return "", err
+		sessionRoot := strings.TrimSpace(session.Workdir)
+		if sessionRoot != "" {
+			if !isPathWithinRoot(sessionRoot, workspaceRoot) {
+				return "", fmt.Errorf("gateway runtime bridge: session workdir escapes current workspace root")
+			}
+			root = sessionRoot
 		}
 	}
-	absolute, err := filepath.Abs(root)
+	absolute, err := filepath.Abs(filepath.Clean(root))
 	if err != nil {
 		return "", err
 	}
 	return filepath.Clean(absolute), nil
+}
+
+// resolveWorkspaceRootForFileAccess 返回当前工作区文件访问根目录。
+// 优先使用 runtime 配置中的 workdir，缺失时回退到当前进程工作目录。
+func (b *gatewayRuntimePortBridge) resolveWorkspaceRootForFileAccess() (string, error) {
+	root := strings.TrimSpace(b.currentConfig().Workdir)
+	if root == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		root = cwd
+	}
+	absolute, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(absolute), nil
+}
+
+// isPathWithinRoot 判断 candidate 是否位于 root 目录内（含自身），同时处理符号链接场景。
+func isPathWithinRoot(candidate string, root string) bool {
+	candidateAbs, err := filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	candidateForCheck := candidateAbs
+	if resolvedCandidate, resolveErr := filepath.EvalSymlinks(candidateAbs); resolveErr == nil {
+		candidateForCheck = resolvedCandidate
+	}
+	rootForCheck := rootAbs
+	if resolvedRoot, resolveErr := filepath.EvalSymlinks(rootAbs); resolveErr == nil {
+		rootForCheck = resolvedRoot
+	}
+	relative, err := filepath.Rel(rootForCheck, candidateForCheck)
+	if err != nil {
+		return false
+	}
+	if relative == "." {
+		return true
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
 }
 
 // loadStoredSession 通过可选的会话加载接口读取持久会话。

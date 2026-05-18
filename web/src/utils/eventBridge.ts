@@ -535,6 +535,9 @@ function normalizeUserQuestionRequestedPayload(
 }
 
 const CRITICAL_EVENTS = new Set<string>([EventType.Error]);
+const SESSION_AGNOSTIC_EVENTS = new Set<string>([
+  EventType.Error,
+]);
 
 function strField(payload: unknown, key: string): string {
   return ((payload as PayloadRecord)?.[key] as string) ?? "";
@@ -629,6 +632,8 @@ export function handleGatewayEvent(
     (innerEnvelope?.runtime_event_type as string | undefined) ??
     (payload.event_type as string | undefined);
   if (!eventType) return;
+  const frameSessionId = (frame.session_id || "").trim();
+  const frameRunId = frame.run_id;
 
   // Discard non-critical events during workspace transition to avoid stale data
   // Only Error events are allowed through during transition
@@ -639,15 +644,22 @@ export function handleGatewayEvent(
     return;
   }
 
+  const currentSessionId = useSessionStore.getState().currentSessionId.trim();
+  if (
+    frameSessionId &&
+    currentSessionId &&
+    frameSessionId !== currentSessionId &&
+    !SESSION_AGNOSTIC_EVENTS.has(eventType)
+  ) {
+    return;
+  }
+
   const eventPayload = innerEnvelope?.payload;
 
   const chatStore = useChatStore.getState();
   const uiStore = useUIStore.getState();
   const gwStore = useGatewayStore.getState();
   const insightStore = useRuntimeInsightStore.getState();
-
-  const frameSessionId = frame.session_id;
-  const frameRunId = frame.run_id;
 
   /** 更新最新 verification 消息的 data 为 insightStore 当前最后一条 record */
   function syncLatestVerificationToChat() {

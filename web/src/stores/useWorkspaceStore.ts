@@ -5,6 +5,7 @@ import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 
 /** 工作区记录 */
 export interface Workspace {
@@ -20,6 +21,7 @@ interface WorkspaceState {
   workspaces: Workspace[]
   currentWorkspaceHash: string
   loading: boolean
+  changing: boolean
 
   setWorkspaces: (workspaces: Workspace[]) => void
   setCurrentWorkspaceHash: (hash: string) => void
@@ -42,11 +44,13 @@ function mapAPIWorkspace(w: APIWorkspace): Workspace {
 }
 
 let _fetchWorkspacesPromise: Promise<void> | null = null
+let _workspaceChangePromise: Promise<void> | null = null
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   currentWorkspaceHash: '',
   loading: false,
+  changing: false,
 
   setWorkspaces: (workspaces) => set({ workspaces }),
   setCurrentWorkspaceHash: (currentWorkspaceHash) => set({ currentWorkspaceHash }),
@@ -86,37 +90,45 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       useUIStore.getState().showToast('Cannot switch workspace while generating; stop the current run first.', 'info')
       return
     }
+    if (_workspaceChangePromise) return _workspaceChangePromise
 
-    set({ loading: true })
+    _workspaceChangePromise = (async () => {
+      set({ loading: true, changing: true })
 
-    // 先清空所有前端状态（防止重连 handler 读到旧 sessionId 竞态）
-    useChatStore.getState().clearMessages()
-    useChatStore.getState().setTransitioning(true)
-    useSessionStore.setState({
-      currentSessionId: '',
-      currentProjectId: '',
-      projects: [],
-    })
-    useSessionStore.getState().resetForWorkspaceSwitch()
-    useGatewayStore.getState().setCurrentRunId('')
-    useUIStore.getState().clearFileChanges()
-    useUIStore.getState().resetPreviewTabs()
-    useUIStore.getState().setSearchQuery('')
+      // 先清空所有前端状态（防止重连 handler 读到旧 sessionId 竞态）
+      useChatStore.getState().clearMessages()
+      useChatStore.getState().setTransitioning(true)
+      useSessionStore.setState({
+        currentSessionId: '',
+        currentProjectId: '',
+        projects: [],
+      })
+      useSessionStore.getState().resetForWorkspaceSwitch()
+      useGatewayStore.getState().setCurrentRunId('')
+      useRuntimeInsightStore.getState().reset()
+      useUIStore.getState().clearFileChanges()
+      useUIStore.getState().clearCheckpointRollbackUndo()
+      useUIStore.getState().resetPreviewTabs()
+      useUIStore.getState().setSearchQuery('')
 
-    try {
-      await gatewayAPI.switchWorkspace(hash)
-      set({ currentWorkspaceHash: hash })
-      useGatewayStore.getState().notifyProviderChanged()
+      try {
+        await gatewayAPI.switchWorkspace(hash)
+        set({ currentWorkspaceHash: hash })
+        useGatewayStore.getState().notifyProviderChanged()
 
-      // 加载新工作区的会话列表
-      await useSessionStore.getState().fetchSessions(gatewayAPI, true)
-    } catch (err) {
-      console.error('switchWorkspace failed:', err)
-      useUIStore.getState().showToast('Failed to switch workspace', 'error')
-    } finally {
-      useChatStore.getState().setTransitioning(false)
-      set({ loading: false })
-    }
+        // 加载新工作区的会话列表
+        await useSessionStore.getState().fetchSessions(gatewayAPI, true)
+      } catch (err) {
+        console.error('switchWorkspace failed:', err)
+        useUIStore.getState().showToast('Failed to switch workspace', 'error')
+      } finally {
+        useChatStore.getState().setTransitioning(false)
+        set({ loading: false, changing: false })
+        _workspaceChangePromise = null
+      }
+    })()
+
+    return _workspaceChangePromise
   },
 
   createWorkspace: async (path, gatewayAPI, name) => {
@@ -124,46 +136,53 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       useUIStore.getState().showToast('Cannot switch workspace while generating; stop the current run first.', 'info')
       return
     }
+    if (_workspaceChangePromise) return _workspaceChangePromise
 
-    set({ loading: true })
+    _workspaceChangePromise = (async () => {
+      set({ loading: true, changing: true })
 
-    // 先清空所有前端状态（与 switchWorkspace 保持一致）
-    useChatStore.getState().clearMessages()
-    useChatStore.getState().setTransitioning(true)
-    useSessionStore.setState({
-      currentSessionId: '',
-      currentProjectId: '',
-      projects: [],
-    })
-    useSessionStore.getState().resetForWorkspaceSwitch()
-    useGatewayStore.getState().setCurrentRunId('')
-    useUIStore.getState().clearFileChanges()
-    useUIStore.getState().resetPreviewTabs()
-    useUIStore.getState().setSearchQuery('')
+      // 先清空所有前端状态（与 switchWorkspace 保持一致）
+      useChatStore.getState().clearMessages()
+      useChatStore.getState().setTransitioning(true)
+      useSessionStore.setState({
+        currentSessionId: '',
+        currentProjectId: '',
+        projects: [],
+      })
+      useSessionStore.getState().resetForWorkspaceSwitch()
+      useGatewayStore.getState().setCurrentRunId('')
+      useRuntimeInsightStore.getState().reset()
+      useUIStore.getState().clearFileChanges()
+      useUIStore.getState().clearCheckpointRollbackUndo()
+      useUIStore.getState().resetPreviewTabs()
+      useUIStore.getState().setSearchQuery('')
 
-    try {
-      const result = await gatewayAPI.createWorkspace(path, name)
-      const w = mapAPIWorkspace(result.payload.workspace)
-      set((state) => ({
-        workspaces: [w, ...state.workspaces.filter((x) => x.hash !== w.hash)],
-      }))
+      try {
+        const result = await gatewayAPI.createWorkspace(path, name)
+        const w = mapAPIWorkspace(result.payload.workspace)
+        set((state) => ({
+          workspaces: [w, ...state.workspaces.filter((x) => x.hash !== w.hash)],
+        }))
 
-      // 通知后端切换到新工作区
-      await gatewayAPI.switchWorkspace(w.hash)
-      set({ currentWorkspaceHash: w.hash })
-      useGatewayStore.getState().notifyProviderChanged()
+        // 通知后端切换到新工作区
+        await gatewayAPI.switchWorkspace(w.hash)
+        set({ currentWorkspaceHash: w.hash })
+        useGatewayStore.getState().notifyProviderChanged()
 
-      // 加载新工作区的会话列表
-      await useSessionStore.getState().fetchSessions(gatewayAPI, true)
-      useUIStore.getState().showToast('Workspace created', 'success')
-    } catch (err) {
-      console.error('createWorkspace failed:', err)
-      set({ loading: false })
-      useUIStore.getState().showToast('Failed to create workspace', 'error')
-    } finally {
-      useChatStore.getState().setTransitioning(false)
-      set({ loading: false })
-    }
+        // 加载新工作区的会话列表
+        await useSessionStore.getState().fetchSessions(gatewayAPI, true)
+        useUIStore.getState().showToast('Workspace created', 'success')
+      } catch (err) {
+        console.error('createWorkspace failed:', err)
+        useUIStore.getState().showToast('Failed to create workspace', 'error')
+      } finally {
+        useChatStore.getState().setTransitioning(false)
+        set({ loading: false, changing: false })
+        _workspaceChangePromise = null
+      }
+    })()
+
+    return _workspaceChangePromise
   },
 
   renameWorkspace: async (hash, name, gatewayAPI) => {

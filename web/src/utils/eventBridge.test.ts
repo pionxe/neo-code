@@ -21,6 +21,7 @@ function createMockGatewayAPI(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   resetEventBridgeCursors();
   useChatStore.setState({
     messages: [],
@@ -100,6 +101,142 @@ describe("eventBridge", () => {
     );
 
     expect(useChatStore.getState().messages[0].content).toBe("Hello");
+  });
+
+  it("drops stale session events after session switch for tool and chunk updates", () => {
+    const api = createMockGatewayAPI();
+    useSessionStore.setState({ currentSessionId: "sess-new" } as any);
+
+    handleGatewayEvent(
+      {
+        type: EventType.ToolStart,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.ToolStart,
+            payload: {
+              name: "filesystem_write_file",
+              id: "tc-old",
+              arguments: '{"path":"stale.txt"}',
+            },
+          },
+        },
+        session_id: "sess-old",
+        run_id: "run-old",
+      },
+      api,
+    );
+
+    handleGatewayEvent(
+      {
+        type: EventType.ToolDiff,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.ToolDiff,
+            payload: {
+              tool_name: "filesystem_write_file",
+              file_path: "stale.txt",
+              diff: "--- a/stale.txt\n+++ b/stale.txt\n@@ -0,0 +1 @@\n+old\n",
+              was_new: true,
+            },
+          },
+        },
+        session_id: "sess-old",
+        run_id: "run-old",
+      },
+      api,
+    );
+
+    handleGatewayEvent(
+      {
+        type: EventType.AgentChunk,
+        payload: {
+          payload: { runtime_event_type: EventType.AgentChunk, payload: "stale chunk" },
+        },
+        session_id: "sess-old",
+        run_id: "run-old",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().messages).toHaveLength(0);
+    expect(useUIStore.getState().fileChanges).toHaveLength(0);
+  });
+
+  it("drops stale InputNormalized events after session switch", () => {
+    const clearFileChangesSpy = vi.spyOn(
+      useUIStore.getState(),
+      "clearFileChanges",
+    );
+    const setCurrentRunIdSpy = vi.spyOn(
+      useGatewayStore.getState(),
+      "setCurrentRunId",
+    );
+    const listSessions = vi.fn().mockResolvedValue({ payload: { sessions: [] } });
+    const api = createMockGatewayAPI({ listSessions });
+    useSessionStore.setState({ currentSessionId: "sess-new" } as any);
+    useGatewayStore.setState({ currentRunId: "run-current" } as any);
+
+    handleGatewayEvent(
+      {
+        type: EventType.InputNormalized,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.InputNormalized,
+            payload: {
+              session_id: "sess-old",
+              run_id: "run-old",
+            },
+          },
+        },
+        session_id: "sess-old",
+        run_id: "run-old",
+      },
+      api,
+    );
+
+    expect(useSessionStore.getState().currentSessionId).toBe("sess-new");
+    expect(useGatewayStore.getState().currentRunId).toBe("run-current");
+    expect(setCurrentRunIdSpy).not.toHaveBeenCalled();
+    expect(clearFileChangesSpy).not.toHaveBeenCalled();
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+
+  it("accepts InputNormalized when there is no current session yet", async () => {
+    const clearFileChangesSpy = vi.spyOn(
+      useUIStore.getState(),
+      "clearFileChanges",
+    );
+    const setCurrentRunIdSpy = vi.spyOn(
+      useGatewayStore.getState(),
+      "setCurrentRunId",
+    );
+    const listSessions = vi.fn().mockResolvedValue({ payload: { sessions: [] } });
+    const api = createMockGatewayAPI({ listSessions });
+
+    handleGatewayEvent(
+      {
+        type: EventType.InputNormalized,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.InputNormalized,
+            payload: {
+              session_id: "sess-first",
+              run_id: "run-first",
+            },
+          },
+        },
+        session_id: "sess-first",
+        run_id: "run-first",
+      },
+      api,
+    );
+
+    expect(useSessionStore.getState().currentSessionId).toBe("sess-first");
+    expect(setCurrentRunIdSpy).toHaveBeenCalledWith("run-first");
+    expect(clearFileChangesSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(listSessions).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("AgentDone finalizes message from parts array", () => {
@@ -249,6 +386,49 @@ describe("eventBridge", () => {
     );
 
     expect(useChatStore.getState().pendingUserQuestion).toBeNull();
+  });
+
+  it("PermissionRequested and PermissionResolved update permission requests", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.PermissionRequested,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.PermissionRequested,
+            payload: {
+              request_id: "perm-1",
+              tool_call_id: "tc-1",
+              tool_name: "bash",
+              action_type: "run",
+            },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().permissionRequests).toHaveLength(1);
+    expect(useChatStore.getState().permissionRequests[0].request_id).toBe("perm-1");
+
+    handleGatewayEvent(
+      {
+        type: EventType.PermissionResolved,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.PermissionResolved,
+            payload: { request_id: "perm-1" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().permissionRequests).toHaveLength(0);
   });
 
   it("ToolStart adds a tool call message", () => {
@@ -552,6 +732,40 @@ describe("eventBridge", () => {
     expect(useChatStore.getState().messages[0].toolStatus).toBe("running");
   });
 
+  it("Error shows toast, resets generation, and marks running tool calls as error", () => {
+    const api = createMockGatewayAPI();
+    useChatStore.getState().addMessage({
+      id: "tool-running-error",
+      role: "tool",
+      type: "tool_call",
+      content: "",
+      toolName: "bash",
+      toolCallId: "tc-error",
+      toolStatus: "running",
+      timestamp: Date.now(),
+    });
+    useChatStore.getState().setGenerating(true);
+
+    handleGatewayEvent(
+      {
+        type: EventType.Error,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.Error,
+            payload: "boom",
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    expect(useChatStore.getState().messages[0].toolStatus).toBe("error");
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe("boom");
+  });
+
   it("BudgetChecked updates runtime insight budget state", () => {
     const api = createMockGatewayAPI();
     handleGatewayEvent(
@@ -579,6 +793,62 @@ describe("eventBridge", () => {
       "allow",
     );
     expect(useRuntimeInsightStore.getState().budgetUsageRatio).toBe(0.8);
+  });
+
+  it("TokenUsage, BudgetEstimateFailed, and LedgerReconciled update store snapshots", () => {
+    const api = createMockGatewayAPI();
+
+    handleGatewayEvent(
+      {
+        type: EventType.TokenUsage,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.TokenUsage,
+            payload: { input_tokens: 3, output_tokens: 5, total_tokens: 8 },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+    expect(useChatStore.getState().tokenUsage?.total_tokens).toBe(8);
+
+    handleGatewayEvent(
+      {
+        type: EventType.BudgetEstimateFailed,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.BudgetEstimateFailed,
+            payload: { reason: "missing_price", detail: "no price rule" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+    expect(useRuntimeInsightStore.getState().budgetEstimateFailed?.reason).toBe(
+      "missing_price",
+    );
+
+    handleGatewayEvent(
+      {
+        type: EventType.LedgerReconciled,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.LedgerReconciled,
+            payload: { estimated_cost_usd: 1, actual_cost_usd: 0.8, delta_usd: -0.2 },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+    expect(useRuntimeInsightStore.getState().ledgerReconciled?.actual_cost_usd).toBe(
+      0.8,
+    );
   });
 
   it("CompactStart sets persistent compact state without a toast", () => {
@@ -965,6 +1235,31 @@ describe("eventBridge", () => {
       "invalid_transition",
     );
     expect(useUIStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("TodoConflict surfaces a toast for non-recoverable reasons", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.TodoConflict,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.TodoConflict,
+            payload: { action: "update", reason: "server_desync" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe(
+      "server_desync",
+    );
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "Todo conflict: server_desync",
+    );
   });
 
   it("TodoConflict invalid_arguments shows info toast", () => {
@@ -1572,6 +1867,39 @@ describe("eventBridge", () => {
     expect(useRuntimeInsightStore.getState().acceptanceDecision?.status).toBe(
       "accepted",
     );
+  });
+
+  it("Skill and asset events surface user-facing toasts", () => {
+    const api = createMockGatewayAPI();
+    for (const [eventType, payload] of [
+      [EventType.SkillActivated, { skill_id: "skill-a" }],
+      [EventType.SkillDeactivated, { skill_id: "skill-a" }],
+      [EventType.SkillMissing, { skill_id: "skill-b" }],
+      [EventType.AssetSaved, { path: "/tmp/result.txt" }],
+      [EventType.AssetSaveFailed, { path: "/tmp/result.txt" }],
+    ] as const) {
+      handleGatewayEvent(
+        {
+          type: eventType,
+          payload: {
+            payload: {
+              runtime_event_type: eventType,
+              payload,
+            },
+          },
+          session_id: "sess-1",
+          run_id: "run-1",
+        },
+        api,
+      );
+    }
+
+    const toastMessages = useUIStore.getState().toasts.map((toast) => toast.message);
+    expect(toastMessages).toContain("Skill activated: skill-a");
+    expect(toastMessages).toContain("Skill deactivated: skill-a");
+    expect(toastMessages).toContain("Skill unavailable: skill-b");
+    expect(toastMessages).toContain("File saved: /tmp/result.txt");
+    expect(toastMessages).toContain("Failed to save file: /tmp/result.txt");
   });
 
   it("CheckpointCreated only records runtime insight and does not decorate completed tool calls", () => {
