@@ -2596,6 +2596,14 @@ func TestBuildTaskNameTruncatesLongFirstLine(t *testing.T) {
 }
 
 func TestExtractHookNotificationSummaryAndHintFallbacks(t *testing.T) {
+	if summary := extractHookNotificationSummary(nil); summary != "" {
+		t.Fatalf("summary = %q, want empty", summary)
+	}
+	if summary := extractHookNotificationSummary(map[string]any{
+		"payload": map[string]any{"summary": "summary"},
+	}); summary != "summary" {
+		t.Fatalf("summary = %q, want summary", summary)
+	}
 	if summary := extractHookNotificationSummary(map[string]any{
 		"payload": map[string]any{"notification": "notify"},
 	}); summary != "notify" {
@@ -2607,9 +2615,17 @@ func TestExtractHookNotificationSummaryAndHintFallbacks(t *testing.T) {
 		t.Fatalf("summary = %q, want message", summary)
 	}
 	if hint := extractHookNotificationHint(map[string]any{
+		"payload": map[string]any{"reason": "retry"},
+	}); hint != "retry" {
+		t.Fatalf("hint = %q, want retry", hint)
+	}
+	if hint := extractHookNotificationHint(map[string]any{
 		"payload": map[string]any{"status": "async"},
 	}); hint != "async" {
 		t.Fatalf("hint = %q, want async", hint)
+	}
+	if hint := extractHookNotificationHint(nil); hint != "" {
+		t.Fatalf("hint = %q, want empty", hint)
 	}
 }
 
@@ -2658,6 +2674,22 @@ func TestExtractUserVisibleDoneTextHandlesTextFieldAndTypedParts(t *testing.T) {
 		},
 	}); text != "keep" {
 		t.Fatalf("parts text = %q, want keep", text)
+	}
+	if text := extractUserVisibleDoneText(map[string]any{
+		"payload": map[string]any{
+			"parts": []any{
+				map[string]any{"type": "text", "text": "line one"},
+				map[string]any{"type": "", "content": "line two"},
+				"ignored",
+			},
+		},
+	}); text != "line one\nline two" {
+		t.Fatalf("parts text = %q, want joined lines", text)
+	}
+	if text := extractUserVisibleDoneText(map[string]any{
+		"payload": map[string]any{"parts": []any{}},
+	}); text != "" {
+		t.Fatalf("done text = %q, want empty", text)
 	}
 }
 
@@ -2746,6 +2778,21 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	}); text != "本机 Runner 未连接，请在电脑上启动 `neocode runner`" {
 		t.Fatalf("runner error text = %q", text)
 	}
+	if text := extractUserVisibleErrorText(map[string]any{
+		"payload": map[string]any{"message": "capability_denied"},
+	}); text != "权限不足：当前能力令牌不允许此操作" {
+		t.Fatalf("capability error text = %q", text)
+	}
+	if text := extractUserVisibleErrorText(map[string]any{
+		"payload": map[string]any{"message": "tool_execution_failed: bash"},
+	}); text != "工具执行失败：tool_execution_failed: bash" {
+		t.Fatalf("tool execution error text = %q", text)
+	}
+	if text := extractUserVisibleErrorText(map[string]any{
+		"message": "timed out waiting for runner",
+	}); text != "本机 Runner 响应超时，请检查网络连接和 Runner 状态" {
+		t.Fatalf("timeout error text = %q", text)
+	}
 	if text := extractUserVisibleErrorText(nil); text != "" {
 		t.Fatalf("error text = %q, want empty", text)
 	}
@@ -2790,8 +2837,14 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	if status := terminalStatusFromResult("failure"); status != "failure" {
 		t.Fatalf("terminal status = %q, want failure", status)
 	}
+	if status := terminalStatusFromResult("interrupted"); status != "interrupted" {
+		t.Fatalf("terminal status = %q, want interrupted", status)
+	}
 	if status := terminalStatusFromResult("unknown"); status != "running" {
 		t.Fatalf("terminal status = %q, want running fallback", status)
+	}
+	if text := buildTerminalFallbackText("success", ""); text != "任务已完成。" {
+		t.Fatalf("terminal fallback text = %q, want success default", text)
 	}
 	if text := buildTerminalFallbackText("success", "执行完成"); text != "任务已完成：\n执行完成" {
 		t.Fatalf("terminal fallback text = %q, want success summary", text)
@@ -3508,11 +3561,20 @@ func TestExtractUserQuestionRequestAndApprovalDecisionHelpers(t *testing.T) {
 	if !isPermissionRequestNotFoundError(fmt.Errorf("permission request abc not found")) {
 		t.Fatal("expected not-found error to be detected")
 	}
+	if isPermissionRequestNotFoundError(nil) {
+		t.Fatal("expected nil error to not match")
+	}
 	if isPermissionRequestNotFoundError(fmt.Errorf("other error")) {
 		t.Fatal("expected unrelated error to not match")
 	}
+	if readBool(nil, "ok") {
+		t.Fatal("expected nil map bool lookup to fall back to false")
+	}
 	if !readBool(map[string]any{"ok": true}, "ok") {
 		t.Fatal("expected bool field to be read")
+	}
+	if readBool(map[string]any{}, "ok") {
+		t.Fatal("expected missing bool field to fall back to false")
 	}
 	if readBool(map[string]any{"ok": "true"}, "ok") {
 		t.Fatal("expected non-bool field to fall back to false")
