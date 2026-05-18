@@ -39,7 +39,6 @@ import {
 type PayloadRecord = Record<string, unknown> | undefined;
 
 // 模块级缓存最新 verification 消息 ID，避免每次 verification stage 事件都全量扫描 messages 数组。
-let _latestVerificationMsgId: string | undefined;
 
 // 模块级缓存最新的 checkpoint_id，用于文件变更面板关联后续端到端 diff。
 let _latestCheckpointId: string | undefined;
@@ -58,7 +57,6 @@ const CHECKPOINT_REASON_PRE_RESTORE_GUARD = "pre_restore_guard";
 /** 重置模块级游标 —— 在截断聊天历史 / 切换会话等场景调用，避免后续事件挂到已被移除的消息上 */
 export function resetEventBridgeCursors() {
   const keepCheckpointBaseline = useUIStore.getState().isRestoringCheckpoint;
-  _latestVerificationMsgId = undefined;
   _latestCheckpointId = keepCheckpointBaseline
     ? _latestCheckpointId
     : undefined;
@@ -662,16 +660,6 @@ export function handleGatewayEvent(
   const insightStore = useRuntimeInsightStore.getState();
 
   /** 更新最新 verification 消息的 data 为 insightStore 当前最后一条 record */
-  function syncLatestVerificationToChat() {
-    const history = useRuntimeInsightStore.getState().verificationHistory;
-    if (_latestVerificationMsgId && history.length > 0) {
-      chatStore.updateVerificationMessage(
-        _latestVerificationMsgId,
-        history[history.length - 1],
-      );
-    }
-  }
-
   switch (eventType) {
     case EventType.ThinkingDelta: {
       const text = eventPayload as string | undefined;
@@ -1011,7 +999,6 @@ export function handleGatewayEvent(
       const payload = eventPayload as VerificationCompletedPayload | undefined;
       if (payload) {
         insightStore.completeVerification(payload);
-        syncLatestVerificationToChat();
       }
       break;
     }
@@ -1020,7 +1007,6 @@ export function handleGatewayEvent(
       const payload = eventPayload as VerificationFailedPayload | undefined;
       if (payload) {
         insightStore.failVerification(payload);
-        syncLatestVerificationToChat();
       }
       uiStore.showToast(
         strField(eventPayload, "error_class") || "Verification failed",

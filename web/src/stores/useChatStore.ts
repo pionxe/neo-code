@@ -5,7 +5,6 @@ import {
   type AcceptanceDecidedPayload,
   type PendingUserQuestionSnapshot,
 } from '@/api/protocol'
-import { type VerificationRunRecord } from '@/stores/useRuntimeInsightStore'
 import { resetEventBridgeCursors } from '@/utils/eventBridge'
 
 /** 聊天消息 */
@@ -14,7 +13,7 @@ export interface ChatMessage {
   /** 消息角色：user / assistant / tool */
   role: 'user' | 'assistant' | 'tool'
   /** 消息类型：text / thinking / tool_call / code / welcome / system / verification / acceptance */
-  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system' | 'verification' | 'acceptance'
+  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system' | 'acceptance'
   /** 文本内容 */
   content: string
   /** 工具调用信息 */
@@ -23,8 +22,6 @@ export interface ChatMessage {
   toolArgs?: string
   toolResult?: string
   toolStatus?: 'running' | 'done' | 'error'
-  /** Verification 摘要数据(仅 type === 'verification' 使用) */
-  verificationData?: VerificationRunRecord
   /** Acceptance 决策数据(仅 type === 'acceptance' 使用) */
   acceptanceData?: AcceptanceDecidedPayload
   /** Thinking 数据(仅 type === 'thinking' 使用) */
@@ -93,7 +90,6 @@ interface ChatState {
   /** 将所有运行中的工具条目标记为指定状态，用于终止事件兜底收敛 UI。 */
   finalizeRunningToolCalls: (status: 'done' | 'error') => void
   /** 更新一条 verification 消息的 data(verification 进行中持续更新同一条消息) */
-  updateVerificationMessage: (messageId: string, data: VerificationRunRecord) => void
   setGenerating: (v: boolean) => void
   startCompacting: (mode?: string, message?: string) => void
   finishCompacting: () => void
@@ -310,15 +306,6 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: s.messages.map((m) =>
         m.type === 'tool_call' && m.toolStatus === 'running'
           ? { ...m, toolStatus: status }
-          : m
-      ),
-    })),
-
-  updateVerificationMessage: (messageId, data) =>
-    set((s) => ({
-      messages: s.messages.map((m) =>
-        m.id === messageId && m.type === 'verification'
-          ? { ...m, verificationData: data }
           : m
       ),
     })),

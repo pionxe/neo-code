@@ -417,25 +417,6 @@ export interface TodoEventPayload {
 export type ListSessionTodosResult = RPCResult<TodoSnapshot>;
 export type GetRuntimeSnapshotResult = RPCResult<RuntimeSnapshotPayload>;
 
-export interface VerificationStartedPayload {
-  completion_passed: boolean;
-  completion_blocked_reason?: string;
-}
-
-export interface VerificationStageFinishedPayload {
-  name: string;
-  status: string;
-  summary?: string;
-  reason?: string;
-  error_class?: string;
-}
-
-export interface VerificationFinishedPayload {
-  acceptance_status: string;
-  stop_reason?: string;
-  error_class?: string;
-}
-
 export interface VerificationCompletedPayload {
   stop_reason?: string;
 }

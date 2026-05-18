@@ -804,7 +804,7 @@ describe("eventBridge", () => {
         payload: {
           payload: {
             runtime_event_type: EventType.TokenUsage,
-            payload: { input_tokens: 3, output_tokens: 5, total_tokens: 8 },
+            payload: { input_tokens: 3, output_tokens: 5, session_input_tokens: 3, session_output_tokens: 5 },
           },
         },
         session_id: "sess-1",
@@ -812,7 +812,7 @@ describe("eventBridge", () => {
       },
       api,
     );
-    expect(useChatStore.getState().tokenUsage?.total_tokens).toBe(8);
+    expect(useChatStore.getState().tokenUsage?.output_tokens).toBe(5);
 
     handleGatewayEvent(
       {
@@ -820,7 +820,7 @@ describe("eventBridge", () => {
         payload: {
           payload: {
             runtime_event_type: EventType.BudgetEstimateFailed,
-            payload: { reason: "missing_price", detail: "no price rule" },
+            payload: { attempt_seq: 1, request_hash: "hash-1", message: "no price rule" },
           },
         },
         session_id: "sess-1",
@@ -828,8 +828,8 @@ describe("eventBridge", () => {
       },
       api,
     );
-    expect(useRuntimeInsightStore.getState().budgetEstimateFailed?.reason).toBe(
-      "missing_price",
+    expect(useRuntimeInsightStore.getState().budgetEstimateFailed?.message).toBe(
+      "no price rule",
     );
 
     handleGatewayEvent(
@@ -838,7 +838,15 @@ describe("eventBridge", () => {
         payload: {
           payload: {
             runtime_event_type: EventType.LedgerReconciled,
-            payload: { estimated_cost_usd: 1, actual_cost_usd: 0.8, delta_usd: -0.2 },
+            payload: {
+              attempt_seq: 1,
+              request_hash: "hash-1",
+              input_tokens: 3,
+              input_source: "observed",
+              output_tokens: 5,
+              output_source: "observed",
+              has_unknown_usage: false,
+            },
           },
         },
         session_id: "sess-1",
@@ -846,8 +854,8 @@ describe("eventBridge", () => {
       },
       api,
     );
-    expect(useRuntimeInsightStore.getState().ledgerReconciled?.actual_cost_usd).toBe(
-      0.8,
+    expect(useRuntimeInsightStore.getState().ledgerReconciled?.output_tokens).toBe(
+      5,
     );
   });
 
@@ -1007,7 +1015,6 @@ describe("eventBridge", () => {
     );
   });
 
-
   it("AcceptanceDecided stores acceptance decision", () => {
     const api = createMockGatewayAPI();
     handleGatewayEvent(
@@ -1028,6 +1035,53 @@ describe("eventBridge", () => {
     expect(useRuntimeInsightStore.getState().acceptanceDecision?.status).toBe(
       "accepted",
     );
+  });
+
+  it("VerificationCompleted stores final verification outcome", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.VerificationCompleted,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.VerificationCompleted,
+            payload: { stop_reason: "accepted" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(
+      useRuntimeInsightStore.getState().verificationCompleted?.stop_reason,
+    ).toBe("accepted");
+    expect(useChatStore.getState().messages).toHaveLength(0);
+  });
+
+  it("VerificationFailed stores final verification failure without creating verification chat message", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.VerificationFailed,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.VerificationFailed,
+            payload: { stop_reason: "error", error_class: "TestError" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(
+      useRuntimeInsightStore.getState().verificationFailed?.error_class,
+    ).toBe("TestError");
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe("TestError");
+    expect(useChatStore.getState().messages).toHaveLength(0);
   });
 
   it("TodoSnapshotUpdated stores todo snapshot", () => {
@@ -1837,9 +1891,6 @@ describe("eventBridge", () => {
       type: "success",
     });
   });
-
-
-
 
   it("AcceptanceDecided creates an acceptance ChatMessage", () => {
     const api = createMockGatewayAPI();
