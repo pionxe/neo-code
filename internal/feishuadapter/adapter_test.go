@@ -137,13 +137,14 @@ type sentMessage struct {
 }
 
 type fakeMessenger struct {
-	mu            sync.Mutex
-	messages      []sentMessage
-	nextID        int
-	sendTextErr   error
-	sendCardErr   error
-	updateCardErr error
-	deleteCardErr error
+	mu                     sync.Mutex
+	messages               []sentMessage
+	nextID                 int
+	sendTextErr            error
+	sendCardErr            error
+	updateCardErr          error
+	deleteCardErr          error
+	sendPermissionCardHook func(cardID string, payload PermissionCardPayload)
 }
 
 func (m *fakeMessenger) SendText(_ context.Context, chatID string, text string) error {
@@ -155,10 +156,14 @@ func (m *fakeMessenger) SendText(_ context.Context, chatID string, text string) 
 
 func (m *fakeMessenger) SendPermissionCard(_ context.Context, chatID string, payload PermissionCardPayload) (string, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.nextID++
 	cardID := fmt.Sprintf("perm-card-%d", m.nextID)
 	m.messages = append(m.messages, sentMessage{chatID: chatID, kind: "card", card: payload, cardID: cardID})
+	hook := m.sendPermissionCardHook
+	m.mu.Unlock()
+	if hook != nil {
+		hook(cardID, payload)
+	}
 	return cardID, nil
 }
 
@@ -2308,6 +2313,72 @@ func TestApprovalOutboxPreflightDropsStaleOperation(t *testing.T) {
 	after := len(adapterTestMessenger(adapter).snapshot())
 	if after != before {
 		t.Fatalf("stale outbox should be dropped before send, before=%d after=%d", before, after)
+	}
+}
+
+func TestApprovalOutboxSendCardCleanupWhenVersionAdvancedDuringSend(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := "session-outbox-race-send"
+	runID := "run-outbox-race-send"
+	runKey := runBindingKey(sessionID, runID)
+	adapter.trackSession(sessionID, runID, "chat-outbox-race-send", "outbox race send task")
+
+	var createdCardID string
+	var hookOnce sync.Once
+	messenger := adapterTestMessenger(adapter)
+	messenger.mu.Lock()
+	messenger.sendPermissionCardHook = func(cardID string, _ PermissionCardPayload) {
+		createdCardID = strings.TrimSpace(cardID)
+		hookOnce.Do(func() {
+			adapter.mu.Lock()
+			if fsm := adapter.approvalFSMByRun[runKey]; fsm != nil {
+				fsm.Version++
+			}
+			adapter.mu.Unlock()
+		})
+	}
+	messenger.mu.Unlock()
+
+	adapter.processPermissionRequested(
+		context.Background(),
+		sessionID,
+		runID,
+		"chat-outbox-race-send",
+		"perm-outbox-race-send",
+		"filesystem_write_file",
+		"write_file",
+		"outbox-race-send.txt",
+		"需要审批",
+	)
+	if strings.TrimSpace(createdCardID) == "" {
+		t.Fatal("expected permission card to be sent")
+	}
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundDelete := false
+	for _, message := range msgs {
+		if message.kind == "delete_card" && message.chatID == createdCardID {
+			foundDelete = true
+			break
+		}
+	}
+	if !foundDelete {
+		t.Fatalf("expected stale sent permission card to be deleted, msgs=%#v", msgs)
+	}
+
+	adapter.mu.RLock()
+	fsm := adapter.approvalFSMByRun[runKey]
+	storedCardID := ""
+	if fsm != nil {
+		storedCardID = strings.TrimSpace(fsm.CardID)
+	}
+	_, indexed := adapter.approvalCardRunIndex[createdCardID]
+	adapter.mu.RUnlock()
+	if storedCardID != "" {
+		t.Fatalf("stale card should not be attached to fsm, got %q", storedCardID)
+	}
+	if indexed {
+		t.Fatalf("stale card should not remain in approvalCardRunIndex: %s", createdCardID)
 	}
 }
 

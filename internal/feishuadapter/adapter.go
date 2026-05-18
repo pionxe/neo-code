@@ -1139,14 +1139,20 @@ func (a *Adapter) executeApprovalOutbox(ctx context.Context, ops []approvalOutbo
 			var cardID string
 			cardID, err = a.messenger.SendPermissionCard(ctx, op.ChatID, op.PendingCard)
 			if err == nil && strings.TrimSpace(cardID) != "" {
+				normalizedCardID := strings.TrimSpace(cardID)
+				shouldAttach := false
 				a.mu.Lock()
 				fsm := a.approvalFSMByRun[op.RunKey]
 				if fsm != nil && fsm.Generation == op.Generation && fsm.Version == op.Version {
-					fsm.CardID = strings.TrimSpace(cardID)
+					shouldAttach = true
+					fsm.CardID = normalizedCardID
 					a.approvalCardRunIndex[fsm.CardID] = op.RunKey
 					a.rememberRunPermissionCardLocked(op.RunKey, fsm.CardID)
 				}
 				a.mu.Unlock()
+				if !shouldAttach {
+					a.cleanupStalePermissionCard(op, normalizedCardID)
+				}
 			}
 		case approvalOutboxUpdatePendingCard:
 			if strings.TrimSpace(op.CardID) == "" {
@@ -1166,6 +1172,38 @@ func (a *Adapter) executeApprovalOutbox(ctx context.Context, ops []approvalOutbo
 		}
 		a.confirmApprovalOutbox(op)
 	}
+}
+
+// cleanupStalePermissionCard 在发送审批卡后若发现版本已过期，则立即回收该游离卡片。
+func (a *Adapter) cleanupStalePermissionCard(op approvalOutboxOperation, cardID string) {
+	normalizedCardID := strings.TrimSpace(cardID)
+	if normalizedCardID == "" {
+		return
+	}
+	timeout := a.cfg.RequestTimeout
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := a.messenger.DeleteMessage(callCtx, normalizedCardID); err != nil {
+		a.safeLog(
+			"cleanup stale approval card failed kind=%s run_key=%s request_id=%s card_id=%s err=%v",
+			op.Kind,
+			op.RunKey,
+			op.RequestID,
+			normalizedCardID,
+			err,
+		)
+		return
+	}
+	a.safeLog(
+		"cleanup stale approval card success kind=%s run_key=%s request_id=%s card_id=%s",
+		op.Kind,
+		op.RunKey,
+		op.RequestID,
+		normalizedCardID,
+	)
 }
 
 // shouldExecuteApprovalOutbox 在发送副作用前进行代际/版本栅栏校验，避免旧 outbox 覆写新状态。
