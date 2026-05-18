@@ -338,12 +338,6 @@ type StopReasonDecidedPayload struct {
 	Detail string     `json:"detail,omitempty"`
 }
 
-// VerificationStartedPayload 描述 final 验证阶段开始。
-type VerificationStartedPayload struct {
-	CompletionPassed        bool   `json:"completion_passed"`
-	CompletionBlockedReason string `json:"completion_blocked_reason,omitempty"`
-}
-
 // VerificationStageFinishedPayload 描述单个 verifier 阶段结果。
 type VerificationStageFinishedPayload struct {
 	Name       string `json:"name"`
