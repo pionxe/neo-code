@@ -5,7 +5,6 @@ import {
   type AcceptanceDecidedPayload,
   type PendingUserQuestionSnapshot,
 } from '@/api/protocol'
-import { type VerificationRunRecord } from '@/stores/useRuntimeInsightStore'
 import { resetEventBridgeCursors } from '@/utils/eventBridge'
 
 /** 聊天消息 */
@@ -13,8 +12,8 @@ export interface ChatMessage {
   id: string
   /** 消息角色：user / assistant / tool */
   role: 'user' | 'assistant' | 'tool'
-  /** 消息类型：text / thinking / tool_call / code / welcome / system / verification / acceptance */
-  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system' | 'verification' | 'acceptance'
+  /** 消息类型：text / thinking / tool_call / code / welcome / system / acceptance */
+  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system' | 'acceptance'
   /** 文本内容 */
   content: string
   /** 工具调用信息 */
@@ -23,11 +22,9 @@ export interface ChatMessage {
   toolArgs?: string
   toolResult?: string
   toolStatus?: 'running' | 'done' | 'error'
-  /** Verification 摘要数据(仅 type === 'verification' 使用) */
-  verificationData?: VerificationRunRecord
-  /** Acceptance 决策数据(仅 type === 'acceptance' 使用) */
+  /** Acceptance 决策数据，仅 `type === 'acceptance'` 时使用 */
   acceptanceData?: AcceptanceDecidedPayload
-  /** Thinking 数据(仅 type === 'thinking' 使用) */
+  /** Thinking 附加数据，仅 `type === 'thinking'` 时使用 */
   thinkingData?: { collapsed: boolean }
   /** 代码语言 */
   language?: string
@@ -45,19 +42,19 @@ interface ChatState {
   messages: ChatMessage[]
   /** 是否正在生成 */
   isGenerating: boolean
-  /** 当前会话是否正在执行上下文压缩。 */
+  /** 当前会话是否正在执行上下文压缩 */
   isCompacting: boolean
-  /** 当前压缩触发模式，用于展示压缩来源。 */
+  /** 当前压缩触发模式，用于展示压缩来源 */
   compactMode: string
-  /** 压缩期间展示给用户的持续状态文案。 */
+  /** 压缩期间展示给用户的持续状态文案 */
   compactMessage: string
-  /** 当前 AI 回复缓冲 ID（流式追加用） */
+  /** 当前 AI 回复缓冲 ID，用于流式追加 */
   streamingMessageId: string
   /** 当前 thinking 流式消息 ID */
   streamingThinkingMessageId: string
   /** 权限请求列表 */
   permissionRequests: PermissionRequestPayload[]
-  /** 当前待回答 ask_user 问题（v1 单活跃） */
+  /** 当前待回答 ask_user 问题 */
   pendingUserQuestion: PendingUserQuestionSnapshot | null
   /** Token 用量 */
   tokenUsage: TokenUsage | null
@@ -65,7 +62,7 @@ interface ChatState {
   phase: string
   /** 停止原因 */
   stopReason: string
-  /** 会话切换中标记（eventBridge 据此丢弃中间窗口期事件） */
+  /** 会话切换中标记，eventBridge 据此丢弃中间窗口期事件 */
   isTransitioning: boolean
   /** 当前 Agent 工作模式 */
   agentMode: 'build' | 'plan'
@@ -76,29 +73,27 @@ interface ChatState {
   addMessage: (msg: ChatMessage) => void
   setMessages: (messages: ChatMessage[]) => void
   removeMessage: (id: string) => void
-  /** 从指定消息（含）开始截断 messages 数组并清理生成相关状态 */
+  /** 从指定消息开始截断 messages，并清理生成相关状态 */
   truncateFromMessage: (messageId: string) => void
   appendChunk: (text: string) => void
-  /** 原子操作：创建流式 assistant 消息 + 加入列表 + 设置 streamingMessageId */
+  /** 原子操作：创建流式 assistant 消息并设置 streamingMessageId */
   startStreamingMessage: () => string
   finalizeMessage: (id: string, content: string) => void
   /** 创建流式 thinking 消息并设置 streamingThinkingMessageId */
   startThinkingMessage: () => string
-  /** 追加 thinking 文本到当前流式 thinking 消息 */
+  /** 追加 thinking 文本到当前流式消息 */
   appendThinkingChunk: (text: string) => void
-  /** 终结 thinking 消息（collapsed=true）并清空 streamingThinkingMessageId */
+  /** 终结 thinking 消息并清空 streamingThinkingMessageId */
   finalizeThinkingMessage: () => void
   updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => boolean
   appendToolOutput: (toolCallId: string, chunk: string) => void
-  /** 将所有运行中的工具条目标记为指定状态，用于终止事件兜底收敛 UI。 */
+  /** 将所有运行中的工具条目标记为指定状态，用于终止事件兜底收敛 UI */
   finalizeRunningToolCalls: (status: 'done' | 'error') => void
-  /** 更新一条 verification 消息的 data(verification 进行中持续更新同一条消息) */
-  updateVerificationMessage: (messageId: string, data: VerificationRunRecord) => void
   setGenerating: (v: boolean) => void
   startCompacting: (mode?: string, message?: string) => void
   finishCompacting: () => void
   setStreamingMessageId: (id: string) => void
-  /** 重置生成状态：终结当前流式消息 + 清除 isGenerating */
+  /** 重置生成状态：终结当前流式消息并清除 isGenerating */
   resetGeneratingState: () => void
   setTransitioning: (v: boolean) => void
   addPermissionRequest: (req: PermissionRequestPayload) => void
@@ -142,7 +137,7 @@ export function createAssistantMessage(): ChatMessage {
   }
 }
 
-/** 创建系统消息（用于展示 slash command 执行结果） */
+/** 创建系统消息，用于展示 slash command 执行结果 */
 export function createSystemMessage(text: string): ChatMessage {
   return {
     id: nextMsgId(),
@@ -231,7 +226,7 @@ export const useChatStore = create<ChatState>((set) => ({
       }
     }),
 
-  /** 原子操作：创建消息 + 加入列表 + 设置 streamingMessageId，避免竞态 */
+  /** 原子操作：创建消息并设置 streamingMessageId，避免竞态 */
   startStreamingMessage: () => {
     const msg = createAssistantMessage()
     set((s) => ({
@@ -314,15 +309,6 @@ export const useChatStore = create<ChatState>((set) => ({
       ),
     })),
 
-  updateVerificationMessage: (messageId, data) =>
-    set((s) => ({
-      messages: s.messages.map((m) =>
-        m.id === messageId && m.type === 'verification'
-          ? { ...m, verificationData: data }
-          : m
-      ),
-    })),
-
   setGenerating: (isGenerating) => set({ isGenerating }),
   startCompacting: (compactMode = 'manual', compactMessage = 'Compacting context...') =>
     set({
@@ -338,7 +324,7 @@ export const useChatStore = create<ChatState>((set) => ({
     }),
   setStreamingMessageId: (streamingMessageId) => set({ streamingMessageId }),
 
-  /** 重置生成状态：终结当前流式消息 + 清除 isGenerating */
+  /** 重置生成状态：终结当前流式消息并清除 isGenerating */
   resetGeneratingState: () =>
     set((s) => {
       let msgs = s.messages
@@ -402,7 +388,7 @@ export const useChatStore = create<ChatState>((set) => ({
   setAgentMode: (agentMode) => set({ agentMode }),
   setPermissionMode: (permissionMode) => set({ permissionMode }),
 
-  /** 清理全部聊天状态，包括权限请求、token用量等。同时重置 eventBridge 模块级游标，避免跨会话泄漏。 */
+  /** 清理全部聊天状态，并重置 eventBridge 游标，避免跨会话泄漏 */
   clearMessages: () => {
     resetEventBridgeCursors()
     set({

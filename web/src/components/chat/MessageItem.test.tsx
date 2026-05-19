@@ -3,7 +3,6 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import MessageItem from './MessageItem'
 
 vi.mock('./ToolCallCard', () => ({ default: () => <div>tool-card</div> }))
-vi.mock('./VerificationMessage', () => ({ default: () => <div>verification-card</div> }))
 vi.mock('./AcceptanceMessage', () => ({ default: () => <div>acceptance-card</div> }))
 vi.mock('./CodeBlock', () => ({ default: ({ code }: { code: string }) => <pre>{code}</pre> }))
 vi.mock('./MarkdownContent', () => ({ default: ({ content }: { content: string }) => <span>{content}</span> }))
@@ -30,11 +29,9 @@ describe('MessageItem', () => {
 		expect(screen.getByText('reasoning')).toBeInTheDocument()
 	})
 
-	it('renders tool/verification/acceptance delegates', () => {
+	it('renders tool and acceptance delegates', () => {
 		const { rerender } = render(<MessageItem message={{ id: 'm1', role: 'tool', type: 'tool_call', content: '', timestamp: 1 } as any} />)
 		expect(screen.getByText('tool-card')).toBeInTheDocument()
-		rerender(<MessageItem message={{ id: 'm2', role: 'assistant', type: 'verification', content: '', timestamp: 1 } as any} />)
-		expect(screen.getByText('verification-card')).toBeInTheDocument()
 		rerender(<MessageItem message={{ id: 'm3', role: 'assistant', type: 'acceptance', content: '', timestamp: 1 } as any} />)
 		expect(screen.getByText('acceptance-card')).toBeInTheDocument()
 	})

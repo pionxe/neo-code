@@ -6,16 +6,6 @@ beforeEach(() => {
 })
 
 describe('useRuntimeInsightStore', () => {
-  it('upserts verification stages by name', () => {
-    const store = useRuntimeInsightStore.getState()
-
-    store.upsertVerificationStage({ name: 'test', status: 'failed', reason: 'first' })
-    store.upsertVerificationStage({ name: 'test', status: 'passed', summary: 'ok' })
-
-    expect(useRuntimeInsightStore.getState().verificationStages.test.status).toBe('passed')
-    expect(useRuntimeInsightStore.getState().verificationStages.test.summary).toBe('ok')
-  })
-
   it('calculates budget usage ratio when prompt budget is available', () => {
     useRuntimeInsightStore.getState().setBudgetChecked({
       attempt_seq: 1,
@@ -40,39 +30,53 @@ describe('useRuntimeInsightStore', () => {
     expect(useRuntimeInsightStore.getState().budgetUsageRatio).toBeNull()
   })
 
+  it('stores final verification outcomes', () => {
+    const store = useRuntimeInsightStore.getState()
+
+    store.completeVerification({ stop_reason: 'accepted' })
+    expect(useRuntimeInsightStore.getState().verificationCompleted?.stop_reason).toBe('accepted')
+
+    store.failVerification({ stop_reason: 'error', error_class: 'TestError' })
+    expect(useRuntimeInsightStore.getState().verificationFailed?.error_class).toBe('TestError')
+    expect(useRuntimeInsightStore.getState().verificationCompleted).toBeNull()
+  })
+
+  it('clears a stale failed terminal state when verification later completes', () => {
+    const store = useRuntimeInsightStore.getState()
+
+    store.failVerification({ stop_reason: 'error', error_class: 'TestError' })
+    store.completeVerification({ stop_reason: 'accepted' })
+
+    const state = useRuntimeInsightStore.getState()
+    expect(state.verificationCompleted?.stop_reason).toBe('accepted')
+    expect(state.verificationFailed).toBeNull()
+  })
+
+  it('clears a stale completed terminal state when verification later fails', () => {
+    const store = useRuntimeInsightStore.getState()
+
+    store.completeVerification({ stop_reason: 'accepted' })
+    store.failVerification({ stop_reason: 'error', error_class: 'TestError' })
+
+    const state = useRuntimeInsightStore.getState()
+    expect(state.verificationFailed?.error_class).toBe('TestError')
+    expect(state.verificationCompleted).toBeNull()
+  })
+
   it('resets all insight state', () => {
     const store = useRuntimeInsightStore.getState()
     store.setAcceptanceDecision({ status: 'accepted', user_visible_summary: 'done' })
+    store.completeVerification({ stop_reason: 'accepted' })
     store.setTodoSnapshot({ summary: { total: 1, required_total: 1, required_completed: 1, required_failed: 0, required_open: 0 } })
 
     store.reset()
 
     expect(useRuntimeInsightStore.getState().acceptanceDecision).toBeNull()
+    expect(useRuntimeInsightStore.getState().verificationCompleted).toBeNull()
     expect(useRuntimeInsightStore.getState().todoSnapshot).toBeNull()
   })
 
-  it('failVerification updates history status', () => {
-    const store = useRuntimeInsightStore.getState()
-    store.startVerification({ completion_passed: true })
-    store.failVerification({ stop_reason: 'error', error_class: 'TestError' })
-    expect(useRuntimeInsightStore.getState().verificationHistory[0].status).toBe('failed')
-  })
-
   it('setTodoSnapshot clears any stale todoConflict on a valid update', () => {
-    const store = useRuntimeInsightStore.getState()
-    store.setTodoConflict({ action: 'todo_conflict', reason: 'todo_not_found' })
-    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe('todo_not_found')
-
-    store.setTodoSnapshot({
-      items: [{ id: 'a', content: 'task', status: 'pending', required: true, revision: 1 }],
-      summary: { total: 1, required_total: 1, required_completed: 0, required_failed: 0, required_open: 1 },
-    })
-
-    expect(useRuntimeInsightStore.getState().todoConflict).toBeNull()
-    expect(useRuntimeInsightStore.getState().todoSnapshot?.items?.[0].id).toBe('a')
-  })
-
-  it('setTodoSnapshot clears conflict on valid update', () => {
     const store = useRuntimeInsightStore.getState()
     store.setTodoConflict({ action: 'todo_conflict', reason: 'todo_not_found' })
     expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe('todo_not_found')
@@ -105,7 +109,7 @@ describe('useRuntimeInsightStore', () => {
     expect(state.todoConflict).toBeNull()
   })
 
-  it('applyTodoSnapshot updates snapshot but does NOT clear conflict', () => {
+  it('applyTodoSnapshot updates snapshot but does not clear conflict', () => {
     const store = useRuntimeInsightStore.getState()
     store.setTodoConflict({ action: 'todo_conflict', reason: 'revision_conflict' })
     expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe('revision_conflict')
@@ -117,7 +121,6 @@ describe('useRuntimeInsightStore', () => {
 
     const state = useRuntimeInsightStore.getState()
     expect(state.todoSnapshot?.items?.[0].id).toBe('b')
-    // conflict must be preserved
     expect(state.todoConflict?.reason).toBe('revision_conflict')
   })
 
