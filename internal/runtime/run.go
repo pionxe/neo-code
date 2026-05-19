@@ -175,6 +175,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 	s.bindRunState(runToken, &state)
 	statePtr = &state
+	s.applyResumeCheckpoint(ctx, &state)
 	if err := s.resetTodosForUserRun(ctx, &state); err != nil {
 		return s.handleRunError(err)
 	}
@@ -232,7 +233,14 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		state.compactCount = 0
 		state.nextAttemptSeq = 1
 		stage := resolvePlanningStageForState(&state)
-		if err := s.setBaseRunState(ctx, &state, baseRunStateForPlanningStage(stage)); err != nil {
+		nextBaseLifecycle := baseRunStateForPlanningStage(stage)
+		state.mu.Lock()
+		if state.resumeNextBaseLifecycle != "" {
+			nextBaseLifecycle = state.resumeNextBaseLifecycle
+			state.resumeNextBaseLifecycle = ""
+		}
+		state.mu.Unlock()
+		if err := s.setBaseRunState(ctx, &state, nextBaseLifecycle); err != nil {
 			return s.handleRunError(err)
 		}
 
@@ -407,6 +415,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				}
 				s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
 				report := s.evaluateAcceptGate(ctx, &state, turnOutput.assistant)
+				s.emitVerificationLifecycleEvents(ctx, &state, completionState, report)
 				s.emitAcceptGateReport(&state, report)
 
 				if report.Outcome == acceptgate.OutcomeAccepted {

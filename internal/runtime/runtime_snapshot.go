@@ -49,6 +49,14 @@ type RuntimeSnapshotUpdatedPayload struct {
 	Snapshot RuntimeSnapshot `json:"snapshot"`
 }
 
+// ResumeAppliedPayload 描述 run 启动时应用 resume checkpoint 的策略结果。
+type ResumeAppliedPayload struct {
+	CheckpointRunID string `json:"checkpoint_run_id,omitempty"`
+	CheckpointPhase string `json:"checkpoint_phase,omitempty"`
+	CheckpointTurn  int    `json:"checkpoint_turn,omitempty"`
+	Strategy        string `json:"strategy,omitempty"`
+}
+
 // FactsUpdatedPayload 表示事实层快照更新事件。
 type FactsUpdatedPayload struct {
 	Reason string        `json:"reason,omitempty"`

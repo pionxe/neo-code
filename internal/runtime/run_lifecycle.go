@@ -29,6 +29,8 @@ func (s *Service) enterTemporaryRunState(ctx context.Context, state *runState, t
 	}
 	state.mu.Lock()
 	switch temporary {
+	case controlplane.RunStateWaitingUserQuestion:
+		state.waitingUserQuestionCount++
 	case controlplane.RunStateWaitingPermission:
 		state.waitingPermissionCount++
 	case controlplane.RunStateCompacting:
@@ -48,6 +50,10 @@ func (s *Service) leaveTemporaryRunState(ctx context.Context, state *runState, t
 	}
 	state.mu.Lock()
 	switch temporary {
+	case controlplane.RunStateWaitingUserQuestion:
+		if state.waitingUserQuestionCount > 0 {
+			state.waitingUserQuestionCount--
+		}
 	case controlplane.RunStateWaitingPermission:
 		if state.waitingPermissionCount > 0 {
 			state.waitingPermissionCount--
@@ -92,6 +98,9 @@ func (s *Service) refreshEffectiveRunState(ctx context.Context, state *runState)
 
 // deriveEffectiveRunState 统一推导当前有效运行态，临时治理态优先级高于 base 主链态。
 func deriveEffectiveRunState(state *runState) controlplane.RunState {
+	if state.waitingUserQuestionCount > 0 {
+		return controlplane.RunStateWaitingUserQuestion
+	}
 	if state.waitingPermissionCount > 0 {
 		return controlplane.RunStateWaitingPermission
 	}
@@ -133,6 +142,7 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 		state.stopEmitted = true
 		state.baseLifecycle = controlplane.RunStateStopped
 		state.lifecycle = controlplane.RunStateStopped
+		state.waitingUserQuestionCount = 0
 		state.waitingPermissionCount = 0
 		state.compactingCount = 0
 		state.mu.Unlock()

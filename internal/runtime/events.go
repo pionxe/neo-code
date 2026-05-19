@@ -410,6 +410,8 @@ const (
 	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
 	// EventRuntimeSnapshotUpdated 表示 runtime 统一状态快照已更新。
 	EventRuntimeSnapshotUpdated EventType = "runtime_snapshot_updated"
+	// EventResumeApplied 表示运行启动时已应用 resume checkpoint 恢复策略。
+	EventResumeApplied EventType = "resume_applied"
 	// EventFactsUpdated 表示运行事实快照已更新。
 	EventFactsUpdated EventType = "facts_updated"
 	// EventDecisionMade 表示 FinalDecider 已输出裁决。

@@ -88,6 +88,57 @@ func TestTemporaryRunStatePriorityWaitingOverCompacting(t *testing.T) {
 	}
 }
 
+func TestTemporaryRunStatePriorityUserQuestionOverPermissionAndCompacting(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-temp-user-question-priority", newRuntimeSession("session-temp-user-question-priority"))
+	if err := service.setBaseRunState(context.Background(), &state, controlplane.RunStatePlan); err != nil {
+		t.Fatalf("set base run state: %v", err)
+	}
+	if err := service.setBaseRunState(context.Background(), &state, controlplane.RunStateExecute); err != nil {
+		t.Fatalf("set base run state: %v", err)
+	}
+
+	if err := service.enterTemporaryRunState(context.Background(), &state, controlplane.RunStateCompacting); err != nil {
+		t.Fatalf("enter compacting: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateCompacting {
+		t.Fatalf("lifecycle = %q, want compacting", state.lifecycle)
+	}
+	if err := service.enterTemporaryRunState(context.Background(), &state, controlplane.RunStateWaitingPermission); err != nil {
+		t.Fatalf("enter waiting permission: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateWaitingPermission {
+		t.Fatalf("lifecycle = %q, want waiting_permission", state.lifecycle)
+	}
+	if err := service.enterTemporaryRunState(context.Background(), &state, controlplane.RunStateWaitingUserQuestion); err != nil {
+		t.Fatalf("enter waiting user question: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateWaitingUserQuestion {
+		t.Fatalf("lifecycle = %q, want waiting_user_question", state.lifecycle)
+	}
+
+	if err := service.leaveTemporaryRunState(context.Background(), &state, controlplane.RunStateWaitingUserQuestion); err != nil {
+		t.Fatalf("leave waiting user question: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateWaitingPermission {
+		t.Fatalf("lifecycle = %q, want waiting_permission after user question leaves", state.lifecycle)
+	}
+	if err := service.leaveTemporaryRunState(context.Background(), &state, controlplane.RunStateWaitingPermission); err != nil {
+		t.Fatalf("leave waiting permission: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateCompacting {
+		t.Fatalf("lifecycle = %q, want compacting after waiting permission leaves", state.lifecycle)
+	}
+	if err := service.leaveTemporaryRunState(context.Background(), &state, controlplane.RunStateCompacting); err != nil {
+		t.Fatalf("leave compacting: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateExecute {
+		t.Fatalf("lifecycle = %q, want execute", state.lifecycle)
+	}
+}
+
 func assertPhaseTransitions(t *testing.T, events []RuntimeEvent, expected [][2]string) {
 	t.Helper()
 

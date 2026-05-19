@@ -17,6 +17,8 @@ func TestValidateRunStateTransitionMainlineAndGovernanceStates(t *testing.T) {
 		{from: RunStateCompacting, to: RunStatePlan},
 		{from: RunStateExecute, to: RunStateWaitingPermission},
 		{from: RunStateWaitingPermission, to: RunStateExecute},
+		{from: RunStateExecute, to: RunStateWaitingUserQuestion},
+		{from: RunStateWaitingUserQuestion, to: RunStateExecute},
 		{from: RunStateVerify, to: RunStateStopped},
 	}
 
@@ -34,7 +36,7 @@ func TestValidateRunStateTransitionMainlineAndGovernanceStates(t *testing.T) {
 func TestValidateRunStateTransitionRejectsInvalidJump(t *testing.T) {
 	t.Parallel()
 
-	if err := ValidateRunStateTransition(RunStateCompacting, RunStateExecute); err == nil {
+	if err := ValidateRunStateTransition(RunStateExecute, RunStatePlan); err == nil {
 		t.Fatalf("expected invalid transition to return error")
 	}
 }

@@ -10,18 +10,21 @@ import (
 
 	"neo-code/internal/checkpoint"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
 )
 
 type checkpointStoreSpy struct {
-	lastResume    agentsession.ResumeCheckpoint
-	listRecords   []agentsession.CheckpointRecord
-	listSessionID string
-	listOpts      checkpoint.ListCheckpointOpts
-	listErr       error
-	getRecord     agentsession.CheckpointRecord
-	getSessionCP  *agentsession.SessionCheckpoint
-	getErr        error
+	lastResume      agentsession.ResumeCheckpoint
+	latestResume    *agentsession.ResumeCheckpoint
+	latestResumeErr error
+	listRecords     []agentsession.CheckpointRecord
+	listSessionID   string
+	listOpts        checkpoint.ListCheckpointOpts
+	listErr         error
+	getRecord       agentsession.CheckpointRecord
+	getSessionCP    *agentsession.SessionCheckpoint
+	getErr          error
 }
 
 func (s *checkpointStoreSpy) CreateCheckpoint(_ context.Context, in checkpoint.CreateCheckpointInput) (agentsession.CheckpointRecord, error) {
@@ -43,7 +46,7 @@ func (s *checkpointStoreSpy) UpdateCheckpointStatus(context.Context, string, age
 }
 
 func (s *checkpointStoreSpy) GetLatestResumeCheckpoint(context.Context, string) (*agentsession.ResumeCheckpoint, error) {
-	return nil, nil
+	return s.latestResume, s.latestResumeErr
 }
 
 func (s *checkpointStoreSpy) RestoreCheckpoint(context.Context, checkpoint.RestoreCheckpointInput) error {
@@ -306,6 +309,63 @@ func TestUpdateResumeCheckpoint(t *testing.T) {
 	if spy.lastResume.SessionID != fixture.session.ID || spy.lastResume.RunID != "run-resume" || spy.lastResume.Turn != 3 || spy.lastResume.Phase != "verify" {
 		t.Fatalf("SetResumeCheckpoint() captured %#v", spy.lastResume)
 	}
+}
+
+func TestApplyResumeCheckpointReplayPlanStrategy(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-resume-plan", fixture.session)
+	spy := &checkpointStoreSpy{
+		latestResume: &agentsession.ResumeCheckpoint{
+			RunID:           "run-old",
+			SessionID:       fixture.session.ID,
+			Turn:            4,
+			Phase:           "execute",
+			CompletionState: "",
+		},
+	}
+	service := &Service{
+		checkpointStore:  spy,
+		events:           make(chan RuntimeEvent, 16),
+		runtimeSnapshots: make(map[string]RuntimeSnapshot),
+	}
+
+	service.applyResumeCheckpoint(context.Background(), &state)
+
+	if state.resumeNextBaseLifecycle != controlplane.RunStatePlan {
+		t.Fatalf("resumeNextBaseLifecycle = %q, want plan", state.resumeNextBaseLifecycle)
+	}
+	if strings.TrimSpace(state.pendingSystemReminder) == "" {
+		t.Fatalf("pendingSystemReminder should be populated")
+	}
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventResumeApplied, EventRuntimeSnapshotUpdated})
+}
+
+func TestApplyResumeCheckpointVerifyClosureStrategy(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-resume-verify", fixture.session)
+	spy := &checkpointStoreSpy{
+		latestResume: &agentsession.ResumeCheckpoint{
+			RunID:           "run-old-verify",
+			SessionID:       fixture.session.ID,
+			Turn:            2,
+			Phase:           "verify",
+			CompletionState: "completed",
+		},
+	}
+	service := &Service{
+		checkpointStore:  spy,
+		events:           make(chan RuntimeEvent, 16),
+		runtimeSnapshots: make(map[string]RuntimeSnapshot),
+	}
+
+	service.applyResumeCheckpoint(context.Background(), &state)
+
+	if state.resumeNextBaseLifecycle != controlplane.RunStateVerify {
+		t.Fatalf("resumeNextBaseLifecycle = %q, want verify", state.resumeNextBaseLifecycle)
+	}
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventResumeApplied, EventRuntimeSnapshotUpdated})
 }
 
 func TestRuntimeCheckpointFacadeMethods(t *testing.T) {
