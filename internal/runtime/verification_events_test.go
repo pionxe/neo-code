@@ -71,3 +71,50 @@ func TestEmitVerificationLifecycleEvents(t *testing.T) {
 		t.Fatalf("ErrorClass = %q, want unknown", finished.ErrorClass)
 	}
 }
+
+func TestEmitVerificationLifecycleEventsAcceptedAndNilGuards(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-verification-accepted", agentsession.New("verification-accepted"))
+	service.emitVerificationLifecycleEvents(context.Background(), &state, controlplane.CompletionState{}, acceptgate.Report{
+		Outcome: acceptgate.OutcomeAccepted,
+		Results: []acceptgate.CheckResult{
+			{Name: " permission-check ", Passed: false, Reason: "permission denied"},
+			{Name: " timeout-check ", Passed: false, Reason: "command timeout"},
+			{Name: " lookup-check ", Passed: false, Reason: "binary not found"},
+			{Name: " pass-check ", Passed: true, Reason: "  skipped  "},
+		},
+	})
+	service.emitVerificationLifecycleEvents(context.Background(), nil, controlplane.CompletionState{}, acceptgate.Report{})
+	var nilService *Service
+	nilService.emitVerificationLifecycleEvents(context.Background(), &state, controlplane.CompletionState{}, acceptgate.Report{})
+
+	events := collectRuntimeEvents(service.Events())
+	if len(events) != 6 {
+		t.Fatalf("event count = %d, want 6", len(events))
+	}
+
+	finished, ok := events[len(events)-1].Payload.(VerificationFinishedPayload)
+	if !ok {
+		t.Fatalf("finished payload type = %T", events[len(events)-1].Payload)
+	}
+	if finished.ErrorClass != "" {
+		t.Fatalf("ErrorClass = %q, want empty for accepted verification", finished.ErrorClass)
+	}
+
+	var gotClasses []string
+	for _, event := range events[1 : len(events)-1] {
+		payload, ok := event.Payload.(VerificationStageFinishedPayload)
+		if !ok {
+			t.Fatalf("stage payload type = %T", event.Payload)
+		}
+		gotClasses = append(gotClasses, payload.ErrorClass)
+	}
+	wantClasses := []string{"permission_denied", "timeout", "command_not_found", ""}
+	for i := range wantClasses {
+		if gotClasses[i] != wantClasses[i] {
+			t.Fatalf("stage error class[%d] = %q, want %q", i, gotClasses[i], wantClasses[i])
+		}
+	}
+}

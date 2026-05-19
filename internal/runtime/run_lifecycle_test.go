@@ -159,6 +159,54 @@ func TestApplyTurnBaseRunStateBootstrapsVerifyFromEmpty(t *testing.T) {
 	})
 }
 
+func TestApplyTurnBaseRunStateNonBootstrapPaths(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	if err := service.applyTurnBaseRunState(context.Background(), nil, controlplane.RunStateVerify); err != nil {
+		t.Fatalf("apply turn base run state nil state: %v", err)
+	}
+
+	state := newRunState("run-bootstrap-plan", newRuntimeSession("session-bootstrap-plan"))
+	if err := service.applyTurnBaseRunState(context.Background(), &state, controlplane.RunStatePlan); err != nil {
+		t.Fatalf("apply turn base run state plan: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStatePlan {
+		t.Fatalf("lifecycle = %q, want plan", state.lifecycle)
+	}
+
+	state.lifecycle = controlplane.RunStatePlan
+	if err := service.applyTurnBaseRunState(context.Background(), &state, controlplane.RunStateVerify); err != nil {
+		t.Fatalf("apply turn base run state verify from plan: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateVerify {
+		t.Fatalf("lifecycle = %q, want verify", state.lifecycle)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertPhaseTransitions(t, events, [][2]string{
+		{"", "plan"},
+		{"plan", "verify"},
+	})
+}
+
+func TestRunLifecycleRejectsInvalidStates(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-invalid-lifecycle", newRuntimeSession("session-invalid-lifecycle"))
+
+	if err := service.setBaseRunState(context.Background(), &state, controlplane.RunStateWaitingPermission); err == nil {
+		t.Fatal("expected invalid base lifecycle state error")
+	}
+	if err := service.enterTemporaryRunState(context.Background(), &state, controlplane.RunStatePlan); err == nil {
+		t.Fatal("expected unsupported temporary lifecycle state error")
+	}
+	if err := service.leaveTemporaryRunState(context.Background(), &state, controlplane.RunStatePlan); err == nil {
+		t.Fatal("expected unsupported temporary lifecycle state error")
+	}
+}
+
 func assertPhaseTransitions(t *testing.T, events []RuntimeEvent, expected [][2]string) {
 	t.Helper()
 
