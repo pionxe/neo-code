@@ -139,6 +139,26 @@ func TestTemporaryRunStatePriorityUserQuestionOverPermissionAndCompacting(t *tes
 	}
 }
 
+func TestApplyTurnBaseRunStateBootstrapsVerifyFromEmpty(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-bootstrap-verify", newRuntimeSession("session-bootstrap-verify"))
+
+	if err := service.applyTurnBaseRunState(context.Background(), &state, controlplane.RunStateVerify); err != nil {
+		t.Fatalf("apply turn base run state: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateVerify {
+		t.Fatalf("lifecycle = %q, want verify", state.lifecycle)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertPhaseTransitions(t, events, [][2]string{
+		{"", "plan"},
+		{"plan", "verify"},
+	})
+}
+
 func assertPhaseTransitions(t *testing.T, events []RuntimeEvent, expected [][2]string) {
 	t.Helper()
 

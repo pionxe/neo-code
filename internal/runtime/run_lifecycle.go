@@ -22,6 +22,22 @@ func (s *Service) setBaseRunState(ctx context.Context, state *runState, next con
 	return s.refreshEffectiveRunState(ctx, state)
 }
 
+// applyTurnBaseRunState 为每轮主链状态设置提供启动引导，确保恢复到 verify 时可从空态安全进入。
+func (s *Service) applyTurnBaseRunState(ctx context.Context, state *runState, next controlplane.RunState) error {
+	if state == nil {
+		return nil
+	}
+	state.mu.Lock()
+	current := state.lifecycle
+	state.mu.Unlock()
+	if current == "" && next == controlplane.RunStateVerify {
+		if err := s.setBaseRunState(ctx, state, controlplane.RunStatePlan); err != nil {
+			return err
+		}
+	}
+	return s.setBaseRunState(ctx, state, next)
+}
+
 // enterTemporaryRunState 增加临时治理态计数，并触发有效运行态重计算。
 func (s *Service) enterTemporaryRunState(ctx context.Context, state *runState, temporary controlplane.RunState) error {
 	if state == nil {

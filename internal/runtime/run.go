@@ -240,7 +240,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			state.resumeNextBaseLifecycle = ""
 		}
 		state.mu.Unlock()
-		if err := s.setBaseRunState(ctx, &state, nextBaseLifecycle); err != nil {
+		if err := s.applyTurnBaseRunState(ctx, &state, nextBaseLifecycle); err != nil {
 			return s.handleRunError(err)
 		}
 
