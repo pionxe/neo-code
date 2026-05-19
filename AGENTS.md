@@ -39,6 +39,14 @@
 
 如需了解当前各模块的具体实现细节（如 budget 闭环、事件协议、compact 策略），参考 `docs/` 目录下对应文档，而非本文件。
 
+### TUI v2 Phase 0 开发边界
+- TUI v1 (`internal/tui/`) 冻结不改；TUI v2 的新实现统一放在 `internal/tuiv2/`。
+- TUI v2 使用独立二进制入口 `cmd/neocode-tuiv2/main.go`，不复用或改写 TUI v1 入口。
+- TUI v2 禁止 import `internal/runtime`、`internal/session`、`internal/repository` 或任何 SQLite 相关包。
+- TUI v2 不直接使用真实 Gateway 内部 server；真实通信能力必须通过客户端适配器收敛。
+- Fake 实现模拟的是 Gateway 客户端接口，不是 `FakeRuntime`。
+- UI 组件不直接写死假数据，所有数据流必须从 Gateway 客户端接口进入。
+
 ## 5. AI 修改代码时的执行流程
 - 先定位改动所属模块，再检查是否会破坏职责边界。
 - 优先做最小闭环改动，避免无关重构。
