@@ -414,8 +414,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const projects = mapSessionsToProjects(sessions)
         set({ projects, loading: false })
 
-        const state = get()
+        let state = get()
         if (requestSeq !== _fetchSessionsSeq) return
+        const currentSessionVisible = isValidSessionId(state.currentSessionId) &&
+          sessions.some((session) => session.id === state.currentSessionId)
+        if (isValidSessionId(state.currentSessionId) && !currentSessionVisible) {
+          set({ currentSessionId: '', currentProjectId: '', _initialBindDone: false })
+          state = get()
+        }
         if (!isValidSessionId(state.currentSessionId) && sessions.length > 0) {
           const firstSession = sessions[0]
           set({ currentSessionId: firstSession.id })

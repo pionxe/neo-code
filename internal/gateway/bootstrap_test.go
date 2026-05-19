@@ -1332,6 +1332,59 @@ func TestHandleBindStreamFrameRejectsSessionOutsideCurrentWorkspace(t *testing.T
 	}
 }
 
+func TestHandleBindStreamFrameValidatesVisibleSessionBeforeBinding(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	workspaceState := NewConnectionWorkspaceState()
+	workspaceState.SetWorkspaceHash("workspace-a")
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithConnectionWorkspaceState(connectionCtx, workspaceState)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			_ = message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	var loaded LoadSessionInput
+	runtimeStub := &bootstrapRuntimeStub{
+		loadSessionFn: func(_ context.Context, input LoadSessionInput) (Session, error) {
+			loaded = input
+			return Session{ID: input.SessionID}, nil
+		},
+	}
+	response := handleBindStreamFrame(connectionCtx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionBindStream,
+		RequestID: "bind-visible-session",
+		Payload: protocol.BindStreamParams{
+			SessionID: "session-visible",
+			Channel:   "all",
+		},
+	}, runtimeStub)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q: %#v", response.Type, FrameTypeAck, response.Error)
+	}
+	if loaded.SessionID != "session-visible" {
+		t.Fatalf("validated session_id = %q, want %q", loaded.SessionID, "session-visible")
+	}
+	if got := relay.ResolveFallbackSessionIDForWorkspace(connectionID, "workspace-a"); got != "session-visible" {
+		t.Fatalf("fallback session = %q, want %q", got, "session-visible")
+	}
+}
+
 func TestHandleTriggerActionFrame(t *testing.T) {
 	registerConnection := func(
 		t *testing.T,

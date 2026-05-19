@@ -96,6 +96,29 @@ async function syncWorkspaceContext(gatewayAPI: GatewayAPI): Promise<boolean> {
   return true
 }
 
+function sessionExistsInProjects(sessionId: string) {
+  return useSessionStore.getState().projects.some((project) =>
+    project.sessions.some((session) => session.id === sessionId),
+  )
+}
+
+async function bindCurrentSessionForReconnect(gatewayAPI: GatewayAPI) {
+  const sessionId = useSessionStore.getState().currentSessionId
+  if (!isValidSessionId(sessionId)) return
+  if (!sessionExistsInProjects(sessionId)) {
+    useSessionStore.getState().setCurrentSessionId('')
+    useSessionStore.getState().setCurrentProjectId('')
+    return
+  }
+  try {
+    await gatewayAPI.bindStream({ session_id: sessionId, channel: 'all' })
+  } catch (err) {
+    console.warn('[RuntimeProvider] Reconnect bindStream skipped stale session:', err)
+    useSessionStore.getState().setCurrentSessionId('')
+    useSessionStore.getState().setCurrentProjectId('')
+  }
+}
+
 /** RuntimeProvider 装配前端运行时，并为业务组件提供当前 Gateway 客户端。 */
 export function RuntimeProvider({ children }: { children: ReactNode }) {
   const mode = useMemo(detectRuntimeMode, [])
@@ -179,11 +202,8 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
 
         const hasWorkspaces = await syncWorkspaceContext(api)
         if (hasWorkspaces) {
-          const sessionId = useSessionStore.getState().currentSessionId
-          if (isValidSessionId(sessionId)) {
-            await api.bindStream({ session_id: sessionId, channel: 'all' })
-          }
           await useSessionStore.getState().fetchSessions(api, true)
+          await bindCurrentSessionForReconnect(api)
         }
         await refreshPendingUserQuestion(api, useSessionStore.getState().currentSessionId)
 

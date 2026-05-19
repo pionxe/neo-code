@@ -351,4 +351,34 @@ describe('ChatInput', () => {
       expect(mockGatewayAPI.cancel).toHaveBeenCalledWith({ session_id: 'session-1', run_id: 'run-1' })
     })
   })
+
+  it('falls back to run id only when cancelling without an active session', async () => {
+    useSessionStore.setState({ currentSessionId: '' } as never)
+    useGatewayStore.setState({ currentRunId: 'run-1' } as never)
+    useChatStore.setState({ isGenerating: true } as never)
+    mockGatewayAPI.cancel.mockResolvedValueOnce({ payload: { canceled: true, run_id: 'run-1' } })
+    render(<ChatInput />)
+
+    fireEvent.click(screen.getByTitle(/停止生成/))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.cancel).toHaveBeenCalledWith({ run_id: 'run-1' })
+    })
+  })
+
+  it('does not reset generating state when no cancel request is sent', async () => {
+    const resetGeneratingState = vi.spyOn(useChatStore.getState(), 'resetGeneratingState')
+    useSessionStore.setState({ currentSessionId: '' } as never)
+    useGatewayStore.setState({ currentRunId: '' } as never)
+    useChatStore.setState({ isGenerating: true } as never)
+    render(<ChatInput />)
+
+    fireEvent.click(screen.getByTitle(/停止生成/))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.cancel).not.toHaveBeenCalled()
+    })
+    expect(resetGeneratingState).not.toHaveBeenCalled()
+    resetGeneratingState.mockRestore()
+  })
 })

@@ -164,7 +164,14 @@ describe('RuntimeProvider lifecycle', () => {
 		useSessionStore.setState({
 			...useSessionStore.getState(),
 			currentSessionId: 'session-2',
-			fetchSessions: vi.fn().mockResolvedValue(undefined),
+			fetchSessions: vi.fn(async (gatewayAPI: any) => {
+				await gatewayAPI.listSessions()
+			}),
+			projects: [{
+				id: 'group_today',
+				name: 'Today',
+				sessions: [{ id: 'session-2', title: 'Two', time: new Date(0).toISOString() }],
+			}],
 		} as any)
 
 		let runtimeSnapshot: any = null
@@ -183,12 +190,65 @@ describe('RuntimeProvider lifecycle', () => {
 
 		const methods = client.call.mock.calls.map((call: any[]) => call[0])
 		const switchIndex = methods.indexOf('gateway.switchWorkspace')
+		const fetchIndex = methods.indexOf('gateway.listSessions')
 		const bindIndex = methods.indexOf('gateway.bindStream')
 		expect(switchIndex).toBeGreaterThanOrEqual(0)
+		expect(fetchIndex).toBeGreaterThanOrEqual(0)
 		expect(bindIndex).toBeGreaterThanOrEqual(0)
-		expect(switchIndex).toBeLessThan(bindIndex)
+		expect(switchIndex).toBeLessThan(fetchIndex)
+		expect(fetchIndex).toBeLessThan(bindIndex)
 		expect(client.call).toHaveBeenCalledWith('gateway.switchWorkspace', { workspace_hash: 'w2' })
 		expect(client.call).toHaveBeenCalledWith('gateway.bindStream', { session_id: 'session-2', channel: 'all' })
+	})
+
+	it('recovers reconnect when rebinding a stale session fails', async () => {
+		sessionStorage.setItem(
+			'neocode.browserRuntimeConfig',
+			JSON.stringify({ mode: 'browser', gatewayBaseURL: 'http://127.0.0.1:8080', token: 'tok' }),
+		)
+		useWorkspaceStore.setState({
+			fetchWorkspaces: vi.fn().mockResolvedValue(undefined),
+			workspaces: [{ hash: 'w2', path: '/workspace-two', name: 'Two', createdAt: '', updatedAt: '' }],
+			currentWorkspaceHash: 'w2',
+		} as any)
+		useSessionStore.setState({
+			...useSessionStore.getState(),
+			currentSessionId: 'session-stale',
+			fetchSessions: vi.fn().mockResolvedValue(undefined),
+			projects: [{
+				id: 'group_today',
+				name: 'Today',
+				sessions: [{ id: 'session-stale', title: 'Stale', time: new Date(0).toISOString() }],
+			}],
+		} as any)
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+		let runtimeSnapshot: any = null
+		render(
+			<RuntimeProvider>
+				<RuntimeProbe onReady={(rt) => { runtimeSnapshot = rt }} />
+			</RuntimeProvider>,
+		)
+		await waitFor(() => expect(runtimeSnapshot?.status).toBe('connected'))
+		const client = clients[0]
+		client.call.mockImplementation(async (method: string, params?: any) => {
+			if (method === 'gateway.bindStream' && params?.session_id === 'session-stale') {
+				throw new Error('session not found')
+			}
+			if (method === 'gateway.authenticate') return { payload: {} }
+			if (method === 'gateway.listWorkspaces') return { payload: { workspaces: [] } }
+			if (method === 'gateway.ping') return { payload: {} }
+			return { payload: {} }
+		})
+
+		await act(async () => {
+			await client._emitReconnect()
+		})
+
+		await waitFor(() => expect(runtimeSnapshot?.status).toBe('connected'))
+		expect(runtimeSnapshot.error).toBe('')
+		expect(useSessionStore.getState().setCurrentSessionId).toHaveBeenCalledWith('')
+		warnSpy.mockRestore()
 	})
 })
 
