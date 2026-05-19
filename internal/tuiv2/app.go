@@ -8,14 +8,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
+	"neo-code/internal/tuiv2/components"
 	"neo-code/internal/tuiv2/gateway"
 	"neo-code/internal/tuiv2/state"
 )
 
 const (
-	surfaceName     = "ghost-console"
-	defaultTerminal = "0x0"
+	defaultTerminal      = "0x0"
+	inspectorWideWidth   = 30
+	inspectorHiddenWidth = 80
+	inspectorWideMin     = 100
 )
 
 // StartupConfig 承载 TUI v2 独立入口解析出的启动参数和 Gateway 客户端。
@@ -37,47 +41,33 @@ type App struct {
 	eventCh  <-chan gateway.GatewayEvent
 	lastErr  string
 
-	ambientStatus *AmbientStatus
-	agentStream   *AgentStream
-	commandPrompt *CommandPrompt
-	softInspector *SoftInspector
+	ambientStatus *components.AmbientStatus
+	agentStream   *components.AgentStream
+	commandPrompt *components.CommandPrompt
+	softInspector *components.SoftInspector
 }
 
-// AmbientStatus 是后续阶段接入的顶部环境状态组件占位。
-type AmbientStatus struct{}
-
-// AgentStream 是后续阶段接入的 Agent 流组件占位。
-type AgentStream struct{}
-
-// CommandPrompt 是后续阶段接入的命令输入组件占位。
-type CommandPrompt struct{}
-
-// SoftInspector 是后续阶段接入的软检查器组件占位。
-type SoftInspector struct{}
-
 var (
-	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7aa2f7"))
-	idleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#9ece6a"))
-	mutedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#565f89"))
-	debugStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0af68"))
-	promptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#bb9af7"))
-	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#f7768e"))
+	debugStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0af68"))
+	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#f7768e"))
+	separatorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#3b4261"))
 )
 
 var _ tea.Model = (*App)(nil)
 
 // NewApp 创建 TUI v2 根组件，并初始化集中式 ViewState。
 func NewApp(cfg StartupConfig) tea.Model {
+	viewState := state.NewViewState()
 	return &App{
 		client:        cfg.Client,
-		state:         state.NewViewState(),
+		state:         viewState,
 		debug:         cfg.Debug,
 		backend:       cfg.Backend,
 		scenario:      cfg.Scenario,
-		ambientStatus: &AmbientStatus{},
-		agentStream:   &AgentStream{},
-		commandPrompt: &CommandPrompt{},
-		softInspector: &SoftInspector{},
+		ambientStatus: components.NewAmbientStatus(viewState),
+		agentStream:   components.NewAgentStream(viewState),
+		commandPrompt: components.NewCommandPrompt(viewState),
+		softInspector: components.NewSoftInspector(viewState),
 	}
 }
 
@@ -93,8 +83,8 @@ func (a *App) Init() tea.Cmd {
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		a.state.Layout.Width = msg.Width
-		a.state.Layout.Height = msg.Height
+		a.applyWindowSize(msg.Width, msg.Height)
+		return a, tea.ClearScreen
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc", "q":
@@ -112,29 +102,112 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.applyGatewayEvent(msg.event)
 		return a, waitEventCmd(a.eventCh)
 	}
-	return a, nil
+	return a, a.routeComponents(msg)
 }
 
-// View 自上而下拼接子组件占位视图，目前直接输出 ViewState 关键字段。
+// View 自上而下拼接 Focus-Only 静态布局，宽屏时将 Soft Inspector 放到右侧。
 func (a *App) View() string {
 	lines := []string{
-		a.statusLine(),
-		"",
-		a.viewStateLine(),
-		a.gatewayLine(),
-		a.runtimeLine(),
-		a.layoutLine(),
-		a.streamLine(),
-		"",
-		promptStyle.Render("› "),
+		a.ambientStatus.View(),
+		a.separatorLine(),
 	}
 	if a.lastErr != "" {
-		lines = append(lines[:2], append([]string{errorStyle.Render("  × " + a.lastErr)}, lines[2:]...)...)
+		lines = append(lines, errorStyle.Render("  × "+a.lastErr))
 	}
+	lines = append(lines, a.mainArea(), a.separatorLine(), a.commandPrompt.View())
 	if a.debug {
 		lines = append(lines, "", debugStyle.Render(a.debugLine()))
 	}
+	return a.fitViewToTerminal(strings.Join(lines, "\n"))
+}
+
+// applyWindowSize 更新布局尺寸，并按 Focus-Only 断点计算 Soft Inspector 状态。
+func (a *App) applyWindowSize(width int, height int) {
+	a.state.Layout.Width = width
+	a.state.Layout.Height = height
+	switch {
+	case width < inspectorHiddenWidth:
+		a.state.Layout.ShowInspector = false
+		a.state.Layout.InspectorWidth = 0
+	case width < inspectorWideMin:
+		a.state.Layout.ShowInspector = true
+		a.state.Layout.InspectorWidth = width
+	default:
+		a.state.Layout.ShowInspector = true
+		a.state.Layout.InspectorWidth = inspectorWideWidth
+	}
+}
+
+// routeComponents 将全局消息转发给各静态布局组件。
+func (a *App) routeComponents(msg tea.Msg) tea.Cmd {
+	_, statusCmd := a.ambientStatus.Update(msg)
+	_, streamCmd := a.agentStream.Update(msg)
+	_, inspectorCmd := a.softInspector.Update(msg)
+	_, promptCmd := a.commandPrompt.Update(msg)
+	return tea.Batch(statusCmd, streamCmd, inspectorCmd, promptCmd)
+}
+
+// mainArea 渲染中部区域，按终端宽度决定 Inspector 右侧或纵向压缩显示。
+func (a *App) mainArea() string {
+	streamView := a.agentStream.View()
+	if !a.state.Layout.ShowInspector {
+		return streamView
+	}
+	inspectorView := a.softInspector.View()
+	if a.state.Layout.Width >= inspectorWideMin {
+		return lipgloss.JoinHorizontal(lipgloss.Top, streamView, "  ", inspectorView)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, streamView, "", a.separatorLine(), inspectorView)
+}
+
+// separatorLine 渲染单条细线，用于区分主要区域而不使用边框。
+func (a *App) separatorLine() string {
+	width := a.state.Layout.Width
+	if width <= 0 {
+		width = 48
+	}
+	return separatorStyle.Render(strings.Repeat("─", width))
+}
+
+// fitViewToTerminal 将视图约束到当前终端尺寸，避免 resize 后自动换行或旧行残留。
+func (a *App) fitViewToTerminal(view string) string {
+	width := a.state.Layout.Width
+	height := a.state.Layout.Height
+	if width <= 0 {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		lines[i] = fitLine(line, width)
+	}
+	if height > 0 {
+		switch {
+		case len(lines) > height:
+			lines = lines[:height]
+		case len(lines) < height:
+			for len(lines) < height {
+				lines = append(lines, strings.Repeat(" ", width))
+			}
+		}
+	}
 	return strings.Join(lines, "\n")
+}
+
+// fitLine 截断并补齐单行显示宽度，保留 ANSI 样式同时防止终端自动 wrap。
+func fitLine(line string, width int) string {
+	if width <= 0 {
+		return line
+	}
+	target := width - 1
+	if target <= 0 {
+		return ""
+	}
+	fitted := ansi.Truncate(line, target, "")
+	lineWidth := ansi.StringWidth(fitted)
+	if lineWidth < target {
+		fitted += strings.Repeat(" ", target-lineWidth)
+	}
+	return fitted
 }
 
 // applyInitialLoaded 将 Gateway 初始 RPC 结果写入 ViewState。
@@ -194,87 +267,6 @@ func (a *App) applyGatewayEvent(event gateway.GatewayEvent) {
 // appendStream 以追加新 entry 的方式维护不可变 StreamEntry 序列。
 func (a *App) appendStream(entry state.StreamEntry) {
 	a.state.Stream = append(a.state.Stream, entry)
-}
-
-// statusLine 渲染 Ghost Console 顶部状态，保持无边框并用状态符号表达运行态。
-func (a *App) statusLine() string {
-	parts := []string{
-		statusStyle.Render("NEOCODE"),
-		a.renderStatus(),
-		mutedStyle.Render(a.backend),
-		mutedStyle.Render(surfaceName),
-	}
-	return strings.Join(parts, "   ")
-}
-
-// renderStatus 根据 ViewState 的 Runtime phase 渲染顶部状态符号。
-func (a *App) renderStatus() string {
-	switch a.state.Runtime.Phase {
-	case state.RuntimePhaseRunning, state.RuntimePhaseWaitingPermission, state.RuntimePhaseWaitingUser:
-		return statusStyle.Render("◉ " + a.state.Runtime.Phase)
-	case state.RuntimePhaseError:
-		return errorStyle.Render("× " + a.state.Runtime.Phase)
-	default:
-		return idleStyle.Render("○ " + a.state.Runtime.Phase)
-	}
-}
-
-// viewStateLine 渲染 ViewState 顶层占位摘要。
-func (a *App) viewStateLine() string {
-	return mutedStyle.Render(fmt.Sprintf(
-		"ViewState mode:%s input:%s cursor:%d",
-		inputModeName(a.state.Mode),
-		a.state.Input.Mode,
-		a.state.Input.Cursor,
-	))
-}
-
-// gatewayLine 渲染 GatewayState 占位摘要。
-func (a *App) gatewayLine() string {
-	active := "-"
-	if a.state.Gateway.ActiveSess != nil {
-		active = a.state.Gateway.ActiveSess.Title
-	}
-	return mutedStyle.Render(fmt.Sprintf(
-		"Gateway connected:%t sessions:%d active:%s models:%d active_model:%s",
-		a.state.Gateway.Connected,
-		len(a.state.Gateway.Sessions),
-		active,
-		len(a.state.Gateway.Models),
-		a.state.Gateway.ActiveModel,
-	))
-}
-
-// runtimeLine 渲染 RuntimeState 占位摘要。
-func (a *App) runtimeLine() string {
-	return mutedStyle.Render(fmt.Sprintf(
-		"Runtime phase:%s run:%s tokens:%d/%d/%d",
-		a.state.Runtime.Phase,
-		emptyDash(a.state.Runtime.RunID),
-		a.state.Runtime.Tokens.Input,
-		a.state.Runtime.Tokens.Output,
-		a.state.Runtime.Tokens.Total,
-	))
-}
-
-// layoutLine 渲染 LayoutState 占位摘要。
-func (a *App) layoutLine() string {
-	return mutedStyle.Render(fmt.Sprintf(
-		"Layout size:%dx%d inspector:%t/%d",
-		a.state.Layout.Width,
-		a.state.Layout.Height,
-		a.state.Layout.ShowInspector,
-		a.state.Layout.InspectorWidth,
-	))
-}
-
-// streamLine 渲染 Stream 列表占位摘要。
-func (a *App) streamLine() string {
-	last := "-"
-	if len(a.state.Stream) > 0 {
-		last = a.state.Stream[len(a.state.Stream)-1].Content
-	}
-	return mutedStyle.Render(fmt.Sprintf("Stream entries:%d last:%s", len(a.state.Stream), last))
 }
 
 // debugLine 渲染调试模式下的最小运行信息。

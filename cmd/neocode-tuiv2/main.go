@@ -33,7 +33,12 @@ func main() {
 	}
 	cfg.Client = client
 
-	if _, err := tea.NewProgram(tuiv2.NewApp(cfg), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout)).Run(); err != nil {
+	if _, err := tea.NewProgram(
+		tuiv2.NewApp(cfg),
+		tea.WithInput(os.Stdin),
+		tea.WithOutput(os.Stdout),
+		tea.WithAltScreen(),
+	).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "start TUI v2: %v\n", err)
 		os.Exit(1)
 	}
