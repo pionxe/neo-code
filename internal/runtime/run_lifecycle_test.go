@@ -88,6 +88,125 @@ func TestTemporaryRunStatePriorityWaitingOverCompacting(t *testing.T) {
 	}
 }
 
+func TestTemporaryRunStatePriorityUserQuestionOverPermissionAndCompacting(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-temp-user-question-priority", newRuntimeSession("session-temp-user-question-priority"))
+	if err := service.setBaseRunState(context.Background(), &state, controlplane.RunStatePlan); err != nil {
+		t.Fatalf("set base run state: %v", err)
+	}
+	if err := service.setBaseRunState(context.Background(), &state, controlplane.RunStateExecute); err != nil {
+		t.Fatalf("set base run state: %v", err)
+	}
+
+	if err := service.enterTemporaryRunState(context.Background(), &state, controlplane.RunStateCompacting); err != nil {
+		t.Fatalf("enter compacting: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateCompacting {
+		t.Fatalf("lifecycle = %q, want compacting", state.lifecycle)
+	}
+	if err := service.enterTemporaryRunState(context.Background(), &state, controlplane.RunStateWaitingPermission); err != nil {
+		t.Fatalf("enter waiting permission: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateWaitingPermission {
+		t.Fatalf("lifecycle = %q, want waiting_permission", state.lifecycle)
+	}
+	if err := service.enterTemporaryRunState(context.Background(), &state, controlplane.RunStateWaitingUserQuestion); err != nil {
+		t.Fatalf("enter waiting user question: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateWaitingUserQuestion {
+		t.Fatalf("lifecycle = %q, want waiting_user_question", state.lifecycle)
+	}
+
+	if err := service.leaveTemporaryRunState(context.Background(), &state, controlplane.RunStateWaitingUserQuestion); err != nil {
+		t.Fatalf("leave waiting user question: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateWaitingPermission {
+		t.Fatalf("lifecycle = %q, want waiting_permission after user question leaves", state.lifecycle)
+	}
+	if err := service.leaveTemporaryRunState(context.Background(), &state, controlplane.RunStateWaitingPermission); err != nil {
+		t.Fatalf("leave waiting permission: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateCompacting {
+		t.Fatalf("lifecycle = %q, want compacting after waiting permission leaves", state.lifecycle)
+	}
+	if err := service.leaveTemporaryRunState(context.Background(), &state, controlplane.RunStateCompacting); err != nil {
+		t.Fatalf("leave compacting: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateExecute {
+		t.Fatalf("lifecycle = %q, want execute", state.lifecycle)
+	}
+}
+
+func TestApplyTurnBaseRunStateBootstrapsVerifyFromEmpty(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-bootstrap-verify", newRuntimeSession("session-bootstrap-verify"))
+
+	if err := service.applyTurnBaseRunState(context.Background(), &state, controlplane.RunStateVerify); err != nil {
+		t.Fatalf("apply turn base run state: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateVerify {
+		t.Fatalf("lifecycle = %q, want verify", state.lifecycle)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertPhaseTransitions(t, events, [][2]string{
+		{"", "plan"},
+		{"plan", "verify"},
+	})
+}
+
+func TestApplyTurnBaseRunStateNonBootstrapPaths(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	if err := service.applyTurnBaseRunState(context.Background(), nil, controlplane.RunStateVerify); err != nil {
+		t.Fatalf("apply turn base run state nil state: %v", err)
+	}
+
+	state := newRunState("run-bootstrap-plan", newRuntimeSession("session-bootstrap-plan"))
+	if err := service.applyTurnBaseRunState(context.Background(), &state, controlplane.RunStatePlan); err != nil {
+		t.Fatalf("apply turn base run state plan: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStatePlan {
+		t.Fatalf("lifecycle = %q, want plan", state.lifecycle)
+	}
+
+	state.lifecycle = controlplane.RunStatePlan
+	if err := service.applyTurnBaseRunState(context.Background(), &state, controlplane.RunStateVerify); err != nil {
+		t.Fatalf("apply turn base run state verify from plan: %v", err)
+	}
+	if state.lifecycle != controlplane.RunStateVerify {
+		t.Fatalf("lifecycle = %q, want verify", state.lifecycle)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertPhaseTransitions(t, events, [][2]string{
+		{"", "plan"},
+		{"plan", "verify"},
+	})
+}
+
+func TestRunLifecycleRejectsInvalidStates(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-invalid-lifecycle", newRuntimeSession("session-invalid-lifecycle"))
+
+	if err := service.setBaseRunState(context.Background(), &state, controlplane.RunStateWaitingPermission); err == nil {
+		t.Fatal("expected invalid base lifecycle state error")
+	}
+	if err := service.enterTemporaryRunState(context.Background(), &state, controlplane.RunStatePlan); err == nil {
+		t.Fatal("expected unsupported temporary lifecycle state error")
+	}
+	if err := service.leaveTemporaryRunState(context.Background(), &state, controlplane.RunStatePlan); err == nil {
+		t.Fatal("expected unsupported temporary lifecycle state error")
+	}
+}
+
 func assertPhaseTransitions(t *testing.T, events []RuntimeEvent, expected [][2]string) {
 	t.Helper()
 

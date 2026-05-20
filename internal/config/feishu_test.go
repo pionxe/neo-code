@@ -236,6 +236,9 @@ func TestFeishuConfigValidateRejectsInvalidNumericRanges(t *testing.T) {
 }
 
 func TestFeishuConfigValidateRejectsMissingRequiredFieldsIndividually(t *testing.T) {
+	t.Setenv(FeishuAppSecretEnvVar, "")
+	t.Setenv(FeishuSigningSecretEnvVar, "")
+
 	base := FeishuConfig{
 		Enabled:       true,
 		AppID:         "app",

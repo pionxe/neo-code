@@ -147,10 +147,36 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 			return s.emit(ctx, EventToolChunk, input.RunID, input.SessionID, string(chunk))
 		},
 	}
+	var askUserStateMu sync.Mutex
+	askUserQuestionPending := false
+	markAskUserPending := func(pending bool) {
+		askUserStateMu.Lock()
+		askUserQuestionPending = pending
+		askUserStateMu.Unlock()
+	}
+	isAskUserPending := func() bool {
+		askUserStateMu.Lock()
+		defer askUserStateMu.Unlock()
+		return askUserQuestionPending
+	}
+	enterAskUserWaitingState := func() {
+		if input.State == nil {
+			return
+		}
+		_ = s.enterTemporaryRunState(ctx, input.State, controlplane.RunStateWaitingUserQuestion)
+	}
+	leaveAskUserWaitingState := func() {
+		if input.State == nil {
+			return
+		}
+		_ = s.leaveTemporaryRunState(ctx, input.State, controlplane.RunStateWaitingUserQuestion)
+	}
 	if strings.EqualFold(input.Call.Name, tools.ToolNameAskUser) {
 		callInput.AskUserEventEmitter = func(eventName string, payload any) {
 			eventType := eventTypeFromAskUserEvent(eventName)
 			if eventName == "user_question_requested" {
+				markAskUserPending(true)
+				enterAskUserWaitingState()
 				if question, ok := parseAskUserRequestedPayload(payload); ok {
 					s.setPendingUserQuestion(input.State, question)
 					s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_requested")
@@ -158,12 +184,22 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 				s.emitRunScopedPriority(eventType, input.State, payload)
 			} else {
 				if resolved, ok := parseAskUserResolvedPayload(payload); ok {
+					markAskUserPending(false)
+					leaveAskUserWaitingState()
 					s.clearPendingUserQuestionIfMatches(input.State, resolved.RequestID)
 					s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_"+strings.TrimSpace(resolved.Status))
 				}
 				s.emitRunScopedOptional(eventType, input.State, payload)
 			}
 		}
+		defer func() {
+			if !isAskUserPending() {
+				return
+			}
+			leaveAskUserWaitingState()
+			s.clearPendingUserQuestionIfMatches(input.State, "")
+			s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_pending_cleared")
+		}()
 	}
 	if input.State != nil {
 		callInput.SessionMutator = newRuntimeSessionMutator(ctx, s, input.State)

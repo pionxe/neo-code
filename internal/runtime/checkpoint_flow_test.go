@@ -10,18 +10,22 @@ import (
 
 	"neo-code/internal/checkpoint"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/tools"
 )
 
 type checkpointStoreSpy struct {
-	lastResume    agentsession.ResumeCheckpoint
-	listRecords   []agentsession.CheckpointRecord
-	listSessionID string
-	listOpts      checkpoint.ListCheckpointOpts
-	listErr       error
-	getRecord     agentsession.CheckpointRecord
-	getSessionCP  *agentsession.SessionCheckpoint
-	getErr        error
+	lastResume      agentsession.ResumeCheckpoint
+	latestResume    *agentsession.ResumeCheckpoint
+	latestResumeErr error
+	listRecords     []agentsession.CheckpointRecord
+	listSessionID   string
+	listOpts        checkpoint.ListCheckpointOpts
+	listErr         error
+	getRecord       agentsession.CheckpointRecord
+	getSessionCP    *agentsession.SessionCheckpoint
+	getErr          error
 }
 
 func (s *checkpointStoreSpy) CreateCheckpoint(_ context.Context, in checkpoint.CreateCheckpointInput) (agentsession.CheckpointRecord, error) {
@@ -43,7 +47,7 @@ func (s *checkpointStoreSpy) UpdateCheckpointStatus(context.Context, string, age
 }
 
 func (s *checkpointStoreSpy) GetLatestResumeCheckpoint(context.Context, string) (*agentsession.ResumeCheckpoint, error) {
-	return nil, nil
+	return s.latestResume, s.latestResumeErr
 }
 
 func (s *checkpointStoreSpy) RestoreCheckpoint(context.Context, checkpoint.RestoreCheckpointInput) error {
@@ -199,6 +203,15 @@ func countPerEditCheckpointMetaFiles(t *testing.T, root string) int {
 	return count
 }
 
+func hasEventType(events []RuntimeEvent, want EventType) bool {
+	for _, event := range events {
+		if event.Type == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCreateStartOfTurnCheckpoint_PendingWrite(t *testing.T) {
 	fixture := newRuntimeCheckpointFixture(t)
 	fixture.captureFile(t, "main.go", []byte("package main\nconst v = 1\n"))
@@ -326,6 +339,190 @@ func TestUpdateResumeCheckpoint(t *testing.T) {
 
 	if spy.lastResume.SessionID != fixture.session.ID || spy.lastResume.RunID != "run-resume" || spy.lastResume.Turn != 3 || spy.lastResume.Phase != "verify" {
 		t.Fatalf("SetResumeCheckpoint() captured %#v", spy.lastResume)
+	}
+}
+
+func TestApplyResumeCheckpointReplayPlanStrategy(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-resume-plan", fixture.session)
+	spy := &checkpointStoreSpy{
+		latestResume: &agentsession.ResumeCheckpoint{
+			RunID:           "run-old",
+			SessionID:       fixture.session.ID,
+			Turn:            4,
+			Phase:           "execute",
+			CompletionState: "",
+		},
+	}
+	service := &Service{
+		checkpointStore:  spy,
+		events:           make(chan RuntimeEvent, 16),
+		runtimeSnapshots: make(map[string]RuntimeSnapshot),
+	}
+
+	service.applyResumeCheckpoint(context.Background(), &state)
+
+	if state.resumeNextBaseLifecycle != controlplane.RunStatePlan {
+		t.Fatalf("resumeNextBaseLifecycle = %q, want plan", state.resumeNextBaseLifecycle)
+	}
+	if strings.TrimSpace(state.pendingSystemReminder) == "" {
+		t.Fatalf("pendingSystemReminder should be populated")
+	}
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventResumeApplied, EventRuntimeSnapshotUpdated})
+}
+
+func TestApplyResumeCheckpointVerifyClosureStrategy(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-resume-verify", fixture.session)
+	spy := &checkpointStoreSpy{
+		latestResume: &agentsession.ResumeCheckpoint{
+			RunID:           "run-old-verify",
+			SessionID:       fixture.session.ID,
+			Turn:            2,
+			Phase:           "verify",
+			CompletionState: "completed",
+		},
+	}
+	service := &Service{
+		checkpointStore:  spy,
+		events:           make(chan RuntimeEvent, 16),
+		runtimeSnapshots: make(map[string]RuntimeSnapshot),
+	}
+
+	service.applyResumeCheckpoint(context.Background(), &state)
+
+	if state.resumeNextBaseLifecycle != controlplane.RunStateVerify {
+		t.Fatalf("resumeNextBaseLifecycle = %q, want verify", state.resumeNextBaseLifecycle)
+	}
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventResumeApplied, EventRuntimeSnapshotUpdated})
+}
+
+func TestApplyResumeCheckpointSkipsUnsupportedInputs(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRuntimeCheckpointFixture(t)
+	service := &Service{
+		checkpointStore:  &checkpointStoreSpy{},
+		events:           make(chan RuntimeEvent, 16),
+		runtimeSnapshots: make(map[string]RuntimeSnapshot),
+	}
+
+	service.applyResumeCheckpoint(context.Background(), nil)
+
+	emptyState := newRunState("run-empty-session", fixture.session)
+	emptyState.session.ID = "  "
+	service.applyResumeCheckpoint(context.Background(), &emptyState)
+
+	unsupportedState := newRunState("run-unsupported-resume", fixture.session)
+	service.checkpointStore = &checkpointStoreSpy{
+		latestResume: &agentsession.ResumeCheckpoint{
+			RunID:           "run-unknown",
+			SessionID:       fixture.session.ID,
+			Turn:            1,
+			Phase:           "stopped",
+			CompletionState: "completed",
+		},
+	}
+	service.applyResumeCheckpoint(context.Background(), &unsupportedState)
+
+	if unsupportedState.resumeNextBaseLifecycle != "" {
+		t.Fatalf("resumeNextBaseLifecycle = %q, want empty", unsupportedState.resumeNextBaseLifecycle)
+	}
+	if strings.TrimSpace(unsupportedState.pendingSystemReminder) != "" {
+		t.Fatalf("pendingSystemReminder = %q, want empty", unsupportedState.pendingSystemReminder)
+	}
+	if len(collectRuntimeEvents(service.Events())) != 0 {
+		t.Fatal("expected no runtime events for skipped resume checkpoint cases")
+	}
+}
+
+func TestDeriveResumeBaseLifecycle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		phase           string
+		completionState string
+		want            controlplane.RunState
+	}{
+		{name: "verify completed resumes verify", phase: " verify ", completionState: " completed ", want: controlplane.RunStateVerify},
+		{name: "verify incomplete falls back to plan", phase: "verify", completionState: "running", want: controlplane.RunStatePlan},
+		{name: "plan resumes plan", phase: "plan", completionState: "", want: controlplane.RunStatePlan},
+		{name: "execute resumes plan", phase: "execute", completionState: "", want: controlplane.RunStatePlan},
+		{name: "unknown phase ignored", phase: "stopped", completionState: "completed", want: ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := deriveResumeBaseLifecycle(tt.phase, tt.completionState); got != tt.want {
+				t.Fatalf("deriveResumeBaseLifecycle(%q, %q) = %q, want %q", tt.phase, tt.completionState, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServiceRunResumeVerifyClosureBootstrapsFirstTurn(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	providerImpl := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{
+						providertypes.NewTextPart("verification summary"),
+					},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+	resumeStore := &checkpointStoreSpy{
+		latestResume: &agentsession.ResumeCheckpoint{
+			RunID:           "run-old-verify",
+			SessionID:       "ignored-by-spy",
+			Turn:            2,
+			Phase:           "verify",
+			CompletionState: "completed",
+		},
+	}
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		store,
+		&scriptedProviderFactory{provider: providerImpl},
+		&stubContextBuilder{},
+	)
+	service.checkpointStore = resumeStore
+	service.events = make(chan RuntimeEvent, 32)
+	service.runtimeSnapshots = make(map[string]RuntimeSnapshot)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-resume-verify-first-turn",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	if !hasEventType(events, EventResumeApplied) {
+		t.Fatalf("expected %s event, got %+v", EventResumeApplied, events)
+	}
+	if !hasPhaseTransition(events, "", "plan") {
+		t.Fatalf("missing bootstrap transition '' -> plan, events=%+v", events)
+	}
+	if !hasPhaseTransition(events, "plan", "verify") {
+		t.Fatalf("missing resume transition plan -> verify, events=%+v", events)
+	}
+	if !hasEventType(events, EventVerificationStarted) {
+		t.Fatalf("expected %s event, got %+v", EventVerificationStarted, events)
 	}
 }
 

@@ -12,7 +12,6 @@ type TerminalStatus string
 
 const (
 	TerminalStatusCompleted  TerminalStatus = "completed"
-	TerminalStatusContinue   TerminalStatus = "continue"
 	TerminalStatusIncomplete TerminalStatus = "incomplete"
 	TerminalStatusFailed     TerminalStatus = "failed"
 )

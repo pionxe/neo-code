@@ -29,6 +29,8 @@ type runState struct {
 	turn                      int
 	baseLifecycle             controlplane.RunState
 	lifecycle                 controlplane.RunState
+	resumeNextBaseLifecycle   controlplane.RunState
+	waitingUserQuestionCount  int
 	waitingPermissionCount    int
 	compactingCount           int
 	stopEmitted               bool

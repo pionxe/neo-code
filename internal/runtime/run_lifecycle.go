@@ -22,6 +22,22 @@ func (s *Service) setBaseRunState(ctx context.Context, state *runState, next con
 	return s.refreshEffectiveRunState(ctx, state)
 }
 
+// applyTurnBaseRunState 为每轮主链状态设置提供启动引导，确保恢复到 verify 时可从空态安全进入。
+func (s *Service) applyTurnBaseRunState(ctx context.Context, state *runState, next controlplane.RunState) error {
+	if state == nil {
+		return nil
+	}
+	state.mu.Lock()
+	current := state.lifecycle
+	state.mu.Unlock()
+	if current == "" && next == controlplane.RunStateVerify {
+		if err := s.setBaseRunState(ctx, state, controlplane.RunStatePlan); err != nil {
+			return err
+		}
+	}
+	return s.setBaseRunState(ctx, state, next)
+}
+
 // enterTemporaryRunState 增加临时治理态计数，并触发有效运行态重计算。
 func (s *Service) enterTemporaryRunState(ctx context.Context, state *runState, temporary controlplane.RunState) error {
 	if state == nil {
@@ -29,6 +45,8 @@ func (s *Service) enterTemporaryRunState(ctx context.Context, state *runState, t
 	}
 	state.mu.Lock()
 	switch temporary {
+	case controlplane.RunStateWaitingUserQuestion:
+		state.waitingUserQuestionCount++
 	case controlplane.RunStateWaitingPermission:
 		state.waitingPermissionCount++
 	case controlplane.RunStateCompacting:
@@ -48,6 +66,10 @@ func (s *Service) leaveTemporaryRunState(ctx context.Context, state *runState, t
 	}
 	state.mu.Lock()
 	switch temporary {
+	case controlplane.RunStateWaitingUserQuestion:
+		if state.waitingUserQuestionCount > 0 {
+			state.waitingUserQuestionCount--
+		}
 	case controlplane.RunStateWaitingPermission:
 		if state.waitingPermissionCount > 0 {
 			state.waitingPermissionCount--
@@ -92,6 +114,9 @@ func (s *Service) refreshEffectiveRunState(ctx context.Context, state *runState)
 
 // deriveEffectiveRunState 统一推导当前有效运行态，临时治理态优先级高于 base 主链态。
 func deriveEffectiveRunState(state *runState) controlplane.RunState {
+	if state.waitingUserQuestionCount > 0 {
+		return controlplane.RunStateWaitingUserQuestion
+	}
 	if state.waitingPermissionCount > 0 {
 		return controlplane.RunStateWaitingPermission
 	}
@@ -133,6 +158,7 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 		state.stopEmitted = true
 		state.baseLifecycle = controlplane.RunStateStopped
 		state.lifecycle = controlplane.RunStateStopped
+		state.waitingUserQuestionCount = 0
 		state.waitingPermissionCount = 0
 		state.compactingCount = 0
 		state.mu.Unlock()

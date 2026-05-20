@@ -64,6 +64,28 @@ type VerificationCompletedPayload struct {
 	StopReason controlplane.StopReason `json:"stop_reason,omitempty"`
 }
 
+// VerificationStartedPayload 描述验证流程开始事件。
+type VerificationStartedPayload struct {
+	CompletionPassed        bool   `json:"completion_passed"`
+	CompletionBlockedReason string `json:"completion_blocked_reason,omitempty"`
+}
+
+// VerificationStageFinishedPayload 描述单个验证阶段完成事件。
+type VerificationStageFinishedPayload struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Summary    string `json:"summary,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	ErrorClass string `json:"error_class,omitempty"`
+}
+
+// VerificationFinishedPayload 描述验证流程结束事件。
+type VerificationFinishedPayload struct {
+	AcceptanceStatus string                  `json:"acceptance_status"`
+	StopReason       controlplane.StopReason `json:"stop_reason,omitempty"`
+	ErrorClass       string                  `json:"error_class,omitempty"`
+}
+
 // VerificationFailedPayload 描述验证失败事件。
 type VerificationFailedPayload struct {
 	StopReason controlplane.StopReason `json:"stop_reason,omitempty"`
@@ -340,6 +362,12 @@ const (
 	EventProgressEvaluated EventType = "progress_evaluated"
 	// EventStopReasonDecided 表示 stop reason 已决议。
 	EventStopReasonDecided EventType = "stop_reason_decided"
+	// EventVerificationStarted 表示验证流程开始。
+	EventVerificationStarted EventType = "verification_started"
+	// EventVerificationStageFinished 表示单个验证阶段结束。
+	EventVerificationStageFinished EventType = "verification_stage_finished"
+	// EventVerificationFinished 表示验证流程结束。
+	EventVerificationFinished EventType = "verification_finished"
 	// EventVerificationCompleted 表示验证通过并可完成。
 	EventVerificationCompleted EventType = "verification_completed"
 	// EventVerificationFailed 表示验证失败。
@@ -382,6 +410,8 @@ const (
 	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
 	// EventRuntimeSnapshotUpdated 表示 runtime 统一状态快照已更新。
 	EventRuntimeSnapshotUpdated EventType = "runtime_snapshot_updated"
+	// EventResumeApplied 表示运行启动时已应用 resume checkpoint 恢复策略。
+	EventResumeApplied EventType = "resume_applied"
 	// EventSubAgentSnapshotUpdated 表示子代理聚合快照已更新。
 	EventSubAgentSnapshotUpdated EventType = "subagent_snapshot_updated"
 	// EventDecisionMade 表示 FinalDecider 已输出裁决。
