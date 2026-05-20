@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -200,7 +199,6 @@ func (s *Service) executeOneToolCallWithoutPersistence(
 	var bashCommand string
 	var bashChangedPaths []string
 	var touchedPaths []string
-	var removeDirNestedPaths []string
 
 	if isWrite {
 		touchedPaths = toolCallTouchedPaths(call, snapshot.Workdir)
@@ -210,21 +208,6 @@ func (s *Service) executeOneToolCallWithoutPersistence(
 				preSnaps[p] = captureFileSnapshot(p)
 				if s.perEditStore != nil {
 					_, _ = s.perEditStore.CapturePreWrite(p)
-				}
-				// remove_dir: recursively pre-capture all nested files/dirs.
-				if strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameFilesystemRemoveDir) {
-					if info, err := os.Stat(p); err == nil && info.IsDir() {
-						_ = filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
-							if err != nil || path == p {
-								return nil
-							}
-							removeDirNestedPaths = append(removeDirNestedPaths, path)
-							if s.perEditStore != nil {
-								_, _ = s.perEditStore.CapturePreWrite(path)
-							}
-							return nil
-						})
-					}
 				}
 			}
 		}
@@ -290,17 +273,6 @@ func (s *Service) executeOneToolCallWithoutPersistence(
 
 	if isWrite && execErr == nil && !result.IsError && s.perEditStore != nil {
 		switch strings.TrimSpace(call.Name) {
-		case tools.ToolNameFilesystemRemoveDir:
-			if len(removeDirNestedPaths) > 0 && len(touchedPaths) > 0 {
-				allPaths := append([]string{touchedPaths[0]}, removeDirNestedPaths...)
-				_ = s.perEditStore.CapturePostDelete(allPaths)
-			} else if len(touchedPaths) > 0 {
-				_ = s.perEditStore.CapturePostDelete(touchedPaths)
-			}
-		case tools.ToolNameFilesystemMoveFile:
-			if len(touchedPaths) > 1 {
-				_ = s.perEditStore.CapturePostDelete([]string{touchedPaths[0]})
-			}
 		case tools.ToolNameFilesystemDeleteFile:
 			if len(touchedPaths) > 0 {
 				_ = s.perEditStore.CapturePostDelete(touchedPaths)
@@ -594,42 +566,25 @@ func isFileWriteTool(name string) bool {
 	switch strings.TrimSpace(name) {
 	case tools.ToolNameFilesystemWriteFile,
 		tools.ToolNameFilesystemEdit,
-		tools.ToolNameFilesystemMoveFile,
-		tools.ToolNameFilesystemCopyFile,
-		tools.ToolNameFilesystemDeleteFile,
-		tools.ToolNameFilesystemCreateDir,
-		tools.ToolNameFilesystemRemoveDir:
+		tools.ToolNameFilesystemDeleteFile:
 		return true
 	}
 	return false
 }
 
 // toolCallTouchedPaths 从工具调用参数中提取所有可能被修改的工作区绝对路径。
-// move/copy 同时返回 source 与 destination；其他写工具返回单个 path。
 func toolCallTouchedPaths(call providertypes.ToolCall, workdir string) []string {
 	args := strings.TrimSpace(call.Arguments)
 	if args == "" {
 		return nil
 	}
-	switch strings.TrimSpace(call.Name) {
-	case tools.ToolNameFilesystemMoveFile, tools.ToolNameFilesystemCopyFile:
-		var parsed struct {
-			SourcePath      string `json:"source_path"`
-			DestinationPath string `json:"destination_path"`
-		}
-		if err := json.Unmarshal([]byte(args), &parsed); err != nil {
-			return nil
-		}
-		return resolveWorkdirPaths(workdir, parsed.SourcePath, parsed.DestinationPath)
-	default:
-		var parsed struct {
-			Path string `json:"path"`
-		}
-		if err := json.Unmarshal([]byte(args), &parsed); err != nil {
-			return nil
-		}
-		return resolveWorkdirPaths(workdir, parsed.Path)
+	var parsed struct {
+		Path string `json:"path"`
 	}
+	if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+		return nil
+	}
+	return resolveWorkdirPaths(workdir, parsed.Path)
 }
 
 // resolveWorkdirPaths 将多个相对/绝对路径解析为工作区绝对路径，丢弃空字符串。

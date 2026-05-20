@@ -88,7 +88,7 @@ func (t *DeleteFileTool) Execute(ctx context.Context, input tools.ToolCallInput)
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), statErr), "", nil), statErr
 	}
 	if info.IsDir() {
-		err := errors.New(deleteFileToolName + ": path is a directory; use filesystem_remove_dir")
+		err := errors.New(deleteFileToolName + ": path is a directory")
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 

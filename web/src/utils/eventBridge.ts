@@ -202,8 +202,6 @@ const FILE_WRITE_TOOLS = new Set([
   "filesystem_write_file",
   "filesystem_edit",
   "filesystem_delete_file",
-  "filesystem_move_file",
-  "filesystem_copy_file",
 ]);
 
 /** 从 ToolStart 事件提取文件路径并立即填充面板（+0/-0 占位，等 tool_diff 覆盖真实数据） */
@@ -218,16 +216,7 @@ function _trackFileChangeFromTool(toolName: string, argsRaw: string) {
   }
 
   // 统一用 pending 占位，真实状态由 tool_diff/run diff 事件覆盖
-  if (
-    toolName === "filesystem_move_file" ||
-    toolName === "filesystem_copy_file"
-  ) {
-    const src = typeof args.source_path === "string" ? args.source_path : "";
-    const dst =
-      typeof args.destination_path === "string" ? args.destination_path : "";
-    if (src) _upsertFileChange(src, "pending");
-    if (dst) _upsertFileChange(dst, "pending");
-  } else {
+  {
     const path = typeof args.path === "string" ? args.path : "";
     if (path) _upsertFileChange(path, "pending");
   }

@@ -32,11 +32,7 @@ For general file operations outside of codebase exploration, use `filesystem_*` 
 - For simple create/overwrite tasks, prefer `filesystem_write_file` with `verify_after_write=true` so one call can emit write + verification facts.
 - Do not use `bash` to edit files when the filesystem tools can make the change safely.
 - For file system structure changes inside the workspace, prefer the dedicated tools over `bash`:
-  - rename/move: `filesystem_move_file` (not `bash mv`)
-  - copy: `filesystem_copy_file` (not `bash cp`)
   - delete file: `filesystem_delete_file` (not `bash rm`)
-  - create directory: `filesystem_create_dir` (not `bash mkdir`)
-  - remove directory: `filesystem_remove_dir` (not `bash rmdir` / `rm -rf`)
   These tools record their changes for checkpoint/rollback; equivalent `bash` commands produce reduced rollback coverage.
 - For multi-step implementation, debugging, refactoring, or long-running work, keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) when that tool is available and the current mode permits execution todo updates.
 - Create todos that map to real acceptance work, not vague activity.

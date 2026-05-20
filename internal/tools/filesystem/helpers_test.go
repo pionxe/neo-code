@@ -1,7 +1,6 @@
 package filesystem
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,30 +58,6 @@ func TestSkipDirEntry(t *testing.T) {
 	}
 	if got[".vscode"] {
 		t.Fatalf(".vscode file skip = true, want false for non-directory")
-	}
-}
-
-func TestIsCrossDeviceLinkError(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "nil", err: nil, want: false},
-		{name: "other", err: errors.New("permission denied"), want: false},
-		{name: "cross-device", err: errors.New("invalid cross-device link"), want: true},
-		{name: "exdev", err: errors.New("rename failed: EXDEV"), want: true},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isCrossDeviceLinkError(tc.err); got != tc.want {
-				t.Fatalf("isCrossDeviceLinkError(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
 	}
 }
 

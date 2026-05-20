@@ -33,7 +33,7 @@ func TestBuildToolDiffPayload(t *testing.T) {
 
 	t.Run("multi file payload", func(t *testing.T) {
 		result := tools.ToolResult{
-			Name:       tools.ToolNameFilesystemMoveFile,
+			Name:       tools.ToolNameFilesystemWriteFile,
 			ToolCallID: "call-2",
 			Metadata: map[string]any{
 				"tool_diffs": []map[string]any{
@@ -61,7 +61,7 @@ func TestBuildToolDiffPayload(t *testing.T) {
 
 	t.Run("multi file kind from metadata wins over WasNew fallback", func(t *testing.T) {
 		result := tools.ToolResult{
-			Name:       tools.ToolNameFilesystemMoveFile,
+			Name:       tools.ToolNameFilesystemWriteFile,
 			ToolCallID: "call-move",
 			Metadata: map[string]any{
 				"tool_diffs": []map[string]any{
@@ -88,7 +88,7 @@ func TestBuildToolDiffPayload(t *testing.T) {
 
 	t.Run("multi file filters unchanged copy source", func(t *testing.T) {
 		result := tools.ToolResult{
-			Name:       tools.ToolNameFilesystemCopyFile,
+			Name:       tools.ToolNameFilesystemWriteFile,
 			ToolCallID: "call-copy",
 			Metadata: map[string]any{
 				"tool_diffs": []map[string]any{
@@ -112,7 +112,7 @@ func TestBuildToolDiffPayload(t *testing.T) {
 
 	t.Run("multi file delete metadata preserves deleted kind", func(t *testing.T) {
 		result := tools.ToolResult{
-			Name:       tools.ToolNameFilesystemRemoveDir,
+			Name:       tools.ToolNameFilesystemWriteFile,
 			ToolCallID: "call-rm",
 			Metadata: map[string]any{
 				"tool_diffs": []map[string]any{
@@ -144,7 +144,7 @@ func TestBuildToolDiffPayload(t *testing.T) {
 }
 
 func TestToolExecutionHelperFunctions(t *testing.T) {
-	t.Run("toolCallTouchedPaths covers write and move payloads", func(t *testing.T) {
+	t.Run("toolCallTouchedPaths extracts path", func(t *testing.T) {
 		writePaths := toolCallTouchedPaths(providertypes.ToolCall{
 			Name:      tools.ToolNameFilesystemWriteFile,
 			Arguments: `{"path":" docs/readme.md "}`,
@@ -153,16 +153,8 @@ func TestToolExecutionHelperFunctions(t *testing.T) {
 			t.Fatalf("write toolCallTouchedPaths() = %#v", writePaths)
 		}
 
-		movePaths := toolCallTouchedPaths(providertypes.ToolCall{
-			Name:      tools.ToolNameFilesystemMoveFile,
-			Arguments: `{"source_path":"src/a.txt","destination_path":" /tmp/b.txt "}`,
-		}, "/repo")
-		if len(movePaths) != 2 || movePaths[0] != "/repo/src/a.txt" || movePaths[1] != "/tmp/b.txt" {
-			t.Fatalf("move toolCallTouchedPaths() = %#v", movePaths)
-		}
-
 		if got := toolCallTouchedPaths(providertypes.ToolCall{
-			Name:      tools.ToolNameFilesystemCopyFile,
+			Name:      tools.ToolNameFilesystemWriteFile,
 			Arguments: `{invalid`,
 		}, "/repo"); got != nil {
 			t.Fatalf("malformed toolCallTouchedPaths() = %#v, want nil", got)

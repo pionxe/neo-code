@@ -14,11 +14,7 @@ const (
 	grepToolName       = tools.ToolNameFilesystemGrep
 	globToolName       = tools.ToolNameFilesystemGlob
 	editToolName       = tools.ToolNameFilesystemEdit
-	moveFileToolName   = tools.ToolNameFilesystemMoveFile
-	copyFileToolName   = tools.ToolNameFilesystemCopyFile
 	deleteFileToolName = tools.ToolNameFilesystemDeleteFile
-	createDirToolName  = tools.ToolNameFilesystemCreateDir
-	removeDirToolName  = tools.ToolNameFilesystemRemoveDir
 )
 
 func toRelativePath(root string, target string) string {

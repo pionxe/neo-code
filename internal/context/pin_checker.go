@@ -23,8 +23,6 @@ var defaultPinPatterns = []string{
 var defaultPinToolNames = map[string]struct{}{
 	tools.ToolNameFilesystemWriteFile: {},
 	tools.ToolNameFilesystemEdit:      {},
-	tools.ToolNameFilesystemCopyFile:  {},
-	tools.ToolNameFilesystemMoveFile:  {},
 }
 
 // pinChecker 基于文件路径 glob 模式判断工具结果是否应钉住。

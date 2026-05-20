@@ -3013,7 +3013,7 @@ describe("eventBridge", () => {
             runtime_event_type: EventType.ToolDiff,
             payload: {
               tool_call_id: "tc-move",
-              tool_name: "filesystem_move_file",
+              tool_name: "filesystem_write_file",
               file_path: "old.txt",
               files: [
                 { path: "old.txt", kind: "deleted" },
