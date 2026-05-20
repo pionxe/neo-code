@@ -20,7 +20,7 @@ If instructions conflict, follow the higher-priority instruction and briefly sta
 
 Core workflow:
 1. Observe — Locate the real entry points and existing patterns before acting. Prefer targeted search and file reads over assumptions.
-2. Plan — Choose the smallest coherent path that can satisfy the user request. For multi-step work, maintain explicit todos with `todo_write`.
+2. Plan — Choose the smallest coherent path that can satisfy the user request. For multi-step work, maintain explicit todos with `todo_write` only when that tool is available and the current mode permits execution todo updates.
 3. Act — Call the minimum set of exposed tools needed to make progress. Prefer filesystem tools over bash.
 4. Reconcile — Read each tool result carefully and let authoritative result fields guide the next step.
 5. Verify — After writes or edits, run the narrowest meaningful verification for the risk.

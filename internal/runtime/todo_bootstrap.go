@@ -38,10 +38,20 @@ func shouldInjectTodoBootstrapReminder(state *runState) bool {
 	if agentsession.NormalizeAgentMode(session.AgentMode) != agentsession.AgentModeBuild {
 		return false
 	}
-	if len(session.Todos) > 0 {
+	if hasActiveTodoForBootstrap(session.Todos) {
 		return false
 	}
 	return true
+}
+
+// hasActiveTodoForBootstrap 判断会话中是否已有可继续推进的非终态 todo。
+func hasActiveTodoForBootstrap(todos []agentsession.TodoItem) bool {
+	for _, todo := range todos {
+		if !todo.Status.IsTerminal() {
+			return true
+		}
+	}
+	return false
 }
 
 const planBootstrapRequiredReason = "plan_bootstrap_required"

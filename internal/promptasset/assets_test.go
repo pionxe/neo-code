@@ -47,6 +47,7 @@ func TestCorePromptContainsOperationalGuidance(t *testing.T) {
 		"A subagent is a helper, not the source of final truth",
 		"Preserve existing user or repository changes",
 		"Use UTF-8-safe reads and edits",
+		"the current mode permits execution todo updates",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(prompt, want) {

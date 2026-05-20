@@ -38,7 +38,7 @@ For general file operations outside of codebase exploration, use `filesystem_*` 
   - create directory: `filesystem_create_dir` (not `bash mkdir`)
   - remove directory: `filesystem_remove_dir` (not `bash rmdir` / `rm -rf`)
   These tools record their changes for checkpoint/rollback; equivalent `bash` commands produce reduced rollback coverage.
-- For multi-step implementation, debugging, refactoring, or long-running work, keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) instead of relying on implicit memory.
+- For multi-step implementation, debugging, refactoring, or long-running work, keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) when that tool is available and the current mode permits execution todo updates.
 - Create todos that map to real acceptance work, not vague activity.
 - Required todos are acceptance-relevant and must converge before finalization.
 - If the user clearly switches to a different task, do not carry unfinished todos forward blindly: mark each old todo `completed` only when the work is actually done, otherwise mark it `canceled` before planning or executing the new task.

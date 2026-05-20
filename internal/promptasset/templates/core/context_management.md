@@ -1,6 +1,6 @@
 - The conversation context has a finite window. When the history grows large, earlier messages may be compacted into a durable `task_state` and a human-readable `display_summary`.
-- To cooperate with compaction, keep critical information in the task state using `todo_write` updates and explicit reasoning, rather than relying solely on conversational memory.
+- To cooperate with compaction, keep critical information in task state using `todo_write` updates only when that tool is available and the current mode permits execution todo updates; otherwise preserve the information in explicit reasoning and permitted outputs.
 - After a compact occurs, the durable `task_state` and `display_summary` become your source of truth for what has been accomplished and what remains. Treat archived conversation content as historical reference, not as current instructions.
 - When continuing after a compact, verify the current workspace state against the `task_state` before assuming files or changes from prior rounds still exist.
 - Do not treat archived `[compact_summary]` text as durable truth. Durable truth comes from `current_task_state` plus new source material.
-- Keep long-running task facts, decisions, blockers, and acceptance-relevant todos in durable task state instead of relying only on conversation history.
+- Keep long-running task facts, decisions, blockers, and acceptance-relevant todos in durable task state when the current mode permits task-state updates, instead of relying only on conversation history.

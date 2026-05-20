@@ -52,7 +52,7 @@ func TestShouldInjectTodoBootstrapReminder(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "existing todo skips",
+			name: "existing active todo skips",
 			state: runState{
 				session: agentsession.Session{
 					AgentMode: agentsession.AgentModeBuild,
@@ -67,6 +67,37 @@ func TestShouldInjectTodoBootstrapReminder(t *testing.T) {
 				planningEnabled: true,
 			},
 			want: false,
+		},
+		{
+			name: "terminal todos only still injects",
+			state: runState{
+				session: agentsession.Session{
+					AgentMode: agentsession.AgentModeBuild,
+					Todos: []agentsession.TodoItem{
+						{
+							ID:       "todo-completed",
+							Content:  "done",
+							Status:   agentsession.TodoStatusCompleted,
+							Required: &required,
+						},
+						{
+							ID:       "todo-failed",
+							Content:  "failed",
+							Status:   agentsession.TodoStatusFailed,
+							Required: &required,
+						},
+						{
+							ID:       "todo-canceled",
+							Content:  "canceled",
+							Status:   agentsession.TodoStatusCanceled,
+							Required: &required,
+						},
+					},
+				},
+				userGoal:        "继续实现剩余工作",
+				planningEnabled: true,
+			},
+			want: true,
 		},
 		{
 			name: "plan mode skips",

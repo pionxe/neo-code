@@ -187,6 +187,36 @@ func TestDefaultBuilderBuildIncludesPlanSections(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderBuildPlanModeDoesNotRequireTodoWrite(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		AgentMode: agentsession.AgentModePlan,
+		PlanStage: "plan",
+		Metadata:  testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(got.SystemPrompt, "Do not create execution todos in plan mode") {
+		t.Fatalf("expected plan mode to forbid execution todo creation, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "the current mode permits execution todo updates") {
+		t.Fatalf("expected core todo guidance to be mode-gated, got %q", got.SystemPrompt)
+	}
+	for _, forbidden := range []string{
+		"maintain explicit todos with `todo_write`.",
+		"Maintain explicit task state and todos via `todo_write`.",
+		"keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) instead of relying on implicit memory",
+		"keep critical information in the task state using `todo_write` updates",
+	} {
+		if strings.Contains(got.SystemPrompt, forbidden) {
+			t.Fatalf("plan mode prompt should not contain hard todo_write guidance %q in %q", forbidden, got.SystemPrompt)
+		}
+	}
+}
+
 func TestDefaultBuilderBuildIncludesTodosBeforeSystemState(t *testing.T) {
 	t.Parallel()
 
