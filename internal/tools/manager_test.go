@@ -130,7 +130,7 @@ func TestDefaultManagerListAvailableSpecsReadOnlyFiltersWriteTools(t *testing.T)
 	for _, spec := range specs {
 		gotNames[spec.Name] = true
 	}
-	if len(specs) != 2 || !gotNames[ToolNameFilesystemReadFile] || !gotNames[ToolNameTodoWrite] {
+	if len(specs) != 1 || !gotNames[ToolNameFilesystemReadFile] {
 		t.Fatalf("unexpected read-only specs: %+v", specs)
 	}
 }
@@ -471,7 +471,7 @@ func TestDefaultManagerExecuteBlocksWriteToolInReadOnlyMode(t *testing.T) {
 	}
 }
 
-func TestDefaultManagerExecuteAllowsTodoWriteInReadOnlyMode(t *testing.T) {
+func TestDefaultManagerExecuteBlocksTodoWriteInReadOnlyMode(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
@@ -489,17 +489,14 @@ func TestDefaultManagerExecuteAllowsTodoWriteInReadOnlyMode(t *testing.T) {
 		Arguments: []byte(`{"id":"todo-1","action":"update"}`),
 		ReadOnly:  true,
 	})
-	if execErr != nil {
-		t.Fatalf("expected todo_write to execute in read-only mode, got %v", execErr)
+	if execErr == nil || !strings.Contains(execErr.Error(), "read-only mode") {
+		t.Fatalf("expected todo_write to be blocked in read-only mode, got %v", execErr)
 	}
-	if result.Content != "ok" {
-		t.Fatalf("result.Content = %q, want ok", result.Content)
+	if !strings.Contains(result.Content, "read-only mode") {
+		t.Fatalf("expected tool result to mention read-only mode, got %q", result.Content)
 	}
-	if todoTool.callCount != 1 {
-		t.Fatalf("expected todo_write to execute once, got %d", todoTool.callCount)
-	}
-	if !todoTool.lastCall.ReadOnly {
-		t.Fatal("expected read-only flag to be preserved on todo_write call")
+	if todoTool.callCount != 0 {
+		t.Fatalf("expected todo_write not to execute, got %d", todoTool.callCount)
 	}
 }
 

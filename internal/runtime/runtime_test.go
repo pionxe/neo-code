@@ -3954,6 +3954,9 @@ func TestServiceRunPlanModePersistsDraftPlan(t *testing.T) {
 	if saved.CurrentPlan.Status != agentsession.PlanStatusDraft {
 		t.Fatalf("Status = %q, want %q", saved.CurrentPlan.Status, agentsession.PlanStatusDraft)
 	}
+	if len(saved.Todos) != 0 {
+		t.Fatalf("expected plan mode not to create execution todos, got %+v", saved.Todos)
+	}
 	if saved.CurrentPlan.Spec.Goal != "为 runtime 引入 plan/build 模式" {
 		t.Fatalf("Goal = %q", saved.CurrentPlan.Spec.Goal)
 	}
@@ -4018,6 +4021,9 @@ func TestServiceRunPlanModeShowsExplanationTextOutsidePlanningJSON(t *testing.T)
 	saved := onlySession(t, store)
 	if saved.CurrentPlan == nil || saved.CurrentPlan.Spec.Goal != "Preserve prose around planning JSON" {
 		t.Fatalf("expected current plan to be updated, got %+v", saved.CurrentPlan)
+	}
+	if len(saved.Todos) != 0 {
+		t.Fatalf("expected plan prose turn not to create execution todos, got %+v", saved.Todos)
 	}
 	if len(saved.Messages) != 3 {
 		t.Fatalf("message count = %d, want 3", len(saved.Messages))

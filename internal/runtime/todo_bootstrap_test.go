@@ -38,7 +38,7 @@ func TestShouldInjectTodoBootstrapReminder(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "active plan skips",
+			name: "active plan without execution todos injects",
 			state: runState{
 				session: agentsession.Session{
 					AgentMode: agentsession.AgentModeBuild,
@@ -49,7 +49,7 @@ func TestShouldInjectTodoBootstrapReminder(t *testing.T) {
 				userGoal:        "请分析项目并写文档",
 				planningEnabled: true,
 			},
-			want: false,
+			want: true,
 		},
 		{
 			name: "existing todo skips",

@@ -459,6 +459,55 @@ func TestApplyCurrentPlanRevisionNilGuards(t *testing.T) {
 	}
 }
 
+func TestApplyCurrentPlanRevisionDoesNotMutateExecutionTodos(t *testing.T) {
+	t.Parallel()
+
+	session := agentsession.New("plan revision keeps execution todos")
+	session.Todos = []agentsession.TodoItem{
+		{ID: "todo-exec", Content: "current build work", Status: agentsession.TodoStatusInProgress, Revision: 1},
+	}
+	session.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-1",
+		Revision: 1,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:  "old plan",
+			Steps: []string{"old step"},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:          "old plan",
+			KeySteps:      []string{"old step"},
+			ActiveTodoIDs: []string{"todo-old-plan"},
+		},
+	}
+
+	next := &agentsession.PlanArtifact{
+		ID:       "plan-1",
+		Revision: 2,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:  "new plan",
+			Steps: []string{"new step"},
+			Todos: []agentsession.TodoItem{
+				{ID: "todo-plan-only", Content: "legacy plan todo", Status: agentsession.TodoStatusPending},
+			},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:          "new plan",
+			KeySteps:      []string{"new step"},
+			ActiveTodoIDs: []string{"todo-plan-only"},
+		},
+	}
+
+	if !applyCurrentPlanRevision(&session, next) {
+		t.Fatal("expected plan revision to apply")
+	}
+	if len(session.Todos) != 1 || session.Todos[0].ID != "todo-exec" ||
+		session.Todos[0].Status != agentsession.TodoStatusInProgress {
+		t.Fatalf("expected execution todos to remain untouched, got %+v", session.Todos)
+	}
+}
+
 func TestApproveCurrentPlanValidationErrors(t *testing.T) {
 	t.Parallel()
 

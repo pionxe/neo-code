@@ -484,20 +484,20 @@ func TestAskUserToolVisibleInReadOnlyMode(t *testing.T) {
 	}
 }
 
-func TestIsReadOnlyActionAllowedIncludesInteractionAndTodoWrite(t *testing.T) {
+func TestIsReadOnlyActionAllowedIncludesInteractionAndBlocksTodoWrite(t *testing.T) {
 	t.Parallel()
 
 	if !isReadOnlyActionAllowed(security.Action{Type: security.ActionTypeInteraction}) {
 		t.Fatal("expected interaction action to be allowed in read-only mode")
 	}
 
-	if !isReadOnlyActionAllowed(security.Action{
+	if isReadOnlyActionAllowed(security.Action{
 		Type: security.ActionTypeWrite,
 		Payload: security.ActionPayload{
 			Operation: "  " + ToolNameTodoWrite + "  ",
 		},
 	}) {
-		t.Fatal("expected todo_write action to be allowed in read-only mode")
+		t.Fatal("expected todo_write action to be blocked in read-only mode")
 	}
 
 	if isReadOnlyActionAllowed(security.Action{

@@ -10,13 +10,15 @@ const todoBootstrapRequiredReason = "todo_bootstrap_required"
 
 const todoBootstrapRequiredReminder = `[Runtime Control]
 
-todo_bootstrap_required: This build run has no current plan and no active todos.
+todo_bootstrap_required: This build run has no active todos.
 
 Before project analysis, documentation writing, code changes, multi-step debugging, or verification work, call todo_write with action=plan or action=add to create required todos for this run.
 
+If a Current Plan is attached, use it only as planning context. Create current-run execution todos explicitly instead of assuming plan steps already exist as todos.
+
 Do not update or complete old todo IDs that are not present in the current Todo State.`
 
-// maybeAppendTodoBootstrapReminder 在 direct build 缺少 plan/todo 时注入一次结构化提醒。
+// maybeAppendTodoBootstrapReminder 在 build 缺少执行态 todo 时注入一次结构化提醒。
 func (s *Service) maybeAppendTodoBootstrapReminder(ctx context.Context, state *runState) error {
 	if !shouldInjectTodoBootstrapReminder(state) {
 		return nil
@@ -36,23 +38,10 @@ func shouldInjectTodoBootstrapReminder(state *runState) bool {
 	if agentsession.NormalizeAgentMode(session.AgentMode) != agentsession.AgentModeBuild {
 		return false
 	}
-	if hasActivePlanForTodoBootstrap(session.CurrentPlan) || len(session.Todos) > 0 {
+	if len(session.Todos) > 0 {
 		return false
 	}
 	return true
-}
-
-// hasActivePlanForTodoBootstrap 判断当前 plan 是否仍可为 build 继承 todo 所有权。
-func hasActivePlanForTodoBootstrap(plan *agentsession.PlanArtifact) bool {
-	if plan == nil {
-		return false
-	}
-	switch agentsession.NormalizePlanStatus(plan.Status) {
-	case agentsession.PlanStatusDraft, agentsession.PlanStatusApproved:
-		return true
-	default:
-		return false
-	}
 }
 
 const planBootstrapRequiredReason = "plan_bootstrap_required"
@@ -65,7 +54,7 @@ Before research, analysis, or conversational response, you MUST complete the fol
 
 1. Research the codebase as needed using read-only tools.
 2. Output a JSON object containing "plan_spec" and "summary_candidate" that defines the current plan.
-3. plan_spec.todos must be non-empty — include major actionable items with unique IDs and status "pending".
+3. Focus plan_spec on goal, steps, constraints, and open_questions. Do not create execution todos in plan mode.
 
 Do not end this turn without producing a plan.`
 

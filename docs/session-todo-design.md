@@ -58,3 +58,10 @@
 - `Todo` 是更细粒度的结构化执行状态
 - `Todo` 不直接拼入模型消息历史
 - 如需让 `TaskState` 汇总 Todo，应在 runtime/context 层显式投影，而不是复用同一个字段
+
+## 与 Plan Mode 的关系
+
+- `CurrentPlan` 是计划上下文，表示 plan 模式产出的草案或已批准计划
+- `Session.Todos` 是 build 模式的执行进度状态，不由 plan 模式自动创建或维护
+- plan 模式只能研究、澄清和产出计划；即使计划正文包含旧版 `plan_spec.todos`，runtime 也不会把它自动灌入 `Session.Todos`
+- build 模式开始复杂执行且没有当前 Todo State 时，应通过 `todo_write action="plan"` 或 `todo_write action="add"` 显式创建本轮执行 todo

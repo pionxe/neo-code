@@ -258,8 +258,6 @@ func buildPlanArtifact(current *agentsession.PlanArtifact, output planTurnOutput
 	return plan, nil
 }
 
-// applyCurrentPlanRevision 用新 revision 替换当前计划，并清理旧 revision 遗留的对齐状态。
-// resolvePlanDisplayText 优先保留模型对计划的额外说明文本，缺失时回退为规范计划正文。
 // resolvePlanDisplayText 优先保留模型对计划的额外说明文本，缺失时回退为规范计划正文。
 func resolvePlanDisplayText(output planTurnOutput, spec agentsession.PlanSpec) string {
 	display := strings.TrimSpace(output.DisplayText)
@@ -269,27 +267,10 @@ func resolvePlanDisplayText(output planTurnOutput, spec agentsession.PlanSpec) s
 	return strings.TrimSpace(agentsession.RenderPlanContent(spec))
 }
 
+// applyCurrentPlanRevision 用新 revision 替换当前计划，并清理计划对齐状态。
 func applyCurrentPlanRevision(session *agentsession.Session, plan *agentsession.PlanArtifact) bool {
 	if session == nil || plan == nil {
 		return false
-	}
-	// 新 revision 覆盖时，仅取消旧 plan 明确引用的非终态 todo
-	if oldPlan := session.CurrentPlan; oldPlan != nil && oldPlan.Revision < plan.Revision {
-		agentsession.CancelTodosByIDs(session.Todos, oldPlan.Summary.ActiveTodoIDs)
-	}
-	// 将 PlanSpec.Todos 中尚不存在于 session.Todos 的条目补入，
-	// 避免 plan 模式下模型后续通过 todo_write 引用这些 ID 时找不到。
-	for _, planTodo := range plan.Spec.Todos {
-		id := strings.TrimSpace(planTodo.ID)
-		if id == "" {
-			continue
-		}
-		if _, exists := session.FindTodo(id); exists {
-			continue
-		}
-		if err := session.AddTodo(planTodo); err != nil {
-			return false
-		}
 	}
 	session.CurrentPlan = plan
 	session.PlanApprovalPendingFullAlign = false

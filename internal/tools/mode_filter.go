@@ -18,7 +18,6 @@ func isReadOnlyVisibleTool(name string) bool {
 		ToolNameWebFetch,
 		ToolNameMemoRecall,
 		ToolNameMemoList,
-		ToolNameTodoWrite,
 		ToolNameAskUser:
 		return true
 	default:
@@ -34,8 +33,7 @@ func isReadOnlyActionAllowed(action security.Action) bool {
 	if action.Type == security.ActionTypeInteraction {
 		return true
 	}
-	return action.Type == security.ActionTypeWrite &&
-		strings.EqualFold(strings.TrimSpace(action.Payload.Operation), ToolNameTodoWrite)
+	return false
 }
 
 const ()

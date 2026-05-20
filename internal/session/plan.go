@@ -42,9 +42,10 @@ type PlanArtifact struct {
 
 // PlanSpec is the source of truth for the current plan.
 type PlanSpec struct {
-	Goal          string     `json:"goal"`
-	Steps         []string   `json:"steps,omitempty"`
-	Constraints   []string   `json:"constraints,omitempty"`
+	Goal        string   `json:"goal"`
+	Steps       []string `json:"steps,omitempty"`
+	Constraints []string `json:"constraints,omitempty"`
+	// Todos 保留旧计划数据的兼容读取；执行态 todo 由 build 阶段的 session.Todos 维护。
 	Todos         []TodoItem `json:"todos,omitempty"`
 	OpenQuestions []string   `json:"open_questions,omitempty"`
 }
