@@ -13,6 +13,7 @@ import {
   type MessageFrame,
   type PermissionRequestPayload,
   type PendingUserQuestionSnapshot,
+  type PlanUpdatedPayload,
   type TodoEventPayload,
   type TokenUsage,
   type VerificationCompletedPayload,
@@ -52,6 +53,9 @@ let _pendingNextRunRollbackCheckpointId: string | undefined;
 let _currentRollbackRunId: string | undefined;
 // 标记 pending 基线已应用到哪个 run；切到下一 run 时自动失效。
 let _pendingRollbackAppliedRunId: string | undefined;
+// plan 模式下先缓存文本流，等待结构化 plan_updated 决定最终展示。
+let _planChunkBufferByRunId = new Map<string, string>();
+let _planUpdatedRunIds = new Set<string>();
 const CHECKPOINT_REASON_PRE_RESTORE_GUARD = "pre_restore_guard";
 
 /** 重置模块级游标 —— 在截断聊天历史 / 切换会话等场景调用，避免后续事件挂到已被移除的消息上 */
@@ -68,6 +72,8 @@ export function resetEventBridgeCursors() {
   _pendingNextRunRollbackCheckpointId = keepCheckpointBaseline
     ? _pendingNextRunRollbackCheckpointId
     : undefined;
+  _planChunkBufferByRunId = new Map<string, string>();
+  _planUpdatedRunIds = new Set<string>();
   _latestRunDiffRequestId += 1;
   if (!keepCheckpointBaseline) {
     _latestRestoreSyncRequestId += 1;
@@ -373,7 +379,8 @@ function _refreshRunFileChanges(
     .then((result) => {
       if (requestId !== _latestRunDiffRequestId) return;
       if (runId !== useGatewayStore.getState().currentRunId) return;
-      if (sessionId !== useSessionStore.getState().currentSessionId) return;
+      const currentSessionId = useSessionStore.getState().currentSessionId;
+      if (currentSessionId && sessionId !== currentSessionId) return;
       if (!result?.payload) return;
       if (result.payload.warning) {
         useUIStore
@@ -533,12 +540,23 @@ function normalizeUserQuestionRequestedPayload(
 }
 
 const CRITICAL_EVENTS = new Set<string>([EventType.Error]);
-const SESSION_AGNOSTIC_EVENTS = new Set<string>([
-  EventType.Error,
-]);
+const SESSION_AGNOSTIC_EVENTS = new Set<string>([EventType.Error]);
 
 function strField(payload: unknown, key: string): string {
   return ((payload as PayloadRecord)?.[key] as string) ?? "";
+}
+
+function getRunKey(frameRunId: string | undefined): string {
+  return (frameRunId || useGatewayStore.getState().currentRunId || "").trim();
+}
+
+function extractAgentDoneContent(eventPayload: unknown): string {
+  const parts = (eventPayload as { parts?: { text?: string }[] } | undefined)
+    ?.parts;
+  if (parts && Array.isArray(parts)) {
+    return parts.map((p) => p?.text ?? "").join("");
+  }
+  return strField(eventPayload, "content");
 }
 
 function resolveCompactMode(payload: unknown): string {
@@ -564,7 +582,9 @@ function compactMessageForMode(mode: string): string {
 
 function compactErrorMessageForMode(mode: string, message: string): string {
   if (mode === "proactive" || mode === "reactive") {
-    return message ? `Auto context compaction failed: ${message}` : "Auto context compaction failed";
+    return message
+      ? `Auto context compaction failed: ${message}`
+      : "Auto context compaction failed";
   }
   return message || "Compaction failed";
 }
@@ -678,6 +698,16 @@ export function handleGatewayEvent(
       }
       const text = eventPayload as string | undefined;
       if (!text) break;
+      if (chatStore.agentMode === "plan") {
+        const runKey = getRunKey(frameRunId);
+        if (runKey) {
+          _planChunkBufferByRunId.set(
+            runKey,
+            (_planChunkBufferByRunId.get(runKey) ?? "") + text,
+          );
+        }
+        break;
+      }
       if (!chatStore.streamingMessageId) {
         chatStore.startStreamingMessage();
       }
@@ -685,20 +715,60 @@ export function handleGatewayEvent(
       break;
     }
 
+    case EventType.PlanUpdated: {
+      if (chatStore.streamingThinkingMessageId) {
+        chatStore.finalizeThinkingMessage();
+      }
+      const payload = eventPayload as PlanUpdatedPayload | undefined;
+      if (payload?.current_plan) {
+        const activeStreamingID = useChatStore.getState().streamingMessageId;
+        if (activeStreamingID) {
+          useChatStore.getState().removeMessage(activeStreamingID);
+          useChatStore.getState().setStreamingMessageId("");
+        }
+        const runKey = getRunKey(frameRunId);
+        if (runKey) {
+          _planUpdatedRunIds.add(runKey);
+          _planChunkBufferByRunId.delete(runKey);
+        }
+        useChatStore
+          .getState()
+          .upsertPlanMessage(payload.current_plan, payload.display_text);
+      }
+      break;
+    }
+
     case EventType.AgentDone: {
       if (chatStore.streamingThinkingMessageId) {
         chatStore.finalizeThinkingMessage();
       }
-      if (chatStore.streamingMessageId) {
-        const parts = (
-          eventPayload as { parts?: { text?: string }[] } | undefined
-        )?.parts;
-        const content =
-          parts && Array.isArray(parts)
-            ? parts.map((p) => p?.text ?? "").join("")
-            : strField(eventPayload, "content");
-        chatStore.finalizeMessage(chatStore.streamingMessageId, content);
+      const runKey = getRunKey(frameRunId);
+      const content = extractAgentDoneContent(eventPayload);
+      if (runKey && _planUpdatedRunIds.has(runKey)) {
+        if (chatStore.streamingMessageId) {
+          const streamingID = chatStore.streamingMessageId;
+          chatStore.finalizeMessage(streamingID, "");
+          useChatStore.getState().removeMessage(streamingID);
+        }
+        _planUpdatedRunIds.delete(runKey);
+        _planChunkBufferByRunId.delete(runKey);
+        chatStore.setGenerating(false);
+        chatStore.finalizeRunningToolCalls("done");
+        if (frameSessionId) {
+          useSessionStore
+            .getState()
+            .fetchSessions(gatewayAPI, true)
+            .catch(() => {});
+        }
+        break;
       }
+      if (chatStore.streamingMessageId) {
+        chatStore.finalizeMessage(chatStore.streamingMessageId, content);
+      } else if (content) {
+        const id = chatStore.startStreamingMessage();
+        useChatStore.getState().finalizeMessage(id, content);
+      }
+      if (runKey) _planChunkBufferByRunId.delete(runKey);
       chatStore.setGenerating(false);
       chatStore.finalizeRunningToolCalls("done");
       if (frameSessionId) {

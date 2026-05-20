@@ -63,8 +63,9 @@ plan_bootstrap_required: You are in plan mode but no current plan exists.
 Before research, analysis, or conversational response, you MUST complete the following:
 
 1. Research the codebase as needed using read-only tools.
-2. Output a JSON object containing "plan_spec" and "summary_candidate" that defines the current plan.
-3. Focus plan_spec on goal, steps, constraints, and open_questions. Do not create execution todos in plan mode.
+2. Output the visible plan as Markdown first, using short sections for goal, steps, constraints, and open questions.
+3. After the Markdown, include one compact machine-readable JSON object containing "plan_spec" and "summary_candidate". Put this JSON inside an HTML comment, not in a fenced code block.
+4. Focus plan_spec on goal, steps, constraints, and open_questions. Do not create execution todos in plan mode.
 
 Do not end this turn without producing a plan.`
 

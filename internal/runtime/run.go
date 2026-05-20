@@ -380,6 +380,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, planMessage); err != nil {
 							return s.handleRunError(err)
 						}
+						s.emitRunScoped(ctx, EventPlanUpdated, &state, PlanUpdatedPayload{
+							CurrentPlan: nextPlan.Clone(),
+							DisplayText: resolvePlanDisplayText(planOutput, nextPlan.Spec),
+						})
 						s.emitRunScoped(ctx, EventAgentDone, &state, planMessage)
 						return nil
 					}

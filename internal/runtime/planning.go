@@ -258,11 +258,43 @@ func buildPlanArtifact(current *agentsession.PlanArtifact, output planTurnOutput
 	return plan, nil
 }
 
-// resolvePlanDisplayText 优先保留模型对计划的额外说明文本，缺失时回退为规范计划正文。
-func resolvePlanDisplayText(output planTurnOutput, spec agentsession.PlanSpec) string {
-	display := strings.TrimSpace(output.DisplayText)
-	if display != "" {
-		return display
+// renderPlanMarkdown 将结构化计划渲染为前端可直接展示的规范 Markdown。
+func renderPlanMarkdown(spec agentsession.PlanSpec) string {
+	spec, err := agentsession.NormalizePlanSpec(spec)
+	if err != nil {
+		return ""
+	}
+	sections := make([]string, 0, 4)
+	sections = append(sections, "### 目标\n\n"+spec.Goal)
+	if len(spec.Steps) > 0 {
+		sections = append(sections, "### 实施步骤\n\n"+renderMarkdownBulletList(spec.Steps))
+	}
+	if len(spec.Constraints) > 0 {
+		sections = append(sections, "### 约束\n\n"+renderMarkdownBulletList(spec.Constraints))
+	}
+	if len(spec.OpenQuestions) > 0 {
+		sections = append(sections, "### 未决问题\n\n"+renderMarkdownBulletList(spec.OpenQuestions))
+	}
+	return strings.TrimSpace(strings.Join(sections, "\n\n"))
+}
+
+// renderMarkdownBulletList 将计划字段中的字符串列表渲染为 Markdown 无序列表。
+func renderMarkdownBulletList(items []string) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		lines = append(lines, "- "+trimmed)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// resolvePlanDisplayText 在解析出机器可读计划后固定返回规范化计划正文，不保留模型额外说明。
+func resolvePlanDisplayText(_ planTurnOutput, spec agentsession.PlanSpec) string {
+	if markdown := renderPlanMarkdown(spec); markdown != "" {
+		return markdown
 	}
 	return strings.TrimSpace(agentsession.RenderPlanContent(spec))
 }

@@ -3943,6 +3943,7 @@ func TestServiceRunPlanModePersistsDraftPlan(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
+	events := collectRuntimeEvents(service.Events())
 
 	saved := onlySession(t, store)
 	if saved.AgentMode != agentsession.AgentModePlan {
@@ -3978,9 +3979,26 @@ func TestServiceRunPlanModePersistsDraftPlan(t *testing.T) {
 	if got := renderPartsForTest(saved.Messages[2].Parts); !strings.Contains(got, "目标") {
 		t.Fatalf("expected rendered plan content, got %q", got)
 	}
+	var planEvent RuntimeEvent
+	for _, event := range events {
+		if event.Type == EventPlanUpdated {
+			planEvent = event
+			break
+		}
+	}
+	if planEvent.Type != EventPlanUpdated {
+		t.Fatalf("expected %s event, got events %+v", EventPlanUpdated, eventTypes(events))
+	}
+	payload, ok := planEvent.Payload.(PlanUpdatedPayload)
+	if !ok {
+		t.Fatalf("plan event payload = %T, want PlanUpdatedPayload", planEvent.Payload)
+	}
+	if payload.CurrentPlan == nil || payload.CurrentPlan.Spec.Goal != "为 runtime 引入 plan/build 模式" {
+		t.Fatalf("unexpected plan event payload: %+v", payload.CurrentPlan)
+	}
 }
 
-func TestServiceRunPlanModeShowsExplanationTextOutsidePlanningJSON(t *testing.T) {
+func TestServiceRunPlanModePersistsCanonicalMarkdownInsteadOfPlanningJSON(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -4032,8 +4050,12 @@ func TestServiceRunPlanModeShowsExplanationTextOutsidePlanningJSON(t *testing.T)
 	if strings.Contains(got, "\"plan_spec\"") {
 		t.Fatalf("expected persisted assistant text to strip planning JSON, got %q", got)
 	}
-	if !strings.Contains(got, "先确认范围") || !strings.Contains(got, "继续执行") {
-		t.Fatalf("expected prose explanation to be preserved, got %q", got)
+	if strings.Contains(got, "先确认范围") || strings.Contains(got, "继续执行") {
+		t.Fatalf("expected model prose to be replaced by canonical markdown, got %q", got)
+	}
+	if !strings.Contains(got, "### 目标") || !strings.Contains(got, "Preserve prose around planning JSON") ||
+		!strings.Contains(got, "### 实施步骤") || !strings.Contains(got, "- persist plan") {
+		t.Fatalf("expected canonical markdown plan, got %q", got)
 	}
 }
 

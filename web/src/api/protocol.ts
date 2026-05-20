@@ -77,6 +77,7 @@ export const EventType = {
   UserMessage: "user_message",
   AgentChunk: "agent_chunk",
   AgentDone: "agent_done",
+  PlanUpdated: "plan_updated",
   ToolStart: "tool_start",
   ToolResult: "tool_result",
   ToolDiff: "tool_diff",
@@ -296,6 +297,47 @@ export interface ToolCall {
   arguments: string;
 }
 
+export interface PlanTodoItem {
+  id: string;
+  content: string;
+  status?: string;
+  required?: boolean;
+  artifacts?: string[];
+  failure_reason?: string;
+  blocked_reason?: string;
+  revision?: number;
+}
+
+export interface PlanSpec {
+  goal: string;
+  steps?: string[];
+  constraints?: string[];
+  todos?: PlanTodoItem[];
+  open_questions?: string[];
+}
+
+export interface PlanSummaryView {
+  goal: string;
+  key_steps?: string[];
+  constraints?: string[];
+  active_todo_ids?: string[];
+}
+
+export interface PlanArtifact {
+  id: string;
+  revision: number;
+  status: string;
+  spec: PlanSpec;
+  summary: PlanSummaryView;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlanUpdatedPayload {
+  current_plan?: PlanArtifact;
+  display_text?: string;
+}
+
 /** 会话详情 */
 export interface Session {
   id: string;
@@ -306,6 +348,7 @@ export interface Session {
   provider?: string;
   model?: string;
   agent_mode?: string;
+  current_plan?: PlanArtifact;
   messages?: SessionMessage[];
 }
 
