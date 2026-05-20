@@ -94,6 +94,12 @@ func TestPlanModePromptTemplates(t *testing.T) {
 		strings.Contains(PlanModePrompt("plan"), "must not be empty") {
 		t.Fatalf("expected plan prompt not to require execution todo ownership")
 	}
+	if strings.Contains(PlanModePrompt("plan"), "Only output a JSON object") {
+		t.Fatalf("expected plan prompt not to require JSON-only output")
+	}
+	if !strings.Contains(PlanModePrompt("plan"), "inside an HTML comment") {
+		t.Fatalf("expected plan prompt to require machine-readable JSON in an HTML comment")
+	}
 	if !strings.Contains(PlanModePrompt("plan"), "Do not create execution todos in plan mode") {
 		t.Fatalf("expected plan prompt to keep todos in build execution")
 	}

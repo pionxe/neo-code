@@ -133,6 +133,29 @@ func TestMaybeParsePlanTurnOutputIgnoresBraceTextAndKeepsExplanation(t *testing.
 	}
 }
 
+func TestMaybeParsePlanTurnOutputStripsHTMLCommentJSON(t *testing.T) {
+	t.Parallel()
+
+	markdown := "### Goal\n\nShip plan display\n\n### Steps\n\n- Align prompts"
+	text := markdown + "\n\n<!-- {\"plan_spec\":{\"goal\":\"Ship plan display\",\"steps\":[\"Align prompts\"],\"constraints\":[\"Keep parser stable\"],\"open_questions\":[]},\"summary_candidate\":{\"goal\":\"Ship plan display\",\"key_steps\":[\"Align prompts\"],\"constraints\":[\"Keep parser stable\"]}} -->"
+	output, ok, err := maybeParsePlanTurnOutput(providertypes.Message{
+		Role:  providertypes.RoleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(text)},
+	})
+	if err != nil {
+		t.Fatalf("maybeParsePlanTurnOutput() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected HTML comment plan JSON to be detected")
+	}
+	if output.PlanSpec.Goal != "Ship plan display" {
+		t.Fatalf("PlanSpec.Goal = %q", output.PlanSpec.Goal)
+	}
+	if output.DisplayText != markdown {
+		t.Fatalf("DisplayText = %q, want %q", output.DisplayText, markdown)
+	}
+}
+
 func TestMaybeParsePlanTurnOutputFallsBackWhenSummaryIsInvalid(t *testing.T) {
 	t.Parallel()
 

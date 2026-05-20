@@ -174,8 +174,9 @@ func decodePlanTurnOutput(jsonText string) (planTurnOutput, error) {
 
 // stripPlanningJSONObjectText 从原始回复中移除结构化 JSON，并尽量保留自然段落间距。
 func stripPlanningJSONObjectText(text string, candidate extractedPlanningJSONObject) string {
-	before := strings.TrimSpace(text[:candidate.Start])
-	after := strings.TrimSpace(text[candidate.End:])
+	start, end := planningJSONObjectRemovalRange(text, candidate)
+	before := strings.TrimSpace(text[:start])
+	after := strings.TrimSpace(text[end:])
 	switch {
 	case before == "":
 		return after
@@ -184,6 +185,28 @@ func stripPlanningJSONObjectText(text string, candidate extractedPlanningJSONObj
 	default:
 		return strings.TrimSpace(before + "\n\n" + after)
 	}
+}
+
+// planningJSONObjectRemovalRange 扩展结构化 JSON 的剥离范围，避免 HTML 注释外壳泄漏到可见计划正文。
+func planningJSONObjectRemovalRange(text string, candidate extractedPlanningJSONObject) (int, int) {
+	start := candidate.Start
+	end := candidate.End
+	if start < 0 || end < start || end > len(text) {
+		return candidate.Start, candidate.End
+	}
+
+	prefix := text[:start]
+	open := strings.LastIndex(prefix, "<!--")
+	if open < 0 || strings.TrimSpace(prefix[open+len("<!--"):]) != "" {
+		return start, end
+	}
+
+	suffix := text[end:]
+	closeOffset := strings.Index(suffix, "-->")
+	if closeOffset < 0 || strings.TrimSpace(suffix[:closeOffset]) != "" {
+		return start, end
+	}
+	return open, end + closeOffset + len("-->")
 }
 
 // extractPlanningJSONObjectIfPresent 在文本中提取首个满足指定顶层键契约的 JSON 对象。
