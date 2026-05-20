@@ -27,6 +27,9 @@ func Reduce(current *ViewState, event gateway.GatewayEvent) *ViewState {
 		return reducePermissionRequested(next, event)
 	case gateway.EventPermissionResolved:
 		next.Runtime.Phase = RuntimePhaseRunning
+		next.Input.Mode = InputStateModeMessage
+		next.Input.Prompt = ""
+		next.Input.Options = nil
 		return appendStream(next, streamEntry(event, "status", payloadString(event.Payload, "message", "decision", "status")))
 	case gateway.EventAskUserQuestion, gateway.EventUserQuestionRequested:
 		return reduceAskUserQuestion(next, event)
@@ -36,13 +39,18 @@ func Reduce(current *ViewState, event gateway.GatewayEvent) *ViewState {
 		next.Runtime.Phase = RuntimePhaseRunning
 		next.Runtime.RunID = event.RunID
 	case gateway.EventRunFinished:
-		next.Runtime.Phase = RuntimePhaseIdle
+		if next.Runtime.Phase != RuntimePhaseError && next.Runtime.Phase != RuntimePhaseCancelled {
+			next.Runtime.Phase = RuntimePhaseIdle
+		}
 		next.Runtime.Tokens = tokenUsageFromPayload(event.Payload, next.Runtime.Tokens)
 	case gateway.EventRunError, gateway.EventError:
 		next.Runtime.Phase = RuntimePhaseError
 		return appendStream(next, streamEntry(event, "error", payloadString(event.Payload, "message", "error", "text")))
 	case gateway.EventRunCancelled:
 		next.Runtime.Phase = RuntimePhaseCancelled
+		next.Input.Mode = InputStateModeMessage
+		next.Input.Prompt = ""
+		next.Input.Options = nil
 		return appendStream(next, streamEntry(event, "status", payloadString(event.Payload, "message", "phase", "status")))
 	case gateway.EventTokenUsage:
 		next.Runtime.Tokens = tokenUsageFromPayload(event.Payload, next.Runtime.Tokens)
@@ -131,7 +139,7 @@ func reduceAskUserQuestion(next *ViewState, event gateway.GatewayEvent) *ViewSta
 	next.Input.Mode = InputStateModeQuestionAnswer
 	next.Input.Prompt = payloadString(event.Payload, "question", "prompt", "message")
 	next.Input.Options = payloadStringSlice(event.Payload, "options")
-	return next
+	return appendStream(next, streamEntry(event, "question", next.Input.Prompt))
 }
 
 // cloneViewState 复制 ViewState 的顶层结构和切片，避免 reducer 修改输入状态。

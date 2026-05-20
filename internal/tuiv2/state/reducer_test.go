@@ -122,6 +122,9 @@ func TestReduceCoversEventStateTransitions(t *testing.T) {
 				if next.Runtime.Phase != RuntimePhaseRunning {
 					t.Fatalf("phase = %q, want running", next.Runtime.Phase)
 				}
+				if next.Input.Mode != InputStateModeMessage || next.Input.Prompt != "" || next.Input.Options != nil {
+					t.Fatalf("input = %+v, want clean message input", next.Input)
+				}
 				assertLastEntry(t, next, "status", "allow")
 			},
 		},
@@ -134,6 +137,10 @@ func TestReduceCoversEventStateTransitions(t *testing.T) {
 				}
 				if len(next.Input.Options) != 2 {
 					t.Fatalf("options = %+v, want two", next.Input.Options)
+				}
+				assertLastEntry(t, next, "question", "branch?")
+				if next.Stream[len(next.Stream)-1].Metadata["question"] != "branch?" {
+					t.Fatalf("metadata = %+v, want original payload", next.Stream[len(next.Stream)-1].Metadata)
 				}
 			},
 		},
@@ -180,6 +187,9 @@ func TestReduceCoversEventStateTransitions(t *testing.T) {
 			assert: func(t *testing.T, next *ViewState) {
 				if next.Runtime.Phase != RuntimePhaseCancelled {
 					t.Fatalf("phase = %q", next.Runtime.Phase)
+				}
+				if next.Input.Mode != InputStateModeMessage || next.Input.Prompt != "" || next.Input.Options != nil {
+					t.Fatalf("input = %+v, want clean message input", next.Input)
 				}
 				assertLastEntry(t, next, "status", "cancelled")
 			},
@@ -257,6 +267,106 @@ func TestReduceCoversEventStateTransitions(t *testing.T) {
 			current.Stream = []StreamEntry{{ID: "seed", Type: "message", Content: "seed", Metadata: map[string]any{"done": true}}}
 			next := Reduce(current, tt.event)
 			tt.assert(t, next)
+		})
+	}
+}
+
+func TestReducePermissionResolvedRestoresMessageInput(t *testing.T) {
+	current := Reduce(NewViewState(), event(gateway.EventPermissionRequested, map[string]any{
+		"prompt": "allow bash?",
+	}))
+	current.Input.Options = []string{"allow", "deny"}
+	next := Reduce(current, event(gateway.EventPermissionResolved, map[string]any{"decision": "allow"}))
+
+	if next.Runtime.Phase != RuntimePhaseRunning {
+		t.Fatalf("phase = %q, want running", next.Runtime.Phase)
+	}
+	if next.Input.Mode != InputStateModeMessage {
+		t.Fatalf("input mode = %q, want message", next.Input.Mode)
+	}
+	if next.Input.Prompt != "" || next.Input.Options != nil {
+		t.Fatalf("input = %+v, want prompt empty and options nil", next.Input)
+	}
+}
+
+func TestReduceAskUserQuestionAppendsStreamEntry(t *testing.T) {
+	next := Reduce(NewViewState(), event(gateway.EventAskUserQuestion, map[string]any{
+		"question": "which branch?",
+		"options":  []any{"main", "dev"},
+	}))
+
+	if next.Runtime.Phase != RuntimePhaseWaitingUser {
+		t.Fatalf("phase = %q, want waiting_user", next.Runtime.Phase)
+	}
+	if next.Input.Mode != InputStateModeQuestionAnswer {
+		t.Fatalf("input mode = %q, want question_answer", next.Input.Mode)
+	}
+	if next.Input.Prompt != "which branch?" {
+		t.Fatalf("prompt = %q, want question", next.Input.Prompt)
+	}
+	if len(next.Input.Options) != 2 || next.Input.Options[0] != "main" || next.Input.Options[1] != "dev" {
+		t.Fatalf("options = %+v, want [main dev]", next.Input.Options)
+	}
+	assertLastEntry(t, next, "question", "which branch?")
+	if next.Stream[len(next.Stream)-1].Metadata["question"] != "which branch?" {
+		t.Fatalf("metadata = %+v, want original payload", next.Stream[len(next.Stream)-1].Metadata)
+	}
+}
+
+func TestReduceRunCancelledRestoresMessageInput(t *testing.T) {
+	current := Reduce(NewViewState(), event(gateway.EventAskUserQuestion, map[string]any{
+		"question": "continue?",
+		"options":  []any{"yes", "no"},
+	}))
+	next := Reduce(current, event(gateway.EventRunCancelled, map[string]any{"phase": "cancelled"}))
+
+	if next.Runtime.Phase != RuntimePhaseCancelled {
+		t.Fatalf("phase = %q, want cancelled", next.Runtime.Phase)
+	}
+	if next.Input.Mode != InputStateModeMessage {
+		t.Fatalf("input mode = %q, want message", next.Input.Mode)
+	}
+	if next.Input.Prompt != "" || next.Input.Options != nil {
+		t.Fatalf("input = %+v, want prompt empty and options nil", next.Input)
+	}
+}
+
+func TestReduceRunFinishedPreservesTerminalErrorOrCancelled(t *testing.T) {
+	tests := []struct {
+		name       string
+		current    *ViewState
+		wantPhase  string
+		wantTokens TokenUsage
+	}{
+		{
+			name:       "normal run becomes idle",
+			current:    Reduce(NewViewState(), event(gateway.EventRunStarted, nil)),
+			wantPhase:  RuntimePhaseIdle,
+			wantTokens: TokenUsage{Total: 11},
+		},
+		{
+			name:       "error stays error",
+			current:    Reduce(NewViewState(), event(gateway.EventRunError, map[string]any{"message": "boom"})),
+			wantPhase:  RuntimePhaseError,
+			wantTokens: TokenUsage{Total: 11},
+		},
+		{
+			name:       "cancelled stays cancelled",
+			current:    Reduce(NewViewState(), event(gateway.EventRunCancelled, map[string]any{"phase": "cancelled"})),
+			wantPhase:  RuntimePhaseCancelled,
+			wantTokens: TokenUsage{Total: 11},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			next := Reduce(tt.current, event(gateway.EventRunFinished, map[string]any{"tokens": 11}))
+			if next.Runtime.Phase != tt.wantPhase {
+				t.Fatalf("phase = %q, want %q", next.Runtime.Phase, tt.wantPhase)
+			}
+			if next.Runtime.Tokens != tt.wantTokens {
+				t.Fatalf("tokens = %+v, want %+v", next.Runtime.Tokens, tt.wantTokens)
+			}
 		})
 	}
 }
