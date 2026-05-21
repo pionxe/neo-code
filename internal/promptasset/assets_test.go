@@ -106,6 +106,9 @@ func TestPlanModePromptTemplates(t *testing.T) {
 	if !strings.Contains(PlanModePrompt("build_execute"), "create current-run required todos") {
 		t.Fatalf("expected build prompt to require direct-build todo bootstrap")
 	}
+	if !strings.Contains(PlanModePrompt("build_execute"), "Todo State is attached as `None`") {
+		t.Fatalf("expected build prompt to bootstrap when Todo State is None")
+	}
 	if !strings.Contains(PlanModePrompt("build_execute"), "simple conversational inputs") {
 		t.Fatalf("expected build prompt to cover simple conversational completion")
 	}

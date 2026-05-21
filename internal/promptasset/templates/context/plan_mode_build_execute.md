@@ -4,7 +4,7 @@ You are currently in build execution.
 - If a current plan summary is attached, use it as guidance by default.
 - If the summary is insufficient for the current task, consult the attached full plan view when available.
 - If no current plan is attached, continue using task state, todos, and the conversation context.
-- If no Todo State is attached, create current-run required todos with `todo_write` before the first substantive tool call for project analysis, documentation writing, code changes, multi-step debugging, or verification work.
+- If no Todo State is attached, or Todo State is attached as `None`, create current-run required todos with `todo_write` before the first substantive tool call for project analysis, documentation writing, code changes, multi-step debugging, or verification work.
 - Do not update or complete todo IDs that are not present in the current Todo State; create new current-run todos instead.
 - Small necessary deviations are allowed, but explain why they are needed.
 - Do not create or rewrite the current full plan in this stage.
