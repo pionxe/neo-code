@@ -762,6 +762,16 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 	if finished.Title != "Verification finished" || !strings.Contains(finished.Detail, "acceptance_status=failed") || !finished.IsError {
 		t.Fatalf("unexpected finished activity: %+v", finished)
 	}
+	runtimeEventVerificationFinishedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationFinishedPayload{
+			AcceptanceStatus: "continued",
+			StopReason:       agentruntime.StopReasonAcceptContinue,
+		},
+	})
+	continued := app.activities[len(app.activities)-1]
+	if continued.Title != "Verification finished" || !strings.Contains(continued.Detail, "acceptance_status=continued") || continued.IsError {
+		t.Fatalf("unexpected continued activity: %+v", continued)
+	}
 
 	if handled := runtimeEventVerificationCompletedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
 		t.Fatalf("expected invalid verification_completed payload to return false")

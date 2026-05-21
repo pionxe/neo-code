@@ -3592,7 +3592,7 @@ func runtimeEventVerificationFinishedHandler(a *App, event tuiservices.RuntimeEv
 	if class := strings.TrimSpace(payload.ErrorClass); class != "" {
 		detail = detail + " | class=" + class
 	}
-	isError := !strings.EqualFold(acceptanceStatus, "accepted")
+	isError := strings.EqualFold(acceptanceStatus, "failed")
 	a.appendActivity("verify", "Verification finished", detail, isError)
 	return false
 }

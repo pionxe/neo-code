@@ -345,16 +345,21 @@ func TestUpdateResumeCheckpoint(t *testing.T) {
 func TestApplyResumeCheckpointReplayPlanStrategy(t *testing.T) {
 	fixture := newRuntimeCheckpointFixture(t)
 	state := newRunState("run-resume-plan", fixture.session)
+	currentWorkspaceKey := resolveResumeWorkspaceKey(state.session.Workdir, state.effectiveWorkdir)
+	currentTranscriptRevision := sessionTranscriptRevision(state.session)
 	spy := &checkpointStoreSpy{
 		latestResume: &agentsession.ResumeCheckpoint{
 			RunID:              "run-old",
-			WorkspaceKey:       agentsession.WorkspacePathKey(fixture.session.Workdir),
+			WorkspaceKey:       currentWorkspaceKey,
 			SessionID:          fixture.session.ID,
 			Turn:               4,
 			Phase:              "execute",
 			CompletionState:    "",
-			TranscriptRevision: int64(len(fixture.session.Messages)),
+			TranscriptRevision: currentTranscriptRevision,
 		},
+	}
+	if !resumeCheckpointMatchesState(*spy.latestResume, currentWorkspaceKey, currentTranscriptRevision) {
+		t.Fatalf("resume checkpoint should match current state in replay-plan strategy case")
 	}
 	service := &Service{
 		checkpointStore:  spy,
@@ -377,16 +382,21 @@ func TestApplyResumeCheckpointReplayPlanStrategy(t *testing.T) {
 func TestApplyResumeCheckpointVerifyClosureStrategy(t *testing.T) {
 	fixture := newRuntimeCheckpointFixture(t)
 	state := newRunState("run-resume-verify", fixture.session)
+	currentWorkspaceKey := resolveResumeWorkspaceKey(state.session.Workdir, state.effectiveWorkdir)
+	currentTranscriptRevision := sessionTranscriptRevision(state.session)
 	spy := &checkpointStoreSpy{
 		latestResume: &agentsession.ResumeCheckpoint{
 			RunID:              "run-old-verify",
-			WorkspaceKey:       agentsession.WorkspacePathKey(fixture.session.Workdir),
+			WorkspaceKey:       currentWorkspaceKey,
 			SessionID:          fixture.session.ID,
 			Turn:               2,
 			Phase:              "verify",
 			CompletionState:    "completed",
-			TranscriptRevision: int64(len(fixture.session.Messages)),
+			TranscriptRevision: currentTranscriptRevision,
 		},
+	}
+	if !resumeCheckpointMatchesState(*spy.latestResume, currentWorkspaceKey, currentTranscriptRevision) {
+		t.Fatalf("resume checkpoint should match current state in verify-closure strategy case")
 	}
 	service := &Service{
 		checkpointStore:  spy,
@@ -428,7 +438,7 @@ func TestApplyResumeCheckpointSkipsUnsupportedInputs(t *testing.T) {
 			Turn:               1,
 			Phase:              "stopped",
 			CompletionState:    "completed",
-			TranscriptRevision: int64(len(fixture.session.Messages)),
+			TranscriptRevision: sessionTranscriptRevision(fixture.session),
 		},
 	}
 	service.applyResumeCheckpoint(context.Background(), &unsupportedState)
@@ -472,6 +482,39 @@ func TestDeriveResumeBaseLifecycle(t *testing.T) {
 	}
 }
 
+func TestSessionTranscriptRevisionChangesWithoutMessageCountChange(t *testing.T) {
+	t.Parallel()
+
+	base := agentsession.NewWithWorkdir("resume-token", t.TempDir())
+	base.Messages = []providertypes.Message{
+		{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("same-message-count"),
+			},
+		},
+	}
+	base.UpdatedAt = time.Unix(1700000000, 0).UTC()
+	base.TaskState = agentsession.TaskState{
+		Goal:          "implement flow",
+		LastUpdatedAt: time.Unix(1700000001, 0).UTC(),
+	}
+	base.TodoVersion = 1
+
+	next := base
+	next.TaskState.NextStep = "run verification"
+	next.TaskState.LastUpdatedAt = time.Unix(1700000002, 0).UTC()
+	next.UpdatedAt = time.Unix(1700000003, 0).UTC()
+	next.TodoVersion = 2
+
+	if len(base.Messages) != len(next.Messages) {
+		t.Fatalf("message count changed unexpectedly: %d -> %d", len(base.Messages), len(next.Messages))
+	}
+	if sessionTranscriptRevision(base) == sessionTranscriptRevision(next) {
+		t.Fatalf("expected transcript revision token to change when task/todo state changes without message-count change")
+	}
+}
+
 func TestApplyResumeCheckpointSkipsWorkspaceMismatch(t *testing.T) {
 	fixture := newRuntimeCheckpointFixture(t)
 	state := newRunState("run-resume-workspace-mismatch", fixture.session)
@@ -482,7 +525,7 @@ func TestApplyResumeCheckpointSkipsWorkspaceMismatch(t *testing.T) {
 			SessionID:          fixture.session.ID,
 			Turn:               1,
 			Phase:              "execute",
-			TranscriptRevision: int64(len(fixture.session.Messages)),
+			TranscriptRevision: sessionTranscriptRevision(fixture.session),
 			CompletionState:    "",
 		},
 	}
@@ -515,7 +558,7 @@ func TestApplyResumeCheckpointSkipsTranscriptRevisionMismatch(t *testing.T) {
 			SessionID:          fixture.session.ID,
 			Turn:               1,
 			Phase:              "execute",
-			TranscriptRevision: int64(len(fixture.session.Messages) + 3),
+			TranscriptRevision: sessionTranscriptRevision(fixture.session) + 1,
 			CompletionState:    "",
 		},
 	}
@@ -579,7 +622,7 @@ func TestServiceRunResumeVerifyClosureBootstrapsFirstTurn(t *testing.T) {
 			Turn:               2,
 			Phase:              "verify",
 			CompletionState:    "completed",
-			TranscriptRevision: int64(len(seed.Messages)),
+			TranscriptRevision: sessionTranscriptRevision(seed),
 		},
 	}
 	service := NewWithFactory(
