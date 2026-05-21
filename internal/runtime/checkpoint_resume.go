@@ -26,17 +26,19 @@ func (s *Service) updateResumeCheckpoint(ctx context.Context, state *runState, p
 	session := state.session
 	runID := state.runID
 	turn := state.turn
+	effectiveWorkdir := strings.TrimSpace(state.effectiveWorkdir)
 	state.mu.Unlock()
 
 	rc := agentsession.ResumeCheckpoint{
-		ID:              agentsession.NewID("rc"),
-		WorkspaceKey:    agentsession.WorkspacePathKey(session.Workdir),
-		RunID:           runID,
-		SessionID:       session.ID,
-		Turn:            turn,
-		Phase:           phase,
-		CompletionState: completionState,
-		UpdatedAt:       time.Now(),
+		ID:                 agentsession.NewID("rc"),
+		WorkspaceKey:       resolveResumeWorkspaceKey(session.Workdir, effectiveWorkdir),
+		RunID:              runID,
+		SessionID:          session.ID,
+		Turn:               turn,
+		Phase:              phase,
+		CompletionState:    completionState,
+		TranscriptRevision: sessionTranscriptRevision(session),
+		UpdatedAt:          time.Now(),
 	}
 
 	if err := s.checkpointStore.SetResumeCheckpoint(ctx, rc); err != nil {
@@ -52,6 +54,8 @@ func (s *Service) applyResumeCheckpoint(ctx context.Context, state *runState) {
 
 	state.mu.Lock()
 	sessionID := strings.TrimSpace(state.session.ID)
+	workspaceKey := resolveResumeWorkspaceKey(state.session.Workdir, state.effectiveWorkdir)
+	transcriptRevision := sessionTranscriptRevision(state.session)
 	state.mu.Unlock()
 	if sessionID == "" {
 		return
@@ -59,6 +63,9 @@ func (s *Service) applyResumeCheckpoint(ctx context.Context, state *runState) {
 
 	resume, err := s.checkpointStore.GetLatestResumeCheckpoint(ctx, sessionID)
 	if err != nil || resume == nil {
+		return
+	}
+	if !resumeCheckpointMatchesState(*resume, workspaceKey, transcriptRevision) {
 		return
 	}
 
@@ -91,6 +98,41 @@ func (s *Service) applyResumeCheckpoint(ctx context.Context, state *runState) {
 		Strategy:        strategy,
 	})
 	s.emitRuntimeSnapshotUpdated(ctx, state, "resume_applied")
+}
+
+// sessionTranscriptRevision 返回当前会话 transcript 的逻辑版本号，供 resume checkpoint 一致性校验使用。
+func sessionTranscriptRevision(session agentsession.Session) int64 {
+	return int64(len(session.Messages))
+}
+
+// resolveResumeWorkspaceKey 统一计算 resume checkpoint 的工作区比较键，优先会话 workdir，缺失时回退运行时生效目录。
+func resolveResumeWorkspaceKey(sessionWorkdir string, effectiveWorkdir string) string {
+	workdir := strings.TrimSpace(sessionWorkdir)
+	if workdir == "" {
+		workdir = strings.TrimSpace(effectiveWorkdir)
+	}
+	return agentsession.WorkspacePathKey(workdir)
+}
+
+// resumeCheckpointMatchesState 校验 resume checkpoint 是否仍与当前会话工作区/转录版本一致。
+func resumeCheckpointMatchesState(
+	resume agentsession.ResumeCheckpoint,
+	currentWorkspaceKey string,
+	currentTranscriptRevision int64,
+) bool {
+	resumeWorkspaceKey := strings.TrimSpace(resume.WorkspaceKey)
+	workspaceKey := strings.TrimSpace(currentWorkspaceKey)
+	if resumeWorkspaceKey == "" || workspaceKey == "" {
+		return false
+	}
+	if !strings.EqualFold(resumeWorkspaceKey, workspaceKey) {
+		return false
+	}
+
+	if resume.TranscriptRevision < 0 || currentTranscriptRevision < 0 {
+		return false
+	}
+	return resume.TranscriptRevision == currentTranscriptRevision
 }
 
 // deriveResumeBaseLifecycle 将 checkpoint phase/completion_state 映射为恢复时首轮运行态。

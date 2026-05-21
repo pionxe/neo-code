@@ -170,6 +170,63 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 			},
 		},
 		{
+			name:      "verification started",
+			eventType: EventVerificationStarted,
+			payload: map[string]any{
+				"completion_passed":         false,
+				"completion_blocked_reason": "pending_todo",
+			},
+			assertFn: func(t *testing.T, got any) {
+				t.Helper()
+				value, ok := got.(VerificationStartedPayload)
+				if !ok {
+					t.Fatalf("payload type = %T", got)
+				}
+				if value.CompletionPassed || value.CompletionBlockedReason != "pending_todo" {
+					t.Fatalf("payload = %#v", value)
+				}
+			},
+		},
+		{
+			name:      "verification stage finished",
+			eventType: EventVerificationStageFinished,
+			payload: map[string]any{
+				"name":        "required_todo",
+				"status":      "fail",
+				"reason":      "open todo remains",
+				"error_class": "unknown",
+			},
+			assertFn: func(t *testing.T, got any) {
+				t.Helper()
+				value, ok := got.(VerificationStageFinishedPayload)
+				if !ok {
+					t.Fatalf("payload type = %T", got)
+				}
+				if value.Name != "required_todo" || value.Status != "fail" || value.ErrorClass != "unknown" {
+					t.Fatalf("payload = %#v", value)
+				}
+			},
+		},
+		{
+			name:      "verification finished",
+			eventType: EventVerificationFinished,
+			payload: map[string]any{
+				"acceptance_status": "failed",
+				"stop_reason":       "verification_failed",
+				"error_class":       "unknown",
+			},
+			assertFn: func(t *testing.T, got any) {
+				t.Helper()
+				value, ok := got.(VerificationFinishedPayload)
+				if !ok {
+					t.Fatalf("payload type = %T", got)
+				}
+				if value.AcceptanceStatus != "failed" || value.StopReason != StopReasonVerificationFailed || value.ErrorClass != "unknown" {
+					t.Fatalf("payload = %#v", value)
+				}
+			},
+		},
+		{
 			name:      "runtime usage payload",
 			eventType: EventType(RuntimeEventUsage),
 			payload:   map[string]any{"delta": map[string]any{"inputtokens": 1}},

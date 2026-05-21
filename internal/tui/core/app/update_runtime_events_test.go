@@ -181,6 +181,15 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationCompleted]; !ok {
 		t.Fatalf("expected verification_completed handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationStarted]; !ok {
+		t.Fatalf("expected verification_started handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationStageFinished]; !ok {
+		t.Fatalf("expected verification_stage_finished handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationFinished]; !ok {
+		t.Fatalf("expected verification_finished handler to be registered")
+	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationFailed]; !ok {
 		t.Fatalf("expected verification_failed handler to be registered")
 	}
@@ -708,6 +717,51 @@ func TestRuntimeEventMultimodalHandlers(t *testing.T) {
 
 func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 	app, _ := newTestApp(t)
+
+	if handled := runtimeEventVerificationStartedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid verification_started payload to return false")
+	}
+	runtimeEventVerificationStartedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationStartedPayload{
+			CompletionPassed:        false,
+			CompletionBlockedReason: "pending_todo",
+		},
+	})
+	started := app.activities[len(app.activities)-1]
+	if started.Title != "Verification started" || !strings.Contains(started.Detail, "completion_gate=blocked") || started.IsError {
+		t.Fatalf("unexpected started activity: %+v", started)
+	}
+
+	if handled := runtimeEventVerificationStageFinishedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid verification_stage_finished payload to return false")
+	}
+	runtimeEventVerificationStageFinishedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationStageFinishedPayload{
+			Name:       "required_todo",
+			Status:     "fail",
+			Reason:     "todo remains open",
+			ErrorClass: "unknown",
+		},
+	})
+	stage := app.activities[len(app.activities)-1]
+	if stage.Title != "Verification stage failed" || !strings.Contains(stage.Detail, "required_todo") || !stage.IsError {
+		t.Fatalf("unexpected stage activity: %+v", stage)
+	}
+
+	if handled := runtimeEventVerificationFinishedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid verification_finished payload to return false")
+	}
+	runtimeEventVerificationFinishedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationFinishedPayload{
+			AcceptanceStatus: "failed",
+			StopReason:       agentruntime.StopReasonVerificationFailed,
+			ErrorClass:       "unknown",
+		},
+	})
+	finished := app.activities[len(app.activities)-1]
+	if finished.Title != "Verification finished" || !strings.Contains(finished.Detail, "acceptance_status=failed") || !finished.IsError {
+		t.Fatalf("unexpected finished activity: %+v", finished)
+	}
 
 	if handled := runtimeEventVerificationCompletedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
 		t.Fatalf("expected invalid verification_completed payload to return false")

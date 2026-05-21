@@ -205,6 +205,12 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[PhaseChangedPayload](payload)
 	case EventStopReasonDecided:
 		return decodeStopReasonPayload(payload)
+	case EventVerificationStarted:
+		return decodeRuntimePayload[VerificationStartedPayload](payload)
+	case EventVerificationStageFinished:
+		return decodeRuntimePayload[VerificationStageFinishedPayload](payload)
+	case EventVerificationFinished:
+		return decodeRuntimePayload[VerificationFinishedPayload](payload)
 	case EventVerificationCompleted:
 		return decodeRuntimePayload[VerificationCompletedPayload](payload)
 	case EventVerificationFailed:

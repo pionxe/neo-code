@@ -347,11 +347,13 @@ func TestApplyResumeCheckpointReplayPlanStrategy(t *testing.T) {
 	state := newRunState("run-resume-plan", fixture.session)
 	spy := &checkpointStoreSpy{
 		latestResume: &agentsession.ResumeCheckpoint{
-			RunID:           "run-old",
-			SessionID:       fixture.session.ID,
-			Turn:            4,
-			Phase:           "execute",
-			CompletionState: "",
+			RunID:              "run-old",
+			WorkspaceKey:       agentsession.WorkspacePathKey(fixture.session.Workdir),
+			SessionID:          fixture.session.ID,
+			Turn:               4,
+			Phase:              "execute",
+			CompletionState:    "",
+			TranscriptRevision: int64(len(fixture.session.Messages)),
 		},
 	}
 	service := &Service{
@@ -377,11 +379,13 @@ func TestApplyResumeCheckpointVerifyClosureStrategy(t *testing.T) {
 	state := newRunState("run-resume-verify", fixture.session)
 	spy := &checkpointStoreSpy{
 		latestResume: &agentsession.ResumeCheckpoint{
-			RunID:           "run-old-verify",
-			SessionID:       fixture.session.ID,
-			Turn:            2,
-			Phase:           "verify",
-			CompletionState: "completed",
+			RunID:              "run-old-verify",
+			WorkspaceKey:       agentsession.WorkspacePathKey(fixture.session.Workdir),
+			SessionID:          fixture.session.ID,
+			Turn:               2,
+			Phase:              "verify",
+			CompletionState:    "completed",
+			TranscriptRevision: int64(len(fixture.session.Messages)),
 		},
 	}
 	service := &Service{
@@ -418,11 +422,13 @@ func TestApplyResumeCheckpointSkipsUnsupportedInputs(t *testing.T) {
 	unsupportedState := newRunState("run-unsupported-resume", fixture.session)
 	service.checkpointStore = &checkpointStoreSpy{
 		latestResume: &agentsession.ResumeCheckpoint{
-			RunID:           "run-unknown",
-			SessionID:       fixture.session.ID,
-			Turn:            1,
-			Phase:           "stopped",
-			CompletionState: "completed",
+			RunID:              "run-unknown",
+			WorkspaceKey:       agentsession.WorkspacePathKey(fixture.session.Workdir),
+			SessionID:          fixture.session.ID,
+			Turn:               1,
+			Phase:              "stopped",
+			CompletionState:    "completed",
+			TranscriptRevision: int64(len(fixture.session.Messages)),
 		},
 	}
 	service.applyResumeCheckpoint(context.Background(), &unsupportedState)
@@ -466,11 +472,92 @@ func TestDeriveResumeBaseLifecycle(t *testing.T) {
 	}
 }
 
+func TestApplyResumeCheckpointSkipsWorkspaceMismatch(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-resume-workspace-mismatch", fixture.session)
+	spy := &checkpointStoreSpy{
+		latestResume: &agentsession.ResumeCheckpoint{
+			RunID:              "run-old",
+			WorkspaceKey:       "workspace://stale",
+			SessionID:          fixture.session.ID,
+			Turn:               1,
+			Phase:              "execute",
+			TranscriptRevision: int64(len(fixture.session.Messages)),
+			CompletionState:    "",
+		},
+	}
+	service := &Service{
+		checkpointStore:  spy,
+		events:           make(chan RuntimeEvent, 16),
+		runtimeSnapshots: make(map[string]RuntimeSnapshot),
+	}
+
+	service.applyResumeCheckpoint(context.Background(), &state)
+
+	if state.resumeNextBaseLifecycle != "" {
+		t.Fatalf("resumeNextBaseLifecycle = %q, want empty", state.resumeNextBaseLifecycle)
+	}
+	if strings.TrimSpace(state.pendingSystemReminder) != "" {
+		t.Fatalf("pendingSystemReminder = %q, want empty", state.pendingSystemReminder)
+	}
+	if len(collectRuntimeEvents(service.Events())) != 0 {
+		t.Fatal("expected no runtime events when workspace key mismatches")
+	}
+}
+
+func TestApplyResumeCheckpointSkipsTranscriptRevisionMismatch(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-resume-transcript-mismatch", fixture.session)
+	spy := &checkpointStoreSpy{
+		latestResume: &agentsession.ResumeCheckpoint{
+			RunID:              "run-old",
+			WorkspaceKey:       agentsession.WorkspacePathKey(fixture.session.Workdir),
+			SessionID:          fixture.session.ID,
+			Turn:               1,
+			Phase:              "execute",
+			TranscriptRevision: int64(len(fixture.session.Messages) + 3),
+			CompletionState:    "",
+		},
+	}
+	service := &Service{
+		checkpointStore:  spy,
+		events:           make(chan RuntimeEvent, 16),
+		runtimeSnapshots: make(map[string]RuntimeSnapshot),
+	}
+
+	service.applyResumeCheckpoint(context.Background(), &state)
+
+	if state.resumeNextBaseLifecycle != "" {
+		t.Fatalf("resumeNextBaseLifecycle = %q, want empty", state.resumeNextBaseLifecycle)
+	}
+	if strings.TrimSpace(state.pendingSystemReminder) != "" {
+		t.Fatalf("pendingSystemReminder = %q, want empty", state.pendingSystemReminder)
+	}
+	if len(collectRuntimeEvents(service.Events())) != 0 {
+		t.Fatal("expected no runtime events when transcript revision mismatches")
+	}
+}
+
 func TestServiceRunResumeVerifyClosureBootstrapsFirstTurn(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
+	seed, err := store.CreateSession(context.Background(), agentsession.CreateSessionInput{
+		ID:    "session-resume-verify",
+		Title: "resume verify seed",
+		Head: agentsession.SessionHead{
+			Provider: "openai",
+			Model:    manager.Get().CurrentModel,
+			Workdir:  manager.Get().Workdir,
+			TaskState: agentsession.TaskState{
+				VerificationProfile: agentsession.VerificationProfileTaskOnly,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
 	providerImpl := &scriptedProvider{
 		responses: []scriptedResponse{
 			{
@@ -486,11 +573,13 @@ func TestServiceRunResumeVerifyClosureBootstrapsFirstTurn(t *testing.T) {
 	}
 	resumeStore := &checkpointStoreSpy{
 		latestResume: &agentsession.ResumeCheckpoint{
-			RunID:           "run-old-verify",
-			SessionID:       "ignored-by-spy",
-			Turn:            2,
-			Phase:           "verify",
-			CompletionState: "completed",
+			RunID:              "run-old-verify",
+			WorkspaceKey:       agentsession.WorkspacePathKey(seed.Workdir),
+			SessionID:          seed.ID,
+			Turn:               2,
+			Phase:              "verify",
+			CompletionState:    "completed",
+			TranscriptRevision: int64(len(seed.Messages)),
 		},
 	}
 	service := NewWithFactory(
@@ -505,8 +594,9 @@ func TestServiceRunResumeVerifyClosureBootstrapsFirstTurn(t *testing.T) {
 	service.runtimeSnapshots = make(map[string]RuntimeSnapshot)
 
 	if err := service.Run(context.Background(), UserInput{
-		RunID: "run-resume-verify-first-turn",
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+		RunID:     "run-resume-verify-first-turn",
+		SessionID: seed.ID,
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

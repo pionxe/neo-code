@@ -3030,6 +3030,9 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventCompactError:                             runtimeEventCompactErrorHandler,
 	tuiservices.EventTokenUsage:                               runtimeEventTokenUsageHandler,
 	tuiservices.EventPhaseChanged:                             runtimeEventPhaseChangedHandler,
+	tuiservices.EventVerificationStarted:                      runtimeEventVerificationStartedHandler,
+	tuiservices.EventVerificationStageFinished:                runtimeEventVerificationStageFinishedHandler,
+	tuiservices.EventVerificationFinished:                     runtimeEventVerificationFinishedHandler,
 	tuiservices.EventVerificationCompleted:                    runtimeEventVerificationCompletedHandler,
 	tuiservices.EventVerificationFailed:                       runtimeEventVerificationFailedHandler,
 	tuiservices.EventAcceptanceDecided:                        runtimeEventAcceptanceDecidedHandler,
@@ -3522,6 +3525,75 @@ func runtimeEventPhaseChangedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	case "verify":
 		a.setRunProgress(0.82, "Verifying")
 	}
+	return false
+}
+
+// runtimeEventVerificationStartedHandler 处理验证流程开始事件并记录 completion gate 结果。
+func runtimeEventVerificationStartedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.VerificationStartedPayload)
+	if !ok {
+		return false
+	}
+	detail := "completion_gate=pass"
+	if !payload.CompletionPassed {
+		detail = "completion_gate=blocked"
+	}
+	if reason := strings.TrimSpace(payload.CompletionBlockedReason); reason != "" {
+		detail = detail + " (" + reason + ")"
+	}
+	a.appendActivity("verify", "Verification started", detail, false)
+	return false
+}
+
+// runtimeEventVerificationStageFinishedHandler 处理单个验证阶段完成事件并展示结果摘要。
+func runtimeEventVerificationStageFinishedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.VerificationStageFinishedPayload)
+	if !ok {
+		return false
+	}
+	stageName := strings.TrimSpace(payload.Name)
+	if stageName == "" {
+		stageName = "unknown_stage"
+	}
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	title := "Verification stage passed"
+	isError := false
+	if status != "pass" {
+		title = "Verification stage failed"
+		isError = true
+	}
+	detail := stageName
+	if summary := strings.TrimSpace(payload.Summary); summary != "" {
+		detail = detail + " | " + summary
+	} else if reason := strings.TrimSpace(payload.Reason); reason != "" {
+		detail = detail + " | " + reason
+	}
+	if class := strings.TrimSpace(payload.ErrorClass); class != "" {
+		detail = detail + " | class=" + class
+	}
+	a.appendActivity("verify", title, detail, isError)
+	return false
+}
+
+// runtimeEventVerificationFinishedHandler 处理验证流程结束事件并输出最终 acceptance 状态。
+func runtimeEventVerificationFinishedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.VerificationFinishedPayload)
+	if !ok {
+		return false
+	}
+	acceptanceStatus := strings.TrimSpace(payload.AcceptanceStatus)
+	if acceptanceStatus == "" {
+		acceptanceStatus = "unknown"
+	}
+	detail := "acceptance_status=" + acceptanceStatus
+	if reason := strings.TrimSpace(string(payload.StopReason)); reason != "" {
+		detail = detail + " | stop=" + reason
+	}
+	if class := strings.TrimSpace(payload.ErrorClass); class != "" {
+		detail = detail + " | class=" + class
+	}
+	isError := !strings.EqualFold(acceptanceStatus, "accepted")
+	a.appendActivity("verify", "Verification finished", detail, isError)
 	return false
 }
 
