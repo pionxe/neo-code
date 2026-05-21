@@ -1847,18 +1847,70 @@ func convertSessionMessages(messages []providertypes.Message) []gateway.SessionM
 	return converted
 }
 
+// convertRuntimePlanTodoItem 将 session 计划中的 legacy todo 项映射为 gateway 展示结构。
+func convertRuntimePlanTodoItem(item agentsession.TodoItem) gateway.PlanTodoItem {
+	required := false
+	if item.Required != nil {
+		required = *item.Required
+	}
+	return gateway.PlanTodoItem{
+		ID:            strings.TrimSpace(item.ID),
+		Content:       strings.TrimSpace(item.Content),
+		Status:        strings.TrimSpace(string(item.Status)),
+		Required:      required,
+		Artifacts:     append([]string(nil), item.Artifacts...),
+		FailureReason: strings.TrimSpace(item.FailureReason),
+		BlockedReason: strings.TrimSpace(string(item.BlockedReason)),
+		Revision:      item.Revision,
+	}
+}
+
+// convertRuntimePlanArtifact 将 runtime 当前计划快照映射为 gateway 公开契约。
+func convertRuntimePlanArtifact(plan *agentsession.PlanArtifact) *gateway.PlanArtifact {
+	if plan == nil {
+		return nil
+	}
+	converted := &gateway.PlanArtifact{
+		ID:       strings.TrimSpace(plan.ID),
+		Revision: plan.Revision,
+		Status:   strings.TrimSpace(string(plan.Status)),
+		Spec: gateway.PlanSpec{
+			Goal:          strings.TrimSpace(plan.Spec.Goal),
+			Steps:         append([]string(nil), plan.Spec.Steps...),
+			Constraints:   append([]string(nil), plan.Spec.Constraints...),
+			OpenQuestions: append([]string(nil), plan.Spec.OpenQuestions...),
+		},
+		Summary: gateway.PlanSummaryView{
+			Goal:          strings.TrimSpace(plan.Summary.Goal),
+			KeySteps:      append([]string(nil), plan.Summary.KeySteps...),
+			Constraints:   append([]string(nil), plan.Summary.Constraints...),
+			ActiveTodoIDs: append([]string(nil), plan.Summary.ActiveTodoIDs...),
+		},
+		CreatedAt: plan.CreatedAt,
+		UpdatedAt: plan.UpdatedAt,
+	}
+	if len(plan.Spec.Todos) > 0 {
+		converted.Spec.Todos = make([]gateway.PlanTodoItem, 0, len(plan.Spec.Todos))
+		for _, item := range plan.Spec.Todos {
+			converted.Spec.Todos = append(converted.Spec.Todos, convertRuntimePlanTodoItem(item))
+		}
+	}
+	return converted
+}
+
 // convertRuntimeSessionToGatewaySession 将 runtime 会话结构映射为 gateway 契约返回值。
 func convertRuntimeSessionToGatewaySession(session agentsession.Session) gateway.Session {
 	return gateway.Session{
-		ID:        strings.TrimSpace(session.ID),
-		Title:     strings.TrimSpace(session.Title),
-		CreatedAt: session.CreatedAt,
-		UpdatedAt: session.UpdatedAt,
-		Workdir:   strings.TrimSpace(session.Workdir),
-		Provider:  strings.TrimSpace(session.Provider),
-		Model:     strings.TrimSpace(session.Model),
-		AgentMode: strings.TrimSpace(string(session.AgentMode)),
-		Messages:  convertSessionMessages(session.Messages),
+		ID:          strings.TrimSpace(session.ID),
+		Title:       strings.TrimSpace(session.Title),
+		CreatedAt:   session.CreatedAt,
+		UpdatedAt:   session.UpdatedAt,
+		Workdir:     strings.TrimSpace(session.Workdir),
+		Provider:    strings.TrimSpace(session.Provider),
+		Model:       strings.TrimSpace(session.Model),
+		AgentMode:   strings.TrimSpace(string(session.AgentMode)),
+		CurrentPlan: convertRuntimePlanArtifact(session.CurrentPlan),
+		Messages:    convertSessionMessages(session.Messages),
 	}
 }
 

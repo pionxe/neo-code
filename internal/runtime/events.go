@@ -5,6 +5,7 @@ import (
 
 	"neo-code/internal/runtime/acceptgate"
 	"neo-code/internal/runtime/controlplane"
+	agentsession "neo-code/internal/session"
 )
 
 // EventType 标识 runtime 事件类型。
@@ -99,6 +100,12 @@ type AcceptanceDecidedPayload struct {
 	Summary      string                   `json:"summary,omitempty"`
 	ContinueHint string                   `json:"continue_hint,omitempty"`
 	Results      []acceptgate.CheckResult `json:"results,omitempty"`
+}
+
+// PlanUpdatedPayload 描述 plan 模式生成或改写后的结构化计划快照。
+type PlanUpdatedPayload struct {
+	CurrentPlan *agentsession.PlanArtifact `json:"current_plan"`
+	DisplayText string                     `json:"display_text,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账预留负载。
@@ -320,6 +327,8 @@ const (
 	EventThinkingDelta EventType = "thinking_delta"
 	// EventAgentDone 表示 assistant 正常结束。
 	EventAgentDone EventType = "agent_done"
+	// EventPlanUpdated 表示当前结构化计划已生成或更新。
+	EventPlanUpdated EventType = "plan_updated"
 	// EventToolStart 表示工具开始执行。
 	EventToolStart EventType = "tool_start"
 	// EventToolResult 表示工具执行完成并写回会话。

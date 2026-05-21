@@ -680,6 +680,46 @@ type SessionMessage struct {
 	IsError bool `json:"is_error,omitempty"`
 }
 
+// PlanTodoItem 表示计划正文中保留的 legacy todo 项，仅用于展示和兼容读取。
+type PlanTodoItem struct {
+	ID            string   `json:"id"`
+	Content       string   `json:"content"`
+	Status        string   `json:"status,omitempty"`
+	Required      bool     `json:"required,omitempty"`
+	Artifacts     []string `json:"artifacts,omitempty"`
+	FailureReason string   `json:"failure_reason,omitempty"`
+	BlockedReason string   `json:"blocked_reason,omitempty"`
+	Revision      int64    `json:"revision,omitempty"`
+}
+
+// PlanSpec 表示当前完整计划的公开结构。
+type PlanSpec struct {
+	Goal          string         `json:"goal"`
+	Steps         []string       `json:"steps,omitempty"`
+	Constraints   []string       `json:"constraints,omitempty"`
+	Todos         []PlanTodoItem `json:"todos,omitempty"`
+	OpenQuestions []string       `json:"open_questions,omitempty"`
+}
+
+// PlanSummaryView 表示完整计划的紧凑摘要。
+type PlanSummaryView struct {
+	Goal          string   `json:"goal"`
+	KeySteps      []string `json:"key_steps,omitempty"`
+	Constraints   []string `json:"constraints,omitempty"`
+	ActiveTodoIDs []string `json:"active_todo_ids,omitempty"`
+}
+
+// PlanArtifact 表示会话当前计划快照。
+type PlanArtifact struct {
+	ID        string          `json:"id"`
+	Revision  int             `json:"revision"`
+	Status    string          `json:"status"`
+	Spec      PlanSpec        `json:"spec"`
+	Summary   PlanSummaryView `json:"summary"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
 // Session 表示网关视角的会话详情。
 type Session struct {
 	// ID 是会话标识。
@@ -698,6 +738,8 @@ type Session struct {
 	Model string `json:"model,omitempty"`
 	// AgentMode 是会话当前 Agent 工作模式。
 	AgentMode string `json:"agent_mode,omitempty"`
+	// CurrentPlan 是会话当前结构化计划快照。
+	CurrentPlan *PlanArtifact `json:"current_plan,omitempty"`
 	// Messages 是会话消息快照。
 	Messages []SessionMessage `json:"messages,omitempty"`
 }

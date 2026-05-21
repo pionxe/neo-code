@@ -1471,6 +1471,44 @@ func TestConvertGatewayRunInputAndSessionHelpers(t *testing.T) {
 	}
 }
 
+func TestConvertRuntimeSessionToGatewaySessionIncludesCurrentPlan(t *testing.T) {
+	required := true
+	session := agentsession.New("plan session")
+	session.AgentMode = agentsession.AgentModePlan
+	session.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-1",
+		Revision: 2,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:          "修复 web plan 展示",
+			Steps:         []string{"发事件", "渲染卡片"},
+			Constraints:   []string{"不创建执行 todo"},
+			OpenQuestions: []string{"是否需要审批按钮"},
+			Todos: []agentsession.TodoItem{{
+				ID:       "todo-1",
+				Content:  "legacy todo",
+				Status:   agentsession.TodoStatusPending,
+				Required: &required,
+			}},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:     "修复 web plan 展示",
+			KeySteps: []string{"发事件"},
+		},
+	}
+
+	converted := convertRuntimeSessionToGatewaySession(session)
+	if converted.CurrentPlan == nil {
+		t.Fatal("expected current_plan to be present")
+	}
+	if converted.CurrentPlan.ID != "plan-1" || converted.CurrentPlan.Spec.Goal != "修复 web plan 展示" {
+		t.Fatalf("unexpected current_plan: %+v", converted.CurrentPlan)
+	}
+	if len(converted.CurrentPlan.Spec.Todos) != 1 || !converted.CurrentPlan.Spec.Todos[0].Required {
+		t.Fatalf("unexpected plan todos: %+v", converted.CurrentPlan.Spec.Todos)
+	}
+}
+
 func TestGatewayRuntimePortBridgeDeleteSession(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		store := &bridgeSessionStoreStub{

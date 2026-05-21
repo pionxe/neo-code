@@ -34,7 +34,7 @@ func (planModeContextSource) Sections(ctx context.Context, input BuildInput) ([]
 		if stage == "plan" {
 			noPlanHint := promptSection{
 				Title:   "Current Plan",
-				Content: "status: none\n\nNo current plan exists. You must create one by outputting a `plan_spec` + `summary_candidate` JSON before this turn ends.",
+				Content: "status: none\n\nNo current plan exists. You must create one before this turn ends by outputting a visible Markdown plan, followed by one compact `plan_spec` + `summary_candidate` JSON object inside an HTML comment.",
 			}
 			sections = append(sections, noPlanHint)
 		}

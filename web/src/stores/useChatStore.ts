@@ -1,316 +1,384 @@
-import { create } from 'zustand'
+import { create } from "zustand";
 import {
   type TokenUsage,
   type PermissionRequestPayload,
   type AcceptanceDecidedPayload,
   type PendingUserQuestionSnapshot,
-} from '@/api/protocol'
-import { resetEventBridgeCursors } from '@/utils/eventBridge'
+  type PlanArtifact,
+} from "@/api/protocol";
+import { resetEventBridgeCursors } from "@/utils/eventBridge";
 
 /** 聊天消息 */
 export interface ChatMessage {
-  id: string
+  id: string;
   /** 消息角色：user / assistant / tool */
-  role: 'user' | 'assistant' | 'tool'
+  role: "user" | "assistant" | "tool";
   /** 消息类型：text / thinking / tool_call / code / welcome / system / acceptance */
-  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system' | 'acceptance'
+  type:
+    | "text"
+    | "thinking"
+    | "tool_call"
+    | "code"
+    | "welcome"
+    | "system"
+    | "acceptance"
+    | "plan";
   /** 文本内容 */
-  content: string
+  content: string;
   /** 工具调用信息 */
-  toolName?: string
-  toolCallId?: string
-  toolArgs?: string
-  toolResult?: string
-  toolStatus?: 'running' | 'done' | 'error'
+  toolName?: string;
+  toolCallId?: string;
+  toolArgs?: string;
+  toolResult?: string;
+  toolStatus?: "running" | "done" | "error";
   /** Acceptance 决策数据，仅 `type === 'acceptance'` 时使用 */
-  acceptanceData?: AcceptanceDecidedPayload
+  acceptanceData?: AcceptanceDecidedPayload;
+  /** Plan 数据，仅 `type === 'plan'` 时使用 */
+  planData?: PlanArtifact;
   /** Thinking 附加数据，仅 `type === 'thinking'` 时使用 */
-  thinkingData?: { collapsed: boolean }
+  thinkingData?: { collapsed: boolean };
   /** 代码语言 */
-  language?: string
+  language?: string;
   /** 代码文件名 */
-  filename?: string
+  filename?: string;
   /** 时间戳 */
-  timestamp: number
+  timestamp: number;
   /** 是否正在流式生成 */
-  streaming?: boolean
+  streaming?: boolean;
 }
 
 /** 聊天状态 */
 interface ChatState {
   /** 消息列表 */
-  messages: ChatMessage[]
+  messages: ChatMessage[];
   /** 是否正在生成 */
-  isGenerating: boolean
+  isGenerating: boolean;
   /** 当前会话是否正在执行上下文压缩 */
-  isCompacting: boolean
+  isCompacting: boolean;
   /** 当前压缩触发模式，用于展示压缩来源 */
-  compactMode: string
+  compactMode: string;
   /** 压缩期间展示给用户的持续状态文案 */
-  compactMessage: string
+  compactMessage: string;
   /** 当前 AI 回复缓冲 ID，用于流式追加 */
-  streamingMessageId: string
+  streamingMessageId: string;
   /** 当前 thinking 流式消息 ID */
-  streamingThinkingMessageId: string
+  streamingThinkingMessageId: string;
   /** 权限请求列表 */
-  permissionRequests: PermissionRequestPayload[]
+  permissionRequests: PermissionRequestPayload[];
   /** 当前待回答 ask_user 问题 */
-  pendingUserQuestion: PendingUserQuestionSnapshot | null
+  pendingUserQuestion: PendingUserQuestionSnapshot | null;
   /** Token 用量 */
-  tokenUsage: TokenUsage | null
+  tokenUsage: TokenUsage | null;
   /** 当前运行阶段 */
-  phase: string
+  phase: string;
   /** 停止原因 */
-  stopReason: string
+  stopReason: string;
   /** 会话切换中标记，eventBridge 据此丢弃中间窗口期事件 */
-  isTransitioning: boolean
+  isTransitioning: boolean;
   /** 当前 Agent 工作模式 */
-  agentMode: 'build' | 'plan'
+  agentMode: "build" | "plan";
   /** Build 模式下的权限审批策略 */
-  permissionMode: 'default' | 'bypass'
+  permissionMode: "default" | "bypass";
 
   // Actions
-  addMessage: (msg: ChatMessage) => void
-  setMessages: (messages: ChatMessage[]) => void
-  removeMessage: (id: string) => void
+  addMessage: (msg: ChatMessage) => void;
+  setMessages: (messages: ChatMessage[]) => void;
+  removeMessage: (id: string) => void;
   /** 从指定消息开始截断 messages，并清理生成相关状态 */
-  truncateFromMessage: (messageId: string) => void
-  appendChunk: (text: string) => void
+  truncateFromMessage: (messageId: string) => void;
+  appendChunk: (text: string) => void;
   /** 原子操作：创建流式 assistant 消息并设置 streamingMessageId */
-  startStreamingMessage: () => string
-  finalizeMessage: (id: string, content: string) => void
+  startStreamingMessage: () => string;
+  finalizeMessage: (id: string, content: string) => void;
   /** 创建流式 thinking 消息并设置 streamingThinkingMessageId */
-  startThinkingMessage: () => string
+  startThinkingMessage: () => string;
   /** 追加 thinking 文本到当前流式消息 */
-  appendThinkingChunk: (text: string) => void
+  appendThinkingChunk: (text: string) => void;
   /** 终结 thinking 消息并清空 streamingThinkingMessageId */
-  finalizeThinkingMessage: () => void
-  updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => boolean
-  appendToolOutput: (toolCallId: string, chunk: string) => void
+  finalizeThinkingMessage: () => void;
+  updateToolCall: (
+    toolCallId: string,
+    result: string,
+    status: ChatMessage["toolStatus"],
+  ) => boolean;
+  appendToolOutput: (toolCallId: string, chunk: string) => void;
+  upsertPlanMessage: (plan: PlanArtifact, displayText?: string) => void;
   /** 将所有运行中的工具条目标记为指定状态，用于终止事件兜底收敛 UI */
-  finalizeRunningToolCalls: (status: 'done' | 'error') => void
-  setGenerating: (v: boolean) => void
-  startCompacting: (mode?: string, message?: string) => void
-  finishCompacting: () => void
-  setStreamingMessageId: (id: string) => void
+  finalizeRunningToolCalls: (status: "done" | "error") => void;
+  setGenerating: (v: boolean) => void;
+  startCompacting: (mode?: string, message?: string) => void;
+  finishCompacting: () => void;
+  setStreamingMessageId: (id: string) => void;
   /** 重置生成状态：终结当前流式消息并清除 isGenerating */
-  resetGeneratingState: () => void
-  setTransitioning: (v: boolean) => void
-  addPermissionRequest: (req: PermissionRequestPayload) => void
-  removePermissionRequest: (requestId: string) => void
-  setPendingUserQuestion: (question: PendingUserQuestionSnapshot | null) => void
-  clearPendingUserQuestion: (requestId?: string) => void
-  updateTokenUsage: (usage: TokenUsage) => void
-  setPhase: (phase: string) => void
-  setStopReason: (reason: string) => void
-  clearMessages: () => void
-  addSystemMessage: (content: string) => void
-  setAgentMode: (mode: 'build' | 'plan') => void
-  setPermissionMode: (mode: 'default' | 'bypass') => void
+  resetGeneratingState: () => void;
+  setTransitioning: (v: boolean) => void;
+  addPermissionRequest: (req: PermissionRequestPayload) => void;
+  removePermissionRequest: (requestId: string) => void;
+  setPendingUserQuestion: (
+    question: PendingUserQuestionSnapshot | null,
+  ) => void;
+  clearPendingUserQuestion: (requestId?: string) => void;
+  updateTokenUsage: (usage: TokenUsage) => void;
+  setPhase: (phase: string) => void;
+  setStopReason: (reason: string) => void;
+  clearMessages: () => void;
+  addSystemMessage: (content: string) => void;
+  setAgentMode: (mode: "build" | "plan") => void;
+  setPermissionMode: (mode: "default" | "bypass") => void;
 }
 
-let msgIdCounter = 0
+let msgIdCounter = 0;
 function nextMsgId(): string {
-  return `msg_${++msgIdCounter}_${Date.now()}`
+  return `msg_${++msgIdCounter}_${Date.now()}`;
 }
 
 /** 创建用户消息 */
 export function createUserMessage(text: string): ChatMessage {
   return {
     id: nextMsgId(),
-    role: 'user',
-    type: 'text',
+    role: "user",
+    type: "text",
     content: text,
     timestamp: Date.now(),
-  }
+  };
 }
 
 /** 创建 AI 流式消息 */
 export function createAssistantMessage(): ChatMessage {
   return {
     id: nextMsgId(),
-    role: 'assistant',
-    type: 'text',
-    content: '',
+    role: "assistant",
+    type: "text",
+    content: "",
     timestamp: Date.now(),
     streaming: true,
-  }
+  };
 }
 
 /** 创建系统消息，用于展示 slash command 执行结果 */
 export function createSystemMessage(text: string): ChatMessage {
   return {
     id: nextMsgId(),
-    role: 'assistant',
-    type: 'system',
+    role: "assistant",
+    type: "system",
     content: text,
     timestamp: Date.now(),
-  }
+  };
 }
 
 /** 创建工具调用消息 */
-export function createToolCallMessage(toolName: string, toolCallId: string, args: string): ChatMessage {
+export function createToolCallMessage(
+  toolName: string,
+  toolCallId: string,
+  args: string,
+): ChatMessage {
   return {
     id: nextMsgId(),
-    role: 'tool',
-    type: 'tool_call',
-    content: '',
+    role: "tool",
+    type: "tool_call",
+    content: "",
     toolName,
     toolCallId,
     toolArgs: args,
-    toolStatus: 'running',
+    toolStatus: "running",
     timestamp: Date.now(),
-  }
+  };
 }
 
 /** 创建 thinking 流式消息 */
 function createThinkingMessage(): ChatMessage {
   return {
     id: nextMsgId(),
-    role: 'assistant',
-    type: 'thinking',
-    content: '',
+    role: "assistant",
+    type: "thinking",
+    content: "",
     timestamp: Date.now(),
     streaming: true,
     thinkingData: { collapsed: false },
-  }
+  };
 }
 
 export const useChatStore = create<ChatState>((set) => ({
   messages: [],
   isGenerating: false,
   isCompacting: false,
-  compactMode: '',
-  compactMessage: '',
-  streamingMessageId: '',
-  streamingThinkingMessageId: '',
+  compactMode: "",
+  compactMessage: "",
+  streamingMessageId: "",
+  streamingThinkingMessageId: "",
   permissionRequests: [],
   pendingUserQuestion: null,
   tokenUsage: null,
-  phase: '',
-  stopReason: '',
+  phase: "",
+  stopReason: "",
   isTransitioning: false,
-  agentMode: 'build',
-  permissionMode: 'default',
+  agentMode: "build",
+  permissionMode: "default",
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   setMessages: (messages) => set({ messages: [...messages] }),
-  removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
+  removeMessage: (id) =>
+    set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
 
   truncateFromMessage: (messageId) =>
     set((s) => {
-      const idx = s.messages.findIndex((m) => m.id === messageId)
-      if (idx === -1) return s
+      const idx = s.messages.findIndex((m) => m.id === messageId);
+      if (idx === -1) return s;
       return {
         messages: s.messages.slice(0, idx),
-        streamingMessageId: '',
-        streamingThinkingMessageId: '',
+        streamingMessageId: "",
+        streamingThinkingMessageId: "",
         isGenerating: false,
         isCompacting: false,
-        compactMode: '',
-        compactMessage: '',
+        compactMode: "",
+        compactMessage: "",
         permissionRequests: [],
         pendingUserQuestion: null,
-        phase: '',
-        stopReason: '',
-      }
+        phase: "",
+        stopReason: "",
+      };
     }),
 
   appendChunk: (text) =>
     set((s) => {
-      if (!s.streamingMessageId) return s
+      if (!s.streamingMessageId) return s;
       return {
         messages: s.messages.map((m) =>
-          m.id === s.streamingMessageId ? { ...m, content: m.content + text } : m
+          m.id === s.streamingMessageId
+            ? { ...m, content: m.content + text }
+            : m,
         ),
-      }
+      };
     }),
 
   /** 原子操作：创建消息并设置 streamingMessageId，避免竞态 */
   startStreamingMessage: () => {
-    const msg = createAssistantMessage()
+    const msg = createAssistantMessage();
     set((s) => ({
       messages: [...s.messages, msg],
       streamingMessageId: msg.id,
-    }))
-    return msg.id
+    }));
+    return msg.id;
   },
 
   /** 仅当 id 匹配当前 streamingMessageId 时才清空 */
   finalizeMessage: (id, content) =>
     set((s) => ({
       messages: s.messages.map((m) =>
-        m.id === id ? { ...m, content, streaming: false } : m
+        m.id === id ? { ...m, content, streaming: false } : m,
       ),
-      streamingMessageId: s.streamingMessageId === id ? '' : s.streamingMessageId,
+      streamingMessageId:
+        s.streamingMessageId === id ? "" : s.streamingMessageId,
     })),
 
   startThinkingMessage: () => {
-    const msg = createThinkingMessage()
+    const msg = createThinkingMessage();
     set((s) => ({
       messages: [...s.messages, msg],
       streamingThinkingMessageId: msg.id,
-    }))
-    return msg.id
+    }));
+    return msg.id;
   },
 
   appendThinkingChunk: (text) =>
     set((s) => {
-      if (!s.streamingThinkingMessageId) return s
+      if (!s.streamingThinkingMessageId) return s;
       return {
         messages: s.messages.map((m) =>
-          m.id === s.streamingThinkingMessageId ? { ...m, content: m.content + text } : m
+          m.id === s.streamingThinkingMessageId
+            ? { ...m, content: m.content + text }
+            : m,
         ),
-      }
+      };
     }),
 
   finalizeThinkingMessage: () =>
     set((s) => {
-      if (!s.streamingThinkingMessageId) return s
+      if (!s.streamingThinkingMessageId) return s;
       return {
         messages: s.messages.map((m) =>
           m.id === s.streamingThinkingMessageId
             ? { ...m, streaming: false, thinkingData: { collapsed: true } }
-            : m
+            : m,
         ),
-        streamingThinkingMessageId: '',
-      }
+        streamingThinkingMessageId: "",
+      };
     }),
 
   updateToolCall: (toolCallId, result, status) => {
-    let matched = false
+    let matched = false;
     set((s) => ({
       messages: s.messages.map((m) => {
         if (m.toolCallId === toolCallId) {
-          matched = true
-          return { ...m, toolResult: result, toolStatus: status }
+          matched = true;
+          return { ...m, toolResult: result, toolStatus: status };
         }
-        return m
+        return m;
       }),
-    }))
-    return matched
+    }));
+    return matched;
   },
 
   appendToolOutput: (toolCallId, chunk) =>
     set((s) => ({
       messages: s.messages.map((m) =>
         m.toolCallId === toolCallId
-          ? { ...m, toolResult: (m.toolResult ?? '') + chunk }
-          : m
+          ? { ...m, toolResult: (m.toolResult ?? "") + chunk }
+          : m,
       ),
     })),
+
+  upsertPlanMessage: (plan, displayText = "") =>
+    set((s) => {
+      const planID = plan.id?.trim();
+      const content =
+        displayText.trim() || plan.spec?.goal || plan.summary?.goal || "";
+      let matched = false;
+      const messages = s.messages.map((m) => {
+        if (m.type !== "plan") return m;
+        const samePlanRevision =
+          planID &&
+          m.planData?.id === planID &&
+          m.planData?.revision === plan.revision;
+        if (!samePlanRevision) return m;
+        matched = true;
+        return {
+          ...m,
+          content,
+          planData: plan,
+          streaming: false,
+        };
+      });
+      if (matched) return { messages };
+      return {
+        messages: [
+          ...messages,
+          {
+            id: `plan_${plan.id || Date.now()}_${plan.revision || 0}`,
+            role: "assistant" as const,
+            type: "plan" as const,
+            content,
+            planData: plan,
+            timestamp: Date.now(),
+          },
+        ],
+      };
+    }),
 
   finalizeRunningToolCalls: (status) =>
     set((s) => ({
       messages: s.messages.map((m) =>
-        m.type === 'tool_call' && m.toolStatus === 'running'
+        m.type === "tool_call" && m.toolStatus === "running"
           ? { ...m, toolStatus: status }
-          : m
+          : m,
       ),
     })),
 
   setGenerating: (isGenerating) => set({ isGenerating }),
-  startCompacting: (compactMode = 'manual', compactMessage = 'Compacting context...') =>
+  startCompacting: (
+    compactMode = "manual",
+    compactMessage = "Compacting context...",
+  ) =>
     set({
       isCompacting: true,
       compactMode,
@@ -319,36 +387,36 @@ export const useChatStore = create<ChatState>((set) => ({
   finishCompacting: () =>
     set({
       isCompacting: false,
-      compactMode: '',
-      compactMessage: '',
+      compactMode: "",
+      compactMessage: "",
     }),
   setStreamingMessageId: (streamingMessageId) => set({ streamingMessageId }),
 
   /** 重置生成状态：终结当前流式消息并清除 isGenerating */
   resetGeneratingState: () =>
     set((s) => {
-      let msgs = s.messages
+      let msgs = s.messages;
       if (s.streamingMessageId) {
         msgs = msgs.map((m) =>
-          m.id === s.streamingMessageId ? { ...m, streaming: false } : m
-        )
+          m.id === s.streamingMessageId ? { ...m, streaming: false } : m,
+        );
       }
       if (s.streamingThinkingMessageId) {
         msgs = msgs.map((m) =>
           m.id === s.streamingThinkingMessageId
             ? { ...m, streaming: false, thinkingData: { collapsed: true } }
-            : m
-        )
+            : m,
+        );
       }
       return {
         messages: msgs,
-        streamingMessageId: '',
-        streamingThinkingMessageId: '',
+        streamingMessageId: "",
+        streamingThinkingMessageId: "",
         isGenerating: false,
         isCompacting: false,
-        compactMode: '',
-        compactMessage: '',
-      }
+        compactMode: "",
+        compactMessage: "",
+      };
     }),
 
   setTransitioning: (isTransitioning) => set({ isTransitioning }),
@@ -358,24 +426,29 @@ export const useChatStore = create<ChatState>((set) => ({
 
   removePermissionRequest: (requestId) =>
     set((s) => ({
-      permissionRequests: s.permissionRequests.filter((r) => r.request_id !== requestId),
+      permissionRequests: s.permissionRequests.filter(
+        (r) => r.request_id !== requestId,
+      ),
     })),
 
-  setPendingUserQuestion: (question) => set({
-    pendingUserQuestion: question
-      ? {
-          ...question,
-          options: Array.isArray(question.options) ? [...question.options] : undefined,
-        }
-      : null,
-  }),
+  setPendingUserQuestion: (question) =>
+    set({
+      pendingUserQuestion: question
+        ? {
+            ...question,
+            options: Array.isArray(question.options)
+              ? [...question.options]
+              : undefined,
+          }
+        : null,
+    }),
 
   clearPendingUserQuestion: (requestId) =>
     set((s) => {
-      if (!s.pendingUserQuestion) return s
-      if (!requestId) return { pendingUserQuestion: null }
-      if (s.pendingUserQuestion.request_id !== requestId) return s
-      return { pendingUserQuestion: null }
+      if (!s.pendingUserQuestion) return s;
+      if (!requestId) return { pendingUserQuestion: null };
+      if (s.pendingUserQuestion.request_id !== requestId) return s;
+      return { pendingUserQuestion: null };
     }),
 
   updateTokenUsage: (tokenUsage) => set({ tokenUsage }),
@@ -390,23 +463,23 @@ export const useChatStore = create<ChatState>((set) => ({
 
   /** 清理全部聊天状态，并重置 eventBridge 游标，避免跨会话泄漏 */
   clearMessages: () => {
-    resetEventBridgeCursors()
+    resetEventBridgeCursors();
     set({
       messages: [],
-      streamingMessageId: '',
-      streamingThinkingMessageId: '',
+      streamingMessageId: "",
+      streamingThinkingMessageId: "",
       isGenerating: false,
       isCompacting: false,
-      compactMode: '',
-      compactMessage: '',
+      compactMode: "",
+      compactMessage: "",
       permissionRequests: [],
       pendingUserQuestion: null,
       tokenUsage: null,
-      phase: '',
-      stopReason: '',
+      phase: "",
+      stopReason: "",
       isTransitioning: false,
-      agentMode: 'build',
-      permissionMode: 'default',
-    })
+      agentMode: "build",
+      permissionMode: "default",
+    });
   },
-}))
+}));

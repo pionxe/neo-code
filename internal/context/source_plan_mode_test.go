@@ -50,6 +50,37 @@ func TestPlanModeSectionsReturnsWithoutPlanWhenNil(t *testing.T) {
 	}
 }
 
+func TestPlanModeSectionsNoCurrentPlanUsesHTMLCommentContract(t *testing.T) {
+	t.Parallel()
+
+	source := planModeContextSource{}
+	sections, err := source.Sections(context.Background(), BuildInput{
+		AgentMode:   agentsession.AgentModePlan,
+		PlanStage:   "plan",
+		CurrentPlan: nil,
+	})
+	if err != nil {
+		t.Fatalf("Sections() error = %v", err)
+	}
+	var currentPlanContent string
+	for _, section := range sections {
+		if section.Title == "Current Plan" {
+			currentPlanContent = section.Content
+			break
+		}
+	}
+	if currentPlanContent == "" {
+		t.Fatal("expected Current Plan section when plan stage has no current plan")
+	}
+	if !strings.Contains(currentPlanContent, "visible Markdown plan") ||
+		!strings.Contains(currentPlanContent, "inside an HTML comment") {
+		t.Fatalf("Current Plan hint = %q, want Markdown plus HTML comment JSON contract", currentPlanContent)
+	}
+	if strings.Contains(currentPlanContent, "outputting a `plan_spec` + `summary_candidate` JSON") {
+		t.Fatalf("Current Plan hint should not use old JSON-only wording: %q", currentPlanContent)
+	}
+}
+
 func TestPlanModeSectionsContextError(t *testing.T) {
 	t.Parallel()
 

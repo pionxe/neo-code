@@ -1,236 +1,329 @@
-import { create } from 'zustand'
-import { type GatewayAPI } from '@/api/gateway'
-import { type SessionSummary as APISessionSummary } from '@/api/protocol'
-import { useChatStore } from '@/stores/useChatStore'
-import { useUIStore } from '@/stores/useUIStore'
-import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
-import { parseDateTime } from '@/utils/format'
+import { create } from "zustand";
+import { type GatewayAPI } from "@/api/gateway";
+import {
+  type PlanArtifact,
+  type SessionSummary as APISessionSummary,
+} from "@/api/protocol";
+import { useChatStore } from "@/stores/useChatStore";
+import { useUIStore } from "@/stores/useUIStore";
+import { useRuntimeInsightStore } from "@/stores/useRuntimeInsightStore";
+import { parseDateTime } from "@/utils/format";
 
 /** 判断 sessionId 是否有效（非空且不是临时草稿前缀） */
 export function isValidSessionId(id: string): boolean {
-  return !!id && !id.startsWith('new_')
+  return !!id && !id.startsWith("new_");
 }
 
 /** 会话摘要（UI 层展示用） */
 export interface SessionSummary {
-  id: string
-  title: string
-  time: string
-  createdAt?: string
-  updatedAt?: string
+  id: string;
+  title: string;
+  time: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /** 项目分组 */
 export interface Project {
-  id: string
-  name: string
-  sessions: SessionSummary[]
+  id: string;
+  name: string;
+  sessions: SessionSummary[];
 }
 
 /** 会话状态 */
 interface SessionState {
   /** 项目列表 */
-  projects: Project[]
+  projects: Project[];
   /** 当前活跃会话 ID */
-  currentSessionId: string
+  currentSessionId: string;
   /** 当前活跃会话所在项目 ID */
-  currentProjectId: string
+  currentProjectId: string;
   /** 是否正在加载 */
-  loading: boolean
+  loading: boolean;
   /** 上一次 switchSession 的 abort controller */
-  _switchAbort: AbortController | null
+  _switchAbort: AbortController | null;
   /** 初始化时是否已完成 bindStream（避免 fetchSessions 和 initializeActiveSession 重复绑定） */
-  _initialBindDone: boolean
+  _initialBindDone: boolean;
 
   // Actions
-  setProjects: (projects: Project[]) => void
-  setCurrentSessionId: (id: string) => void
-  setCurrentProjectId: (id: string) => void
-  setLoading: (loading: boolean) => void
+  setProjects: (projects: Project[]) => void;
+  setCurrentSessionId: (id: string) => void;
+  setCurrentProjectId: (id: string) => void;
+  setLoading: (loading: boolean) => void;
   /** 从后端拉取会话列表并映射为项目分组 */
-  fetchSessions: (gatewayAPI: GatewayAPI, force?: boolean) => Promise<void>
+  fetchSessions: (gatewayAPI: GatewayAPI, force?: boolean) => Promise<void>;
   /** 切换到指定会话：清空消息 → 绑定流 → 加载历史消息 */
-  switchSession: (sessionId: string, gatewayAPI: GatewayAPI) => Promise<void>
+  switchSession: (sessionId: string, gatewayAPI: GatewayAPI) => Promise<void>;
   /** 创建新会话：清空消息，等待 run 成功后由事件回写真实 session_id */
-  createSession: () => void
+  createSession: () => void;
   /** 初始化当前活跃会话：如存在有效会话则绑定流 */
-  initializeActiveSession: (gatewayAPI: GatewayAPI) => Promise<void>
+  initializeActiveSession: (gatewayAPI: GatewayAPI) => Promise<void>;
   /** 准备新的聊天输入状态 */
-  prepareNewChat: () => void
+  prepareNewChat: () => void;
   /** 重置内部状态（工作区切换时调用，确保 fetchSessions 不使用过期数据） */
-  resetForWorkspaceSwitch: () => void
+  resetForWorkspaceSwitch: () => void;
   /** 从本地 projects 列表中移除一个 session（乐观更新） */
-  removeSessionLocally: (sessionId: string) => void
+  removeSessionLocally: (sessionId: string) => void;
 }
 
 /** 将后端扁平会话列表映射为项目分组结构 */
 function mapSessionsToProjects(apiSessions: APISessionSummary[]): Project[] {
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const yesterday = new Date(today.getTime() - 86400000)
-  const weekAgo = new Date(today.getTime() - 7 * 86400000)
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 86400000);
+  const weekAgo = new Date(today.getTime() - 7 * 86400000);
 
   const groups: Record<string, APISessionSummary[]> = {
-    '今天': [],
-    '昨天': [],
-    '最近7天': [],
-    '更早': [],
-  }
+    今天: [],
+    昨天: [],
+    最近7天: [],
+    更早: [],
+  };
 
   for (const s of apiSessions) {
-    const sessionTime = selectSessionDisplayTime(s)
+    const sessionTime = selectSessionDisplayTime(s);
     if (sessionTime >= today) {
-      groups['今天'].push(s)
+      groups["今天"].push(s);
     } else if (sessionTime >= yesterday) {
-      groups['昨天'].push(s)
+      groups["昨天"].push(s);
     } else if (sessionTime >= weekAgo) {
-      groups['最近7天'].push(s)
+      groups["最近7天"].push(s);
     } else {
-      groups['更早'].push(s)
+      groups["更早"].push(s);
     }
   }
 
-  const projects: Project[] = []
+  const projects: Project[] = [];
   for (const [name, sessions] of Object.entries(groups)) {
-    if (sessions.length === 0) continue
+    if (sessions.length === 0) continue;
     projects.push({
       id: `group_${name}`,
       name,
       sessions: sessions.map((s) => ({
         id: s.id,
-        title: s.title || '未命名会话',
+        title: s.title || "未命名会话",
         time: selectSessionDisplayTime(s).toISOString(),
         createdAt: s.created_at,
         updatedAt: s.updated_at,
       })),
-    })
+    });
   }
 
-  return projects
+  return projects;
 }
 
 /** 选择会话展示时间：优先取 created/updated 中较新的有效时间，规避单字段异常。 */
 function selectSessionDisplayTime(session: APISessionSummary): Date {
-  const created = parseDateTime(session.created_at)
-  const updated = parseDateTime(session.updated_at)
-  const createdValid = !isNaN(created.getTime())
-  const updatedValid = !isNaN(updated.getTime())
+  const created = parseDateTime(session.created_at);
+  const updated = parseDateTime(session.updated_at);
+  const createdValid = !isNaN(created.getTime());
+  const updatedValid = !isNaN(updated.getTime());
   if (createdValid && updatedValid) {
-    return updated.getTime() >= created.getTime() ? updated : created
+    return updated.getTime() >= created.getTime() ? updated : created;
   }
-  if (updatedValid) return updated
-  if (createdValid) return created
+  if (updatedValid) return updated;
+  if (createdValid) return created;
   // 当后端时间字段都无效时，不伪造“当前时间”，避免损坏记录冒充“刚刚更新”并扰乱排序。
-  return new Date(0)
+  return new Date(0);
 }
 
 export type BackendMessage = {
-  role: string
-  content: string
-  tool_calls?: Array<{ id: string; name: string; arguments: string }>
-  tool_call_id?: string
-  is_error?: boolean
-}
+  role: string;
+  content: string;
+  tool_calls?: Array<{ id: string; name: string; arguments: string }>;
+  tool_call_id?: string;
+  is_error?: boolean;
+};
+
+type BackendSessionData = {
+  messages?: BackendMessage[];
+  agent_mode?: string;
+  current_plan?: PlanArtifact;
+};
 
 /** 并发拉取 session 详情 + todos + runtime snapshot，并把后者写入对应 store。
  *  todos / runtime snapshot 失败用 .catch 兜底，不阻断主流程的 loadSession。 */
-export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId: string) {
+export async function loadSessionWithInsights(
+  gatewayAPI: GatewayAPI,
+  sessionId: string,
+) {
   const [sessionFrame, todosResult, runtimeSnapshotResult] = await Promise.all([
     gatewayAPI.loadSession(sessionId),
-    (gatewayAPI.listSessionTodos?.(sessionId) ?? Promise.resolve(null)).catch(() => null),
-    (gatewayAPI.getRuntimeSnapshot?.(sessionId) ?? Promise.resolve(null)).catch(() => null),
-  ])
-  const insightStore = useRuntimeInsightStore.getState()
+    (gatewayAPI.listSessionTodos?.(sessionId) ?? Promise.resolve(null)).catch(
+      () => null,
+    ),
+    (gatewayAPI.getRuntimeSnapshot?.(sessionId) ?? Promise.resolve(null)).catch(
+      () => null,
+    ),
+  ]);
+  const insightStore = useRuntimeInsightStore.getState();
   if (todosResult?.payload) {
-    insightStore.setTodoSnapshot(todosResult.payload)
+    insightStore.setTodoSnapshot(todosResult.payload);
   }
-  const pendingQuestion = runtimeSnapshotResult?.payload?.pending_user_question
+  const pendingQuestion = runtimeSnapshotResult?.payload?.pending_user_question;
   if (pendingQuestion) {
-    useChatStore.getState().setPendingUserQuestion(pendingQuestion)
+    useChatStore.getState().setPendingUserQuestion(pendingQuestion);
   } else {
-    useChatStore.getState().clearPendingUserQuestion()
+    useChatStore.getState().clearPendingUserQuestion();
   }
-  return sessionFrame
+  return sessionFrame;
 }
 
 /** isInternalHistoryMessage 识别仅供 runtime/provider 续跑使用、不能回放到 Web 聊天流的内部控制消息。 */
 function isInternalHistoryMessage(msg: BackendMessage): boolean {
-  const role = msg.role.trim().toLowerCase()
+  const role = msg.role.trim().toLowerCase();
   // 所有 system 角色消息仅供模型内部使用，不展示给用户
-  if (role === 'system') return true
-  if (role !== 'assistant') return false
+  if (role === "system") return true;
+  if (role !== "assistant") return false;
 
-  const content = msg.content.trim()
-  if (!content) return false
-  return /^<acceptance_continue\b[\s\S]*<\/acceptance_continue>$/.test(content)
+  const content = msg.content.trim();
+  if (!content) return false;
+  return /^<acceptance_continue\b[\s\S]*<\/acceptance_continue>$/.test(content);
 }
 
 /** 将后端历史消息映射为前端 ChatMessage 列表，正确合并 tool_result 回 tool_call */
-export function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType<typeof useChatStore.getState>['messages'][0]> {
-  let _idCounter = 0
+export function mapHistoryMessages(
+  backendMessages: BackendMessage[],
+): Array<ReturnType<typeof useChatStore.getState>["messages"][0]> {
+  let _idCounter = 0;
   // Phase 1: Collect tool results by tool_call_id
-  const toolResults = new Map<string, { content: string; isError: boolean }>()
+  const toolResults = new Map<string, { content: string; isError: boolean }>();
   for (const msg of backendMessages) {
-    if (isInternalHistoryMessage(msg)) continue
+    if (isInternalHistoryMessage(msg)) continue;
     if (msg.tool_call_id) {
-      toolResults.set(msg.tool_call_id, { content: msg.content, isError: !!msg.is_error })
+      toolResults.set(msg.tool_call_id, {
+        content: msg.content,
+        isError: !!msg.is_error,
+      });
     }
   }
 
   // Phase 2: Map messages, merging tool results into corresponding tool_calls
-  const result: Array<ReturnType<typeof useChatStore.getState>['messages'][0]> = []
+  const result: Array<ReturnType<typeof useChatStore.getState>["messages"][0]> =
+    [];
   for (const msg of backendMessages) {
-    if (isInternalHistoryMessage(msg)) continue
+    if (isInternalHistoryMessage(msg)) continue;
 
     // Skip bare tool result messages — they are merged into tool_call messages
-    if (msg.tool_call_id) continue
+    if (msg.tool_call_id) continue;
 
     if (msg.tool_calls && msg.tool_calls.length > 0) {
       // If assistant message also has text content, emit that first
-      if (msg.content && msg.role === 'assistant') {
+      if (msg.content && msg.role === "assistant") {
         result.push({
           id: `hist_${Date.now()}_${_idCounter++}`,
-          role: 'assistant',
-          type: 'text',
+          role: "assistant",
+          type: "text",
           content: msg.content,
           timestamp: Date.now(),
-        })
+        });
       }
       // Map each tool call, merging its result if available
       for (const tc of msg.tool_calls) {
-        const tr = toolResults.get(tc.id)
+        const tr = toolResults.get(tc.id);
         result.push({
           id: `hist_tc_${tc.id}_${_idCounter++}`,
-          role: 'tool',
-          type: 'tool_call',
-          content: '',
+          role: "tool",
+          type: "tool_call",
+          content: "",
           toolName: tc.name,
           toolCallId: tc.id,
           toolArgs: tc.arguments,
           toolResult: tr?.content,
-          toolStatus: tr ? (tr.isError ? 'error' as const : 'done' as const) : 'done' as const,
+          toolStatus: tr
+            ? tr.isError
+              ? ("error" as const)
+              : ("done" as const)
+            : ("done" as const),
           timestamp: Date.now(),
-        })
+        });
       }
     } else {
       result.push({
         id: `hist_${msg.role}_${Date.now()}_${_idCounter++}`,
-        role: (msg.role as 'user' | 'assistant' | 'tool') || 'assistant',
-        type: 'text',
+        role: (msg.role as "user" | "assistant" | "tool") || "assistant",
+        type: "text",
         content: msg.content,
         timestamp: Date.now(),
-      })
+      });
     }
   }
-  return result
+  return result;
 }
 
-let _latestCheckpointRestoreReloadSeq = 0
+function createHistoryPlanMessage(
+  plan: PlanArtifact,
+): ReturnType<typeof useChatStore.getState>["messages"][0] {
+  return {
+    id: `hist_plan_${plan.id}_${plan.revision}`,
+    role: "assistant",
+    type: "plan",
+    content: plan.spec?.goal || plan.summary?.goal || "",
+    planData: plan,
+    timestamp: Date.now(),
+  };
+}
+
+function isRenderedCurrentPlanMessage(
+  msg: BackendMessage,
+  plan: PlanArtifact,
+): boolean {
+  if (msg.role.trim().toLowerCase() !== "assistant") return false;
+  if (msg.tool_calls && msg.tool_calls.length > 0) return false;
+  const content = msg.content.trim();
+  const goal = plan.spec?.goal?.trim();
+  if (!content || !goal) return false;
+  return (
+    content.startsWith(`### 目标\n\n${goal}`) ||
+    content.startsWith(`### 目标\r\n\r\n${goal}`) ||
+    content.startsWith(`目标\n${goal}`) ||
+    content.startsWith(`目标\r\n${goal}`)
+  );
+}
+
+function mapSessionMessages(
+  sessionData: BackendSessionData,
+): Array<ReturnType<typeof useChatStore.getState>["messages"][0]> {
+  const plan = sessionData.current_plan;
+  const sourceMessages = sessionData.messages || [];
+  if (!plan) return mapHistoryMessages(sourceMessages);
+
+  const mapped: Array<ReturnType<typeof useChatStore.getState>["messages"][0]> =
+    [];
+  let pendingSegment: BackendMessage[] = [];
+  let insertedPlan = false;
+
+  const flushPendingSegment = () => {
+    if (pendingSegment.length === 0) return;
+    mapped.push(...mapHistoryMessages(pendingSegment));
+    pendingSegment = [];
+  };
+
+  for (const msg of sourceMessages) {
+    if (isRenderedCurrentPlanMessage(msg, plan)) {
+      flushPendingSegment();
+      if (!insertedPlan) {
+        mapped.push(createHistoryPlanMessage(plan));
+        insertedPlan = true;
+      }
+      continue;
+    }
+    pendingSegment.push(msg);
+  }
+  flushPendingSegment();
+
+  if (!insertedPlan) {
+    mapped.push(createHistoryPlanMessage(plan));
+  }
+  return mapped;
+}
+
+let _latestCheckpointRestoreReloadSeq = 0;
 
 /** beginCheckpointRestoreReloadSeq 申请一次 checkpoint 回退重载序号，用于丢弃过期重载结果。 */
 export function beginCheckpointRestoreReloadSeq(): number {
-  _latestCheckpointRestoreReloadSeq += 1
-  return _latestCheckpointRestoreReloadSeq
+  _latestCheckpointRestoreReloadSeq += 1;
+  return _latestCheckpointRestoreReloadSeq;
 }
 
 /** checkpoint 回退后全量重载会话状态，统一刷新消息、insight 与文件变更面板。 */
@@ -239,35 +332,41 @@ export async function reloadSessionAfterCheckpointRestore(
   sessionId: string,
   reloadSeq: number = beginCheckpointRestoreReloadSeq(),
 ): Promise<boolean> {
-  const normalizedSessionId = sessionId.trim()
-  if (!normalizedSessionId) return false
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) return false;
 
-  useUIStore.getState().clearFileChanges()
-  useChatStore.getState().clearMessages()
-  useRuntimeInsightStore.getState().reset()
+  useUIStore.getState().clearFileChanges();
+  useChatStore.getState().clearMessages();
+  useRuntimeInsightStore.getState().reset();
 
-  const sessionFrame = await loadSessionWithInsights(gatewayAPI, normalizedSessionId)
-  if (reloadSeq !== _latestCheckpointRestoreReloadSeq) return false
-  const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
+  const sessionFrame = await loadSessionWithInsights(
+    gatewayAPI,
+    normalizedSessionId,
+  );
+  if (reloadSeq !== _latestCheckpointRestoreReloadSeq) return false;
+  const sessionData = sessionFrame.payload as BackendSessionData;
 
-  if (sessionData.messages && sessionData.messages.length > 0) {
-    const mapped = mapHistoryMessages(sessionData.messages)
-    useChatStore.getState().setMessages(mapped)
+  if (
+    (sessionData.messages && sessionData.messages.length > 0) ||
+    sessionData.current_plan
+  ) {
+    const mapped = mapSessionMessages(sessionData);
+    useChatStore.getState().setMessages(mapped);
   }
 
-  const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
-  useChatStore.getState().setAgentMode(restoredMode)
-  return true
+  const restoredMode = sessionData.agent_mode === "plan" ? "plan" : "build";
+  useChatStore.getState().setAgentMode(restoredMode);
+  return true;
 }
 
-let _fetchSessionsPromise: Promise<void> | null = null
-let _fetchSessionsSeq = 0
-let _switchSessionSeq = 0
+let _fetchSessionsPromise: Promise<void> | null = null;
+let _fetchSessionsSeq = 0;
+let _switchSessionSeq = 0;
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   projects: [],
-  currentSessionId: '',
-  currentProjectId: '',
+  currentSessionId: "",
+  currentProjectId: "",
   loading: false,
   _switchAbort: null,
   _initialBindDone: false,
@@ -278,186 +377,238 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setLoading: (loading) => set({ loading }),
 
   switchSession: async (sessionId: string, gatewayAPI: GatewayAPI) => {
-    if (!sessionId) return
+    if (!sessionId) return;
 
     // 生成中拒绝切换会话
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('Cannot switch session while generating; stop the current run first.', 'info')
-      return
+      useUIStore
+        .getState()
+        .showToast(
+          "Cannot switch session while generating; stop the current run first.",
+          "info",
+        );
+      return;
     }
 
     // Abort previous switchSession if still in progress
-    const prevAbort = get()._switchAbort
+    const prevAbort = get()._switchAbort;
     if (prevAbort) {
-      prevAbort.abort()
+      prevAbort.abort();
     }
-    const switchSeq = ++_switchSessionSeq
-    const abortCtrl = new AbortController()
-    set({ _switchAbort: abortCtrl, loading: true })
+    const switchSeq = ++_switchSessionSeq;
+    const abortCtrl = new AbortController();
+    set({ _switchAbort: abortCtrl, loading: true });
 
-    const prevSessionId = get().currentSessionId
+    const prevSessionId = get().currentSessionId;
 
     try {
       // 1. Clear messages first, then enter transitioning state to keep event drop window effective
-      const chatStore = useChatStore.getState()
-      chatStore.clearMessages()
-      chatStore.setTransitioning(true)
-      useRuntimeInsightStore.getState().reset()
-      useUIStore.getState().clearCheckpointRollbackUndo()
+      const chatStore = useChatStore.getState();
+      chatStore.clearMessages();
+      chatStore.setTransitioning(true);
+      useRuntimeInsightStore.getState().reset();
+      useUIStore.getState().clearCheckpointRollbackUndo();
 
       // 2. Update session ID
-      set({ currentSessionId: sessionId })
+      set({ currentSessionId: sessionId });
 
       // 3. Bind stream (events will be discarded due to isTransitioning)
-      await gatewayAPI.bindStream({ session_id: sessionId, channel: 'all' })
-      if (abortCtrl.signal.aborted || switchSeq !== _switchSessionSeq || get()._switchAbort !== abortCtrl) return
+      await gatewayAPI.bindStream({ session_id: sessionId, channel: "all" });
+      if (
+        abortCtrl.signal.aborted ||
+        switchSeq !== _switchSessionSeq ||
+        get()._switchAbort !== abortCtrl
+      )
+        return;
 
       // 4. Load historical messages (concurrently fetch todos + runtime snapshot)
-      const sessionFrame = await loadSessionWithInsights(gatewayAPI, sessionId)
-      if (abortCtrl.signal.aborted || switchSeq !== _switchSessionSeq || get()._switchAbort !== abortCtrl) return
-      const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
+      const sessionFrame = await loadSessionWithInsights(gatewayAPI, sessionId);
+      if (
+        abortCtrl.signal.aborted ||
+        switchSeq !== _switchSessionSeq ||
+        get()._switchAbort !== abortCtrl
+      )
+        return;
+      const sessionData = sessionFrame.payload as BackendSessionData;
 
       // Check if this request was superseded
-      if (abortCtrl.signal.aborted || switchSeq !== _switchSessionSeq || get()._switchAbort !== abortCtrl) return
+      if (
+        abortCtrl.signal.aborted ||
+        switchSeq !== _switchSessionSeq ||
+        get()._switchAbort !== abortCtrl
+      )
+        return;
 
       // 5. Load messages and stop transitioning
-      if (sessionData.messages && sessionData.messages.length > 0) {
-        const mapped = mapHistoryMessages(sessionData.messages)
-        useChatStore.getState().setMessages(mapped)
+      if (
+        (sessionData.messages && sessionData.messages.length > 0) ||
+        sessionData.current_plan
+      ) {
+        const mapped = mapSessionMessages(sessionData);
+        useChatStore.getState().setMessages(mapped);
       }
       // 恢复会话的 agent_mode
-      const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
-      useChatStore.getState().setAgentMode(restoredMode)
-      chatStore.setTransitioning(false)
+      const restoredMode = sessionData.agent_mode === "plan" ? "plan" : "build";
+      useChatStore.getState().setAgentMode(restoredMode);
+      chatStore.setTransitioning(false);
     } catch (err) {
-      if (abortCtrl.signal.aborted || switchSeq !== _switchSessionSeq || get()._switchAbort !== abortCtrl) return
-      console.error('switchSession failed:', err)
+      if (
+        abortCtrl.signal.aborted ||
+        switchSeq !== _switchSessionSeq ||
+        get()._switchAbort !== abortCtrl
+      )
+        return;
+      console.error("switchSession failed:", err);
       // Revert to previous session and re-bind its stream
-      set({ currentSessionId: prevSessionId })
+      set({ currentSessionId: prevSessionId });
       if (isValidSessionId(prevSessionId)) {
-        gatewayAPI.bindStream({ session_id: prevSessionId, channel: 'all' }).catch(() => {})
+        gatewayAPI
+          .bindStream({ session_id: prevSessionId, channel: "all" })
+          .catch(() => {});
       }
-      useChatStore.getState().setTransitioning(false)
+      useChatStore.getState().setTransitioning(false);
     } finally {
       if (switchSeq === _switchSessionSeq && get()._switchAbort === abortCtrl) {
-        set({ loading: false, _switchAbort: null })
+        set({ loading: false, _switchAbort: null });
       }
     }
   },
 
   createSession: () => {
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('Cannot start a new session while generating; stop the current run first.', 'info')
-      return
+      useUIStore
+        .getState()
+        .showToast(
+          "Cannot start a new session while generating; stop the current run first.",
+          "info",
+        );
+      return;
     }
-    useChatStore.getState().clearMessages()
-    useRuntimeInsightStore.getState().reset()
-    useUIStore.getState().clearCheckpointRollbackUndo()
-    set({ currentSessionId: '', currentProjectId: '' })
+    useChatStore.getState().clearMessages();
+    useRuntimeInsightStore.getState().reset();
+    useUIStore.getState().clearCheckpointRollbackUndo();
+    set({ currentSessionId: "", currentProjectId: "" });
   },
 
   initializeActiveSession: async (gatewayAPI) => {
-    const state = get()
-    const sessionId = state.currentSessionId
+    const state = get();
+    const sessionId = state.currentSessionId;
     // fetchSessions already binds the first session, so skip if already bound
     if (isValidSessionId(sessionId) && !state._initialBindDone) {
       try {
-        await gatewayAPI.bindStream({ session_id: sessionId, channel: 'all' })
-        set({ _initialBindDone: true })
+        await gatewayAPI.bindStream({ session_id: sessionId, channel: "all" });
+        set({ _initialBindDone: true });
       } catch (err) {
-        console.error('initializeActiveSession bindStream failed:', err)
-        useUIStore.getState().showToast('Failed to bind event stream; real-time messages may not arrive.', 'error')
+        console.error("initializeActiveSession bindStream failed:", err);
+        useUIStore
+          .getState()
+          .showToast(
+            "Failed to bind event stream; real-time messages may not arrive.",
+            "error",
+          );
       }
     }
   },
 
   prepareNewChat: () => {
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('Cannot start a new session while generating; stop the current run first.', 'info')
-      return
+      useUIStore
+        .getState()
+        .showToast(
+          "Cannot start a new session while generating; stop the current run first.",
+          "info",
+        );
+      return;
     }
-    useChatStore.getState().clearMessages()
-    useRuntimeInsightStore.getState().reset()
-    useUIStore.getState().clearCheckpointRollbackUndo()
-    set({ currentSessionId: '', currentProjectId: '' })
+    useChatStore.getState().clearMessages();
+    useRuntimeInsightStore.getState().reset();
+    useUIStore.getState().clearCheckpointRollbackUndo();
+    set({ currentSessionId: "", currentProjectId: "" });
   },
 
   resetForWorkspaceSwitch: () => {
-    const currentAbort = get()._switchAbort
+    const currentAbort = get()._switchAbort;
     if (currentAbort) {
-      currentAbort.abort()
+      currentAbort.abort();
     }
-    _fetchSessionsPromise = null
-    _fetchSessionsSeq += 1
-    _switchSessionSeq += 1
-    set({ _initialBindDone: false, loading: false, _switchAbort: null })
+    _fetchSessionsPromise = null;
+    _fetchSessionsSeq += 1;
+    _switchSessionSeq += 1;
+    set({ _initialBindDone: false, loading: false, _switchAbort: null });
   },
 
   removeSessionLocally: (sessionId) => {
-    const projects = get().projects
-      .map((p) => ({ ...p, sessions: p.sessions.filter((s) => s.id !== sessionId) }))
-      .filter((p) => p.sessions.length > 0)
-    set({ projects })
+    const projects = get()
+      .projects.map((p) => ({
+        ...p,
+        sessions: p.sessions.filter((s) => s.id !== sessionId),
+      }))
+      .filter((p) => p.sessions.length > 0);
+    set({ projects });
   },
 
   fetchSessions: async (gatewayAPI, force) => {
     // 去重：若已有 fetch 在进行中，复用同一 promise（force 跳过去重）
-    if (!force && _fetchSessionsPromise) return _fetchSessionsPromise
+    if (!force && _fetchSessionsPromise) return _fetchSessionsPromise;
 
-    const requestSeq = ++_fetchSessionsSeq
+    const requestSeq = ++_fetchSessionsSeq;
     const fetchPromise = (async () => {
-      set({ loading: true })
+      set({ loading: true });
       try {
-        const result = await gatewayAPI.listSessions()
-        if (requestSeq !== _fetchSessionsSeq) return
-        const sessions = result.payload.sessions
-        const projects = mapSessionsToProjects(sessions)
-        set({ projects, loading: false })
+        const result = await gatewayAPI.listSessions();
+        if (requestSeq !== _fetchSessionsSeq) return;
+        const sessions = result.payload.sessions;
+        const projects = mapSessionsToProjects(sessions);
+        set({ projects, loading: false });
 
-        let state = get()
-        if (requestSeq !== _fetchSessionsSeq) return
-        const currentSessionVisible = isValidSessionId(state.currentSessionId) &&
-          sessions.some((session) => session.id === state.currentSessionId)
-        if (isValidSessionId(state.currentSessionId) && !currentSessionVisible) {
-          set({ currentSessionId: '', currentProjectId: '', _initialBindDone: false })
-          state = get()
-        }
+        const state = get();
+        if (requestSeq !== _fetchSessionsSeq) return;
         if (!isValidSessionId(state.currentSessionId) && sessions.length > 0) {
-          const firstSession = sessions[0]
-          set({ currentSessionId: firstSession.id })
+          const firstSession = sessions[0];
+          set({ currentSessionId: firstSession.id });
           try {
-            await gatewayAPI.bindStream({ session_id: firstSession.id, channel: 'all' })
-            if (requestSeq !== _fetchSessionsSeq) return
-            set({ _initialBindDone: true })
+            await gatewayAPI.bindStream({
+              session_id: firstSession.id,
+              channel: "all",
+            });
+            if (requestSeq !== _fetchSessionsSeq) return;
+            set({ _initialBindDone: true });
 
             // Load historical messages for the auto-selected session (concurrently fetch todos + runtime snapshot)
-            const sessionFrame = await loadSessionWithInsights(gatewayAPI, firstSession.id)
-            if (requestSeq !== _fetchSessionsSeq) return
-            const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
-            if (sessionData.messages && sessionData.messages.length > 0) {
-              const mapped = mapHistoryMessages(sessionData.messages)
-              useChatStore.getState().setMessages(mapped)
+            const sessionFrame = await loadSessionWithInsights(
+              gatewayAPI,
+              firstSession.id,
+            );
+            if (requestSeq !== _fetchSessionsSeq) return;
+            const sessionData = sessionFrame.payload as BackendSessionData;
+            if (
+              (sessionData.messages && sessionData.messages.length > 0) ||
+              sessionData.current_plan
+            ) {
+              const mapped = mapSessionMessages(sessionData);
+              useChatStore.getState().setMessages(mapped);
             }
-            const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
-            useChatStore.getState().setAgentMode(restoredMode)
+            const restoredMode =
+              sessionData.agent_mode === "plan" ? "plan" : "build";
+            useChatStore.getState().setAgentMode(restoredMode);
           } catch (err) {
-            if (requestSeq !== _fetchSessionsSeq) return
-            console.error('Auto bindStream or loadSession failed:', err)
-            useUIStore.getState().showToast('Failed to load session', 'error')
+            if (requestSeq !== _fetchSessionsSeq) return;
+            console.error("Auto bindStream or loadSession failed:", err);
+            useUIStore.getState().showToast("Failed to load session", "error");
           }
         }
       } catch (err) {
-        if (requestSeq !== _fetchSessionsSeq) return
-        console.error('fetchSessions failed:', err)
-        set({ projects: [], loading: false })
+        if (requestSeq !== _fetchSessionsSeq) return;
+        console.error("fetchSessions failed:", err);
+        set({ projects: [], loading: false });
       } finally {
         if (requestSeq === _fetchSessionsSeq) {
-          _fetchSessionsPromise = null
+          _fetchSessionsPromise = null;
         }
       }
-    })()
+    })();
 
-    _fetchSessionsPromise = fetchPromise
-    return fetchPromise
+    _fetchSessionsPromise = fetchPromise;
+    return fetchPromise;
   },
-}))
+}));
