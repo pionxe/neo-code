@@ -74,8 +74,8 @@ func TestTodosSourceSectionsBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sections() error = %v", err)
 	}
-	if sections != nil {
-		t.Fatalf("Sections() = %+v, want nil", sections)
+	if len(sections) != 1 || sections[0].Content != "None" {
+		t.Fatalf("Sections() = %+v, want single section with 'None'", sections)
 	}
 
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
@@ -100,8 +100,8 @@ func TestTodosSourceSectionsAllTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sections() error = %v", err)
 	}
-	if sections != nil {
-		t.Fatalf("Sections() = %+v, want nil for all terminal todos", sections)
+	if len(sections) != 1 || sections[0].Content != "None" {
+		t.Fatalf("Sections() = %+v, want single section with 'None' for all terminal todos", sections)
 	}
 }
 

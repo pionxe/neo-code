@@ -27,7 +27,12 @@ func (todosSource) Sections(ctx context.Context, input BuildInput) ([]promptSect
 		return nil, err
 	}
 	if len(input.Todos) == 0 {
-		return nil, nil
+		return []promptSection{
+			{
+				Title:   "Todo State",
+				Content: "None",
+			},
+		}, nil
 	}
 
 	active := make([]agentsession.TodoItem, 0, len(input.Todos))
@@ -37,7 +42,12 @@ func (todosSource) Sections(ctx context.Context, input BuildInput) ([]promptSect
 		}
 	}
 	if len(active) == 0 {
-		return nil, nil
+		return []promptSection{
+			{
+				Title:   "Todo State",
+				Content: "None",
+			},
+		}, nil
 	}
 
 	sort.SliceStable(active, func(i, j int) bool {
