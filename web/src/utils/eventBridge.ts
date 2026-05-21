@@ -1026,10 +1026,13 @@ export function handleGatewayEvent(
       if (payload) {
         insightStore.addTodoEvent(payload);
         if (payload.items) {
+          const clearConflict =
+            payload.action === "reset" ||
+            (payload.items.length === 0 && payload.summary?.total === 0);
           insightStore.applyTodoSnapshot({
             items: payload.items,
             summary: payload.summary,
-          });
+          }, { clearConflict });
         }
       }
       break;

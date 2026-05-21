@@ -139,6 +139,21 @@ describe('useRuntimeInsightStore', () => {
     expect(state.todoHistory.a).toBeDefined()
   })
 
+  it('applyTodoSnapshot can clear stale conflict on reset while preserving history', () => {
+    const store = useRuntimeInsightStore.getState()
+    store.setTodoSnapshot({
+      items: [{ id: 'a', content: 'task a', status: 'in_progress', required: true, revision: 1 }],
+    })
+    store.setTodoConflict({ action: 'todo_conflict', reason: 'todo_not_found' })
+
+    store.applyTodoSnapshot({ items: [] }, { clearConflict: true })
+
+    const state = useRuntimeInsightStore.getState()
+    expect(state.todoSnapshot?.items).toEqual([])
+    expect(state.todoConflict).toBeNull()
+    expect(state.todoHistory.a).toBeDefined()
+  })
+
   it('setTodoSnapshot accumulates todoHistory across replacements', () => {
     const store = useRuntimeInsightStore.getState()
     store.setTodoSnapshot({
