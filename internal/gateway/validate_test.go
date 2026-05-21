@@ -185,6 +185,76 @@ func TestValidateFrame_BasicRules(t *testing.T) {
 			wantCode: ErrorCodeInvalidAction.String(),
 		},
 		{
+			name: "approve_plan valid payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionApprovePlan,
+				Payload: map[string]any{
+					"session_id": "session-1",
+					"plan_id":    "plan-1",
+					"revision":   1,
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name: "approve_plan missing payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionApprovePlan,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
+		{
+			name: "approve_plan missing session_id",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionApprovePlan,
+				Payload: map[string]any{
+					"plan_id":  "plan-1",
+					"revision": 1,
+				},
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload.session_id",
+		},
+		{
+			name: "approve_plan missing plan_id",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionApprovePlan,
+				Payload: map[string]any{
+					"session_id": "session-1",
+					"revision":   1,
+				},
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload.plan_id",
+		},
+		{
+			name: "approve_plan invalid revision",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionApprovePlan,
+				Payload: map[string]any{
+					"session_id": "session-1",
+					"plan_id":    "plan-1",
+					"revision":   0,
+				},
+			},
+			wantCode: ErrorCodeInvalidAction.String(),
+		},
+		{
+			name: "approve_plan invalid payload shape",
+			frame: MessageFrame{
+				Type:    FrameTypeRequest,
+				Action:  FrameActionApprovePlan,
+				Payload: "bad-payload",
+			},
+			wantCode: ErrorCodeInvalidFrame.String(),
+		},
+		{
 			name: "event frame allows empty action",
 			frame: MessageFrame{
 				Type: FrameTypeEvent,

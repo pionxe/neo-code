@@ -59,6 +59,10 @@ type bootstrapRuntimeStub struct {
 	checkpointDiffFn     func(ctx context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error)
 }
 
+type runtimePortWithoutPlanApproval struct {
+	RuntimePort
+}
+
 func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
 	if s != nil && s.runFn != nil {
 		return s.runFn(ctx, input)
@@ -2627,6 +2631,86 @@ func TestHandleCancelListLoadResolveBranches(t *testing.T) {
 		}
 		if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
 			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeMissingRequiredField.String())
+		}
+	})
+
+	t.Run("approve plan runtime unavailable", func(t *testing.T) {
+		response := handleApprovePlanFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionApprovePlan,
+			Payload: map[string]any{
+				"session_id": "session-1",
+				"plan_id":    "plan-1",
+				"revision":   1,
+			},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("approve plan unsupported runtime port", func(t *testing.T) {
+		response := handleApprovePlanFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionApprovePlan,
+			Payload: map[string]any{
+				"session_id": "session-1",
+				"plan_id":    "plan-1",
+				"revision":   1,
+			},
+		}, runtimePortWithoutPlanApproval{RuntimePort: &bootstrapRuntimeStub{}})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("approve plan fills session from frame", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			approvePlanFn: func(_ context.Context, input ApprovePlanInput) (ApprovePlanResult, error) {
+				if input.SessionID != "session-from-frame" {
+					t.Fatalf("session_id = %q, want frame session", input.SessionID)
+				}
+				return ApprovePlanResult{PlanID: input.PlanID, Revision: input.Revision, Status: "approved"}, nil
+			},
+		}
+		response := handleApprovePlanFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionApprovePlan,
+			SessionID: " session-from-frame ",
+			Payload: map[string]any{
+				"plan_id":  "plan-1",
+				"revision": 1,
+			},
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response = %#v, want ack", response)
+		}
+		if response.SessionID != "session-from-frame" {
+			t.Fatalf("response session_id = %q, want frame session", response.SessionID)
+		}
+	})
+
+	t.Run("approve plan invalid revision", func(t *testing.T) {
+		response := handleApprovePlanFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionApprovePlan,
+			Payload: map[string]any{
+				"session_id": "session-1",
+				"plan_id":    "plan-1",
+				"revision":   0,
+			},
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
 		}
 	})
 

@@ -1160,6 +1160,30 @@ func TestGatewayRuntimePortBridgeApprovePlanInvalidAction(t *testing.T) {
 	}
 }
 
+func TestGatewayRuntimePortBridgeApprovePlanAccessDenied(t *testing.T) {
+	runtimeSvc := &runtimePlanApproverStub{
+		runtimeStub: &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)},
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), runtimeSvc, testSessionStore)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	t.Cleanup(func() { _ = bridge.Close() })
+
+	_, err = bridge.ApprovePlan(context.Background(), gateway.ApprovePlanInput{
+		SubjectID: "other-subject",
+		SessionID: "session-1",
+		PlanID:    "plan-1",
+		Revision:  1,
+	})
+	if !errors.Is(err, gateway.ErrRuntimeAccessDenied) {
+		t.Fatalf("approve_plan error = %v, want ErrRuntimeAccessDenied", err)
+	}
+	if runtimeSvc.approveInput.SessionID != "" {
+		t.Fatalf("runtime approve should not be called, input = %#v", runtimeSvc.approveInput)
+	}
+}
+
 func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
 	t.Parallel()
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -546,6 +547,43 @@ func TestMultiWorkspaceRuntime_ApprovePlanRoutesByWorkspace(t *testing.T) {
 	if alphaPort := builder.portFor(alpha.Path); alphaPort != nil && alphaPort.approvePlanCalls.Load() != 0 {
 		t.Fatalf("alpha approve plan should not be called, got %d", alphaPort.approvePlanCalls.Load())
 	}
+}
+
+func TestMultiWorkspaceRuntime_ApprovePlanErrors(t *testing.T) {
+	t.Run("workspace not found", func(t *testing.T) {
+		idx, alpha, _ := setupIndex(t)
+		builder := newTestBuilder()
+		mw := NewMultiWorkspaceRuntime(idx, alpha.Hash, builder.build)
+		t.Cleanup(func() { _ = mw.Close() })
+
+		_, err := mw.ApprovePlan(ctxWithHash(t, "missing-workspace"), ApprovePlanInput{
+			SessionID: "session-1",
+			PlanID:    "plan-1",
+			Revision:  1,
+		})
+		if !errors.Is(err, ErrRuntimeResourceNotFound) {
+			t.Fatalf("ApprovePlan error = %v, want ErrRuntimeResourceNotFound", err)
+		}
+	})
+
+	t.Run("runtime port does not support plan approval", func(t *testing.T) {
+		idx, alpha, beta := setupIndex(t)
+		builder := newTestBuilder()
+		mw := NewMultiWorkspaceRuntime(idx, alpha.Hash, builder.build)
+		mw.PreloadWorkspaceBundle(beta.Hash, runtimePortWithoutPlanApproval{
+			RuntimePort: newRecordingPort("beta"),
+		}, func() error { return nil })
+		t.Cleanup(func() { _ = mw.Close() })
+
+		_, err := mw.ApprovePlan(ctxWithHash(t, beta.Hash), ApprovePlanInput{
+			SessionID: "session-1",
+			PlanID:    "plan-1",
+			Revision:  1,
+		})
+		if err == nil || !strings.Contains(err.Error(), "plan approval runtime port is unavailable") {
+			t.Fatalf("ApprovePlan error = %v, want unsupported plan approval", err)
+		}
+	})
 }
 
 func TestMultiWorkspaceRuntime_CreatePersistsIndex(t *testing.T) {
