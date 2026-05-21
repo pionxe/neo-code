@@ -89,6 +89,12 @@ type runtimeStub struct {
 	checkpointDiffErr     error
 }
 
+type runtimePlanApproverStub struct {
+	*runtimeStub
+	approveInput agentruntime.ApproveCurrentPlanInput
+	approveErr   error
+}
+
 const testBridgeSubjectID = bridgeLocalSubjectID
 
 func (s *runtimeStub) Submit(_ context.Context, input agentruntime.PrepareInput) error {
@@ -130,6 +136,14 @@ func (s *runtimeStub) ExecuteSystemTool(_ context.Context, input agentruntime.Sy
 func (s *runtimeStub) ResolvePermission(_ context.Context, input agentruntime.PermissionResolutionInput) error {
 	s.permissionInput = input
 	return s.permissionErr
+}
+
+func (s *runtimePlanApproverStub) ApproveCurrentPlan(
+	_ context.Context,
+	input agentruntime.ApproveCurrentPlanInput,
+) error {
+	s.approveInput = input
+	return s.approveErr
 }
 
 func (s *runtimeStub) ResolveUserQuestion(_ context.Context, input agentruntime.UserQuestionResolutionInput) error {
@@ -1073,6 +1087,101 @@ func TestGatewayRuntimePortBridgeListSessionTodosAndSnapshot(t *testing.T) {
 			t.Fatalf("snapshot = %#v", snapshot)
 		}
 	})
+}
+
+func TestGatewayRuntimePortBridgeApprovePlan(t *testing.T) {
+	runtimeSvc := &runtimePlanApproverStub{
+		runtimeStub: &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)},
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), runtimeSvc, testSessionStore)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	t.Cleanup(func() { _ = bridge.Close() })
+
+	result, err := bridge.ApprovePlan(context.Background(), gateway.ApprovePlanInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+		PlanID:    " plan-1 ",
+		Revision:  3,
+	})
+	if err != nil {
+		t.Fatalf("approve_plan: %v", err)
+	}
+	if runtimeSvc.approveInput.SessionID != "session-1" || runtimeSvc.approveInput.PlanID != "plan-1" || runtimeSvc.approveInput.Revision != 3 {
+		t.Fatalf("approve input = %#v, want trimmed session/plan revision", runtimeSvc.approveInput)
+	}
+	if result.PlanID != "plan-1" || result.Revision != 3 || result.Status != "approved" {
+		t.Fatalf("approve result = %#v, want approved plan-1 revision 3", result)
+	}
+}
+
+func TestGatewayRuntimePortBridgeApprovePlanUnsupportedRuntime(t *testing.T) {
+	bridge, err := newGatewayRuntimePortBridge(
+		context.Background(),
+		&runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)},
+		testSessionStore,
+	)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	t.Cleanup(func() { _ = bridge.Close() })
+
+	_, err = bridge.ApprovePlan(context.Background(), gateway.ApprovePlanInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+		PlanID:    "plan-1",
+		Revision:  1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime does not support plan approval") {
+		t.Fatalf("approve_plan unsupported error = %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeApprovePlanInvalidAction(t *testing.T) {
+	runtimeSvc := &runtimePlanApproverStub{
+		runtimeStub: &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)},
+		approveErr:  agentruntime.ErrPlanApprovalRevisionMismatch,
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), runtimeSvc, testSessionStore)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	t.Cleanup(func() { _ = bridge.Close() })
+
+	_, err = bridge.ApprovePlan(context.Background(), gateway.ApprovePlanInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+		PlanID:    "plan-1",
+		Revision:  1,
+	})
+	if !errors.Is(err, gateway.ErrRuntimeInvalidAction) {
+		t.Fatalf("approve_plan error = %v, want ErrRuntimeInvalidAction", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeApprovePlanAccessDenied(t *testing.T) {
+	runtimeSvc := &runtimePlanApproverStub{
+		runtimeStub: &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)},
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), runtimeSvc, testSessionStore)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	t.Cleanup(func() { _ = bridge.Close() })
+
+	_, err = bridge.ApprovePlan(context.Background(), gateway.ApprovePlanInput{
+		SubjectID: "other-subject",
+		SessionID: "session-1",
+		PlanID:    "plan-1",
+		Revision:  1,
+	})
+	if !errors.Is(err, gateway.ErrRuntimeAccessDenied) {
+		t.Fatalf("approve_plan error = %v, want ErrRuntimeAccessDenied", err)
+	}
+	if runtimeSvc.approveInput.SessionID != "" {
+		t.Fatalf("runtime approve should not be called, input = %#v", runtimeSvc.approveInput)
+	}
 }
 
 func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {

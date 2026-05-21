@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
-import { useSessionStore } from '@/stores/useSessionStore'
-import { useChatStore } from '@/stores/useChatStore'
+import { isValidSessionId, useSessionStore } from '@/stores/useSessionStore'
+import { createUserMessage, useChatStore } from '@/stores/useChatStore'
+import { useGatewayStore } from '@/stores/useGatewayStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { PermissionDecision } from '@/api/protocol'
 import MessageList from './MessageList'
@@ -16,7 +18,16 @@ import {
   Check,
   Info,
   LoaderCircle,
+  Play,
 } from 'lucide-react'
+
+const APPROVED_PLAN_EXECUTION_PROMPT = '按已批准计划执行'
+
+type PendingApprovedPlanRun = {
+  sessionId: string
+  planId: string
+  revision: number
+}
 
 export default function ChatPanel() {
   const gatewayAPI = useGatewayAPI()
@@ -29,8 +40,12 @@ export default function ChatPanel() {
   const projects = useSessionStore((s) => s.projects)
 
   const permissionRequests = useChatStore((s) => s.permissionRequests)
+  const messages = useChatStore((s) => s.messages)
+  const isGenerating = useChatStore((s) => s.isGenerating)
   const agentMode = useChatStore((s) => s.agentMode)
   const permissionMode = useChatStore((s) => s.permissionMode)
+  const setAgentMode = useChatStore((s) => s.setAgentMode)
+  const setPermissionMode = useChatStore((s) => s.setPermissionMode)
   const currentPermission = permissionRequests[0]
   const pendingUserQuestion = useChatStore((s) => s.pendingUserQuestion)
   const clearPendingUserQuestion = useChatStore((s) => s.clearPendingUserQuestion)
@@ -40,6 +55,10 @@ export default function ChatPanel() {
   const [editingTitle, setEditingTitle] = useState(false)
   const [isResolvingPermission, setIsResolvingPermission] = useState(false)
   const [isResolvingUserQuestion, setIsResolvingUserQuestion] = useState(false)
+  const [isApprovingPlan, setIsApprovingPlan] = useState(false)
+  const [isStartingApprovedPlanRun, setIsStartingApprovedPlanRun] = useState(false)
+  const [dismissedPlanApprovalKey, setDismissedPlanApprovalKey] = useState('')
+  const [pendingApprovedPlanRun, setPendingApprovedPlanRun] = useState<PendingApprovedPlanRun | null>(null)
   const [userQuestionText, setUserQuestionText] = useState('')
   const [userQuestionSingleChoice, setUserQuestionSingleChoice] = useState('')
   const [userQuestionMultiChoices, setUserQuestionMultiChoices] = useState<string[]>([])
@@ -51,6 +70,27 @@ export default function ChatPanel() {
   const currentSession = projects.flatMap((p) => p.sessions).find((s) => s.id === currentSessionId)
   const title = currentSession?.title || '新对话'
   const pendingQuestionOptions = parseUserQuestionOptions(Array.isArray(pendingUserQuestion?.options) ? pendingUserQuestion.options : [])
+  const latestPlan = [...messages].reverse().find((message) => message.type === 'plan')?.planData
+  const latestPlanKey = latestPlan && currentSessionId
+    ? `${currentSessionId}:${latestPlan.id}:${latestPlan.revision}`
+    : ''
+  const latestDraftPlan = latestPlan?.status === 'draft' ? latestPlan : undefined
+  const planApprovalKey = latestDraftPlan && currentSessionId
+    ? `${currentSessionId}:${latestDraftPlan.id}:${latestDraftPlan.revision}`
+    : ''
+  const pendingApprovedPlanRunKey = pendingApprovedPlanRun
+    ? `${pendingApprovedPlanRun.sessionId}:${pendingApprovedPlanRun.planId}:${pendingApprovedPlanRun.revision}`
+    : ''
+  const retryApprovedPlanRun = pendingApprovedPlanRun && pendingApprovedPlanRunKey === latestPlanKey
+    ? pendingApprovedPlanRun
+    : null
+  const showPlanApprovalPanel = Boolean(
+    latestDraftPlan &&
+    planApprovalKey &&
+    dismissedPlanApprovalKey !== planApprovalKey &&
+    !isCompacting,
+  )
+  const showApprovedPlanRunRetryPanel = Boolean(retryApprovedPlanRun && !isCompacting)
 
   async function handlePermissionDecision(decision: string) {
     if (!gatewayAPI || !currentPermission || isResolvingPermission) return
@@ -65,6 +105,97 @@ export default function ChatPanel() {
     } finally {
       setIsResolvingPermission(false)
     }
+  }
+
+  function focusComposerInput() {
+    window.setTimeout(() => {
+      document.querySelector<HTMLTextAreaElement>('.input-box textarea')?.focus()
+    }, 0)
+  }
+
+  function handleDismissPlanApproval() {
+    if (planApprovalKey) setDismissedPlanApprovalKey(planApprovalKey)
+    focusComposerInput()
+  }
+
+  async function startApprovedPlanRun(sessionId: string, retryPlan: PendingApprovedPlanRun) {
+    if (!gatewayAPI || isStartingApprovedPlanRun || isGenerating) return false
+    setIsStartingApprovedPlanRun(true)
+    setAgentMode('build')
+
+    const userMsg = createUserMessage(APPROVED_PLAN_EXECUTION_PROMPT)
+    useChatStore.getState().addMessage(userMsg)
+    useRuntimeInsightStore.getState().setTodoSnapshot({
+      items: [],
+      summary: { total: 0, required_total: 0, required_completed: 0, required_failed: 0, required_open: 0 },
+    })
+    useChatStore.getState().setGenerating(true)
+
+    try {
+      const ack = await gatewayAPI.run({
+        session_id: sessionId,
+        input_text: APPROVED_PLAN_EXECUTION_PROMPT,
+        mode: 'build',
+      })
+      const gatewayStore = useGatewayStore.getState()
+      const sessionStore = useSessionStore.getState()
+      if (ack.run_id) gatewayStore.setCurrentRunId(ack.run_id)
+      if (ack.session_id) {
+        sessionStore.setCurrentSessionId(ack.session_id)
+        gatewayAPI.bindStream({ session_id: ack.session_id, channel: 'all' }).catch(() => {})
+      }
+      setPendingApprovedPlanRun(null)
+      return true
+    } catch (err) {
+      useChatStore.getState().setGenerating(false)
+      useChatStore.getState().removeMessage(userMsg.id)
+      setPendingApprovedPlanRun(retryPlan)
+      console.error('Approved plan run failed:', err)
+      useUIStore.getState().showToast('Failed to start approved plan run', 'error')
+      return false
+    } finally {
+      setIsStartingApprovedPlanRun(false)
+    }
+  }
+
+  async function handleApprovePlan(permissionModeTarget: 'default' | 'bypass') {
+    if (!gatewayAPI || !latestDraftPlan || !planApprovalKey || isApprovingPlan || isStartingApprovedPlanRun || isGenerating) return
+    if (!isValidSessionId(currentSessionId)) {
+      useUIStore.getState().showToast('Send a message first to start a session', 'error')
+      return
+    }
+
+    setIsApprovingPlan(true)
+    try {
+      await gatewayAPI.approvePlan({
+        session_id: currentSessionId,
+        plan_id: latestDraftPlan.id,
+        revision: latestDraftPlan.revision,
+      })
+
+      setDismissedPlanApprovalKey(planApprovalKey)
+      setPermissionMode(permissionModeTarget)
+      await startApprovedPlanRun(currentSessionId, {
+        sessionId: currentSessionId,
+        planId: latestDraftPlan.id,
+        revision: latestDraftPlan.revision,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to approve plan'
+      useUIStore.getState().showToast(message, 'error')
+      console.error('Approve plan failed:', err)
+    } finally {
+      setIsApprovingPlan(false)
+    }
+  }
+
+  async function handleRetryApprovedPlanRun() {
+    if (!retryApprovedPlanRun || isStartingApprovedPlanRun || isGenerating) return
+    if (!isValidSessionId(retryApprovedPlanRun.sessionId)) {
+      useUIStore.getState().showToast('Send a message first to start a session', 'error')
+      return
+    }
+    await startApprovedPlanRun(retryApprovedPlanRun.sessionId, retryApprovedPlanRun)
   }
 
   function parseUserQuestionOptions(raw: unknown[]): { label: string; value: string; description?: string }[] {
@@ -525,6 +656,94 @@ export default function ChatPanel() {
                 style={{ opacity: isResolvingUserQuestion ? 0.6 : 1 }}
               >
                 <Check size={13} /> 提交
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : showPlanApprovalPanel && latestDraftPlan ? (
+        <div className="permission-area">
+          <div className="permission-card">
+            <div className="permission-card-header">
+              <Shield size={16} style={{ color: 'var(--accent)' }} />
+              <span>计划审批</span>
+            </div>
+            <div className="permission-details">
+              <div>
+                <div className="permission-detail-label">计划</div>
+                <div className="permission-detail-value">{latestDraftPlan.summary?.goal || latestDraftPlan.spec?.goal || latestDraftPlan.id}</div>
+              </div>
+              <div>
+                <div className="permission-detail-label">Revision</div>
+                <div className="permission-detail-value">{latestDraftPlan.revision}</div>
+              </div>
+            </div>
+            <div className="permission-actions">
+              <button
+                onClick={() => handleDismissPlanApproval()}
+                disabled={isApprovingPlan}
+                className="permission-btn reject"
+                style={{ opacity: isApprovingPlan ? 0.6 : 1 }}
+              >
+                <X size={13} /> 需要修改
+              </button>
+              <button
+                onClick={() => handleApprovePlan('default')}
+                disabled={isApprovingPlan || isStartingApprovedPlanRun || isGenerating}
+                className="permission-btn once"
+                style={{ opacity: isApprovingPlan || isStartingApprovedPlanRun || isGenerating ? 0.6 : 1 }}
+              >
+                {isApprovingPlan ? <LoaderCircle size={13} className="compact-status-spinner" /> : <Check size={13} />}
+                同意并以 default 执行
+              </button>
+              <button
+                onClick={() => handleApprovePlan('bypass')}
+                disabled={isApprovingPlan || isStartingApprovedPlanRun || isGenerating}
+                className="permission-btn session"
+                style={{ opacity: isApprovingPlan || isStartingApprovedPlanRun || isGenerating ? 0.6 : 1 }}
+              >
+                {isApprovingPlan ? <LoaderCircle size={13} className="compact-status-spinner" /> : <Play size={13} />}
+                同意并以 bypass 执行
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : showApprovedPlanRunRetryPanel && retryApprovedPlanRun ? (
+        <div className="permission-area">
+          <div className="permission-card">
+            <div className="permission-card-header">
+              <Play size={16} style={{ color: 'var(--accent)' }} />
+              <span>计划执行</span>
+            </div>
+            <div className="permission-details">
+              <div>
+                <div className="permission-detail-label">计划</div>
+                <div className="permission-detail-value">{latestPlan?.summary?.goal || latestPlan?.spec?.goal || retryApprovedPlanRun.planId}</div>
+              </div>
+              <div>
+                <div className="permission-detail-label">Revision</div>
+                <div className="permission-detail-value">{retryApprovedPlanRun.revision}</div>
+              </div>
+            </div>
+            <div className="permission-actions">
+              <button
+                onClick={() => {
+                  setPendingApprovedPlanRun(null)
+                  focusComposerInput()
+                }}
+                disabled={isStartingApprovedPlanRun}
+                className="permission-btn reject"
+                style={{ opacity: isStartingApprovedPlanRun ? 0.6 : 1 }}
+              >
+                <X size={13} /> 稍后处理
+              </button>
+              <button
+                onClick={() => handleRetryApprovedPlanRun()}
+                disabled={isStartingApprovedPlanRun || isGenerating}
+                className="permission-btn session"
+                style={{ opacity: isStartingApprovedPlanRun || isGenerating ? 0.6 : 1 }}
+              >
+                {isStartingApprovedPlanRun ? <LoaderCircle size={13} className="compact-status-spinner" /> : <Play size={13} />}
+                重试执行已批准计划
               </button>
             </div>
           </div>

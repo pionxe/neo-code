@@ -39,9 +39,14 @@ func TestStrictACLAllowlist(t *testing.T) {
 		{source: RequestSourceHTTP, method: "checkpoint.restore", want: true},
 		{source: RequestSourceHTTP, method: "checkpoint.undoRestore", want: true},
 		{source: RequestSourceHTTP, method: "checkpoint.diff", want: true},
+		{source: RequestSourceIPC, method: "gateway.approvePlan", want: true},
+		{source: RequestSourceHTTP, method: "gateway.approvePlan", want: true},
+		{source: RequestSourceWS, method: "gateway.approvePlan", want: true},
+		{source: RequestSourceSSE, method: "gateway.approvePlan", want: false},
 		{source: RequestSourceHTTP, method: "gateway.userQuestionAnswer", want: true},
 		{source: RequestSourceHTTP, method: "gateway.user_question_answer", want: true},
 		{source: RequestSourceUnknown, method: "gateway.ping", want: false},
+		{source: RequestSourceUnknown, method: "gateway.approvePlan", want: false},
 	}
 	for _, tc := range cases {
 		assertACLAllowed(t, acl, tc.source, tc.method, tc.want)

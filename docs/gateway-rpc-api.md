@@ -421,6 +421,41 @@ type ResolvePermissionParams struct {
 
 ---
 
+## Method: gateway.approvePlan
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type ApprovePlanParams struct {
+	SessionID string `json:"session_id"` // MUST
+	PlanID    string `json:"plan_id"`    // MUST
+	Revision  int    `json:"revision"`   // MUST > 0
+}
+```
+
+- Response Schema:
+
+```json
+{
+  "type": "ack",
+  "action": "approve_plan",
+  "session_id": "session-1",
+  "payload": {
+    "plan_id": "plan-1",
+    "revision": 2,
+    "status": "approved"
+  }
+}
+```
+
+- Semantics:
+  - 仅批准当前会话中匹配 `plan_id + revision` 的 `draft` 计划。
+  - 成功后客户端可再调用 `gateway.run({ "mode": "build" })` 执行已批准计划。
+
+---
+
 ## Method: gateway.userQuestionAnswer
 
 - Stability: Beta

@@ -25,6 +25,8 @@ type rpcRunCaptureRuntimeStub struct {
 	deactivateSkillFn   func(ctx context.Context, input SessionSkillMutationInput) error
 	listSessionSkillsFn func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
 	listAvailableFn     func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
+	approvePlanInput    ApprovePlanInput
+	approvePlanFn       func(ctx context.Context, input ApprovePlanInput) (ApprovePlanResult, error)
 	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
 	listProvidersFn     func(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error)
 	createProviderFn    func(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error)
@@ -113,6 +115,17 @@ func (s *rpcRunCaptureRuntimeStub) ListAvailableSkills(
 
 func (s *rpcRunCaptureRuntimeStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
 	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ApprovePlan(
+	ctx context.Context,
+	input ApprovePlanInput,
+) (ApprovePlanResult, error) {
+	s.approvePlanInput = input
+	if s.approvePlanFn != nil {
+		return s.approvePlanFn(ctx, input)
+	}
+	return ApprovePlanResult{}, nil
 }
 
 func (s *rpcRunCaptureRuntimeStub) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
@@ -605,6 +618,83 @@ func TestDispatchRPCRequestResolvePermissionDoesNotRequireSession(t *testing.T) 
 	}
 	if frame.Action != FrameActionResolvePermission {
 		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionResolvePermission)
+	}
+}
+
+func TestDispatchRPCRequestApprovePlanAllowedForAuthenticatedWebSocket(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("local_admin")
+	ctx := WithRequestSource(context.Background(), RequestSourceWS)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	runtimeStub := &rpcRunCaptureRuntimeStub{
+		approvePlanFn: func(_ context.Context, input ApprovePlanInput) (ApprovePlanResult, error) {
+			if input.SubjectID != "local_admin" {
+				t.Fatalf("subject_id = %q, want %q", input.SubjectID, "local_admin")
+			}
+			if input.SessionID != "session-1" || input.PlanID != "plan-1" || input.Revision != 2 {
+				t.Fatalf("approve input = %#v", input)
+			}
+			return ApprovePlanResult{
+				PlanID:   input.PlanID,
+				Revision: input.Revision,
+				Status:   "approved",
+			}, nil
+		},
+	}
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-approve-plan"`),
+		Method:  protocol.MethodGatewayApprovePlan,
+		Params:  json.RawMessage(`{"session_id":"session-1","plan_id":"plan-1","revision":2}`),
+	}, runtimeStub)
+	if response.Error != nil {
+		t.Fatalf("approvePlan should pass strict WS ACL, got error: %+v", response.Error)
+	}
+
+	frame, err := decodeJSONRPCResultFrame(response)
+	if err != nil {
+		t.Fatalf("decode approvePlan result frame: %v", err)
+	}
+	if frame.Action != FrameActionApprovePlan {
+		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionApprovePlan)
+	}
+	payload, ok := frame.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", frame.Payload)
+	}
+	if payload["plan_id"] != "plan-1" || payload["status"] != "approved" || payload["revision"] != float64(2) {
+		t.Fatalf("payload = %#v, want approved plan result", payload)
+	}
+	if runtimeStub.approvePlanInput.PlanID != "plan-1" {
+		t.Fatalf("approvePlan was not called, captured input = %#v", runtimeStub.approvePlanInput)
+	}
+}
+
+func TestDispatchRPCRequestApprovePlanInvalidRuntimeAction(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("local_admin")
+	ctx := WithRequestSource(context.Background(), RequestSourceWS)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-approve-plan-invalid"`),
+		Method:  protocol.MethodGatewayApprovePlan,
+		Params:  json.RawMessage(`{"session_id":"session-1","plan_id":"plan-1","revision":2}`),
+	}, &rpcRunCaptureRuntimeStub{
+		approvePlanFn: func(_ context.Context, _ ApprovePlanInput) (ApprovePlanResult, error) {
+			return ApprovePlanResult{}, ErrRuntimeInvalidAction
+		},
+	})
+	if response.Error == nil {
+		t.Fatal("approvePlan invalid action should return JSON-RPC error")
+	}
+	if response.Error.Data == nil || response.Error.Data.GatewayCode != ErrorCodeInvalidAction.String() {
+		t.Fatalf("approvePlan error = %#v, want invalid_action", response.Error)
 	}
 }
 
@@ -1347,6 +1437,16 @@ func TestDispatchRPCRequestMetricsGrowForTUIMethodSequence(t *testing.T) {
 		t.Fatalf("compact response error: %+v", compact.Error)
 	}
 
+	approvePlan := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-approve-tui"`),
+		Method:  protocol.MethodGatewayApprovePlan,
+		Params:  json.RawMessage(`{"session_id":"session-tui","plan_id":"plan-tui","revision":1}`),
+	}, &rpcRunCaptureRuntimeStub{})
+	if approvePlan.Error != nil {
+		t.Fatalf("approvePlan response error: %+v", approvePlan.Error)
+	}
+
 	listSessions := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
 		JSONRPC: protocol.JSONRPCVersion,
 		ID:      json.RawMessage(`"req-list-tui"`),
@@ -1366,6 +1466,9 @@ func TestDispatchRPCRequestMetricsGrowForTUIMethodSequence(t *testing.T) {
 	}
 	if snapshot["ipc|gateway.compact|ok"] == 0 {
 		t.Fatalf("expected compact metric to grow, snapshot=%#v", snapshot)
+	}
+	if snapshot["ipc|gateway.approveplan|ok"] == 0 {
+		t.Fatalf("expected approvePlan metric to grow, snapshot=%#v", snapshot)
 	}
 	if snapshot["ipc|gateway.listsessions|ok"] == 0 {
 		t.Fatalf("expected listSessions metric to grow, snapshot=%#v", snapshot)

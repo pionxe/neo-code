@@ -49,6 +49,28 @@ type PermissionResolutionInput struct {
 	Decision PermissionResolutionDecision `json:"decision"`
 }
 
+// ApprovePlanInput 表示批准当前计划 draft revision 的输入。
+type ApprovePlanInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string `json:"subject_id,omitempty"`
+	// SessionID 是计划所属会话标识。
+	SessionID string `json:"session_id"`
+	// PlanID 是目标计划标识。
+	PlanID string `json:"plan_id"`
+	// Revision 是待批准的计划 revision。
+	Revision int `json:"revision"`
+}
+
+// ApprovePlanResult 表示批准计划后的稳定返回结构。
+type ApprovePlanResult struct {
+	// PlanID 是已批准计划标识。
+	PlanID string `json:"plan_id"`
+	// Revision 是已批准 revision。
+	Revision int `json:"revision"`
+	// Status 是批准后的计划状态，当前固定为 approved。
+	Status string `json:"status"`
+}
+
 // RunInput 表示网关向下游运行端口发起 run 动作时的输入。
 type RunInput struct {
 	// SubjectID 是请求方身份主体标识。
@@ -924,6 +946,12 @@ type RuntimePort interface {
 	UndoRestore(ctx context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error)
 	// CheckpointDiff 查询两个相邻代码检查点之间的差异。
 	CheckpointDiff(ctx context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error)
+}
+
+// PlanApprovalRuntimePort 定义批准计划的可选下游能力。
+type PlanApprovalRuntimePort interface {
+	// ApprovePlan 将指定 draft 计划 revision 推进到 approved。
+	ApprovePlan(ctx context.Context, input ApprovePlanInput) (ApprovePlanResult, error)
 }
 
 // ManagementRuntimePort 定义前端管理面访问配置能力的可选下游端口。

@@ -497,6 +497,37 @@ func (b *gatewayRuntimePortBridge) ResolvePermission(ctx context.Context, input 
 	})
 }
 
+// ApprovePlan 将网关计划批准请求转换为 runtime 当前计划批准输入。
+func (b *gatewayRuntimePortBridge) ApprovePlan(
+	ctx context.Context,
+	input gateway.ApprovePlanInput,
+) (gateway.ApprovePlanResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.ApprovePlanResult{}, err
+	}
+	approver, ok := b.runtime.(agentruntime.PlanApprover)
+	if !ok {
+		return gateway.ApprovePlanResult{}, fmt.Errorf("gateway runtime bridge: runtime does not support plan approval")
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	planID := strings.TrimSpace(input.PlanID)
+	if err := approver.ApproveCurrentPlan(ctx, agentruntime.ApproveCurrentPlanInput{
+		SessionID: sessionID,
+		PlanID:    planID,
+		Revision:  input.Revision,
+	}); err != nil {
+		if agentruntime.IsPlanApprovalInvalidError(err) {
+			return gateway.ApprovePlanResult{}, fmt.Errorf("%w: %v", gateway.ErrRuntimeInvalidAction, err)
+		}
+		return gateway.ApprovePlanResult{}, err
+	}
+	return gateway.ApprovePlanResult{
+		PlanID:   planID,
+		Revision: input.Revision,
+		Status:   "approved",
+	}, nil
+}
+
 // ResolveUserQuestion 将网关 ask_user 回答转发到 runtime。
 func (b *gatewayRuntimePortBridge) ResolveUserQuestion(ctx context.Context, input gateway.UserQuestionAnswerInput) error {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {

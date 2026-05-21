@@ -21,6 +21,7 @@ export const Method = {
   UndoRestore: "checkpoint.undoRestore",
   CheckpointDiff: "checkpoint.diff",
   ResolvePermission: "gateway.resolvePermission",
+  ApprovePlan: "gateway.approvePlan",
   UserQuestionAnswer: "gateway.userQuestionAnswer",
   ExecuteSystemTool: "gateway.executeSystemTool",
   ActivateSessionSkill: "gateway.activateSessionSkill",
@@ -62,6 +63,7 @@ export const FrameType = {
 // 帧动作
 export const FrameAction = {
   Run: "run",
+  ApprovePlan: "approve_plan",
   ListProviders: "list_providers",
   CreateCustomProvider: "create_custom_provider",
   DeleteCustomProvider: "delete_custom_provider",
@@ -265,6 +267,12 @@ export interface ResolvePermissionParams {
   decision: string;
 }
 
+export interface ApprovePlanParams {
+  session_id: string;
+  plan_id: string;
+  revision: number;
+}
+
 /** gateway.userQuestionAnswer 参数 */
 export interface ResolveUserQuestionParams {
   request_id: string;
@@ -399,6 +407,8 @@ export type ListSessionsResult = RPCResult<{ sessions: SessionSummary[] }>;
 
 /** gateway.cancel 响应 */
 export type CancelResult = RPCResult<{ canceled: boolean; run_id: string }>;
+
+export type ApprovePlanResult = RPCResult<{ plan_id: string; revision: number; status: string }>;
 
 export interface TodoViewItem {
   id: string;

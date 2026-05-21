@@ -98,6 +98,8 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		return nil
 	case FrameActionResolvePermission:
 		return validateResolvePermissionFrame(frame)
+	case FrameActionApprovePlan:
+		return validateApprovePlanFrame(frame)
 	case FrameActionUserQuestionAnswer:
 		return validateUserQuestionAnswerFrame(frame)
 	case FrameActionRestoreCheckpoint,
@@ -177,6 +179,42 @@ func decodePermissionResolutionInput(payload any) (PermissionResolutionInput, er
 		return PermissionResolutionInput{}, err
 	}
 	return input, nil
+}
+
+// validateApprovePlanFrame 校验 approve_plan 动作所需字段。
+func validateApprovePlanFrame(frame MessageFrame) *FrameError {
+	if frame.Payload == nil {
+		return NewMissingRequiredFieldError("payload")
+	}
+
+	input, err := decodeApprovePlanPayload(frame.Payload)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(input.SessionID) == "" {
+		return NewMissingRequiredFieldError("payload.session_id")
+	}
+	if strings.TrimSpace(input.PlanID) == "" {
+		return NewMissingRequiredFieldError("payload.plan_id")
+	}
+	if input.Revision <= 0 {
+		return NewFrameError(ErrorCodeInvalidAction, "invalid approve_plan revision")
+	}
+
+	return nil
+}
+
+// decodeApprovePlanPayload 将 payload 解析为批准计划输入。
+func decodeApprovePlanPayload(payload any) (ApprovePlanInput, *FrameError) {
+	var params protocol.ApprovePlanParams
+	if err := decodePayload(payload, &params); err != nil {
+		return ApprovePlanInput{}, NewFrameError(ErrorCodeInvalidFrame, "invalid approve_plan payload")
+	}
+	return ApprovePlanInput{
+		SessionID: strings.TrimSpace(params.SessionID),
+		PlanID:    strings.TrimSpace(params.PlanID),
+		Revision:  params.Revision,
+	}, nil
 }
 
 // decodeRenameSessionPayload 解析 renameSession 的负载参数。
@@ -595,6 +633,7 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionListSessionTodos,
 		FrameActionGetRuntimeSnapshot,
 		FrameActionResolvePermission,
+		FrameActionApprovePlan,
 		FrameActionDeleteSession,
 		FrameActionRenameSession,
 		FrameActionListFiles,

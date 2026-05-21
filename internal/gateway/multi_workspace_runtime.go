@@ -345,6 +345,19 @@ func (m *MultiWorkspaceRuntime) ResolvePermission(ctx context.Context, input Per
 	return port.ResolvePermission(ctx, input)
 }
 
+// ApprovePlan 将计划批准请求路由到当前工作区 RuntimePort 的可选计划审批能力。
+func (m *MultiWorkspaceRuntime) ApprovePlan(ctx context.Context, input ApprovePlanInput) (ApprovePlanResult, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return ApprovePlanResult{}, err
+	}
+	approvalPort, ok := port.(PlanApprovalRuntimePort)
+	if !ok {
+		return ApprovePlanResult{}, fmt.Errorf("plan approval runtime port is unavailable")
+	}
+	return approvalPort.ApprovePlan(ctx, input)
+}
+
 func (m *MultiWorkspaceRuntime) ResolveUserQuestion(ctx context.Context, input UserQuestionAnswerInput) error {
 	port, err := m.getPort(ctx)
 	if err != nil {

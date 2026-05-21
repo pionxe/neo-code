@@ -53,10 +53,12 @@ describe('GatewayAPI', () => {
 
 	it('maps permission and user question resolution', async () => {
 		await api.resolvePermission({ request_id: 'r1', decision: 'allow_once' })
+		await api.approvePlan({ session_id: 's1', plan_id: 'p1', revision: 2 })
 		await api.resolveUserQuestion({ request_id: 'q1', status: 'answered', message: 'ok' })
 
 		expect(call).toHaveBeenNthCalledWith(1, Method.ResolvePermission, { request_id: 'r1', decision: 'allow_once' })
-		expect(call).toHaveBeenNthCalledWith(2, Method.UserQuestionAnswer, { request_id: 'q1', status: 'answered', message: 'ok' })
+		expect(call).toHaveBeenNthCalledWith(2, Method.ApprovePlan, { session_id: 's1', plan_id: 'p1', revision: 2 })
+		expect(call).toHaveBeenNthCalledWith(3, Method.UserQuestionAnswer, { request_id: 'q1', status: 'answered', message: 'ok' })
 	})
 })
 

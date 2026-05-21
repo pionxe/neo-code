@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -535,7 +536,8 @@ func TestApproveCurrentPlanValidationErrors(t *testing.T) {
 	t.Parallel()
 
 	session := agentsession.New("approve validation")
-	if err := approveCurrentPlan(&session, "plan-1", 1); err == nil {
+	if err := approveCurrentPlan(&session, "plan-1", 1); !errors.Is(err, ErrPlanApprovalCurrentPlanMissing) ||
+		!IsPlanApprovalInvalidError(err) {
 		t.Fatal("expected error when current plan does not exist")
 	}
 
@@ -549,15 +551,18 @@ func TestApproveCurrentPlanValidationErrors(t *testing.T) {
 		},
 	}
 
-	if err := approveCurrentPlan(&session, "plan-2", 2); err == nil {
-		t.Fatal("expected id mismatch error")
+	if err := approveCurrentPlan(&session, "plan-2", 2); !errors.Is(err, ErrPlanApprovalPlanIDMismatch) ||
+		!IsPlanApprovalInvalidError(err) {
+		t.Fatalf("expected id mismatch error, got %v", err)
 	}
-	if err := approveCurrentPlan(&session, "plan-1", 1); err == nil {
-		t.Fatal("expected revision mismatch error")
+	if err := approveCurrentPlan(&session, "plan-1", 1); !errors.Is(err, ErrPlanApprovalRevisionMismatch) ||
+		!IsPlanApprovalInvalidError(err) {
+		t.Fatalf("expected revision mismatch error, got %v", err)
 	}
 
 	session.CurrentPlan.Status = agentsession.PlanStatusApproved
-	if err := approveCurrentPlan(&session, "plan-1", 2); err == nil {
-		t.Fatal("expected status mismatch error")
+	if err := approveCurrentPlan(&session, "plan-1", 2); !errors.Is(err, ErrPlanApprovalStatusInvalid) ||
+		!IsPlanApprovalInvalidError(err) {
+		t.Fatalf("expected status mismatch error, got %v", err)
 	}
 }

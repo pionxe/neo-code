@@ -778,7 +778,44 @@ Observation：
 
 ---
 
-## 15. wake.openUrl
+## 15. gateway.approvePlan
+
+Method: `gateway.approvePlan`
+Stability: `Stable`
+Auth Required: `Yes`
+
+Request Schema:
+
+```go
+type ApprovePlanParams struct {
+	SessionID string `json:"session_id"` // MUST
+	PlanID    string `json:"plan_id"`    // MUST
+	Revision  int    `json:"revision"`   // MUST > 0
+}
+```
+
+Response Schema:
+
+```json
+{
+  "type": "ack",
+  "action": "approve_plan",
+  "session_id": "session-1",
+  "payload": {
+    "plan_id": "plan-1",
+    "revision": 2,
+    "status": "approved"
+  }
+}
+```
+
+Semantics:
+1. Only the current session plan matching `plan_id + revision` and `draft` status can be approved.
+2. After success, clients can call `gateway.run` with `mode: "build"` to execute the approved plan.
+
+---
+
+## 16. wake.openUrl
 
 Method: `wake.openUrl`  
 Stability: `Experimental`  
@@ -828,7 +865,7 @@ Observation：
 
 ---
 
-## 16. gateway.event（服务端通知）
+## 17. gateway.event（服务端通知）
 
 Method: `gateway.event`  
 Stability: `Stable`  

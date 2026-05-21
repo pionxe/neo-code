@@ -1683,9 +1683,66 @@ func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runti
 	}
 }
 
+// handleApprovePlanFrame 处理计划批准请求，并把能力收敛到可选 runtime 端口。
+func handleApprovePlanFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+	approvalPort, approvalErr := requirePlanApprovalRuntimePort(runtimePort)
+	if approvalErr != nil {
+		return errorFrame(frame, approvalErr)
+	}
+
+	input, err := decodeApprovePlanPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	input.SubjectID = subjectID
+	if input.SessionID == "" {
+		input.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+	if input.SessionID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.session_id"))
+	}
+	if input.PlanID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.plan_id"))
+	}
+	if input.Revision <= 0 {
+		return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid approve_plan revision"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, approveErr := approvalPort.ApprovePlan(callCtx, input)
+	if approveErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, approveErr, "approve_plan")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionApprovePlan,
+		RequestID: frame.RequestID,
+		SessionID: input.SessionID,
+		Payload:   result,
+	}
+}
+
 // runtimePortUnavailableFrame 在 runtime 未注入时返回统一错误。
 func runtimePortUnavailableFrame(frame MessageFrame) MessageFrame {
 	return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runtime port is unavailable"))
+}
+
+// requirePlanApprovalRuntimePort 校验当前 runtime 端口是否支持计划批准能力。
+func requirePlanApprovalRuntimePort(runtimePort RuntimePort) (PlanApprovalRuntimePort, *FrameError) {
+	approvalPort, ok := runtimePort.(PlanApprovalRuntimePort)
+	if !ok {
+		return nil, NewFrameError(ErrorCodeInternalError, "plan approval runtime port is unavailable")
+	}
+	return approvalPort, nil
 }
 
 // requireManagementRuntimePort 校验当前 runtime 端口是否支持管理面扩展能力。
@@ -1785,6 +1842,9 @@ func runtimeCallFailedFrame(ctx context.Context, frame MessageFrame, err error, 
 	case errors.Is(err, ErrRuntimeResourceNotFound):
 		errorCode = ErrorCodeResourceNotFound
 		message = fmt.Sprintf("%s target not found", normalizedOperation)
+	case errors.Is(err, ErrRuntimeInvalidAction):
+		errorCode = ErrorCodeInvalidAction
+		message = fmt.Sprintf("%s invalid action", normalizedOperation)
 	case errors.Is(err, context.DeadlineExceeded):
 		errorCode = ErrorCodeTimeout
 		message = fmt.Sprintf("%s timed out", normalizedOperation)

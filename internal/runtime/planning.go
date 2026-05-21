@@ -399,16 +399,16 @@ func rememberFullPlanRevision(session *agentsession.Session) bool {
 // approveCurrentPlan 显式批准当前 draft revision，并安排下一轮做一次完整计划对齐。
 func approveCurrentPlan(session *agentsession.Session, planID string, revision int) error {
 	if session == nil || session.CurrentPlan == nil {
-		return fmt.Errorf("runtime: current plan does not exist")
+		return fmt.Errorf("%w: current plan does not exist", ErrPlanApprovalCurrentPlanMissing)
 	}
 	if strings.TrimSpace(planID) == "" || strings.TrimSpace(session.CurrentPlan.ID) != strings.TrimSpace(planID) {
-		return fmt.Errorf("runtime: current plan id does not match")
+		return fmt.Errorf("%w: current plan id does not match", ErrPlanApprovalPlanIDMismatch)
 	}
 	if revision <= 0 || session.CurrentPlan.Revision != revision {
-		return fmt.Errorf("runtime: current plan revision does not match")
+		return fmt.Errorf("%w: current plan revision does not match", ErrPlanApprovalRevisionMismatch)
 	}
 	if session.CurrentPlan.Status != agentsession.PlanStatusDraft {
-		return fmt.Errorf("runtime: current plan status %q cannot be approved", session.CurrentPlan.Status)
+		return fmt.Errorf("%w: current plan status %q cannot be approved", ErrPlanApprovalStatusInvalid, session.CurrentPlan.Status)
 	}
 	session.CurrentPlan = session.CurrentPlan.Clone()
 	session.CurrentPlan.Status = agentsession.PlanStatusApproved

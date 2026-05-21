@@ -63,6 +63,8 @@ const (
 	MethodGatewayCheckpointDiff = "checkpoint.diff"
 	// MethodGatewayResolvePermission 表示提交权限审批决策。
 	MethodGatewayResolvePermission = "gateway.resolvePermission"
+	// MethodGatewayApprovePlan 表示批准当前 draft 计划 revision。
+	MethodGatewayApprovePlan = "gateway.approvePlan"
 	// MethodGatewayUserQuestionAnswer 表示提交 ask_user 回答。
 	MethodGatewayUserQuestionAnswer = "gateway.userQuestionAnswer"
 	// MethodGatewayDeleteSession 表示删除/归档会话。
@@ -364,6 +366,13 @@ type CheckpointDiffParams struct {
 type ResolvePermissionParams struct {
 	RequestID string `json:"request_id"`
 	Decision  string `json:"decision"`
+}
+
+// ApprovePlanParams 表示 gateway.approvePlan 参数。
+type ApprovePlanParams struct {
+	SessionID string `json:"session_id"`
+	PlanID    string `json:"plan_id"`
+	Revision  int    `json:"revision"`
 }
 
 // UserQuestionAnswerParams 表示 gateway.userQuestionAnswer 参数。
@@ -777,6 +786,15 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 			return normalized, parseErr
 		}
 		normalized.Action = "resolve_permission"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayApprovePlan:
+		params, parseErr := decodeApprovePlanParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "approve_plan"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.Payload = params
 		return normalized, nil
 	case MethodGatewayUserQuestionAnswer:
@@ -1509,6 +1527,24 @@ func decodeResolvePermissionParams(raw json.RawMessage) (ResolvePermissionParams
 		case "allow_once", "allow_session", "reject":
 		default:
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.decision", GatewayCodeInvalidAction)
+		}
+		return nil
+	})
+}
+
+// decodeApprovePlanParams 对 gateway.approvePlan 的 params 执行反序列化与字段校验。
+func decodeApprovePlanParams(raw json.RawMessage) (ApprovePlanParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.approvePlan", func(p *ApprovePlanParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.PlanID = strings.TrimSpace(p.PlanID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.PlanID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.plan_id", GatewayCodeMissingRequiredField)
+		}
+		if p.Revision <= 0 {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.revision", GatewayCodeInvalidAction)
 		}
 		return nil
 	})

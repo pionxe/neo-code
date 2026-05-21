@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,7 @@ type recordingPort struct {
 	runCalls          atomic.Int32
 	listSessionsCalls atomic.Int32
 	executeSysCalls   atomic.Int32
+	approvePlanCalls  atomic.Int32
 	resolveUserCalls  atomic.Int32
 	cancelCalls       atomic.Int32
 	closed            atomic.Int32
@@ -87,6 +89,15 @@ func (p *recordingPort) ListAvailableSkills(_ context.Context, _ ListAvailableSk
 
 func (p *recordingPort) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
 	return nil
+}
+
+func (p *recordingPort) ApprovePlan(_ context.Context, input ApprovePlanInput) (ApprovePlanResult, error) {
+	p.approvePlanCalls.Add(1)
+	return ApprovePlanResult{
+		PlanID:   input.PlanID,
+		Revision: input.Revision,
+		Status:   "approved",
+	}, nil
 }
 
 func (p *recordingPort) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
@@ -508,6 +519,73 @@ func TestMultiWorkspaceRuntime_ResolveUserQuestionRoutesByWorkspace(t *testing.T
 	}
 }
 
+func TestMultiWorkspaceRuntime_ApprovePlanRoutesByWorkspace(t *testing.T) {
+	idx, alpha, beta := setupIndex(t)
+	builder := newTestBuilder()
+	mw := NewMultiWorkspaceRuntime(idx, alpha.Hash, builder.build)
+	t.Cleanup(func() { _ = mw.Close() })
+
+	result, err := mw.ApprovePlan(ctxWithHash(t, beta.Hash), ApprovePlanInput{
+		SessionID: "session-1",
+		PlanID:    "plan-1",
+		Revision:  2,
+	})
+	if err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	if result.PlanID != "plan-1" || result.Revision != 2 || result.Status != "approved" {
+		t.Fatalf("ApprovePlan result = %#v", result)
+	}
+
+	betaPort := builder.portFor(beta.Path)
+	if betaPort == nil {
+		t.Fatalf("beta port should be built")
+	}
+	if got := betaPort.approvePlanCalls.Load(); got != 1 {
+		t.Fatalf("beta approve plan calls = %d, want 1", got)
+	}
+	if alphaPort := builder.portFor(alpha.Path); alphaPort != nil && alphaPort.approvePlanCalls.Load() != 0 {
+		t.Fatalf("alpha approve plan should not be called, got %d", alphaPort.approvePlanCalls.Load())
+	}
+}
+
+func TestMultiWorkspaceRuntime_ApprovePlanErrors(t *testing.T) {
+	t.Run("workspace not found", func(t *testing.T) {
+		idx, alpha, _ := setupIndex(t)
+		builder := newTestBuilder()
+		mw := NewMultiWorkspaceRuntime(idx, alpha.Hash, builder.build)
+		t.Cleanup(func() { _ = mw.Close() })
+
+		_, err := mw.ApprovePlan(ctxWithHash(t, "missing-workspace"), ApprovePlanInput{
+			SessionID: "session-1",
+			PlanID:    "plan-1",
+			Revision:  1,
+		})
+		if !errors.Is(err, ErrRuntimeResourceNotFound) {
+			t.Fatalf("ApprovePlan error = %v, want ErrRuntimeResourceNotFound", err)
+		}
+	})
+
+	t.Run("runtime port does not support plan approval", func(t *testing.T) {
+		idx, alpha, beta := setupIndex(t)
+		builder := newTestBuilder()
+		mw := NewMultiWorkspaceRuntime(idx, alpha.Hash, builder.build)
+		mw.PreloadWorkspaceBundle(beta.Hash, runtimePortWithoutPlanApproval{
+			RuntimePort: newRecordingPort("beta"),
+		}, func() error { return nil })
+		t.Cleanup(func() { _ = mw.Close() })
+
+		_, err := mw.ApprovePlan(ctxWithHash(t, beta.Hash), ApprovePlanInput{
+			SessionID: "session-1",
+			PlanID:    "plan-1",
+			Revision:  1,
+		})
+		if err == nil || !strings.Contains(err.Error(), "plan approval runtime port is unavailable") {
+			t.Fatalf("ApprovePlan error = %v, want unsupported plan approval", err)
+		}
+	})
+}
+
 func TestMultiWorkspaceRuntime_CreatePersistsIndex(t *testing.T) {
 	idx, alpha, _ := setupIndex(t)
 	builder := newTestBuilder()
@@ -747,6 +825,7 @@ func TestMultiWorkspaceRuntime_ListWorkspacesMatchesIndex(t *testing.T) {
 // guard against future drift: MultiWorkspaceRuntime must implement RuntimePort and ManagementRuntimePort.
 var _ RuntimePort = (*MultiWorkspaceRuntime)(nil)
 var _ ManagementRuntimePort = (*MultiWorkspaceRuntime)(nil)
+var _ PlanApprovalRuntimePort = (*MultiWorkspaceRuntime)(nil)
 
 // guard helper: ensure recordingPort builds correctly under sync access.
 func TestRecordingPort_Concurrent(t *testing.T) {

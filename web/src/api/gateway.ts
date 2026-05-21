@@ -18,6 +18,8 @@ import {
   type CheckpointDiffParams,
   type CheckpointDiffResult,
   type ResolvePermissionParams,
+  type ApprovePlanParams,
+  type ApprovePlanResult,
   type ResolveUserQuestionParams,
   type Session,
   type RunAckResult,
@@ -142,6 +144,10 @@ export class GatewayAPI {
   /** 解析权限请求 */
   async resolvePermission(params: ResolvePermissionParams) {
     return this.ws.call(Method.ResolvePermission, params)
+  }
+
+  async approvePlan(params: ApprovePlanParams) {
+    return this.ws.call<ApprovePlanResult>(Method.ApprovePlan, params)
   }
 
   /** 提交 ask_user 回答 */

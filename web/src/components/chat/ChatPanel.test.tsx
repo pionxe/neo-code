@@ -16,7 +16,7 @@ vi.mock('./MessageList', () => ({
 }))
 
 vi.mock('./ChatInput', () => ({
-  default: () => <div data-testid="chat-input" />,
+  default: () => <div className="input-box"><textarea data-testid="chat-input" /></div>,
 }))
 
 vi.mock('./ModelSelector', () => ({
@@ -27,11 +27,33 @@ vi.mock('./TodoStrip', () => ({
   default: () => <div data-testid="todo-strip" />,
 }))
 
+function draftPlanMessage(revision = 1) {
+  return {
+    id: `plan_msg_${revision}`,
+    role: 'assistant',
+    type: 'plan',
+    content: '实现审批面板',
+    timestamp: Date.now(),
+    planData: {
+      id: 'plan-1',
+      revision,
+      status: 'draft',
+      spec: { goal: '实现审批面板', steps: ['补 RPC', '补 Web'] },
+      summary: { goal: '实现审批面板', key_steps: ['补 RPC', '补 Web'] },
+      created_at: '2026-05-20T00:00:00Z',
+      updated_at: '2026-05-20T00:00:00Z',
+    },
+  }
+}
+
 describe('ChatPanel', () => {
   beforeEach(() => {
     mockGatewayAPI = {
       resolvePermission: vi.fn().mockResolvedValue(undefined),
       resolveUserQuestion: vi.fn().mockResolvedValue(undefined),
+      approvePlan: vi.fn().mockResolvedValue({ payload: { plan_id: 'plan-1', revision: 1, status: 'approved' } }),
+      run: vi.fn().mockResolvedValue({ session_id: 'session-1', run_id: 'run-1' }),
+      bindStream: vi.fn().mockResolvedValue(undefined),
     }
 
     useUIStore.setState({
@@ -307,5 +329,156 @@ describe('ChatPanel', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Compacting context...')
     expect(screen.getByText('Need input')).toBeInTheDocument()
     expect(screen.queryByTestId('chat-input')).not.toBeInTheDocument()
+  })
+
+  it('shows plan approval panel for latest draft plan', () => {
+    useChatStore.setState({
+      messages: [draftPlanMessage()],
+    } as any)
+
+    render(<ChatPanel />)
+
+    expect(screen.getByText('计划审批')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /同意并以 bypass 执行/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /同意并以 default 执行/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /需要修改/ })).toBeInTheDocument()
+  })
+
+  it('approves plan with bypass mode and starts build run', async () => {
+    useChatStore.setState({
+      messages: [draftPlanMessage()],
+      agentMode: 'plan',
+      permissionMode: 'default',
+    } as any)
+
+    render(<ChatPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /同意并以 bypass 执行/ }))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.approvePlan).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        plan_id: 'plan-1',
+        revision: 1,
+      })
+    })
+    await waitFor(() => {
+      expect(mockGatewayAPI.run).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        input_text: '按已批准计划执行',
+        mode: 'build',
+      })
+    })
+    expect(useChatStore.getState().agentMode).toBe('build')
+    expect(useChatStore.getState().permissionMode).toBe('bypass')
+  })
+
+  it('approves plan with default mode and starts build run', async () => {
+    useChatStore.setState({
+      messages: [draftPlanMessage()],
+      agentMode: 'plan',
+      permissionMode: 'bypass',
+    } as any)
+
+    render(<ChatPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /同意并以 default 执行/ }))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.approvePlan).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        plan_id: 'plan-1',
+        revision: 1,
+      })
+    })
+    expect(mockGatewayAPI.run).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      input_text: '按已批准计划执行',
+      mode: 'build',
+    })
+    expect(useChatStore.getState().agentMode).toBe('build')
+    expect(useChatStore.getState().permissionMode).toBe('default')
+  })
+
+  it('rejects current plan revision and shows approval again for a new revision', async () => {
+    useChatStore.setState({
+      messages: [draftPlanMessage(1)],
+    } as any)
+
+    render(<ChatPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /需要修改/ }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('计划审批')).not.toBeInTheDocument()
+    })
+    expect(mockGatewayAPI.approvePlan).not.toHaveBeenCalled()
+    expect(screen.getByTestId('chat-input')).toHaveFocus()
+
+    act(() => {
+      useChatStore.setState({ messages: [draftPlanMessage(2)] } as any)
+    })
+
+    expect(await screen.findByText('计划审批')).toBeInTheDocument()
+  })
+
+  it('keeps plan approval panel when approve fails', async () => {
+    mockGatewayAPI.approvePlan.mockRejectedValueOnce(new Error('revision mismatch'))
+    useChatStore.setState({
+      messages: [draftPlanMessage()],
+    } as any)
+
+    render(<ChatPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /同意并以 default 执行/ }))
+
+    await waitFor(() => {
+      expect(useUIStore.getState().showToast).toHaveBeenCalledWith('revision mismatch', 'error')
+    })
+    expect(mockGatewayAPI.run).not.toHaveBeenCalled()
+    expect(screen.getByText('计划审批')).toBeInTheDocument()
+  })
+
+  it('shows retry execution panel when approved plan run fails', async () => {
+    mockGatewayAPI.run.mockRejectedValueOnce(new Error('run failed'))
+    useChatStore.setState({
+      messages: [draftPlanMessage()],
+      agentMode: 'plan',
+      permissionMode: 'default',
+    } as any)
+
+    render(<ChatPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /同意并以 bypass 执行/ }))
+
+    expect(await screen.findByRole('button', { name: /重试执行已批准计划/ })).toBeInTheDocument()
+    expect(mockGatewayAPI.approvePlan).toHaveBeenCalledTimes(1)
+    expect(mockGatewayAPI.run).toHaveBeenCalledTimes(1)
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith('Failed to start approved plan run', 'error')
+    expect(useChatStore.getState().permissionMode).toBe('bypass')
+  })
+
+  it('retries approved plan execution without approving again', async () => {
+    mockGatewayAPI.run
+      .mockRejectedValueOnce(new Error('run failed'))
+      .mockResolvedValueOnce({ session_id: 'session-1', run_id: 'run-retry' })
+    useChatStore.setState({
+      messages: [draftPlanMessage()],
+      agentMode: 'plan',
+      permissionMode: 'default',
+    } as any)
+
+    render(<ChatPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /同意并以 default 执行/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /重试执行已批准计划/ }))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.run).toHaveBeenCalledTimes(2)
+    })
+    expect(mockGatewayAPI.approvePlan).toHaveBeenCalledTimes(1)
+    expect(mockGatewayAPI.run).toHaveBeenLastCalledWith({
+      session_id: 'session-1',
+      input_text: '按已批准计划执行',
+      mode: 'build',
+    })
+    expect(mockGatewayAPI.bindStream).toHaveBeenCalledWith({ session_id: 'session-1', channel: 'all' })
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /重试执行已批准计划/ })).not.toBeInTheDocument()
+    })
   })
 })
