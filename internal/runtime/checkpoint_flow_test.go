@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 type checkpointStoreSpy struct {
 	lastResume      agentsession.ResumeCheckpoint
+	setResumeErr    error
 	latestResume    *agentsession.ResumeCheckpoint
 	latestResumeErr error
 	listRecords     []agentsession.CheckpointRecord
@@ -56,7 +58,7 @@ func (s *checkpointStoreSpy) RestoreCheckpoint(context.Context, checkpoint.Resto
 
 func (s *checkpointStoreSpy) SetResumeCheckpoint(_ context.Context, rc agentsession.ResumeCheckpoint) error {
 	s.lastResume = rc
-	return nil
+	return s.setResumeErr
 }
 
 func (s *checkpointStoreSpy) PruneExpiredCheckpoints(context.Context, string, int) (int, error) {
@@ -342,6 +344,32 @@ func TestUpdateResumeCheckpoint(t *testing.T) {
 	}
 }
 
+func TestUpdateResumeCheckpointSkipsWhenStoreUnavailable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-no-store", fixture.session)
+	service := &Service{}
+	service.updateResumeCheckpoint(context.Background(), &state, "plan", "")
+}
+
+func TestUpdateResumeCheckpointSwallowsStoreErrorAndUsesEffectiveWorkdir(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-resume-workdir-fallback", fixture.session)
+	state.session.Workdir = "   "
+	state.effectiveWorkdir = fixture.workdir
+	spy := &checkpointStoreSpy{setResumeErr: errors.New("write failed")}
+	service := &Service{checkpointStore: spy}
+
+	service.updateResumeCheckpoint(context.Background(), &state, "verify", "running")
+
+	if spy.lastResume.WorkspaceKey != agentsession.WorkspacePathKey(fixture.workdir) {
+		t.Fatalf("WorkspaceKey = %q, want %q", spy.lastResume.WorkspaceKey, agentsession.WorkspacePathKey(fixture.workdir))
+	}
+}
+
 func TestApplyResumeCheckpointReplayPlanStrategy(t *testing.T) {
 	fixture := newRuntimeCheckpointFixture(t)
 	state := newRunState("run-resume-plan", fixture.session)
@@ -572,6 +600,124 @@ func TestResumeCheckpointMatchesStateSupportsLegacyMessageCountFallback(t *testi
 	}
 	if !resumeCheckpointMatchesState(resume, workspaceKey, currentRevision, legacyRevision) {
 		t.Fatalf("expected legacy len(messages) checkpoint to match during compatibility fallback")
+	}
+}
+
+func TestResolveResumeWorkspaceKey(t *testing.T) {
+	t.Parallel()
+
+	sessionWorkdir := t.TempDir()
+	effectiveWorkdir := t.TempDir()
+	got := resolveResumeWorkspaceKey(sessionWorkdir, effectiveWorkdir)
+	if got != agentsession.WorkspacePathKey(sessionWorkdir) {
+		t.Fatalf("resolveResumeWorkspaceKey(session, effective) = %q, want %q", got, agentsession.WorkspacePathKey(sessionWorkdir))
+	}
+
+	gotFallback := resolveResumeWorkspaceKey("   ", effectiveWorkdir)
+	if gotFallback != agentsession.WorkspacePathKey(effectiveWorkdir) {
+		t.Fatalf("resolveResumeWorkspaceKey(empty, effective) = %q, want %q", gotFallback, agentsession.WorkspacePathKey(effectiveWorkdir))
+	}
+}
+
+func TestResumeCheckpointMatchesStateBranches(t *testing.T) {
+	t.Parallel()
+
+	workspace := agentsession.WorkspacePathKey(t.TempDir())
+	if resumeCheckpointMatchesState(agentsession.ResumeCheckpoint{}, workspace, 1, 1) {
+		t.Fatal("expected empty checkpoint workspace to fail")
+	}
+	if resumeCheckpointMatchesState(agentsession.ResumeCheckpoint{WorkspaceKey: workspace}, "", 1, 1) {
+		t.Fatal("expected empty current workspace to fail")
+	}
+	if resumeCheckpointMatchesState(agentsession.ResumeCheckpoint{WorkspaceKey: workspace + "-other", TranscriptRevision: 1}, workspace, 1, 1) {
+		t.Fatal("expected workspace mismatch to fail")
+	}
+	if resumeCheckpointMatchesState(agentsession.ResumeCheckpoint{WorkspaceKey: workspace, TranscriptRevision: -1}, workspace, 1, 1) {
+		t.Fatal("expected negative checkpoint revision to fail")
+	}
+	if resumeCheckpointMatchesState(agentsession.ResumeCheckpoint{WorkspaceKey: workspace, TranscriptRevision: 1}, workspace, -1, 1) {
+		t.Fatal("expected negative current revision to fail")
+	}
+	if !resumeCheckpointMatchesState(agentsession.ResumeCheckpoint{WorkspaceKey: workspace, TranscriptRevision: 9}, workspace, 9, 3) {
+		t.Fatal("expected exact current revision match to pass")
+	}
+	if resumeCheckpointMatchesState(agentsession.ResumeCheckpoint{WorkspaceKey: workspace, TranscriptRevision: 8}, workspace, 9, -1) {
+		t.Fatal("expected legacy fallback disabled on negative legacy revision")
+	}
+	if resumeCheckpointMatchesState(agentsession.ResumeCheckpoint{WorkspaceKey: workspace, TranscriptRevision: 8}, workspace, 9, 7) {
+		t.Fatal("expected mismatch across current/legacy revisions to fail")
+	}
+}
+
+func TestSessionTranscriptRevisionIncludesTodoAndPlanState(t *testing.T) {
+	t.Parallel()
+
+	required := true
+	base := agentsession.NewWithWorkdir("resume-rich", t.TempDir())
+	base.Messages = []providertypes.Message{
+		{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("same-count"),
+			},
+		},
+	}
+	base.TodoVersion = 2
+	base.Todos = []agentsession.TodoItem{
+		{
+			ID:            "todo-1",
+			Content:       "prepare report",
+			Status:        agentsession.TodoStatusInProgress,
+			Required:      &required,
+			OwnerType:     agentsession.TodoOwnerTypeAgent,
+			OwnerID:       "agent-1",
+			FailureReason: "",
+			BlockedReason: agentsession.TodoBlockedReasonPermissionWait,
+			Revision:      3,
+			UpdatedAt:     time.Unix(1700020000, 0).UTC(),
+		},
+	}
+	base.TaskState = agentsession.TaskState{
+		VerificationProfile: agentsession.VerificationProfileFixBug,
+		Goal:                "fix bug",
+		Progress:            []string{"  inspect logs  ", "write test"},
+		OpenItems:           []string{"   verify patch"},
+		NextStep:            "  run tests  ",
+		Blockers:            []string{" permission "},
+		KeyArtifacts:        []string{" report.md "},
+		Decisions:           []string{" keep legacy fallback "},
+		UserConstraints:     []string{" no destructive ops "},
+		LastUpdatedAt:       time.Unix(1700020001, 0).UTC(),
+	}
+	base.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-1",
+		Revision: 2,
+	}
+	base.LastFullPlanRevision = 2
+	base.PlanApprovalPendingFullAlign = true
+
+	cloned := base
+	cloned.TaskState.Progress = append([]string(nil), base.TaskState.Progress...)
+	cloned.TaskState.OpenItems = append([]string(nil), base.TaskState.OpenItems...)
+	cloned.TaskState.Blockers = append([]string(nil), base.TaskState.Blockers...)
+	cloned.TaskState.KeyArtifacts = append([]string(nil), base.TaskState.KeyArtifacts...)
+	cloned.TaskState.Decisions = append([]string(nil), base.TaskState.Decisions...)
+	cloned.TaskState.UserConstraints = append([]string(nil), base.TaskState.UserConstraints...)
+	cloned.Todos = append([]agentsession.TodoItem(nil), base.Todos...)
+	if len(cloned.Todos) > 0 {
+		requiredCopy := *cloned.Todos[0].Required
+		cloned.Todos[0].Required = &requiredCopy
+	}
+
+	before := sessionTranscriptRevision(base)
+	after := sessionTranscriptRevision(cloned)
+	if before != after {
+		t.Fatalf("expected equal revisions for equivalent rich state, got %d vs %d", before, after)
+	}
+
+	cloned.Todos[0].Status = agentsession.TodoStatusCompleted
+	if sessionTranscriptRevision(base) == sessionTranscriptRevision(cloned) {
+		t.Fatal("expected todo status change to affect transcript revision")
 	}
 }
 

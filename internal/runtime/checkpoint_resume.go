@@ -15,7 +15,6 @@ import (
 const (
 	resumeStrategyReplayPlan         = "replay_plan"
 	resumeStrategyVerifyClosureFirst = "resume_verify_closure"
-	resumeTranscriptRevisionInvalid  = int64(-1)
 )
 
 // updateResumeCheckpoint 在 phase 转换时写入或更新 ResumeCheckpoint。
@@ -126,14 +125,11 @@ func sessionTranscriptRevision(session agentsession.Session) int64 {
 		PlanContextDirty:                session.PlanContextDirty,
 		PlanRestorePendingAlign:         session.PlanRestorePendingAlign,
 	}
-	raw, err := json.Marshal(snapshot)
-	if err != nil {
-		return resumeTranscriptRevisionInvalid
-	}
+	// snapshot 字段仅由基础可序列化类型组成，Marshal 对该结构是稳定可达的。
+	raw, _ := json.Marshal(snapshot)
 	hasher := fnv.New64a()
-	if _, err := hasher.Write(raw); err != nil {
-		return resumeTranscriptRevisionInvalid
-	}
+	// fnv.Hash Write 对内存写入不会返回错误，这里忽略 error 以保持实现简洁。
+	_, _ = hasher.Write(raw)
 	const positiveInt64Mask = uint64(1<<63 - 1)
 	return int64(hasher.Sum64() & positiveInt64Mask)
 }
