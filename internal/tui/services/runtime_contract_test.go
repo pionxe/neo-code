@@ -17,6 +17,19 @@ var runtimeContractEventSourceFiles = []string{
 	"internal/runtime/events_subagent.go",
 }
 
+// legacyPassthroughEvents 是已知的遗留透传事件，允许不注册到 contractRegistry。
+// 新增的 runtime Event* 常量必须显式注册到 contractRegistry，否则 CI 失败。
+var legacyPassthroughEvents = map[string]struct{}{
+	"thinking_delta":               {},
+	"plan_updated":                 {},
+	"budget_checked":               {},
+	"budget_estimate_failed":       {},
+	"ledger_reconciled":            {},
+	"repository_context_unavailable": {},
+	"resume_applied":               {},
+	"run_diff_summary":             {},
+}
+
 // TestRegisteredEventTypesSorted 验证 RegisteredEventTypes 返回排序后的列表。
 func TestRegisteredEventTypesSorted(t *testing.T) {
 	types := RegisteredEventTypes()
@@ -87,7 +100,7 @@ func TestIsRegisteredEventType(t *testing.T) {
 }
 
 // TestRuntimeEventContractConsistency 扫描 runtime 事件常量并与 contractRegistry 求差集。
-// 若存在 RequireConsumer=true 的事件未在 contractRegistry 中注册，测试失败。
+// 未注册且不在 legacyPassthroughEvents 中的事件会导致测试失败。
 func TestRuntimeEventContractConsistency(t *testing.T) {
 	runtimeEventValues := collectRuntimeEventConstants(t)
 	if len(runtimeEventValues) == 0 {
@@ -99,43 +112,53 @@ func TestRuntimeEventContractConsistency(t *testing.T) {
 		registeredTypes[eventType] = struct{}{}
 	}
 
-	var violations []string
+	var unregistered []string
 	for _, eventValue := range runtimeEventValues {
 		eventType := EventType(eventValue)
 		if _, registered := registeredTypes[eventType]; registered {
 			continue
 		}
-		// 未注册到 contractRegistry → 默认 RequireConsumer=false（透传安全）
-		// 这是可接受的，仅记录日志
-		t.Logf("runtime event %q not registered in contractRegistry (passthrough allowed)", eventValue)
+		if _, legacy := legacyPassthroughEvents[eventValue]; legacy {
+			t.Logf("runtime event %q in legacyPassthroughEvents allowlist (passthrough allowed)", eventValue)
+			continue
+		}
+		unregistered = append(unregistered, eventValue)
+	}
+
+	if len(unregistered) > 0 {
+		sort.Strings(unregistered)
+		t.Fatalf(
+			"runtime events not registered in contractRegistry and not in legacyPassthroughEvents:\n  %s\n\n"+
+				"Fix: add to contractRegistry in runtime_contract.go with explicit RequireConsumer decision, "+
+				"or add to legacyPassthroughEvents if passthrough is acceptable.",
+			strings.Join(unregistered, "\n  "),
+		)
 	}
 
 	// 反向检查：contractRegistry 中 RequireConsumer=true 的事件是否都在 runtime 中定义
-	// 这确保了 TUI 侧不会声明一个 runtime 根本不产生的事件需要消费者
 	runtimeEventSet := make(map[string]struct{}, len(runtimeEventValues))
 	for _, v := range runtimeEventValues {
 		runtimeEventSet[v] = struct{}{}
 	}
+	var ghostEvents []string
 	for eventType, entry := range contractRegistry {
 		if !entry.RequireConsumer {
 			continue
 		}
-		// 跳过 TUI 侧特有的 bridge 事件（如 run_context, tool_status, usage）
 		if isTUIBridgeEvent(eventType) {
 			continue
 		}
 		if _, exists := runtimeEventSet[string(eventType)]; !exists {
-			violations = append(violations, string(eventType))
+			ghostEvents = append(ghostEvents, string(eventType))
 		}
 	}
 
-	if len(violations) > 0 {
-		sort.Strings(violations)
+	if len(ghostEvents) > 0 {
+		sort.Strings(ghostEvents)
 		t.Fatalf(
 			"contractRegistry events with RequireConsumer=true not found in runtime events.go:\n  %s\n\n"+
-				"These events are declared as requiring consumers but runtime does not produce them.\n"+
 				"Fix: remove from contractRegistry or add the event to runtime events.go.",
-			strings.Join(violations, "\n  "),
+			strings.Join(ghostEvents, "\n  "),
 		)
 	}
 }
@@ -233,6 +256,44 @@ func TestRequireConsumerMustHaveDecodeBranch(t *testing.T) {
 	}
 }
 
+// TestRequireConsumerMustHaveTUIConsumer 验证 contractRegistry 中 RequireConsumer=true 的事件
+// 必须在 TUI update.go 的 runtimeEventHandlerRegistry 中有对应的 handler。
+// 这确保事件不会在 decode 后被 handleRuntimeEvent 静默丢弃。
+func TestRequireConsumerMustHaveTUIConsumer(t *testing.T) {
+	tuiHandlerEvents := collectTUIEventHandlerEvents(t)
+	if len(tuiHandlerEvents) == 0 {
+		t.Fatal("no events found in runtimeEventHandlerRegistry")
+	}
+
+	tuiHandlerSet := make(map[string]struct{}, len(tuiHandlerEvents))
+	for _, v := range tuiHandlerEvents {
+		tuiHandlerSet[v] = struct{}{}
+	}
+
+	var violations []string
+	for eventType, entry := range contractRegistry {
+		if !entry.RequireConsumer {
+			continue
+		}
+		value := string(eventType)
+		if _, handled := tuiHandlerSet[value]; handled {
+			continue
+		}
+		// bridge 事件在 update.go 中也有 handler，但如果缺失也算违规
+		violations = append(violations, value)
+	}
+
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Fatalf(
+			"contractRegistry events with RequireConsumer=true missing TUI event handler:\n  %s\n\n"+
+				"Fix: add a handler in runtimeEventHandlerRegistry (internal/tui/core/app/update.go), or "+
+				"set RequireConsumer=false in contractRegistry if TUI consumption is not required.",
+			strings.Join(violations, "\n  "),
+		)
+	}
+}
+
 // isTUIBridgeEvent 判断事件是否为 TUI 侧特有的 bridge 事件（非 runtime 产生）。
 func isTUIBridgeEvent(eventType EventType) bool {
 	bridgeEvents := map[EventType]struct{}{
@@ -259,6 +320,109 @@ func resolveConstNameToValue(constName string) (string, bool) {
 		return value, true
 	}
 	return "", false
+}
+
+// collectTUIEventHandlerEvents 从 update.go 的 runtimeEventHandlerRegistry 中提取已注册的事件值。
+func collectTUIEventHandlerEvents(t *testing.T) []string {
+	t.Helper()
+
+	projectRoot := findProjectRoot(t)
+	filePath := filepath.Join(projectRoot, "internal", "tui", "core", "app", "update.go")
+
+	src, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", filePath, err)
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filePath, src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filePath, err)
+	}
+
+	// 从 runtime_contract.go 构建常量名→值映射
+	constNameToValue := buildEventTypeConstMap(t, filepath.Join(projectRoot, "internal", "tui", "services", "runtime_contract.go"))
+	// bridge 常量
+	bridgeConstMap := buildBridgeConstMap(t, filepath.Join(projectRoot, "internal", "tui", "services", "runtime_bridge.go"))
+	for k, v := range bridgeConstMap {
+		constNameToValue[k] = v
+	}
+
+	var eventValues []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		// 查找 runtimeEventHandlerRegistry 的 map literal
+		valueSpec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		// 查找 var runtimeEventHandlerRegistry = map[...]...{...}
+		isRegistry := false
+		for _, name := range valueSpec.Names {
+			if name.Name == "runtimeEventHandlerRegistry" {
+				isRegistry = true
+				break
+			}
+		}
+		if !isRegistry || len(valueSpec.Values) == 0 {
+			return true
+		}
+
+		// 解析 composite literal 中的 key
+		for _, val := range valueSpec.Values {
+			compositeLit, ok := val.(*ast.CompositeLit)
+			if !ok {
+				continue
+			}
+			for _, elt := range compositeLit.Elts {
+				kvExpr, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				eventValue := extractEventValueFromExpr(kvExpr.Key, constNameToValue)
+				if eventValue != "" {
+					eventValues = append(eventValues, eventValue)
+				}
+			}
+		}
+		return true
+	})
+	return eventValues
+}
+
+// extractEventValueFromExpr 从 AST 表达式中提取事件字符串值。
+func extractEventValueFromExpr(expr ast.Expr, constNameToValue map[string]string) string {
+	switch v := expr.(type) {
+	case *ast.Ident:
+		// tuiservices.EventXxx
+		if value, ok := constNameToValue[v.Name]; ok {
+			return value
+		}
+		return v.Name
+	case *ast.SelectorExpr:
+		// tuiservices.EventXxx → 提取 EventXxx
+		if ident, ok := v.X.(*ast.Ident); ok && ident.Name == "tuiservices" {
+			if value, ok := constNameToValue[v.Sel.Name]; ok {
+				return value
+			}
+			return v.Sel.Name
+		}
+	case *ast.CallExpr:
+		// tuiservices.EventType(tuiservices.RuntimeEventXxx) → 提取 RuntimeEventXxx
+		if funIdent, ok := v.Fun.(*ast.Ident); ok && funIdent.Name == "EventType" {
+			if len(v.Args) > 0 {
+				return extractEventValueFromExpr(v.Args[0], constNameToValue)
+			}
+		}
+		// tuiservices.EventType(tuiservices.RuntimeEventXxx) via SelectorExpr
+		if sel, ok := v.Fun.(*ast.SelectorExpr); ok {
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "tuiservices" && sel.Sel.Name == "EventType" {
+				if len(v.Args) > 0 {
+					return extractEventValueFromExpr(v.Args[0], constNameToValue)
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // collectRuntimeEventConstants 从 runtime 事件源文件中提取所有 Event* 常量值。

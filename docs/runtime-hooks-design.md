@@ -224,14 +224,24 @@ EventMyNewEvent: {RequireConsumer: true},
 
 **Step 3：添加 TUI 消费者**
 
-在 `internal/tui/core/app/update.go` 的事件处理 switch 中添加对应分支，确保事件被正确消费。
+在 `internal/tui/core/app/update.go` 的 `runtimeEventHandlerRegistry` 中添加对应 handler：
+
+```go
+// update.go - runtimeEventHandlerRegistry 中添加：
+tuiservices.EventMyNewEvent: runtimeEventMyNewEventHandler,
+```
 
 ### CI 契约检查
 
 以下测试用例在 CI 中强制执行事件契约一致性：
 
-- `TestRuntimeEventContractConsistency`：扫描 runtime 事件常量，验证 `RequireConsumer=true` 的事件已注册
+- `TestRuntimeEventContractConsistency`：扫描 runtime 事件常量，未注册且不在 `legacyPassthroughEvents` 中的事件会导致 CI 失败
 - `TestGatewayDecodeBranchConsistency`：验证 gateway decode 分支中的事件都在 contractRegistry 中注册
-- `TestRequireConsumerMustHaveDecodeBranch`：验证 `RequireConsumer=true` 的事件必须有 decode 分支
+- `TestRequireConsumerMustHaveDecodeBranch`：验证 `RequireConsumer=true` 的事件必须有 gateway decode 分支
+- `TestRequireConsumerMustHaveTUIConsumer`：验证 `RequireConsumer=true` 的事件必须在 `runtimeEventHandlerRegistry` 中有 handler
 
-若 CI 失败，检查以上三步是否遗漏。未注册的事件默认允许透传（`RequireConsumer=false`），不会导致 CI 失败。
+若 CI 失败，检查以上三步是否遗漏。
+
+### 遗留透传事件
+
+`legacyPassthroughEvents` 是已知的遗留透传事件允许列表，这些事件在 contractRegistry 建立之前已存在，允许不注册。新增的 runtime Event* 常量必须显式注册到 contractRegistry，否则 CI 失败。
