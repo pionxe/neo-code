@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
@@ -724,3 +725,116 @@ const (
 	EventDecisionMade               EventType = "decision_made"
 	EventTodoSnapshotUpdated        EventType = "todo_snapshot_updated"
 )
+
+// contractEntry 描述单个事件类型的契约声明。
+type contractEntry struct {
+	RequireConsumer bool
+}
+
+// contractRegistry 声明 TUI 侧已知的事件类型及其消费者要求。
+// RequireConsumer=true 表示该事件必须有对应的 gateway decode 分支与 TUI 消费者；
+// RequireConsumer=false 表示该事件允许透传（passthrough），不要求显式消费。
+var contractRegistry = map[EventType]contractEntry{
+	// --- 已有 decode 分支的事件（RequireConsumer=true）---
+	EventUserMessage:               {RequireConsumer: true},
+	EventAgentDone:                 {RequireConsumer: true},
+	EventToolStart:                 {RequireConsumer: true},
+	EventToolResult:                {RequireConsumer: true},
+	EventPermissionRequested:       {RequireConsumer: true},
+	EventPermissionResolved:        {RequireConsumer: true},
+	EventUserQuestionRequested:     {RequireConsumer: true},
+	EventUserQuestionAnswered:      {RequireConsumer: true},
+	EventUserQuestionTimeout:       {RequireConsumer: true},
+	EventUserQuestionSkipped:       {RequireConsumer: true},
+	EventCompactApplied:            {RequireConsumer: true},
+	EventCompactError:              {RequireConsumer: true},
+	EventTokenUsage:                {RequireConsumer: true},
+	EventPhaseChanged:              {RequireConsumer: true},
+	EventStopReasonDecided:         {RequireConsumer: true},
+	EventVerificationStarted:       {RequireConsumer: true},
+	EventVerificationStageFinished: {RequireConsumer: true},
+	EventVerificationFinished:      {RequireConsumer: true},
+	EventVerificationCompleted:     {RequireConsumer: true},
+	EventVerificationFailed:        {RequireConsumer: true},
+	EventAcceptanceDecided:         {RequireConsumer: true},
+	EventInputNormalized:           {RequireConsumer: true},
+	EventAssetSaved:                {RequireConsumer: true},
+	EventAssetSaveFailed:           {RequireConsumer: true},
+	EventHookStarted:               {RequireConsumer: true},
+	EventHookFinished:              {RequireConsumer: true},
+	EventHookFailed:                {RequireConsumer: true},
+	EventHookBlocked:               {RequireConsumer: true},
+	EventHookNotification:          {RequireConsumer: true},
+	EventRepoHooksDiscovered:       {RequireConsumer: true},
+	EventRepoHooksLoaded:           {RequireConsumer: true},
+	EventRepoHooksSkippedUntrusted: {RequireConsumer: true},
+	EventRepoHooksTrustStoreInvalid: {RequireConsumer: true},
+	EventCheckpointCreated:          {RequireConsumer: true},
+	EventCheckpointWarning:          {RequireConsumer: true},
+	EventCheckpointRestored:         {RequireConsumer: true},
+	EventCheckpointUndoRestore:      {RequireConsumer: true},
+	EventToolDiff:                   {RequireConsumer: true},
+	EventBashSideEffect:             {RequireConsumer: true},
+	EventTodoUpdated:                {RequireConsumer: true},
+	EventTodoConflict:               {RequireConsumer: true},
+	EventTodoSnapshotUpdated:        {RequireConsumer: true},
+	EventSubAgentStarted:            {RequireConsumer: true},
+	EventSubAgentProgress:           {RequireConsumer: true},
+	EventSubAgentRetried:            {RequireConsumer: true},
+	EventSubAgentBlocked:            {RequireConsumer: true},
+	EventSubAgentCompleted:          {RequireConsumer: true},
+	EventSubAgentFailed:             {RequireConsumer: true},
+	EventSubAgentCanceled:           {RequireConsumer: true},
+	EventSubAgentFinished:           {RequireConsumer: true},
+	EventSubAgentToolCallStarted:    {RequireConsumer: true},
+	EventSubAgentToolCallResult:     {RequireConsumer: true},
+	EventSubAgentToolCallDenied:     {RequireConsumer: true},
+	EventRuntimeSnapshotUpdated:     {RequireConsumer: true},
+	EventSubAgentSnapshotUpdated:    {RequireConsumer: true},
+	EventDecisionMade:               {RequireConsumer: true},
+
+	// --- 字符串类 payload 事件（有 decode 分支，透传字符串）---
+	EventAgentChunk:       {RequireConsumer: true},
+	EventToolChunk:        {RequireConsumer: true},
+	EventError:            {RequireConsumer: true},
+	EventToolCallThinking: {RequireConsumer: true},
+	EventCompactStart:     {RequireConsumer: true},
+
+	// --- 显式声明为透传安全（passthrough-safe）的事件 ---
+	// 这些事件在 runtime 侧产生但不要求 TUI 显式消费，
+	// 未在 gateway decode 中处理时会以原始 payload 透传。
+	EventRunCanceled:        {RequireConsumer: false},
+	EventSkillActivated:     {RequireConsumer: false},
+	EventSkillDeactivated:   {RequireConsumer: false},
+	EventSkillMissing:       {RequireConsumer: false},
+	EventProgressEvaluated:  {RequireConsumer: false},
+	EventTodoSummaryInjected: {RequireConsumer: false},
+}
+
+// RegisteredEventTypes 返回所有已注册的契约事件类型（排序后）。
+func RegisteredEventTypes() []EventType {
+	types := make([]EventType, 0, len(contractRegistry))
+	for eventType := range contractRegistry {
+		types = append(types, eventType)
+	}
+	sort.Slice(types, func(i, j int) bool {
+		return types[i] < types[j]
+	})
+	return types
+}
+
+// RequireConsumer 返回指定事件类型是否要求显式消费者。
+// 若事件类型未注册，返回 false（允许透传）。
+func RequireConsumer(eventType EventType) bool {
+	entry, ok := contractRegistry[eventType]
+	if !ok {
+		return false
+	}
+	return entry.RequireConsumer
+}
+
+// IsRegisteredEventType 返回指定事件类型是否已注册到契约中。
+func IsRegisteredEventType(eventType EventType) bool {
+	_, ok := contractRegistry[eventType]
+	return ok
+}
