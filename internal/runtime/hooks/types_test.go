@@ -246,3 +246,103 @@ func TestHookPointCapabilities(t *testing.T) {
 		t.Fatal("unknown hook point should not have capability")
 	}
 }
+
+func TestListHookPointsReturnsSortedSlice(t *testing.T) {
+	t.Parallel()
+
+	points := ListHookPoints()
+	if len(points) == 0 {
+		t.Fatal("expected at least one hook point")
+	}
+
+	// 验证包含所有已知点位。
+	expected := []HookPoint{
+		HookPointBeforeToolCall,
+		HookPointAfterToolResult,
+		HookPointBeforeCompletionDecision,
+		HookPointAcceptGate,
+		HookPointBeforePermissionDecision,
+		HookPointAfterToolFailure,
+		HookPointSessionStart,
+		HookPointSessionEnd,
+		HookPointUserPromptSubmit,
+		HookPointPreCompact,
+		HookPointPostCompact,
+		HookPointSubAgentStart,
+		HookPointSubAgentStop,
+	}
+	if len(points) != len(expected) {
+		t.Fatalf("ListHookPoints() len = %d, want %d", len(points), len(expected))
+	}
+
+	// 验证排序。
+	for i := 1; i < len(points); i++ {
+		if points[i] < points[i-1] {
+			t.Fatalf("ListHookPoints() not sorted: %q < %q at index %d", points[i], points[i-1], i)
+		}
+	}
+
+	// 验证包含所有点位。
+	pointSet := make(map[HookPoint]struct{}, len(points))
+	for _, p := range points {
+		pointSet[p] = struct{}{}
+	}
+	for _, p := range expected {
+		if _, ok := pointSet[p]; !ok {
+			t.Fatalf("ListHookPoints() missing point %q", p)
+		}
+	}
+}
+
+func TestIsUserAllowed(t *testing.T) {
+	t.Parallel()
+
+	allowedPoints := []HookPoint{
+		HookPointBeforeToolCall,
+		HookPointAfterToolResult,
+		HookPointBeforeCompletionDecision,
+		HookPointAcceptGate,
+		HookPointAfterToolFailure,
+		HookPointSessionStart,
+		HookPointSessionEnd,
+		HookPointUserPromptSubmit,
+		HookPointPostCompact,
+		HookPointSubAgentStop,
+	}
+	for _, p := range allowedPoints {
+		if !IsUserAllowed(p) {
+			t.Fatalf("IsUserAllowed(%q) = false, want true", p)
+		}
+	}
+
+	disallowedPoints := []HookPoint{
+		HookPointBeforePermissionDecision,
+		HookPointPreCompact,
+		HookPointSubAgentStart,
+	}
+	for _, p := range disallowedPoints {
+		if IsUserAllowed(p) {
+			t.Fatalf("IsUserAllowed(%q) = true, want false", p)
+		}
+	}
+
+	// 未知点位应返回 false。
+	if IsUserAllowed(HookPoint("unknown_point")) {
+		t.Fatal("IsUserAllowed(unknown) should return false")
+	}
+}
+
+func TestIsRepoAllowed(t *testing.T) {
+	t.Parallel()
+
+	// 当前 repo 与 user 共享策略。
+	if !IsRepoAllowed(HookPointBeforeToolCall) {
+		t.Fatal("IsRepoAllowed(before_tool_call) should be true")
+	}
+	if IsRepoAllowed(HookPointPreCompact) {
+		t.Fatal("IsRepoAllowed(pre_compact) should be false")
+	}
+	if IsRepoAllowed(HookPoint("unknown")) {
+		t.Fatal("IsRepoAllowed(unknown) should be false")
+	}
+}

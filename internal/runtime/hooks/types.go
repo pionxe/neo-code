@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 )
@@ -223,4 +224,31 @@ func isSupportedHookPoint(point HookPoint) bool {
 func HookPointCapabilities(point HookPoint) (HookPointCapability, bool) {
 	capability, ok := hookPointCapabilities[point]
 	return capability, ok
+}
+
+// ListHookPoints 返回所有已注册的 hook 点位（按字符串排序，保证确定性）。
+func ListHookPoints() []HookPoint {
+	points := make([]HookPoint, 0, len(hookPointCapabilities))
+	for point := range hookPointCapabilities {
+		points = append(points, point)
+	}
+	sort.Slice(points, func(i, j int) bool {
+		return points[i] < points[j]
+	})
+	return points
+}
+
+// IsUserAllowed 返回指定点位是否允许 user scope hook 挂载。
+func IsUserAllowed(point HookPoint) bool {
+	capability, ok := hookPointCapabilities[point]
+	if !ok {
+		return false
+	}
+	return capability.UserAllowed
+}
+
+// IsRepoAllowed 返回指定点位是否允许 repo scope hook 挂载。
+// 当前 repo 与 user 共享相同的 allowed 策略。
+func IsRepoAllowed(point HookPoint) bool {
+	return IsUserAllowed(point)
 }
