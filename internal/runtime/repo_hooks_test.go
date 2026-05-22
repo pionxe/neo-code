@@ -808,3 +808,271 @@ func TestRepoHookEventEmittersAndHelpers(t *testing.T) {
 		t.Fatalf("coalesceHookMessage(blank) = %q, want empty", got)
 	}
 }
+
+// TestRepoHookPointSingleSourceConsistency 验证 repo 侧与 runtime hooks 包的点位定义一致。
+// 新增 hook point 时只需修改 runtime hooks 包，repo 验证自动接受。
+func TestRepoHookPointSingleSourceConsistency(t *testing.T) {
+	t.Parallel()
+
+	allPoints := runtimehooks.ListHookPoints()
+	if len(allPoints) == 0 {
+		t.Fatal("expected at least one hook point from runtime hooks package")
+	}
+
+	base := config.RuntimeHookItemConfig{
+		ID:            "repo-consistency",
+		Scope:         "repo",
+		Kind:          "builtin",
+		Mode:          "sync",
+		Handler:       "add_context_note",
+		TimeoutSec:    2,
+		FailurePolicy: "warn_only",
+		Params:        map[string]any{"note": "consistency check"},
+	}
+
+	for _, point := range allPoints {
+		point := point
+		t.Run(string(point), func(t *testing.T) {
+			t.Parallel()
+			if !runtimehooks.IsRepoAllowed(point) {
+				// 跳过不允许 repo 的点位。
+				return
+			}
+			item := base.Clone()
+			item.Point = string(point)
+			if err := validateRepoHookItem(item); err != nil {
+				t.Fatalf("repo validation rejected point %q: %v", point, err)
+			}
+		})
+	}
+
+	// 验证 accept_gate 在 runtime hooks 包中存在且允许 repo。
+	acceptGateCap, ok := runtimehooks.HookPointCapabilities(runtimehooks.HookPointAcceptGate)
+	if !ok {
+		t.Fatal("accept_gate not found in runtime hooks capabilities")
+	}
+	if !acceptGateCap.UserAllowed {
+		t.Fatal("accept_gate should allow repo hooks (via UserAllowed)")
+	}
+}
+
+func TestEvaluateWorkspaceTrustPermissionAndNormalizeErrorBranches(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	workspace := filepath.Join(homeDir, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
+	storePath := resolveTrustedWorkspacesPath()
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir trust store dir: %v", err)
+	}
+
+	// 分支：trust store 是目录，触发 read 或 permissions 错误。
+	if err := os.MkdirAll(storePath, 0o755); err != nil {
+		t.Fatalf("mkdir store as dir: %v", err)
+	}
+	decision := evaluateWorkspaceTrust(workspace)
+	if decision.Trusted {
+		t.Fatal("expected untrusted when trust store is a directory")
+	}
+	if strings.TrimSpace(decision.InvalidReason) == "" {
+		t.Fatal("expected non-empty invalid reason when trust store is a directory")
+	}
+
+	// 清理并写入包含相对路径 entry 的 trust store。
+	if err := os.RemoveAll(storePath); err != nil {
+		t.Fatalf("remove store dir: %v", err)
+	}
+	store := trustedWorkspaceStore{
+		Version:    repoHooksTrustStoreVersion,
+		Workspaces: []string{"relative/path/not/absolute"},
+	}
+	rawStore, err := json.Marshal(store)
+	if err != nil {
+		t.Fatalf("marshal trust store: %v", err)
+	}
+	if err := os.WriteFile(storePath, rawStore, 0o644); err != nil {
+		t.Fatalf("write trust store: %v", err)
+	}
+
+	// 分支：workspaces 中的 entry 无法 normalize（相对路径）。
+	decision = evaluateWorkspaceTrust(workspace)
+	if decision.Trusted {
+		t.Fatal("expected untrusted when workspaces entry is relative")
+	}
+	if !strings.Contains(decision.InvalidReason, "invalid") {
+		t.Fatalf("expected invalid path error, got: %s", decision.InvalidReason)
+	}
+}
+
+func TestLoadRepoHookItemsErrorBranches(t *testing.T) {
+	workspace := t.TempDir()
+
+	// 分支：YAML 结构不匹配（未知字段）。
+	hooksPath := filepath.Join(workspace, ".neocode", "hooks.yaml")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(hooksPath, []byte(`
+hooks:
+  items:
+    - id: bad
+      unknown_field: value
+`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := loadRepoHookItems(hooksPath, config.StaticDefaults().Runtime.Hooks)
+	if err == nil {
+		t.Fatal("expected unknown field error")
+	}
+
+	// 分支：item 校验失败（空 id）。
+	if err := os.WriteFile(hooksPath, []byte(`
+hooks:
+  items:
+    - point: before_tool_call
+`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err = loadRepoHookItems(hooksPath, config.StaticDefaults().Runtime.Hooks)
+	if err == nil {
+		t.Fatal("expected validation error for empty id")
+	}
+}
+
+func TestBuildRepoHookExecutorForWorkspaceErrorPaths(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	// 分支：loadRepoHookItems 解析失败（trust 已通过但 hooks 文件损坏）。
+	workspace := filepath.Join(homeDir, "bad-hooks")
+	if err := os.MkdirAll(filepath.Join(workspace, ".neocode"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".neocode", "hooks.yaml"), []byte(`not: valid: yaml: [`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	storePath := resolveTrustedWorkspacesPath()
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir trust store dir: %v", err)
+	}
+	rawStore, err := json.Marshal(trustedWorkspaceStore{
+		Version:    repoHooksTrustStoreVersion,
+		Workspaces: []string{workspace},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(storePath, rawStore, 0o644); err != nil {
+		t.Fatalf("write trust store: %v", err)
+	}
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	_, err = buildRepoHookExecutorForWorkspace(service, workspace, config.StaticDefaults().Runtime.Hooks)
+	if err == nil {
+		t.Fatal("expected error from corrupted hooks file")
+	}
+
+	// 分支：hooksPath 解析失败（workspace 为空）。
+	service2 := &Service{events: make(chan RuntimeEvent, 16)}
+	exec, err := buildRepoHookExecutorForWorkspace(service2, " ", config.StaticDefaults().Runtime.Hooks)
+	if err != nil {
+		t.Fatalf("buildRepoHookExecutorForWorkspace(blank) error = %v", err)
+	}
+	if exec != nil {
+		t.Fatal("expected nil executor for blank workspace")
+	}
+}
+
+func TestValidateRepoHookItemCommandKindBranches(t *testing.T) {
+	t.Parallel()
+
+	// 分支：kind=command 且 params.command 存在时通过。
+	item := config.RuntimeHookItemConfig{
+		ID:            "cmd-ok",
+		Point:         "before_tool_call",
+		Scope:         "repo",
+		Kind:          "command",
+		Mode:          "sync",
+		TimeoutSec:    2,
+		FailurePolicy: "warn_only",
+		Params:        map[string]any{"command": "echo ok"},
+	}
+	if err := validateRepoHookItem(item); err != nil {
+		t.Fatalf("validateRepoHookItem(command with params) error = %v", err)
+	}
+
+	// 分支：kind=command 但 params.command 为空。
+	item2 := item.Clone()
+	item2.Params = map[string]any{}
+	if err := validateRepoHookItem(item2); err == nil {
+		t.Fatal("expected error for command without params.command")
+	}
+}
+
+func TestBuildRepoHookExecutorForWorkspaceEmptyHooks(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	workspace := filepath.Join(homeDir, "empty-hooks")
+	if err := os.MkdirAll(filepath.Join(workspace, ".neocode"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// hooks 文件存在但所有 item 都 disabled。
+	if err := os.WriteFile(filepath.Join(workspace, ".neocode", "hooks.yaml"), []byte(`
+hooks:
+  items:
+    - id: disabled-hook
+      enabled: false
+      point: before_tool_call
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: add_context_note
+      params:
+        note: skip
+`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	storePath := resolveTrustedWorkspacesPath()
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir trust store dir: %v", err)
+	}
+	rawStore, err := json.Marshal(trustedWorkspaceStore{
+		Version:    repoHooksTrustStoreVersion,
+		Workspaces: []string{workspace},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(storePath, rawStore, 0o644); err != nil {
+		t.Fatalf("write trust store: %v", err)
+	}
+
+	service := &Service{events: make(chan RuntimeEvent, 64)}
+	exec, err := buildRepoHookExecutorForWorkspace(service, workspace, config.StaticDefaults().Runtime.Hooks)
+	if err != nil {
+		t.Fatalf("buildRepoHookExecutorForWorkspace() error = %v", err)
+	}
+	if exec != nil {
+		t.Fatal("expected nil executor when all hooks are disabled")
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	if !containsRuntimeEventType(events, EventRepoHooksLoaded) {
+		t.Fatalf("expected %s event", EventRepoHooksLoaded)
+	}
+}
+
+func TestResolveTrustedWorkspacesPathHomeDirFallback(t *testing.T) {
+	// 分支：HOME 为相对路径，触发 UserHomeDir fallback。
+	originalHome := os.Getenv("HOME")
+	t.Setenv("HOME", "relative-home-dir")
+	t.Cleanup(func() { os.Setenv("HOME", originalHome) })
+
+	path := resolveTrustedWorkspacesPath()
+	if !strings.Contains(path, ".neocode") {
+		t.Fatalf("expected .neocode in path, got: %s", path)
+	}
+}

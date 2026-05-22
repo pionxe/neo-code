@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"neo-code/internal/runtime/hooks"
 )
 
 func TestRuntimeHooksConfigApplyDefaultsAndValidate(t *testing.T) {
@@ -46,7 +48,7 @@ func TestRuntimeHooksConfigValidateUnsupportedFields(t *testing.T) {
 	tests := []RuntimeHookItemConfig{
 		{
 			ID:      "bad-scope",
-			Point:   runtimeHookPointBeforeToolCall,
+			Point:   string(hooks.HookPointBeforeToolCall),
 			Scope:   "repo",
 			Kind:    runtimeHookKindBuiltIn,
 			Mode:    runtimeHookModeSync,
@@ -54,7 +56,7 @@ func TestRuntimeHooksConfigValidateUnsupportedFields(t *testing.T) {
 		},
 		{
 			ID:      "bad-kind",
-			Point:   runtimeHookPointBeforeToolCall,
+			Point:   string(hooks.HookPointBeforeToolCall),
 			Scope:   runtimeHookScopeUser,
 			Kind:    "command",
 			Mode:    runtimeHookModeSync,
@@ -62,7 +64,7 @@ func TestRuntimeHooksConfigValidateUnsupportedFields(t *testing.T) {
 		},
 		{
 			ID:      "bad-mode",
-			Point:   runtimeHookPointBeforeToolCall,
+			Point:   string(hooks.HookPointBeforeToolCall),
 			Scope:   runtimeHookScopeUser,
 			Kind:    runtimeHookKindBuiltIn,
 			Mode:    "async",
@@ -70,7 +72,7 @@ func TestRuntimeHooksConfigValidateUnsupportedFields(t *testing.T) {
 		},
 		{
 			ID:      "bad-handler",
-			Point:   runtimeHookPointBeforeToolCall,
+			Point:   string(hooks.HookPointBeforeToolCall),
 			Scope:   runtimeHookScopeUser,
 			Kind:    runtimeHookKindBuiltIn,
 			Mode:    runtimeHookModeSync,
@@ -113,7 +115,7 @@ func TestRuntimeHooksConfigValidateRejectsExternalKindsWithP6LiteMessage(t *test
 			cfg.Items = []RuntimeHookItemConfig{
 				{
 					ID:      "external-kind",
-					Point:   runtimeHookPointBeforeToolCall,
+					Point:   string(hooks.HookPointBeforeToolCall),
 					Scope:   runtimeHookScopeUser,
 					Kind:    kind,
 					Mode:    runtimeHookModeSync,
@@ -144,7 +146,7 @@ func TestRuntimeHooksConfigValidateAllowsCommand(t *testing.T) {
 		Items: []RuntimeHookItemConfig{
 			{
 				ID:            "accept-command",
-				Point:         runtimeHookPointAcceptGate,
+				Point:         string(hooks.HookPointAcceptGate),
 				Scope:         runtimeHookScopeUser,
 				Kind:          runtimeHookKindCommand,
 				Mode:          runtimeHookModeSync,
@@ -170,7 +172,7 @@ func TestRuntimeHooksConfigValidateAllowsHTTPObserve(t *testing.T) {
 		Items: []RuntimeHookItemConfig{
 			{
 				ID:    "observe-http",
-				Point: runtimeHookPointBeforeToolCall,
+				Point: string(hooks.HookPointBeforeToolCall),
 				Scope: runtimeHookScopeUser,
 				Kind:  runtimeHookKindHTTP,
 				Params: map[string]any{
@@ -193,7 +195,7 @@ func TestRuntimeHooksConfigValidateRejectsInvalidHTTPObserveConfig(t *testing.T)
 
 	base := RuntimeHookItemConfig{
 		ID:    "observe-http",
-		Point: runtimeHookPointBeforeToolCall,
+		Point: string(hooks.HookPointBeforeToolCall),
 		Scope: runtimeHookScopeUser,
 		Kind:  runtimeHookKindHTTP,
 		Mode:  runtimeHookModeObserve,
@@ -281,7 +283,7 @@ func TestRuntimeHooksConfigValidateRejectsDisallowedUserPoint(t *testing.T) {
 		Items: []RuntimeHookItemConfig{
 			{
 				ID:            "deny-pre-compact",
-				Point:         runtimeHookPointPreCompact,
+				Point:         string(hooks.HookPointPreCompact),
 				Scope:         runtimeHookScopeUser,
 				Kind:          runtimeHookKindBuiltIn,
 				Mode:          runtimeHookModeSync,
@@ -308,7 +310,7 @@ func TestRuntimeHooksConfigItemDefaultsAndClone(t *testing.T) {
 		Items: []RuntimeHookItemConfig{
 			{
 				ID:      "warn-bash",
-				Point:   runtimeHookPointBeforeToolCall,
+				Point:   string(hooks.HookPointBeforeToolCall),
 				Handler: runtimeHookHandlerWarnOnToolCall,
 				Params: map[string]any{
 					"tool_name": "bash",
@@ -368,7 +370,7 @@ func TestRuntimeHooksConfigValidateItemFailurePolicy(t *testing.T) {
 		Items: []RuntimeHookItemConfig{
 			{
 				ID:            "require-readme",
-				Point:         runtimeHookPointBeforeCompletionDecision,
+				Point:         string(hooks.HookPointBeforeCompletionDecision),
 				Scope:         runtimeHookScopeUser,
 				Kind:          runtimeHookKindBuiltIn,
 				Mode:          runtimeHookModeSync,
@@ -394,7 +396,7 @@ func TestRuntimeHooksConfigValidateWarnOnToolCallRequiresTarget(t *testing.T) {
 		Items: []RuntimeHookItemConfig{
 			{
 				ID:            "warn-missing-target",
-				Point:         runtimeHookPointBeforeToolCall,
+				Point:         string(hooks.HookPointBeforeToolCall),
 				Scope:         runtimeHookScopeUser,
 				Kind:          runtimeHookKindBuiltIn,
 				Mode:          runtimeHookModeSync,
@@ -449,8 +451,8 @@ func TestRuntimeHooksConfigEdgeBranches(t *testing.T) {
 			DefaultTimeoutSec:    2,
 			DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
 			Items: []RuntimeHookItemConfig{
-				{ID: "dup", Point: runtimeHookPointBeforeToolCall, Scope: runtimeHookScopeUser, Kind: runtimeHookKindBuiltIn, Mode: runtimeHookModeSync, Handler: runtimeHookHandlerWarnOnToolCall, TimeoutSec: 1, Params: map[string]any{"tool_name": "bash"}},
-				{ID: " DUP ", Point: runtimeHookPointBeforeToolCall, Scope: runtimeHookScopeUser, Kind: runtimeHookKindBuiltIn, Mode: runtimeHookModeSync, Handler: runtimeHookHandlerWarnOnToolCall, TimeoutSec: 1, Params: map[string]any{"tool_name": "bash"}},
+				{ID: "dup", Point: string(hooks.HookPointBeforeToolCall), Scope: runtimeHookScopeUser, Kind: runtimeHookKindBuiltIn, Mode: runtimeHookModeSync, Handler: runtimeHookHandlerWarnOnToolCall, TimeoutSec: 1, Params: map[string]any{"tool_name": "bash"}},
+				{ID: " DUP ", Point: string(hooks.HookPointBeforeToolCall), Scope: runtimeHookScopeUser, Kind: runtimeHookKindBuiltIn, Mode: runtimeHookModeSync, Handler: runtimeHookHandlerWarnOnToolCall, TimeoutSec: 1, Params: map[string]any{"tool_name": "bash"}},
 			},
 		}
 		if err := cfg.Validate(); err == nil {
@@ -465,7 +467,7 @@ func TestRuntimeHooksConfigEdgeBranches(t *testing.T) {
 		}
 		item := RuntimeHookItemConfig{
 			ID:      "x",
-			Point:   runtimeHookPointBeforeToolCall,
+			Point:   string(hooks.HookPointBeforeToolCall),
 			Scope:   runtimeHookScopeUser,
 			Kind:    runtimeHookKindBuiltIn,
 			Mode:    runtimeHookModeSync,
@@ -554,7 +556,7 @@ func TestRuntimeHTTPObserveValidationHelpers(t *testing.T) {
 		} {
 			item := RuntimeHookItemConfig{
 				ID:    "observe-http",
-				Point: runtimeHookPointBeforeToolCall,
+				Point: string(hooks.HookPointBeforeToolCall),
 				Scope: runtimeHookScopeUser,
 				Kind:  runtimeHookKindHTTP,
 				Mode:  runtimeHookModeObserve,
@@ -580,7 +582,7 @@ func TestRuntimeHTTPObserveValidationHelpers(t *testing.T) {
 				name: "invalid absolute url",
 				item: RuntimeHookItemConfig{
 					ID:    "observe-http",
-					Point: runtimeHookPointBeforeToolCall,
+					Point: string(hooks.HookPointBeforeToolCall),
 					Scope: runtimeHookScopeUser,
 					Kind:  runtimeHookKindHTTP,
 					Mode:  runtimeHookModeObserve,
@@ -593,7 +595,7 @@ func TestRuntimeHTTPObserveValidationHelpers(t *testing.T) {
 				name: "headers must be map",
 				item: RuntimeHookItemConfig{
 					ID:    "observe-http",
-					Point: runtimeHookPointBeforeToolCall,
+					Point: string(hooks.HookPointBeforeToolCall),
 					Scope: runtimeHookScopeUser,
 					Kind:  runtimeHookKindHTTP,
 					Mode:  runtimeHookModeObserve,
@@ -607,7 +609,7 @@ func TestRuntimeHTTPObserveValidationHelpers(t *testing.T) {
 				name: "empty header name",
 				item: RuntimeHookItemConfig{
 					ID:    "observe-http",
-					Point: runtimeHookPointBeforeToolCall,
+					Point: string(hooks.HookPointBeforeToolCall),
 					Scope: runtimeHookScopeUser,
 					Kind:  runtimeHookKindHTTP,
 					Mode:  runtimeHookModeObserve,
@@ -621,7 +623,7 @@ func TestRuntimeHTTPObserveValidationHelpers(t *testing.T) {
 				name: "empty header value",
 				item: RuntimeHookItemConfig{
 					ID:    "observe-http",
-					Point: runtimeHookPointBeforeToolCall,
+					Point: string(hooks.HookPointBeforeToolCall),
 					Scope: runtimeHookScopeUser,
 					Kind:  runtimeHookKindHTTP,
 					Mode:  runtimeHookModeObserve,
@@ -663,17 +665,73 @@ func TestRuntimeHTTPObserveValidationHelpers(t *testing.T) {
 		if got := readRuntimeHookParamString(map[string]any{"x": 123}, "x"); got != "123" {
 			t.Fatalf("readRuntimeHookParamString(non-string) = %q", got)
 		}
-		if !runtimeHookPointUserAllowed(runtimeHookPointBeforeToolCall) {
+		if !hooks.IsUserAllowed(hooks.HookPointBeforeToolCall) {
 			t.Fatal("before_tool_call should allow user hooks")
 		}
-		for _, point := range []string{
-			runtimeHookPointBeforePermissionDecision,
-			runtimeHookPointPreCompact,
-			runtimeHookPointSubAgentStart,
+		for _, point := range []hooks.HookPoint{
+			hooks.HookPointBeforePermissionDecision,
+			hooks.HookPointPreCompact,
+			hooks.HookPointSubAgentStart,
 		} {
-			if runtimeHookPointUserAllowed(point) {
+			if hooks.IsUserAllowed(point) {
 				t.Fatalf("%s should be rejected for user hooks", point)
 			}
 		}
 	})
+}
+
+// TestHookPointSingleSourceConsistency 验证 config 侧与 runtime hooks 包的点位定义一致。
+// 新增 hook point 时只需修改 runtime hooks 包，config 侧自动接受。
+func TestHookPointSingleSourceConsistency(t *testing.T) {
+	t.Parallel()
+
+	// 所有 runtime hooks 包导出的点位都应被 config 接受。
+	allPoints := hooks.ListHookPoints()
+	if len(allPoints) == 0 {
+		t.Fatal("expected at least one hook point from runtime hooks package")
+	}
+
+	base := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+	}
+
+	for _, point := range allPoints {
+		point := point
+		t.Run(string(point), func(t *testing.T) {
+			t.Parallel()
+			if !hooks.IsUserAllowed(point) {
+				// 跳过不允许 user 的点位，它们在 config 校验中会被拒绝。
+				return
+			}
+			cfg := base.Clone()
+			cfg.Items = []RuntimeHookItemConfig{
+				{
+					ID:            "test-" + string(point),
+					Point:         string(point),
+					Scope:         runtimeHookScopeUser,
+					Kind:          runtimeHookKindBuiltIn,
+					Mode:          runtimeHookModeSync,
+					Handler:       runtimeHookHandlerAddContextNote,
+					TimeoutSec:    2,
+					FailurePolicy: runtimeHookFailurePolicyWarnOnly,
+					Params:        map[string]any{"note": "consistency check"},
+				},
+			}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("config rejected point %q: %v", point, err)
+			}
+		})
+	}
+
+	// 验证 accept_gate 在 runtime hooks 包中存在且允许 user。
+	acceptGateCap, ok := hooks.HookPointCapabilities(hooks.HookPointAcceptGate)
+	if !ok {
+		t.Fatal("accept_gate not found in runtime hooks capabilities")
+	}
+	if !acceptGateCap.UserAllowed {
+		t.Fatal("accept_gate should allow user hooks")
+	}
 }
