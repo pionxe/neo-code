@@ -1490,6 +1490,56 @@ describe("eventBridge", () => {
     );
   });
 
+  it("TodoSnapshotUpdated reset clears stale TodoConflict", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.TodoConflict,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.TodoConflict,
+            payload: { action: "update", reason: "todo_not_found" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe(
+      "todo_not_found",
+    );
+
+    handleGatewayEvent(
+      {
+        type: EventType.TodoSnapshotUpdated,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.TodoSnapshotUpdated,
+            payload: {
+              action: "reset",
+              reason: "new_user_run",
+              items: [],
+              summary: {
+                total: 0,
+                required_total: 0,
+                required_completed: 0,
+                required_failed: 0,
+                required_open: 0,
+              },
+            },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-2",
+      },
+      api,
+    );
+
+    expect(useRuntimeInsightStore.getState().todoConflict).toBeNull();
+    expect(useRuntimeInsightStore.getState().todoSnapshot?.items).toEqual([]);
+  });
+
   it("TodoUpdated clears TodoConflict", () => {
     const api = createMockGatewayAPI();
     // Set conflict first

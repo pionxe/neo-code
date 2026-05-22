@@ -44,7 +44,7 @@ interface RuntimeInsightState {
   failVerification: (payload: VerificationFailedPayload) => void
   setAcceptanceDecision: (payload: AcceptanceDecidedPayload | null) => void
   setTodoSnapshot: (snapshot: TodoSnapshot | null) => void
-  applyTodoSnapshot: (snapshot: TodoSnapshot | null) => void
+  applyTodoSnapshot: (snapshot: TodoSnapshot | null, options?: { clearConflict?: boolean }) => void
   addTodoEvent: (event: TodoEventPayload) => void
   setTodoConflict: (event: TodoEventPayload | null) => void
   setBudgetChecked: (payload: BudgetCheckedPayload) => void
@@ -110,13 +110,13 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
     }
     return { todoSnapshot, todoConflict: null, todoHistory }
   }),
-  applyTodoSnapshot: (todoSnapshot) => set((s) => {
+  applyTodoSnapshot: (todoSnapshot, options) => set((s) => {
     const items = todoSnapshot?.items ?? []
     if (!todoSnapshot) {
-      return { todoSnapshot: null }
+      return options?.clearConflict ? { todoSnapshot: null, todoConflict: null } : { todoSnapshot: null }
     }
     if (items.length === 0) {
-      return { todoSnapshot }
+      return options?.clearConflict ? { todoSnapshot, todoConflict: null } : { todoSnapshot }
     }
     const now = Date.now()
     const todoHistory = { ...s.todoHistory }
@@ -128,7 +128,9 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
         firstSeenAt: prev?.firstSeenAt ?? now,
       }
     }
-    return { todoSnapshot, todoHistory }
+    return options?.clearConflict
+      ? { todoSnapshot, todoConflict: null, todoHistory }
+      : { todoSnapshot, todoHistory }
   }),
   addTodoEvent: (event) => set((s) => ({ todoEvents: [...s.todoEvents, event] })),
   setTodoConflict: (todoConflict) => set({ todoConflict }),

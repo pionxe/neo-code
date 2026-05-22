@@ -13,6 +13,7 @@ func TestValidateRunStateTransitionMainlineAndGovernanceStates(t *testing.T) {
 		{from: RunStatePlan, to: RunStateExecute},
 		{from: RunStateExecute, to: RunStateVerify},
 		{from: RunStateVerify, to: RunStatePlan},
+		{from: RunStateVerify, to: RunStateExecute},
 		{from: RunStatePlan, to: RunStateCompacting},
 		{from: RunStateCompacting, to: RunStatePlan},
 		{from: RunStateExecute, to: RunStateWaitingPermission},
