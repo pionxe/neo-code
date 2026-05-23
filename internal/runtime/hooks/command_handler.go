@@ -20,6 +20,8 @@ type CommandHookPayload struct {
 	PayloadVersion string         `json:"payload_version"`
 	HookID         string         `json:"hook_id"`
 	Point          string         `json:"point"`
+	RunID          string         `json:"run_id,omitempty"`
+	SessionID      string         `json:"session_id,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
@@ -41,14 +43,16 @@ type CommandHookSpec struct {
 }
 
 // BuildCommandPayload 构造传给外部命令的 stdin JSON payload。
-func BuildCommandPayload(hookID string, point HookPoint, metadata map[string]any) CommandHookPayload {
+func BuildCommandPayload(hookID string, point HookPoint, input HookContext) CommandHookPayload {
 	payload := CommandHookPayload{
 		PayloadVersion: CommandHookPayloadVersion,
 		HookID:         strings.TrimSpace(hookID),
 		Point:          string(point),
+		RunID:          strings.TrimSpace(input.RunID),
+		SessionID:      strings.TrimSpace(input.SessionID),
 	}
-	if len(metadata) > 0 {
-		payload.Metadata = metadata
+	if len(input.Metadata) > 0 {
+		payload.Metadata = input.Metadata
 	}
 	return payload
 }
@@ -76,7 +80,7 @@ func ParseCommandResponse(raw []byte) (CommandHookResponse, error) {
 
 // RunCommandHook 执行外部命令并返回结构化的 HookResult。
 func RunCommandHook(ctx context.Context, spec CommandHookSpec, input HookContext) HookResult {
-	payload := BuildCommandPayload(spec.HookID, spec.Point, input.Metadata)
+	payload := BuildCommandPayload(spec.HookID, spec.Point, input)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return HookResult{
@@ -97,14 +101,24 @@ func RunCommandHook(ctx context.Context, spec CommandHookSpec, input HookContext
 	stdout, err := cmd.Output()
 	message := strings.TrimSpace(string(stdout))
 
-	// 尝试解析 stdout JSON 协议
+	// 非零 exit code 优先于 JSON status（防止恶意脚本声称 pass 但实际失败）
+	if err != nil {
+		return buildResultFromExitCode(ctx, spec, err, message, stdout)
+	}
+
+	// exit code 0: 尝试解析 stdout JSON 协议
 	resp, parseErr := ParseCommandResponse(stdout)
 	if parseErr == nil {
 		return buildResultFromResponse(spec, resp)
 	}
 
-	// 退化模式: stdout 非 JSON，按 exit code 推断状态
-	return buildResultFromExitCode(ctx, spec, err, message)
+	// 退化模式: exit 0 但 stdout 非 JSON，按 pass 处理
+	return HookResult{
+		HookID:  spec.HookID,
+		Point:   spec.Point,
+		Status:  HookResultPass,
+		Message: message,
+	}
 }
 
 func buildExecCmd(ctx context.Context, spec CommandHookSpec) *exec.Cmd {
@@ -162,15 +176,11 @@ func buildResultFromResponse(spec CommandHookSpec, resp CommandHookResponse) Hoo
 	return result
 }
 
-func buildResultFromExitCode(ctx context.Context, spec CommandHookSpec, err error, message string) HookResult {
+func buildResultFromExitCode(ctx context.Context, spec CommandHookSpec, err error, message string, stdout []byte) HookResult {
 	result := HookResult{
 		HookID:  spec.HookID,
 		Point:   spec.Point,
 		Message: message,
-	}
-	if err == nil {
-		result.Status = HookResultPass
-		return result
 	}
 	// 上下文取消/超时优先判定为 failed
 	if ctx.Err() != nil {
@@ -194,12 +204,21 @@ func buildResultFromExitCode(ctx context.Context, spec CommandHookSpec, err erro
 			}
 			result.Error = err.Error()
 		}
-		return result
+	} else {
+		result.Status = HookResultFailed
+		if result.Message == "" {
+			result.Message = err.Error()
+		}
+		result.Error = err.Error()
 	}
-	result.Status = HookResultFailed
-	if result.Message == "" {
-		result.Message = err.Error()
+	// 尝试从 stdout JSON 提取 message/annotations（status 仍由 exit code 决定）
+	if resp, parseErr := ParseCommandResponse(stdout); parseErr == nil {
+		if trimmed := strings.TrimSpace(resp.Message); trimmed != "" {
+			result.Message = trimmed
+		}
+		if len(resp.Annotations) > 0 {
+			result.Metadata.Annotations = resp.Annotations
+		}
 	}
-	result.Error = err.Error()
 	return result
 }

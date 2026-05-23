@@ -13,9 +13,13 @@ import (
 
 func TestBuildCommandPayload(t *testing.T) {
 	t.Parallel()
-	payload := BuildCommandPayload("my-hook", HookPointBeforeToolCall, map[string]any{
-		"tool_name": "bash",
-		"workdir":   "/tmp",
+	payload := BuildCommandPayload("my-hook", HookPointBeforeToolCall, HookContext{
+		RunID:     "run-123",
+		SessionID: "sess-456",
+		Metadata: map[string]any{
+			"tool_name": "bash",
+			"workdir":   "/tmp",
+		},
 	})
 	if payload.PayloadVersion != CommandHookPayloadVersion {
 		t.Fatalf("payload_version = %q, want %q", payload.PayloadVersion, CommandHookPayloadVersion)
@@ -26,6 +30,12 @@ func TestBuildCommandPayload(t *testing.T) {
 	if payload.Point != string(HookPointBeforeToolCall) {
 		t.Fatalf("point = %q, want %q", payload.Point, HookPointBeforeToolCall)
 	}
+	if payload.RunID != "run-123" {
+		t.Fatalf("run_id = %q, want %q", payload.RunID, "run-123")
+	}
+	if payload.SessionID != "sess-456" {
+		t.Fatalf("session_id = %q, want %q", payload.SessionID, "sess-456")
+	}
 	if payload.Metadata["tool_name"] != "bash" {
 		t.Fatalf("metadata[tool_name] = %v, want %q", payload.Metadata["tool_name"], "bash")
 	}
@@ -33,9 +43,12 @@ func TestBuildCommandPayload(t *testing.T) {
 
 func TestBuildCommandPayloadEmptyMetadata(t *testing.T) {
 	t.Parallel()
-	payload := BuildCommandPayload("hook", HookPointSessionStart, nil)
+	payload := BuildCommandPayload("hook", HookPointSessionStart, HookContext{})
 	if payload.Metadata != nil {
 		t.Fatalf("metadata should be nil for empty input, got %v", payload.Metadata)
+	}
+	if payload.RunID != "" {
+		t.Fatalf("run_id should be empty, got %q", payload.RunID)
 	}
 }
 
@@ -414,6 +427,89 @@ func TestRunCommandHookWorkdir(t *testing.T) {
 	}
 }
 
+func TestBuildCommandPayloadRunSessionID(t *testing.T) {
+	t.Parallel()
+	payload := BuildCommandPayload("my-hook", HookPointBeforeToolCall, HookContext{
+		RunID:     "run-abc",
+		SessionID: "sess-xyz",
+	})
+	if payload.RunID != "run-abc" {
+		t.Fatalf("run_id = %q, want %q", payload.RunID, "run-abc")
+	}
+	if payload.SessionID != "sess-xyz" {
+		t.Fatalf("session_id = %q, want %q", payload.SessionID, "sess-xyz")
+	}
+}
+
+func TestBuildCommandPayloadEmptyRunSessionID(t *testing.T) {
+	t.Parallel()
+	payload := BuildCommandPayload("hook", HookPointSessionStart, HookContext{})
+	if payload.RunID != "" {
+		t.Fatalf("run_id should be empty, got %q", payload.RunID)
+	}
+	if payload.SessionID != "" {
+		t.Fatalf("session_id should be empty, got %q", payload.SessionID)
+	}
+}
+
+func TestRunCommandHookExitCodePrecedenceOverJSON(t *testing.T) {
+	// Security: non-zero exit code must override JSON status.
+	// A malicious script claiming "pass" while exiting 1 should result in block, not pass.
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var spec CommandHookSpec
+	if runtime.GOOS == "windows" {
+		spec = CommandHookSpec{
+			HookID:  "precedence-test",
+			Point:   HookPointBeforeToolCall,
+			Command: []string{"powershell", "-Command", "Write-Output '{\"status\":\"pass\",\"message\":\"claiming pass\"}'; exit 1"},
+		}
+	} else {
+		spec = CommandHookSpec{
+			HookID:  "precedence-test",
+			Point:   HookPointBeforeToolCall,
+			Command: []string{"sh", "-c", "echo '{\"status\":\"pass\",\"message\":\"claiming pass\"}'; exit 1"},
+		}
+	}
+	result := RunCommandHook(ctx, spec, HookContext{})
+	if result.Status != HookResultBlock {
+		t.Fatalf("status = %q, want %q (exit code must take precedence over JSON status)", result.Status, HookResultBlock)
+	}
+	// message should still be extracted from JSON stdout
+	if result.Message != "claiming pass" {
+		t.Fatalf("message = %q, want %q (should extract message from JSON even when exit code wins)", result.Message, "claiming pass")
+	}
+}
+
+func TestRunCommandHookExitCodeThreeWithJSONMessage(t *testing.T) {
+	// exit code 3 + JSON with message → failed status, message from JSON
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var spec CommandHookSpec
+	if runtime.GOOS == "windows" {
+		spec = CommandHookSpec{
+			HookID:  "exit3-json",
+			Point:   HookPointBeforeToolCall,
+			Command: []string{"powershell", "-Command", "Write-Output '{\"status\":\"pass\",\"message\":\"from json\"}'; exit 3"},
+		}
+	} else {
+		spec = CommandHookSpec{
+			HookID:  "exit3-json",
+			Point:   HookPointBeforeToolCall,
+			Command: []string{"sh", "-c", "echo '{\"status\":\"pass\",\"message\":\"from json\"}'; exit 3"},
+		}
+	}
+	result := RunCommandHook(ctx, spec, HookContext{})
+	if result.Status != HookResultFailed {
+		t.Fatalf("status = %q, want %q", result.Status, HookResultFailed)
+	}
+	if result.Message != "from json" {
+		t.Fatalf("message = %q, want %q", result.Message, "from json")
+	}
+}
+
 func TestRunCommandHookStdinPayload(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -432,11 +528,21 @@ func TestRunCommandHookStdinPayload(t *testing.T) {
 			Command: []string{"cat"},
 		}
 	}
-	result := RunCommandHook(ctx, spec, HookContext{Metadata: map[string]any{"workdir": "/tmp"}})
+	result := RunCommandHook(ctx, spec, HookContext{
+		RunID:     "run-789",
+		SessionID: "sess-012",
+		Metadata:  map[string]any{"workdir": "/tmp"},
+	})
 	if result.Status != HookResultPass {
 		t.Fatalf("status = %q, want %q", result.Status, HookResultPass)
 	}
 	if !strings.Contains(result.Message, CommandHookPayloadVersion) {
 		t.Fatalf("stdin payload should contain payload_version, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "run-789") {
+		t.Fatalf("stdin payload should contain run_id, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "sess-012") {
+		t.Fatalf("stdin payload should contain session_id, got: %s", result.Message)
 	}
 }
