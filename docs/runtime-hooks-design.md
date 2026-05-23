@@ -173,3 +173,75 @@ user/repo hook 的 `message` 会进入 runtime 的 annotation buffer（运行态
 - `fail_closed` -> `fail_closed`
 
 其中 `warn_only/fail_open` 不阻断主链，仅记录失败；`fail_closed` 触发阻断。
+
+## Runtime 事件契约
+
+runtime 事件在三端之间传递，任一端遗漏不会触发编译错误，仅在运行时表现为"事件丢失"或"未知事件被透传"。契约检查器通过 CI 测试强制三端一致性。
+
+### 事件流转路径
+
+```text
+runtime (events.go) → gateway protocol encode → gateway_stream_client decode → TUI update handler consume
+```
+
+### 新增 runtime event 三步清单
+
+当新增一个 runtime event 时，必须完成以下三步：
+
+**Step 1：定义事件常量与 payload**
+
+在 `internal/runtime/events.go`（或 `events_subagent.go`）中添加 `Event*` 常量和对应的 payload 结构体。
+
+```go
+// events.go
+const EventMyNewEvent EventType = "my_new_event"
+
+type MyNewEventPayload struct {
+    Field string `json:"field"`
+}
+```
+
+**Step 2：添加 gateway decode 分支**
+
+在 `internal/tui/services/gateway_stream_client.go` 的 `restoreRuntimePayload` 函数中添加对应的 case 分支：
+
+```go
+case EventMyNewEvent:
+    return decodeRuntimePayload[MyNewEventPayload](payload)
+```
+
+同时在 `internal/tui/services/runtime_contract.go` 中：
+- 添加 `EventMyNewEvent` 常量定义
+- 在 `contractRegistry` 中注册，设置 `RequireConsumer` 为 `true`（需要 TUI 消费）或 `false`（透传安全）
+
+```go
+// runtime_contract.go
+const EventMyNewEvent EventType = "my_new_event"
+
+// contractRegistry 中添加：
+EventMyNewEvent: {RequireConsumer: true},
+```
+
+**Step 3：添加 TUI 消费者**
+
+在 `internal/tui/core/app/update.go` 的 `runtimeEventHandlerRegistry` 中添加对应 handler：
+
+```go
+// update.go - runtimeEventHandlerRegistry 中添加：
+tuiservices.EventMyNewEvent: runtimeEventMyNewEventHandler,
+```
+
+### CI 契约检查
+
+以下测试用例在 CI 中强制执行事件契约一致性：
+
+- `TestRuntimeEventContractConsistency`：扫描 runtime 事件常量，未注册且不在 `legacyPassthroughEvents` 中的事件会导致 CI 失败
+- `TestGatewayDecodeBranchConsistency`：验证 gateway decode 分支中的事件都在 contractRegistry 中注册
+- `TestRequireConsumerMustHaveDecodeBranch`：验证 `RequireConsumer=true` 的事件必须有 gateway decode 分支
+- `TestRequireConsumerMustHaveTUIConsumer`：验证 `RequireConsumer=true` 的事件必须在 `runtimeEventHandlerRegistry` 中有 handler
+
+若 CI 失败，检查以上三步是否遗漏。
+
+### 遗留透传事件
+
+`legacyPassthroughEvents` 是已知的遗留透传事件允许列表，这些事件在 contractRegistry 建立之前已存在，允许不注册。新增的 runtime Event* 常量必须显式注册到 contractRegistry，否则 CI 失败。
