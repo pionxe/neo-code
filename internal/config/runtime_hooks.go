@@ -286,8 +286,8 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 		if normalizedMode != runtimeHookModeSync {
 			return fmt.Errorf("mode %q is not supported for kind command (only sync)", c.Mode)
 		}
-		if strings.TrimSpace(readRuntimeHookParamString(c.Params, "command")) == "" {
-			return fmt.Errorf("kind command requires params.command")
+		if err := validateRuntimeCommandItem(c.Params); err != nil {
+			return err
 		}
 	case runtimeHookKindHTTP:
 		if normalizedMode != runtimeHookModeObserve {
@@ -345,6 +345,39 @@ func validateRuntimeHTTPObserveItem(c RuntimeHookItemConfig, policy string) erro
 				return fmt.Errorf("kind http params.headers[%q] is empty", key)
 			}
 		}
+	}
+	return nil
+}
+
+// validateRuntimeCommandItem 校验 command kind 的 params.command 格式。
+// 支持 []string / []any (argv 模式) 和 string + shell=true (shell 模式)。
+func validateRuntimeCommandItem(params map[string]any) error {
+	if len(params) == 0 {
+		return fmt.Errorf("kind command requires params.command")
+	}
+	raw, ok := params["command"]
+	if !ok || raw == nil {
+		return fmt.Errorf("kind command requires params.command")
+	}
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("kind command requires params.command")
+		}
+		shellVal, _ := params["shell"].(bool)
+		if !shellVal {
+			return fmt.Errorf("string params.command requires params.shell=true; use array format for argv mode")
+		}
+	case []any:
+		if len(v) == 0 {
+			return fmt.Errorf("kind command requires non-empty params.command")
+		}
+	case []string:
+		if len(v) == 0 {
+			return fmt.Errorf("kind command requires non-empty params.command")
+		}
+	default:
+		return fmt.Errorf("params.command must be a string (with shell=true) or an array")
 	}
 	return nil
 }

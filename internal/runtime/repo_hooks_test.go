@@ -998,7 +998,7 @@ func TestValidateRepoHookItemCommandKindBranches(t *testing.T) {
 		Mode:          "sync",
 		TimeoutSec:    2,
 		FailurePolicy: "warn_only",
-		Params:        map[string]any{"command": "echo ok"},
+		Params:        map[string]any{"command": []any{"echo", "ok"}},
 	}
 	if err := validateRepoHookItem(item); err != nil {
 		t.Fatalf("validateRepoHookItem(command with params) error = %v", err)

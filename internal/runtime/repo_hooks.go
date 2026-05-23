@@ -363,9 +363,41 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 			return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", item.Handler)
 		}
 	case repoHookKindCommand:
-		if strings.TrimSpace(readHookParamString(item.Params, "command")) == "" {
+		if err := validateRepoCommandParams(item.Params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRepoCommandParams 校验 repo command hook 的 params.command 格式。
+func validateRepoCommandParams(params map[string]any) error {
+	if len(params) == 0 {
+		return fmt.Errorf("kind command requires params.command")
+	}
+	raw, ok := params["command"]
+	if !ok || raw == nil {
+		return fmt.Errorf("kind command requires params.command")
+	}
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
 			return fmt.Errorf("kind command requires params.command")
 		}
+		shellVal, _ := params["shell"].(bool)
+		if !shellVal {
+			return fmt.Errorf("string params.command requires params.shell=true; use array format for argv mode")
+		}
+	case []any:
+		if len(v) == 0 {
+			return fmt.Errorf("kind command requires non-empty params.command")
+		}
+	case []string:
+		if len(v) == 0 {
+			return fmt.Errorf("kind command requires non-empty params.command")
+		}
+	default:
+		return fmt.Errorf("params.command must be a string (with shell=true) or an array")
 	}
 	return nil
 }

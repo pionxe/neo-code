@@ -1,6 +1,9 @@
 package hooks
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // HookResultStatus 表示单个 hook 的执行结果状态。
 type HookResultStatus string
@@ -36,6 +39,10 @@ type HookResultMetadata struct {
 	OriginalStatus  string
 	BlockDowngraded bool
 	GuardSignal     bool
+
+	// P6 command hook 协议字段
+	Annotations []string        // stdout JSON "annotations" 数组
+	UpdateInput json.RawMessage // stdout JSON "update_input" 原始字节
 }
 
 // RunOutput 是一次点位执行的聚合结果。

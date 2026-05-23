@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -212,7 +210,7 @@ func buildConfiguredHookSpec(
 		specKind = runtimehooks.HookKindFunction
 		specMode = runtimehooks.HookModeSync
 	case configuredHookKindCommand:
-		handler, err = buildUserCommandHookHandler(item.Params, defaultWorkdir)
+		handler, err = buildUserCommandHookHandler(strings.TrimSpace(item.ID), item.Params, defaultWorkdir)
 		specKind = runtimehooks.HookKindCommand
 		specMode = runtimehooks.HookModeSync
 	case configuredHookKindHTTP:
@@ -258,8 +256,8 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 		if mode != configuredHookModeSync {
 			return fmt.Errorf("mode %q is not supported for kind command (only sync)", item.Mode)
 		}
-		if strings.TrimSpace(readHookParamString(item.Params, "command")) == "" {
-			return fmt.Errorf("kind command requires params.command")
+		if _, _, err := parseCommandHookParams(item.Params); err != nil {
+			return err
 		}
 	case configuredHookKindHTTP:
 		if mode != configuredHookModeObserve {
@@ -378,47 +376,73 @@ func buildUserBuiltinHookHandler(
 	}
 }
 
-// buildUserCommandHookHandler 将命令型 hook 转为同步阻断处理器，并通过 stdin 传入上下文 JSON。
-func buildUserCommandHookHandler(params map[string]any, defaultWorkdir string) (runtimehooks.HookHandler, error) {
-	command := strings.TrimSpace(readHookParamString(params, "command"))
-	if command == "" {
-		return nil, fmt.Errorf("kind command requires params.command")
+// buildUserCommandHookHandler 将命令型 hook 转为同步阻断处理器，使用 stdin/stdout JSON 协议。
+func buildUserCommandHookHandler(hookID string, params map[string]any, defaultWorkdir string) (runtimehooks.HookHandler, error) {
+	argv, shell, err := parseCommandHookParams(params)
+	if err != nil {
+		return nil, err
 	}
 	return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
-		workdir := resolveHookWorkdir(input, defaultWorkdir)
-		cmd := buildCommandHookProcess(ctx, command)
-		if strings.TrimSpace(workdir) != "" {
-			cmd.Dir = workdir
+		spec := runtimehooks.CommandHookSpec{
+			HookID:  hookID,
+			Point:   runtimehooks.HookPoint(strings.TrimSpace(fmt.Sprintf("%v", input.Metadata["point"]))),
+			Command: argv,
+			Shell:   shell,
+			Workdir: resolveHookWorkdir(input, defaultWorkdir),
 		}
-		payload, err := json.Marshal(input)
-		if err != nil {
-			detail := fmt.Sprintf("command hook marshal input failed: %v", err)
-			return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: detail}
-		}
-		cmd.Stdin = bytes.NewReader(payload)
-		output, err := cmd.CombinedOutput()
-		message := strings.TrimSpace(string(output))
-		if err == nil {
-			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: message}
-		}
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && (exitErr.ExitCode() == 1 || exitErr.ExitCode() == 2) {
-			return runtimehooks.HookResult{Status: runtimehooks.HookResultBlock, Message: message}
-		}
-		detail := strings.TrimSpace(message)
-		if detail == "" {
-			detail = err.Error()
-		}
-		return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: err.Error()}
+		return runtimehooks.RunCommandHook(ctx, spec, input)
 	}, nil
 }
 
-// buildCommandHookProcess 以当前平台的 shell 执行用户命令，保留脚本组合能力。
-func buildCommandHookProcess(ctx context.Context, command string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "powershell", "-Command", command)
+// parseCommandHookParams 解析 params.command 为 argv 数组，支持 []string / []any / string+shell 三种格式。
+func parseCommandHookParams(params map[string]any) (argv []string, shell bool, err error) {
+	if len(params) == 0 {
+		return nil, false, fmt.Errorf("kind command requires params.command")
 	}
-	return exec.CommandContext(ctx, "sh", "-c", command)
+	raw, ok := params["command"]
+	if !ok || raw == nil {
+		return nil, false, fmt.Errorf("kind command requires params.command")
+	}
+	switch v := raw.(type) {
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return nil, false, fmt.Errorf("kind command requires params.command")
+		}
+		shellVal, _ := params["shell"].(bool)
+		if !shellVal {
+			return nil, false, fmt.Errorf("string params.command requires params.shell=true; use array format for argv mode")
+		}
+		return []string{trimmed}, true, nil
+	case []string:
+		if len(v) == 0 {
+			return nil, false, fmt.Errorf("kind command requires non-empty params.command")
+		}
+		out := make([]string, 0, len(v))
+		for _, s := range v {
+			trimmed := strings.TrimSpace(s)
+			if trimmed == "" {
+				return nil, false, fmt.Errorf("params.command contains empty element")
+			}
+			out = append(out, trimmed)
+		}
+		return out, false, nil
+	case []any:
+		if len(v) == 0 {
+			return nil, false, fmt.Errorf("kind command requires non-empty params.command")
+		}
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s := strings.TrimSpace(fmt.Sprintf("%v", item))
+			if s == "" {
+				return nil, false, fmt.Errorf("params.command contains empty element")
+			}
+			out = append(out, s)
+		}
+		return out, false, nil
+	default:
+		return nil, false, fmt.Errorf("params.command must be a string (with shell=true) or an array of strings")
+	}
 }
 
 // buildUserHTTPObserveHookHandler 将 kind=http 的 observe 配置转换为观测回调处理器。

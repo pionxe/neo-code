@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	runtimehooks "neo-code/internal/runtime/hooks"
+	providertypes "neo-code/internal/provider/types"
 )
 
 const (
@@ -229,10 +231,15 @@ func (s *Service) recordUserHookAnnotations(state *runState, output runtimehooks
 			continue
 		}
 		message := strings.TrimSpace(result.Message)
-		if message == "" {
-			continue
+		if message != "" {
+			notes = append(notes, message)
 		}
-		notes = append(notes, message)
+		for _, annotation := range result.Metadata.Annotations {
+			trimmed := strings.TrimSpace(annotation)
+			if trimmed != "" {
+				notes = append(notes, trimmed)
+			}
+		}
 	}
 	if len(notes) == 0 {
 		return
@@ -240,4 +247,41 @@ func (s *Service) recordUserHookAnnotations(state *runState, output runtimehooks
 	state.mu.Lock()
 	state.hookAnnotations = append(state.hookAnnotations, notes...)
 	state.mu.Unlock()
+}
+
+// applyCommandHookUpdateInput 检查 hook 输出中的 update_input 并应用到用户输入 parts。
+// 当前仅支持 user_prompt_submit 点位；update_input 格式: {"text": "..."}  替换文本内容。
+func applyCommandHookUpdateInput(output runtimehooks.RunOutput, parts []providertypes.ContentPart) []providertypes.ContentPart {
+	if len(output.Results) == 0 {
+		return parts
+	}
+	for _, result := range output.Results {
+		if len(result.Metadata.UpdateInput) == 0 {
+			continue
+		}
+		cap, ok := runtimehooks.HookPointCapabilities(result.Point)
+		if !ok || !cap.CanUpdateInput {
+			continue
+		}
+		var update struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(result.Metadata.UpdateInput, &update); err != nil {
+			continue
+		}
+		if update.Text == "" {
+			continue
+		}
+		newParts := make([]providertypes.ContentPart, 0, len(parts))
+		for _, part := range parts {
+			if part.Kind == providertypes.ContentPartText {
+				newParts = append(newParts, providertypes.NewTextPart(update.Text))
+				update.Text = "" // 仅替换第一个文本 part
+			} else {
+				newParts = append(newParts, part)
+			}
+		}
+		return newParts
+	}
+	return parts
 }
