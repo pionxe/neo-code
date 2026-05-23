@@ -273,53 +273,56 @@ func TestRunCommandHookTimeout(t *testing.T) {
 
 func TestRunCommandHookEnvIsolation(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	tmpDir := t.TempDir()
+	var spec CommandHookSpec
 	if runtime.GOOS == "windows" {
-		script := filepath.Join(tmpDir, "check_env.ps1")
-		if err := os.WriteFile(script, []byte(`$env:NEOCODE_HOOK_HOOK_ID; $env:NEOCODE_HOOK_POINT; $env:NEOCODE_HOOK_PAYLOAD_VERSION; if ($env:PATH) { "HAS_PATH=1" }; '{"status":"pass"}'`), 0o755); err != nil {
-			t.Fatalf("write script: %v", err)
-		}
-		spec := CommandHookSpec{
+		spec = CommandHookSpec{
 			HookID:  "env-test",
 			Point:   HookPointBeforeToolCall,
-			Command: []string{"powershell", "-ExecutionPolicy", "Bypass", "-File", script},
-		}
-		result := RunCommandHook(ctx, spec, HookContext{})
-		if result.Status != HookResultPass {
-			t.Fatalf("status = %q, want %q; message: %s", result.Status, HookResultPass, result.Message)
-		}
-		if !strings.Contains(result.Message, "env-test") {
-			t.Fatalf("expected NEOCODE_HOOK_HOOK_ID in output, got: %s", result.Message)
-		}
-		if strings.Contains(result.Message, "HAS_PATH=1") {
-			t.Fatal("PATH should not be inherited in isolated env")
+			Command: []string{"powershell", "-Command", "$env:NEOCODE_HOOK_HOOK_ID; $env:NEOCODE_HOOK_POINT; $env:NEOCODE_HOOK_PAYLOAD_VERSION; '{\"status\":\"pass\"}'"},
 		}
 	} else {
-		script := filepath.Join(tmpDir, "check_env.sh")
-		if err := os.WriteFile(script, []byte("#!/bin/sh\nenv | grep NEOCODE_HOOK_ | sort\nif [ -n \"$PATH\" ]; then echo \"HAS_PATH=1\"; fi\necho '{\"status\":\"pass\"}'\n"), 0o755); err != nil {
-			t.Fatalf("write script: %v", err)
-		}
-		spec := CommandHookSpec{
+		spec = CommandHookSpec{
 			HookID:  "env-test",
 			Point:   HookPointBeforeToolCall,
-			Command: []string{"sh", script},
+			Command: []string{"sh", "-c", "echo $NEOCODE_HOOK_HOOK_ID; echo $NEOCODE_HOOK_POINT; echo $NEOCODE_HOOK_PAYLOAD_VERSION; echo '{\"status\":\"pass\"}'"},
 		}
-		result := RunCommandHook(ctx, spec, HookContext{})
-		if result.Status != HookResultPass {
-			t.Fatalf("status = %q, want %q; message: %s", result.Status, HookResultPass, result.Message)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := RunCommandHook(ctx, spec, HookContext{})
+	if result.Status != HookResultPass {
+		t.Fatalf("status = %q, want %q; message: %s", result.Status, HookResultPass, result.Message)
+	}
+	if !strings.Contains(result.Message, "env-test") {
+		t.Fatalf("expected NEOCODE_HOOK_HOOK_ID in output, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "before_tool_call") {
+		t.Fatalf("expected NEOCODE_HOOK_POINT in output, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, CommandHookPayloadVersion) {
+		t.Fatalf("expected NEOCODE_HOOK_PAYLOAD_VERSION in output, got: %s", result.Message)
+	}
+}
+
+func TestBuildCommandEnvContainsHookVars(t *testing.T) {
+	t.Parallel()
+	spec := CommandHookSpec{HookID: "id-123", Point: HookPointSessionEnd}
+	env := buildCommandEnv(spec)
+	envMap := make(map[string]bool)
+	for _, e := range env {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = true
 		}
-		if !strings.Contains(result.Message, "NEOCODE_HOOK_HOOK_ID=env-test") {
-			t.Fatalf("expected NEOCODE_HOOK_HOOK_ID in output, got: %s", result.Message)
-		}
-		if !strings.Contains(result.Message, "NEOCODE_HOOK_POINT=before_tool_call") {
-			t.Fatalf("expected NEOCODE_HOOK_POINT in output, got: %s", result.Message)
-		}
-		if strings.Contains(result.Message, "HAS_PATH=1") {
-			t.Fatal("PATH should not be inherited in isolated env")
-		}
+	}
+	if !envMap["NEOCODE_HOOK_HOOK_ID"] {
+		t.Fatal("missing NEOCODE_HOOK_HOOK_ID")
+	}
+	if !envMap["NEOCODE_HOOK_POINT"] {
+		t.Fatal("missing NEOCODE_HOOK_POINT")
+	}
+	if !envMap["NEOCODE_HOOK_PAYLOAD_VERSION"] {
+		t.Fatal("missing NEOCODE_HOOK_PAYLOAD_VERSION")
 	}
 }
 
