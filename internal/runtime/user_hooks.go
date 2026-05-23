@@ -210,7 +210,12 @@ func buildConfiguredHookSpec(
 		specKind = runtimehooks.HookKindFunction
 		specMode = runtimehooks.HookModeSync
 	case configuredHookKindCommand:
-		handler, err = buildUserCommandHookHandler(strings.TrimSpace(item.ID), item.Params, defaultWorkdir)
+		handler, err = buildUserCommandHookHandler(
+			strings.TrimSpace(item.ID),
+			runtimehooks.HookPoint(strings.TrimSpace(item.Point)),
+			item.Params,
+			defaultWorkdir,
+		)
 		specKind = runtimehooks.HookKindCommand
 		specMode = runtimehooks.HookModeSync
 	case configuredHookKindHTTP:
@@ -377,7 +382,7 @@ func buildUserBuiltinHookHandler(
 }
 
 // buildUserCommandHookHandler 将命令型 hook 转为同步阻断处理器，使用 stdin/stdout JSON 协议。
-func buildUserCommandHookHandler(hookID string, params map[string]any, defaultWorkdir string) (runtimehooks.HookHandler, error) {
+func buildUserCommandHookHandler(hookID string, point runtimehooks.HookPoint, params map[string]any, defaultWorkdir string) (runtimehooks.HookHandler, error) {
 	argv, shell, err := parseCommandHookParams(params)
 	if err != nil {
 		return nil, err
@@ -385,7 +390,7 @@ func buildUserCommandHookHandler(hookID string, params map[string]any, defaultWo
 	return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
 		spec := runtimehooks.CommandHookSpec{
 			HookID:  hookID,
-			Point:   runtimehooks.HookPoint(strings.TrimSpace(fmt.Sprintf("%v", input.Metadata["point"]))),
+			Point:   point,
 			Command: argv,
 			Shell:   shell,
 			Workdir: resolveHookWorkdir(input, defaultWorkdir),
