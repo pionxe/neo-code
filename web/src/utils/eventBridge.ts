@@ -534,10 +534,7 @@ function normalizeUserQuestionRequestedPayload(
 }
 
 const CRITICAL_EVENTS = new Set<string>([EventType.Error, EventType.RunError]);
-const SESSION_AGNOSTIC_EVENTS = new Set<string>([
-  EventType.Error,
-  EventType.RunError,
-]);
+const SESSION_AGNOSTIC_EVENTS = new Set<string>([EventType.Error]);
 
 function strField(payload: unknown, key: string): string {
   return ((payload as PayloadRecord)?.[key] as string) ?? "";
@@ -545,6 +542,20 @@ function strField(payload: unknown, key: string): string {
 
 function getRunKey(frameRunId: string | undefined): string {
   return (frameRunId || useGatewayStore.getState().currentRunId || "").trim();
+}
+
+function isCurrentRunScopedTerminalEvent(
+  eventType: string,
+  frameRunId: string | undefined,
+): boolean {
+  if (eventType !== EventType.RunError) return false;
+  const eventRunId = (frameRunId || "").trim();
+  const currentRunId = useGatewayStore.getState().currentRunId.trim();
+  return (
+    eventRunId !== "" &&
+    currentRunId !== "" &&
+    eventRunId === currentRunId
+  );
 }
 
 function isMaxTurnExceeded(reason: string, code = ""): boolean {
@@ -682,7 +693,8 @@ export function handleGatewayEvent(
     frameSessionId &&
     currentSessionId &&
     frameSessionId !== currentSessionId &&
-    !SESSION_AGNOSTIC_EVENTS.has(eventType)
+    !SESSION_AGNOSTIC_EVENTS.has(eventType) &&
+    !isCurrentRunScopedTerminalEvent(eventType, frameRunId)
   ) {
     return;
   }
