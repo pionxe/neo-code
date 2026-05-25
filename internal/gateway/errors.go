@@ -18,6 +18,8 @@ const (
 	ErrorCodeUnsupportedAction ErrorCode = "unsupported_action"
 	// ErrorCodeInternalError 表示网关内部错误。
 	ErrorCodeInternalError ErrorCode = "internal_error"
+	// ErrorCodeMaxTurnExceeded 表示 runtime 达到单次运行最大轮数后受控停止。
+	ErrorCodeMaxTurnExceeded ErrorCode = "max_turn_exceeded"
 	// ErrorCodeTimeout 表示网关下游调用超时。
 	ErrorCodeTimeout ErrorCode = "timeout"
 	// ErrorCodeUnauthorized 表示请求未通过认证校验。
@@ -41,6 +43,7 @@ var stableErrorCodes = map[string]struct{}{
 	string(ErrorCodeMissingRequiredField):     {},
 	string(ErrorCodeUnsupportedAction):        {},
 	string(ErrorCodeInternalError):            {},
+	string(ErrorCodeMaxTurnExceeded):          {},
 	string(ErrorCodeTimeout):                  {},
 	string(ErrorCodeUnauthorized):             {},
 	string(ErrorCodeAccessDenied):             {},

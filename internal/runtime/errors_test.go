@@ -40,3 +40,16 @@ func TestHandleRunErrorProviderErrorDoesNotWriteStdLog(t *testing.T) {
 	}
 
 }
+
+func TestIsMaxTurnLimitError(t *testing.T) {
+	err := newMaxTurnLimitError(40)
+	if !IsMaxTurnLimitError(err) {
+		t.Fatal("expected direct max turn error to be recognized")
+	}
+	if !IsMaxTurnLimitError(errors.Join(errors.New("outer"), err)) {
+		t.Fatal("expected joined max turn error to be recognized")
+	}
+	if IsMaxTurnLimitError(errors.New("runtime: max turn limit reached (40)")) {
+		t.Fatal("plain text error should not be treated as max turn error")
+	}
+}

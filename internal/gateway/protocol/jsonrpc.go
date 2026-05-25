@@ -140,6 +140,8 @@ const (
 	GatewayCodeUnsupportedAction = "unsupported_action"
 	// GatewayCodeInternalError 表示网关内部错误。
 	GatewayCodeInternalError = "internal_error"
+	// GatewayCodeMaxTurnExceeded 表示 runtime 达到单次运行最大轮数后受控停止。
+	GatewayCodeMaxTurnExceeded = "max_turn_exceeded"
 	// GatewayCodeTimeout 表示网关处理请求时发生超时。
 	GatewayCodeTimeout = "timeout"
 	// GatewayCodeUnsafePath 表示路径存在安全风险。
@@ -1201,7 +1203,8 @@ func MapGatewayCodeToJSONRPCCode(gatewayCode string) int {
 		GatewayCodeUnsafePath,
 		GatewayCodeUnauthorized,
 		GatewayCodeAccessDenied,
-		GatewayCodeResourceNotFound:
+		GatewayCodeResourceNotFound,
+		GatewayCodeMaxTurnExceeded:
 		return JSONRPCCodeInvalidParams
 	case GatewayCodeInternalError:
 		return JSONRPCCodeInternalError

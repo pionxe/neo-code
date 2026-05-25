@@ -987,6 +987,214 @@ describe("eventBridge", () => {
     expect(useChatStore.getState().messages[0].toolStatus).toBe("error");
   });
 
+  it("StopReasonDecided marks running tool calls as error and shows max-turn toast", () => {
+    const api = createMockGatewayAPI();
+    useChatStore.getState().addMessage({
+      id: "tool-running-max-turn",
+      role: "tool",
+      type: "tool_call",
+      content: "",
+      toolName: "bash",
+      toolCallId: "tc-max-turn",
+      toolStatus: "running",
+      timestamp: Date.now(),
+    });
+    useChatStore.getState().setGenerating(true);
+
+    handleGatewayEvent(
+      {
+        type: EventType.StopReasonDecided,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.StopReasonDecided,
+            payload: { reason: "max_turn_exceeded", detail: "runtime: max turn limit reached (40)" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-max-turn",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    expect(useChatStore.getState().stopReason).toBe("max_turn_exceeded");
+    expect(useChatStore.getState().messages[0].toolStatus).toBe("error");
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "已达到本次运行最大轮数，可继续发送消息或调高 runtime.max_turns",
+    );
+    useSessionStore.setState({ currentSessionId: "" } as any);
+    useGatewayStore.setState({ currentRunId: "" } as any);
+  });
+
+  it("RunError with max-turn stop reason uses explicit max-turn UX instead of generic run failed", () => {
+    const api = createMockGatewayAPI();
+    useChatStore.getState().addMessage({
+      id: "tool-running-run-error",
+      role: "tool",
+      type: "tool_call",
+      content: "",
+      toolName: "bash",
+      toolCallId: "tc-run-error",
+      toolStatus: "running",
+      timestamp: Date.now(),
+    });
+    useChatStore.getState().setGenerating(true);
+
+    handleGatewayEvent(
+      {
+        type: EventType.RunError,
+        payload: {
+          event_type: EventType.RunError,
+          payload: {
+            code: "max_turn_exceeded",
+            message: "runtime: max turn limit reached (40)",
+            stop_reason: "max_turn_exceeded",
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-max-turn-error",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    expect(useChatStore.getState().stopReason).toBe("max_turn_exceeded");
+    expect(useChatStore.getState().messages[0].toolStatus).toBe("error");
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "已达到本次运行最大轮数，可继续发送消息或调高 runtime.max_turns",
+    );
+    expect(
+      useUIStore.getState().toasts.some((toast) => toast.message === "runtime: max turn limit reached (40)"),
+    ).toBe(false);
+  });
+
+  it("RunError with max-turn stop reason is handled during session mismatch", () => {
+    const api = createMockGatewayAPI();
+    useSessionStore.setState({ currentSessionId: "sess-current" } as any);
+    useGatewayStore.setState({ currentRunId: "run-max-turn-mismatch" } as any);
+    useChatStore.getState().addMessage({
+      id: "tool-running-run-error-mismatch",
+      role: "tool",
+      type: "tool_call",
+      content: "",
+      toolName: "bash",
+      toolCallId: "tc-run-error-mismatch",
+      toolStatus: "running",
+      timestamp: Date.now(),
+    });
+    useChatStore.getState().setGenerating(true);
+
+    handleGatewayEvent(
+      {
+        type: EventType.RunError,
+        payload: {
+          event_type: EventType.RunError,
+          payload: {
+            code: "max_turn_exceeded",
+            message: "runtime: max turn limit reached (40)",
+            stop_reason: "max_turn_exceeded",
+          },
+        },
+        session_id: "sess-stale",
+        run_id: "run-max-turn-mismatch",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    expect(useChatStore.getState().stopReason).toBe("max_turn_exceeded");
+    expect(useChatStore.getState().messages[0].toolStatus).toBe("error");
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "已达到本次运行最大轮数，可继续发送消息或调高 runtime.max_turns",
+    );
+  });
+
+  it("RunError during session mismatch is ignored when run id is stale", () => {
+    const api = createMockGatewayAPI();
+    useSessionStore.setState({ currentSessionId: "sess-current" } as any);
+    useGatewayStore.setState({ currentRunId: "run-current" } as any);
+    useChatStore.getState().addMessage({
+      id: "tool-running-stale-run-error",
+      role: "tool",
+      type: "tool_call",
+      content: "",
+      toolName: "bash",
+      toolCallId: "tc-stale-run-error",
+      toolStatus: "running",
+      timestamp: Date.now(),
+    });
+    useChatStore.getState().setGenerating(true);
+
+    handleGatewayEvent(
+      {
+        type: EventType.RunError,
+        payload: {
+          event_type: EventType.RunError,
+          payload: {
+            code: "max_turn_exceeded",
+            message: "runtime: max turn limit reached (40)",
+            stop_reason: "max_turn_exceeded",
+          },
+        },
+        session_id: "sess-stale",
+        run_id: "run-stale",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isGenerating).toBe(true);
+    expect(useChatStore.getState().stopReason).toBe("");
+    expect(useChatStore.getState().messages[0].toolStatus).toBe("running");
+    expect(useUIStore.getState().toasts).toHaveLength(0);
+    useSessionStore.setState({ currentSessionId: "" } as any);
+    useGatewayStore.setState({ currentRunId: "" } as any);
+  });
+
+  it("RunError for current run is handled while transitioning", () => {
+    const api = createMockGatewayAPI();
+    useSessionStore.setState({ currentSessionId: "sess-current" } as any);
+    useGatewayStore.setState({ currentRunId: "run-transition" } as any);
+    useChatStore.setState({ isTransitioning: true } as any);
+    useChatStore.getState().addMessage({
+      id: "tool-running-transition-run-error",
+      role: "tool",
+      type: "tool_call",
+      content: "",
+      toolName: "bash",
+      toolCallId: "tc-transition-run-error",
+      toolStatus: "running",
+      timestamp: Date.now(),
+    });
+    useChatStore.getState().setGenerating(true);
+
+    handleGatewayEvent(
+      {
+        type: EventType.RunError,
+        payload: {
+          event_type: EventType.RunError,
+          payload: {
+            code: "max_turn_exceeded",
+            message: "runtime: max turn limit reached (40)",
+            stop_reason: "max_turn_exceeded",
+          },
+        },
+        session_id: "sess-stale",
+        run_id: "run-transition",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    expect(useChatStore.getState().stopReason).toBe("max_turn_exceeded");
+    expect(useChatStore.getState().messages[0].toolStatus).toBe("error");
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "已达到本次运行最大轮数，可继续发送消息或调高 runtime.max_turns",
+    );
+    useSessionStore.setState({ currentSessionId: "" } as any);
+    useGatewayStore.setState({ currentRunId: "" } as any);
+    useChatStore.setState({ isTransitioning: false } as any);
+  });
+
   it("RunCanceled does not convert running tool calls to done", () => {
     const api = createMockGatewayAPI();
     useChatStore.getState().addMessage({

@@ -2,7 +2,7 @@
 
 本文档用于第三方客户端实现统一异常处理策略，覆盖 Gateway 稳定错误码集合：
 
-`invalid_frame`、`invalid_action`、`invalid_multimodal_payload`、`missing_required_field`、`unsupported_action`、`internal_error`、`timeout`、`unauthorized`、`access_denied`、`resource_not_found`。
+`invalid_frame`、`invalid_action`、`invalid_multimodal_payload`、`missing_required_field`、`unsupported_action`、`internal_error`、`max_turn_exceeded`、`timeout`、`unauthorized`、`access_denied`、`resource_not_found`。
 
 ## 1. 错误码对照表
 
@@ -14,6 +14,7 @@
 | `missing_required_field` | `200` | `-32600` / `-32602` | 缺失必填字段。请求层字段缺失多映射为 `-32600`，方法参数层字段缺失多映射为 `-32602`。 | 缺失 `id`；缺失 `params`；`cancel` 缺失 `run_id`。 | 调整参数补齐必填项再重试。 |
 | `unsupported_action` | `200` | `-32601` | 方法未注册或不被网关识别。 | 调用不存在的方法名。 | 客户端按能力探测降级，或升级服务端版本。 |
 | `internal_error` | `200` | `-32603` | 网关内部异常或未分类下游异常。 | 结果编码失败；runtime port 不可用；未知运行时错误。 | 采用指数退避重试；持续失败时告警。 |
+| `max_turn_exceeded` | `200` | `-32602` | Runtime 达到 `runtime.max_turns` 后受控停止。 | 异步 `gateway.run` 通过 `run_error` 返回 `stop_reason=max_turn_exceeded`。 | 提示用户继续发送消息、拆分任务或调高 `runtime.max_turns`；不要按网关内部错误告警。 |
 | `timeout` | `200` | `-32603` | 网关调用 runtime 超时（`context.DeadlineExceeded`）。 | `run/compact/cancel/loadSession/resolvePermission` 下游调用超时。 | 可重试且建议带幂等键（如固定 `run_id`）。 |
 | `unauthorized` | `401`（仅 /rpc） | `-32602` | 请求未通过认证。 | 未携带 token；token 非法；连接未先 `authenticate`。 | 先刷新凭证并重新认证，认证成功后再发业务请求。 |
 | `access_denied` | `403`（仅 /rpc） | `-32602` | 已认证但不具备该方法或资源权限。 | ACL 拒绝当前来源调用该方法；runtime 返回 access denied。 | 终止当前请求并提示授权不足，不要盲重试。 |

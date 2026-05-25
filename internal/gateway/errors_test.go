@@ -10,9 +10,14 @@ func TestStableErrorCodes(t *testing.T) {
 		ErrorCodeMissingRequiredField,
 		ErrorCodeUnsupportedAction,
 		ErrorCodeInternalError,
+		ErrorCodeMaxTurnExceeded,
 		ErrorCodeTimeout,
 		ErrorCodeUnauthorized,
 		ErrorCodeAccessDenied,
+		ErrorCodeResourceNotFound,
+		ErrorCodeRunnerOffline,
+		ErrorCodeCapabilityDenied,
+		ErrorCodeToolExecutionFailed,
 	}
 
 	for _, code := range codes {

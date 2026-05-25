@@ -10,6 +10,7 @@
 | `missing_required_field` | 200 | -32602 | 缺失必填字段（如 `params.session_id`、`params.request_id`、`payload.run_id`）。 | 直接失败，补齐字段。 |
 | `unsupported_action` | 200 | -32601 | 方法不存在或当前版本未实现。 | 降级到兼容方法，或提示版本不支持。 |
 | `internal_error` | 200 | -32603 | 网关内部异常、运行时不可用、不可归类的执行失败。 | 可短暂重试；持续失败需告警。 |
+| `max_turn_exceeded` | 200 | -32602 | Runtime 达到 `runtime.max_turns` 后受控停止；异步 `gateway.run` 会通过 `run_error.stop_reason=max_turn_exceeded` 透传。 | 提示用户可继续发送消息、拆分任务或调高 `runtime.max_turns`，不要按网关内部错误告警。 |
 | `timeout` | 200 | -32603 | Gateway 调用 runtime 超过操作超时窗口。 | 可重试并增加客户端超时预算；必要时调用 `gateway.cancel`。 |
 | `unauthorized` | 401 | -32602 | 未提供有效 token 或连接未完成认证。 | 刷新凭据并重新认证，不建议盲重试。 |
 | `access_denied` | 403 | -32602 | 已认证但 ACL/主体权限不允许当前动作或资源访问。 | 直接失败，提示权限不足。 |

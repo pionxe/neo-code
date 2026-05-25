@@ -1,5 +1,6 @@
 import {
   EventType,
+  StopReason,
   type AcceptanceDecidedPayload,
   type BashSideEffectPayload,
   type BudgetCheckedPayload,
@@ -56,7 +57,10 @@ let _pendingRollbackAppliedRunId: string | undefined;
 // plan 模式下先缓存文本流，等待结构化 plan_updated 决定最终展示。
 let _planChunkBufferByRunId = new Map<string, string>();
 let _planUpdatedRunIds = new Set<string>();
+let _maxTurnToastRunIds = new Set<string>();
 const CHECKPOINT_REASON_PRE_RESTORE_GUARD = "pre_restore_guard";
+const MAX_TURN_EXCEEDED_MESSAGE =
+  "已达到本次运行最大轮数，可继续发送消息或调高 runtime.max_turns";
 
 /** 重置模块级游标 —— 在截断聊天历史 / 切换会话等场景调用，避免后续事件挂到已被移除的消息上 */
 export function resetEventBridgeCursors() {
@@ -74,6 +78,7 @@ export function resetEventBridgeCursors() {
     : undefined;
   _planChunkBufferByRunId = new Map<string, string>();
   _planUpdatedRunIds = new Set<string>();
+  _maxTurnToastRunIds = new Set<string>();
   _latestRunDiffRequestId += 1;
   if (!keepCheckpointBaseline) {
     _latestRestoreSyncRequestId += 1;
@@ -528,7 +533,7 @@ function normalizeUserQuestionRequestedPayload(
   };
 }
 
-const CRITICAL_EVENTS = new Set<string>([EventType.Error]);
+const CRITICAL_EVENTS = new Set<string>([EventType.Error, EventType.RunError]);
 const SESSION_AGNOSTIC_EVENTS = new Set<string>([EventType.Error]);
 
 function strField(payload: unknown, key: string): string {
@@ -537,6 +542,34 @@ function strField(payload: unknown, key: string): string {
 
 function getRunKey(frameRunId: string | undefined): string {
   return (frameRunId || useGatewayStore.getState().currentRunId || "").trim();
+}
+
+function isCurrentRunScopedTerminalEvent(
+  eventType: string,
+  frameRunId: string | undefined,
+): boolean {
+  if (eventType !== EventType.RunError) return false;
+  const eventRunId = (frameRunId || "").trim();
+  const currentRunId = useGatewayStore.getState().currentRunId.trim();
+  return (
+    eventRunId !== "" &&
+    currentRunId !== "" &&
+    eventRunId === currentRunId
+  );
+}
+
+function isMaxTurnExceeded(reason: string, code = ""): boolean {
+  return (
+    reason === StopReason.MaxTurnExceeded ||
+    code === StopReason.MaxTurnExceeded
+  );
+}
+
+function showMaxTurnExceededToastOnce(frameRunId: string | undefined) {
+  const runKey = getRunKey(frameRunId) || "__unknown_run__";
+  if (_maxTurnToastRunIds.has(runKey)) return;
+  _maxTurnToastRunIds.add(runKey);
+  useUIStore.getState().showToast(MAX_TURN_EXCEEDED_MESSAGE, "error");
 }
 
 function extractAgentDoneContent(eventPayload: unknown): string {
@@ -634,7 +667,11 @@ export function handleGatewayEvent(
   const payload = frame.payload as PayloadRecord;
   if (!payload) return;
 
-  const innerEnvelope = payload.payload as PayloadRecord;
+  const rawInnerPayload = payload.payload;
+  const innerEnvelope =
+    rawInnerPayload && typeof rawInnerPayload === "object"
+      ? (rawInnerPayload as PayloadRecord)
+      : undefined;
   const eventType =
     (innerEnvelope?.runtime_event_type as string | undefined) ??
     (payload.event_type as string | undefined);
@@ -656,12 +693,16 @@ export function handleGatewayEvent(
     frameSessionId &&
     currentSessionId &&
     frameSessionId !== currentSessionId &&
-    !SESSION_AGNOSTIC_EVENTS.has(eventType)
+    !SESSION_AGNOSTIC_EVENTS.has(eventType) &&
+    !isCurrentRunScopedTerminalEvent(eventType, frameRunId)
   ) {
     return;
   }
 
-  const eventPayload = innerEnvelope?.payload;
+  const eventPayload =
+    innerEnvelope?.runtime_event_type !== undefined
+      ? innerEnvelope.payload
+      : rawInnerPayload;
 
   const chatStore = useChatStore.getState();
   const uiStore = useUIStore.getState();
@@ -910,6 +951,21 @@ export function handleGatewayEvent(
       break;
     }
 
+    case EventType.RunError: {
+      const code = strField(eventPayload, "code");
+      const reason = strField(eventPayload, "stop_reason");
+      const message = strField(eventPayload, "message") || "Run failed";
+      useChatStore.getState().resetGeneratingState();
+      useChatStore.getState().finalizeRunningToolCalls("error");
+      if (isMaxTurnExceeded(reason, code)) {
+        useChatStore.getState().setStopReason(StopReason.MaxTurnExceeded);
+        showMaxTurnExceededToastOnce(frameRunId);
+      } else {
+        uiStore.showToast(message, "error");
+      }
+      break;
+    }
+
     case EventType.StopReasonDecided: {
       const reason = strField(eventPayload, "reason");
       const detail = strField(eventPayload, "detail");
@@ -920,6 +976,10 @@ export function handleGatewayEvent(
       }
       if (reason === "fatal_error") {
         uiStore.showToast(detail || "模型调用失败，请检查配置", "error");
+      }
+      if (reason === StopReason.MaxTurnExceeded) {
+        useChatStore.getState().finalizeRunningToolCalls("error");
+        showMaxTurnExceededToastOnce(frameRunId);
       }
       break;
     }

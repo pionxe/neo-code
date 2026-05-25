@@ -314,6 +314,9 @@ func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInp
 		return err
 	}
 	err := b.runtime.Submit(ctx, convertGatewayRunInput(input))
+	if agentruntime.IsMaxTurnLimitError(err) {
+		return gateway.NewRuntimeMaxTurnExceededError(err.Error())
+	}
 	if err != nil && isRuntimeNotFoundError(err) {
 		sessionID := strings.TrimSpace(input.SessionID)
 		if sessionID == "" {
@@ -326,7 +329,11 @@ func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInp
 		if _, createErr := creator.CreateSession(ctx, sessionID); createErr != nil {
 			return err
 		}
-		return b.runtime.Submit(ctx, convertGatewayRunInput(input))
+		retryErr := b.runtime.Submit(ctx, convertGatewayRunInput(input))
+		if agentruntime.IsMaxTurnLimitError(retryErr) {
+			return gateway.NewRuntimeMaxTurnExceededError(retryErr.Error())
+		}
+		return retryErr
 	}
 	return err
 }

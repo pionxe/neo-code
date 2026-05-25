@@ -523,14 +523,18 @@ func dispatchRunFrameWithSubjectID(
 				)
 			}
 			if relayExists && relay != nil {
-				errorCode := "INTERNAL_ERROR"
+				errorCode := ErrorCodeInternalError.String()
 				errorMessage := "run failed"
+				stopReason := ""
 				if failedFrame.Error != nil {
-					if normalizedCode := strings.ToUpper(strings.TrimSpace(failedFrame.Error.Code)); normalizedCode != "" {
+					if normalizedCode := strings.TrimSpace(failedFrame.Error.Code); normalizedCode != "" {
 						errorCode = normalizedCode
 					}
 					if normalizedMessage := strings.TrimSpace(failedFrame.Error.Message); normalizedMessage != "" {
 						errorMessage = normalizedMessage
+					}
+					if strings.TrimSpace(failedFrame.Error.Code) == ErrorCodeMaxTurnExceeded.String() {
+						stopReason = ErrorCodeMaxTurnExceeded.String()
 					}
 				}
 				fallbackSessionID := strings.TrimSpace(frameSnapshot.SessionID)
@@ -542,14 +546,18 @@ func dispatchRunFrameWithSubjectID(
 					fallbackRunID = strings.TrimSpace(inputSnapshot.RunID)
 				}
 				if fallbackSessionID != "" {
+					payload := map[string]any{
+						"code":    errorCode,
+						"message": errorMessage,
+					}
+					if stopReason != "" {
+						payload["stop_reason"] = stopReason
+					}
 					relay.PublishRuntimeEvent(RuntimeEvent{
 						Type:      RuntimeEventTypeRunError,
 						SessionID: fallbackSessionID,
 						RunID:     fallbackRunID,
-						Payload: map[string]any{
-							"code":    errorCode,
-							"message": errorMessage,
-						},
+						Payload:   payload,
 					})
 				}
 			}
@@ -1842,6 +1850,13 @@ func runtimeCallFailedFrame(ctx context.Context, frame MessageFrame, err error, 
 	case errors.Is(err, ErrRuntimeResourceNotFound):
 		errorCode = ErrorCodeResourceNotFound
 		message = fmt.Sprintf("%s target not found", normalizedOperation)
+	case errors.Is(err, ErrRuntimeMaxTurnExceeded):
+		errorCode = ErrorCodeMaxTurnExceeded
+		if detail := RuntimeMaxTurnExceededDetail(err); detail != "" {
+			message = detail
+		} else {
+			message = fmt.Sprintf("%s max turn exceeded", normalizedOperation)
+		}
 	case errors.Is(err, ErrRuntimeInvalidAction):
 		errorCode = ErrorCodeInvalidAction
 		message = fmt.Sprintf("%s invalid action", normalizedOperation)

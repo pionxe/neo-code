@@ -2057,6 +2057,95 @@ ASSERT:
 	}
 }
 
+func TestDispatchRequestFrameRunMaxTurnFailurePublishesStopReason(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+
+	messageCh := make(chan RelayMessage, 8)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			messageCh <- message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	if err := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: "run-session-max-turn",
+		RunID:     "run-max-turn",
+		Channel:   StreamChannelIPC,
+		Role:      StreamRoleNone,
+		Explicit:  true,
+	}); err != nil {
+		t.Fatalf("bind connection: %v", err)
+	}
+
+	runtime := &bootstrapRuntimeStub{
+		runFn: func(_ context.Context, _ RunInput) error {
+			return NewRuntimeMaxTurnExceededError("runtime: max turn limit reached (40)")
+		},
+	}
+	response := dispatchRequestFrame(connectionCtx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionRun,
+		RequestID: "req-run-max-turn",
+		SessionID: "run-session-max-turn",
+		RunID:     "run-max-turn",
+		InputText: "hello",
+	}, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case message := <-messageCh:
+			notification, ok := message.Payload.(protocol.JSONRPCNotification)
+			if !ok || notification.Method != protocol.MethodGatewayEvent {
+				continue
+			}
+			eventFrame := MessageFrame{}
+			raw, err := json.Marshal(notification.Params)
+			if err != nil {
+				t.Fatalf("marshal payload params: %v", err)
+			}
+			if err := json.Unmarshal(raw, &eventFrame); err != nil {
+				t.Fatalf("unmarshal event frame: %v", err)
+			}
+			payloadMap, _ := eventFrame.Payload.(map[string]any)
+			if strings.TrimSpace(fmt.Sprint(payloadMap["event_type"])) != string(RuntimeEventTypeRunError) {
+				continue
+			}
+			envelope, _ := payloadMap["payload"].(map[string]any)
+			if got := strings.TrimSpace(fmt.Sprint(envelope["code"])); got != ErrorCodeMaxTurnExceeded.String() {
+				t.Fatalf("payload.code = %q, want %q", got, ErrorCodeMaxTurnExceeded.String())
+			}
+			if got := strings.TrimSpace(fmt.Sprint(envelope["stop_reason"])); got != ErrorCodeMaxTurnExceeded.String() {
+				t.Fatalf("payload.stop_reason = %q, want %q", got, ErrorCodeMaxTurnExceeded.String())
+			}
+			if got := strings.TrimSpace(fmt.Sprint(envelope["message"])); got != "runtime: max turn limit reached (40)" {
+				t.Fatalf("payload.message = %q, want max turn detail", got)
+			}
+			return
+		case <-deadline:
+			t.Fatal("expected max-turn run_error event")
+		}
+	}
+}
+
 func TestRuntimeCallFailedFrameSanitizesErrorAndMapsCode(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := WithGatewayLogger(context.Background(), log.New(&buf, "", 0))
@@ -2107,6 +2196,19 @@ func TestRuntimeCallFailedFrameSanitizesErrorAndMapsCode(t *testing.T) {
 	}
 	if invalidActionErr.Error.Message != "approve_plan invalid action" {
 		t.Fatalf("invalid action message = %q, want %q", invalidActionErr.Error.Message, "approve_plan invalid action")
+	}
+
+	maxTurnErr := runtimeCallFailedFrame(
+		context.Background(),
+		frame,
+		NewRuntimeMaxTurnExceededError("runtime: max turn limit reached (40)"),
+		"run",
+	)
+	if maxTurnErr.Error == nil || maxTurnErr.Error.Code != ErrorCodeMaxTurnExceeded.String() {
+		t.Fatalf("max turn error payload = %#v, want max_turn_exceeded", maxTurnErr.Error)
+	}
+	if maxTurnErr.Error.Message != "runtime: max turn limit reached (40)" {
+		t.Fatalf("max turn message = %q, want runtime detail", maxTurnErr.Error.Message)
 	}
 }
 
