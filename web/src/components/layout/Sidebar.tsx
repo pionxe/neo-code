@@ -331,7 +331,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
       {createWorkspaceOpen && (
         <CreateWorkspaceDialog
           electronMode={runtime.mode === 'electron'}
-          onPickDirectory={runtime.mode === 'electron' ? runtime.selectWorkdir : undefined}
+          onPickDirectory={runtime.mode === 'electron' ? runtime.pickWorkspaceDirectory : undefined}
           onSubmit={handleCreateWorkspace}
           onClose={() => setCreateWorkspaceOpen(false)}
         />
@@ -513,7 +513,7 @@ function CreateWorkspaceDialog({
   electronMode, onPickDirectory, onSubmit, onClose,
 }: {
   electronMode: boolean
-  onPickDirectory?: () => Promise<string>
+  onPickDirectory?: () => Promise<string | null>
   onSubmit: (path: string, name?: string) => Promise<void>
   onClose: () => void
 }) {
@@ -561,7 +561,7 @@ function CreateWorkspaceDialog({
                 placeholder="例如：/Users/me/projects/foo" autoFocus
               />
               {electronMode && onPickDirectory && (
-                <button className="btn btn-secondary" onClick={handlePick}>浏览</button>
+                <button type="button" className="btn btn-secondary" onClick={handlePick}>浏览</button>
               )}
             </div>
           </label>

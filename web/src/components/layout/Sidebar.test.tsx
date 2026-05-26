@@ -9,20 +9,27 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 let mockGatewayAPI: any = null
+let mockRuntime: {
+  mode: 'browser' | 'electron'
+  selectWorkdir: ReturnType<typeof vi.fn>
+  pickWorkspaceDirectory: ReturnType<typeof vi.fn>
+}
 const appCss = readFileSync('src/index.css', 'utf-8')
 
 vi.mock('@/context/RuntimeProvider', () => ({
   useGatewayAPI: () => mockGatewayAPI,
-  useRuntime: () => ({
-    mode: 'browser',
-    selectWorkdir: vi.fn(),
-  }),
+  useRuntime: () => mockRuntime,
 }))
 
 describe('Sidebar ProviderModal', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     cleanup()
+    mockRuntime = {
+      mode: 'browser',
+      selectWorkdir: vi.fn(),
+      pickWorkspaceDirectory: vi.fn(),
+    }
     mockGatewayAPI = {
       listMCPServers: vi.fn().mockResolvedValue({
         payload: {
@@ -372,6 +379,87 @@ describe('Sidebar ProviderModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Workspace One/i }))
     expect(switchWorkspace).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps browser workspace creation as manual path entry without a directory picker', () => {
+    const { container } = render(<Sidebar />)
+    const addWorkspaceButton = container.querySelector('.sidebar-section-header .btn')
+    expect(addWorkspaceButton).toBeInstanceOf(HTMLButtonElement)
+
+    fireEvent.click(addWorkspaceButton as HTMLButtonElement)
+
+    expect(screen.getByText('新建工作区')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('例如：/Users/me/projects/foo')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '浏览' })).not.toBeInTheDocument()
+  })
+
+  it('uses the Electron directory picker to fill the workspace path', async () => {
+    mockRuntime = {
+      mode: 'electron',
+      selectWorkdir: vi.fn().mockResolvedValue('D:\\projects\\neo-code'),
+      pickWorkspaceDirectory: vi.fn().mockResolvedValue('D:\\projects\\neo-code'),
+    }
+
+    const { container } = render(<Sidebar />)
+    const addWorkspaceButton = container.querySelector('.sidebar-section-header .btn')
+    fireEvent.click(addWorkspaceButton as HTMLButtonElement)
+
+    fireEvent.click(screen.getByRole('button', { name: '浏览' }))
+
+    await waitFor(() => {
+      expect(mockRuntime.pickWorkspaceDirectory).toHaveBeenCalledTimes(1)
+      expect(mockRuntime.selectWorkdir).not.toHaveBeenCalled()
+      expect(screen.getByPlaceholderText('例如：/Users/me/projects/foo')).toHaveValue('D:\\projects\\neo-code')
+    })
+    expect(screen.getByText('新建工作区')).toBeInTheDocument()
+  })
+
+  it('keeps the previous workspace path when Electron directory selection is canceled', async () => {
+    mockRuntime = {
+      mode: 'electron',
+      selectWorkdir: vi.fn().mockResolvedValue(''),
+      pickWorkspaceDirectory: vi.fn().mockResolvedValue(null),
+    }
+
+    const { container } = render(<Sidebar />)
+    const addWorkspaceButton = container.querySelector('.sidebar-section-header .btn')
+    fireEvent.click(addWorkspaceButton as HTMLButtonElement)
+
+    const pathInput = screen.getByPlaceholderText('例如：/Users/me/projects/foo')
+    fireEvent.change(pathInput, { target: { value: 'D:\\existing' } })
+    fireEvent.click(screen.getByRole('button', { name: '浏览' }))
+
+    await waitFor(() => {
+      expect(mockRuntime.pickWorkspaceDirectory).toHaveBeenCalledTimes(1)
+    })
+    expect(mockRuntime.selectWorkdir).not.toHaveBeenCalled()
+    expect(pathInput).toHaveValue('D:\\existing')
+    expect(screen.getByText('新建工作区')).toBeInTheDocument()
+  })
+
+  it('submits the selected workspace path through the workspace store and closes the dialog', async () => {
+    const createWorkspace = vi.fn().mockResolvedValue(undefined)
+    useWorkspaceStore.setState({
+      createWorkspace,
+      changing: false,
+    } as any)
+
+    const { container } = render(<Sidebar />)
+    const addWorkspaceButton = container.querySelector('.sidebar-section-header .btn')
+    fireEvent.click(addWorkspaceButton as HTMLButtonElement)
+
+    fireEvent.change(screen.getByPlaceholderText('例如：/Users/me/projects/foo'), {
+      target: { value: 'D:\\projects\\neo-code' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('留空则使用路径'), {
+      target: { value: 'NeoCode' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '创建' }))
+
+    await waitFor(() => {
+      expect(createWorkspace).toHaveBeenCalledWith('D:\\projects\\neo-code', mockGatewayAPI, 'NeoCode')
+    })
+    expect(screen.queryByText('新建工作区')).not.toBeInTheDocument()
   })
 
   it('immediately dispatches collapsed-rail actions', async () => {

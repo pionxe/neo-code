@@ -44,6 +44,7 @@ interface RuntimeContextValue {
   connectBrowser: (input: BrowserConnectInput) => Promise<void>
   startLocalGateway: (port: number) => Promise<void>
   selectWorkdir: () => Promise<string>
+  pickWorkspaceDirectory: () => Promise<string | null>
   retry: () => Promise<void>
   resetBrowserConfig: () => void
 }
@@ -300,6 +301,20 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     }
   }, [mode, workdir])
 
+  const pickWorkspaceDirectory = useCallback(async () => {
+    if (!window.electronAPI || mode !== 'electron') return null
+    try {
+      const result = await window.electronAPI.pickDirectory()
+      if (!result.canceled && result.filePaths.length > 0) {
+        return result.filePaths[0]
+      }
+      return null
+    } catch (err) {
+      console.error('pickWorkspaceDirectory failed:', err)
+      return null
+    }
+  }, [mode])
+
   const startLocalGateway = useCallback(async (port: number) => {
     setError('')
     try {
@@ -410,6 +425,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     connectBrowser,
     startLocalGateway,
     selectWorkdir,
+    pickWorkspaceDirectory,
     retry,
     resetBrowserConfig,
   }), [
@@ -426,6 +442,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     connectBrowser,
     startLocalGateway,
     selectWorkdir,
+    pickWorkspaceDirectory,
     retry,
     resetBrowserConfig,
   ])

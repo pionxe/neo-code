@@ -151,6 +151,100 @@ describe('RuntimeProvider lifecycle', () => {
 		expect(runtimeSnapshot.status).toBe('needs_config')
 	})
 
+	it('pickWorkspaceDirectory is a no-op in browser mode', async () => {
+		sessionStorage.setItem(
+			'neocode.browserRuntimeConfig',
+			JSON.stringify({ mode: 'browser', gatewayBaseURL: 'http://127.0.0.1:8080', token: 'tok' }),
+		)
+		let runtimeSnapshot: any = null
+		render(
+			<RuntimeProvider>
+				<RuntimeProbe onReady={(rt) => { runtimeSnapshot = rt }} />
+			</RuntimeProvider>,
+		)
+		await waitFor(() => expect(runtimeSnapshot?.status).toBe('connected'))
+
+		let selected: string | null = 'unexpected'
+		await act(async () => {
+			selected = await runtimeSnapshot.pickWorkspaceDirectory()
+		})
+
+		expect(selected).toBeNull()
+		expect(runtimeSnapshot.workdir).toBe('')
+	})
+
+	it('pickWorkspaceDirectory returns the selected Electron directory without restarting the Gateway', async () => {
+		const pickDirectory = vi.fn().mockResolvedValue({
+			canceled: false,
+			filePaths: ['D:\\projects\\neo-code'],
+		})
+		const selectWorkdir = vi.fn().mockResolvedValue({ canceled: false, workdir: 'D:\\other' })
+		Object.defineProperty(window, 'electronAPI', {
+			value: {
+				getAddress: vi.fn().mockResolvedValue('127.0.0.1:8080'),
+				getToken: vi.fn().mockResolvedValue('tok'),
+				getWorkdir: vi.fn().mockResolvedValue('D:\\initial'),
+				pickDirectory,
+				selectWorkdir,
+			},
+			configurable: true,
+			writable: true,
+		})
+		let runtimeSnapshot: any = null
+		render(
+			<RuntimeProvider>
+				<RuntimeProbe onReady={(rt) => { runtimeSnapshot = rt }} />
+			</RuntimeProvider>,
+		)
+		await waitFor(() => expect(runtimeSnapshot?.status).toBe('connected'))
+		await waitFor(() => expect(runtimeSnapshot?.workdir).toBe('D:\\initial'))
+
+		let selected: string | null = ''
+		await act(async () => {
+			selected = await runtimeSnapshot.pickWorkspaceDirectory()
+		})
+
+		expect(selected).toBe('D:\\projects\\neo-code')
+		expect(pickDirectory).toHaveBeenCalledTimes(1)
+		expect(selectWorkdir).not.toHaveBeenCalled()
+		expect(runtimeSnapshot.workdir).toBe('D:\\initial')
+	})
+
+	it('pickWorkspaceDirectory returns null when Electron directory selection is canceled', async () => {
+		const pickDirectory = vi.fn().mockResolvedValue({
+			canceled: true,
+			filePaths: ['D:\\projects\\ignored'],
+		})
+		Object.defineProperty(window, 'electronAPI', {
+			value: {
+				getAddress: vi.fn().mockResolvedValue('127.0.0.1:8080'),
+				getToken: vi.fn().mockResolvedValue('tok'),
+				getWorkdir: vi.fn().mockResolvedValue('D:\\initial'),
+				pickDirectory,
+				selectWorkdir: vi.fn(),
+			},
+			configurable: true,
+			writable: true,
+		})
+		let runtimeSnapshot: any = null
+		render(
+			<RuntimeProvider>
+				<RuntimeProbe onReady={(rt) => { runtimeSnapshot = rt }} />
+			</RuntimeProvider>,
+		)
+		await waitFor(() => expect(runtimeSnapshot?.status).toBe('connected'))
+		await waitFor(() => expect(runtimeSnapshot?.workdir).toBe('D:\\initial'))
+
+		let selected: string | null = ''
+		await act(async () => {
+			selected = await runtimeSnapshot.pickWorkspaceDirectory()
+		})
+
+		expect(selected).toBeNull()
+		expect(pickDirectory).toHaveBeenCalledTimes(1)
+		expect(runtimeSnapshot.workdir).toBe('D:\\initial')
+	})
+
 	it('restores workspace context before rebinding session on reconnect', async () => {
 		sessionStorage.setItem(
 			'neocode.browserRuntimeConfig',
