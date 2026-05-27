@@ -286,8 +286,8 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 		if normalizedMode != runtimeHookModeSync {
 			return fmt.Errorf("mode %q is not supported for kind command (only sync)", c.Mode)
 		}
-		if strings.TrimSpace(readRuntimeHookParamString(c.Params, "command")) == "" {
-			return fmt.Errorf("kind command requires params.command")
+		if err := hooks.ValidateCommandParams(c.Params); err != nil {
+			return err
 		}
 	case runtimeHookKindHTTP:
 		if normalizedMode != runtimeHookModeObserve {

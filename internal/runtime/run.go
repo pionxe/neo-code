@@ -203,6 +203,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		})
 		return s.handleRunError(errors.New(findHookBlockMessage(submitHookOutput)))
 	}
+	input.Parts = applyCommandHookUpdateInput(submitHookOutput, input.Parts)
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
 		return s.handleRunError(err)
 	}

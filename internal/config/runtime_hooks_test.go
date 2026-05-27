@@ -152,7 +152,85 @@ func TestRuntimeHooksConfigValidateAllowsCommand(t *testing.T) {
 				Mode:          runtimeHookModeSync,
 				TimeoutSec:    2,
 				FailurePolicy: runtimeHookFailurePolicyWarnOnly,
+				Params:        map[string]any{"command": []any{"echo", "ok"}},
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestRuntimeHooksConfigValidateCommandShellMode(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+		Items: []RuntimeHookItemConfig{
+			{
+				ID:            "cmd-shell",
+				Point:         string(hooks.HookPointAcceptGate),
+				Scope:         runtimeHookScopeUser,
+				Kind:          runtimeHookKindCommand,
+				Mode:          runtimeHookModeSync,
+				TimeoutSec:    2,
+				FailurePolicy: runtimeHookFailurePolicyWarnOnly,
+				Params:        map[string]any{"command": "echo ok", "shell": true},
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestRuntimeHooksConfigValidateCommandStringWithoutShellRejected(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+		Items: []RuntimeHookItemConfig{
+			{
+				ID:            "cmd-no-shell",
+				Point:         string(hooks.HookPointAcceptGate),
+				Scope:         runtimeHookScopeUser,
+				Kind:          runtimeHookKindCommand,
+				Mode:          runtimeHookModeSync,
+				TimeoutSec:    2,
+				FailurePolicy: runtimeHookFailurePolicyWarnOnly,
 				Params:        map[string]any{"command": "echo ok"},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for string command without shell=true")
+	}
+}
+
+func TestRuntimeHooksConfigValidateCommandArgvMode(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+		Items: []RuntimeHookItemConfig{
+			{
+				ID:            "cmd-argv",
+				Point:         string(hooks.HookPointAcceptGate),
+				Scope:         runtimeHookScopeUser,
+				Kind:          runtimeHookKindCommand,
+				Mode:          runtimeHookModeSync,
+				TimeoutSec:    2,
+				FailurePolicy: runtimeHookFailurePolicyWarnOnly,
+				Params:        map[string]any{"command": []string{"echo", "hello"}},
 			},
 		},
 	}

@@ -363,8 +363,8 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 			return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", item.Handler)
 		}
 	case repoHookKindCommand:
-		if strings.TrimSpace(readHookParamString(item.Params, "command")) == "" {
-			return fmt.Errorf("kind command requires params.command")
+		if err := runtimehooks.ValidateCommandParams(item.Params); err != nil {
+			return err
 		}
 	}
 	return nil

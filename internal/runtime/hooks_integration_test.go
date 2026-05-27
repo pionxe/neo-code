@@ -1253,3 +1253,142 @@ func TestEmitSubAgentStopHookNilServiceNoop(t *testing.T) {
 		Error:      "noop",
 	})
 }
+
+func TestApplyCommandHookUpdateInput(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty results returns parts unchanged", func(t *testing.T) {
+		t.Parallel()
+		parts := []providertypes.ContentPart{providertypes.NewTextPart("original")}
+		got := applyCommandHookUpdateInput(runtimehooks.RunOutput{}, parts)
+		if len(got) != 1 || got[0].Text != "original" {
+			t.Fatalf("got %v, want original parts unchanged", got)
+		}
+	})
+
+	t.Run("replaces first text part when CanUpdateInput", func(t *testing.T) {
+		t.Parallel()
+		output := runtimehooks.RunOutput{
+			Results: []runtimehooks.HookResult{{
+				Point:  runtimehooks.HookPointUserPromptSubmit,
+				Status: runtimehooks.HookResultPass,
+				Metadata: runtimehooks.HookResultMetadata{
+					UpdateInput: []byte(`{"text":"rewritten"}`),
+				},
+			}},
+		}
+		parts := []providertypes.ContentPart{providertypes.NewTextPart("original")}
+		got := applyCommandHookUpdateInput(output, parts)
+		if len(got) != 1 || got[0].Text != "rewritten" {
+			t.Fatalf("got %v, want text replaced to 'rewritten'", got)
+		}
+	})
+
+	t.Run("ignores when CanUpdateInput is false", func(t *testing.T) {
+		t.Parallel()
+		output := runtimehooks.RunOutput{
+			Results: []runtimehooks.HookResult{{
+				Point:  runtimehooks.HookPointBeforeToolCall,
+				Status: runtimehooks.HookResultPass,
+				Metadata: runtimehooks.HookResultMetadata{
+					UpdateInput: []byte(`{"text":"should not apply"}`),
+				},
+			}},
+		}
+		parts := []providertypes.ContentPart{providertypes.NewTextPart("original")}
+		got := applyCommandHookUpdateInput(output, parts)
+		if len(got) != 1 || got[0].Text != "original" {
+			t.Fatalf("got %v, want original parts unchanged for non-CanUpdateInput point", got)
+		}
+	})
+
+	t.Run("ignores invalid JSON in UpdateInput", func(t *testing.T) {
+		t.Parallel()
+		output := runtimehooks.RunOutput{
+			Results: []runtimehooks.HookResult{{
+				Point:  runtimehooks.HookPointUserPromptSubmit,
+				Status: runtimehooks.HookResultPass,
+				Metadata: runtimehooks.HookResultMetadata{
+					UpdateInput: []byte(`not json`),
+				},
+			}},
+		}
+		parts := []providertypes.ContentPart{providertypes.NewTextPart("original")}
+		got := applyCommandHookUpdateInput(output, parts)
+		if len(got) != 1 || got[0].Text != "original" {
+			t.Fatalf("got %v, want original parts unchanged for invalid JSON", got)
+		}
+	})
+
+	t.Run("ignores empty text in UpdateInput", func(t *testing.T) {
+		t.Parallel()
+		output := runtimehooks.RunOutput{
+			Results: []runtimehooks.HookResult{{
+				Point:  runtimehooks.HookPointUserPromptSubmit,
+				Status: runtimehooks.HookResultPass,
+				Metadata: runtimehooks.HookResultMetadata{
+					UpdateInput: []byte(`{"text":""}`),
+				},
+			}},
+		}
+		parts := []providertypes.ContentPart{providertypes.NewTextPart("original")}
+		got := applyCommandHookUpdateInput(output, parts)
+		if len(got) != 1 || got[0].Text != "original" {
+			t.Fatalf("got %v, want original parts unchanged for empty text", got)
+		}
+	})
+
+	t.Run("only replaces first text part", func(t *testing.T) {
+		t.Parallel()
+		output := runtimehooks.RunOutput{
+			Results: []runtimehooks.HookResult{{
+				Point:  runtimehooks.HookPointUserPromptSubmit,
+				Status: runtimehooks.HookResultPass,
+				Metadata: runtimehooks.HookResultMetadata{
+					UpdateInput: []byte(`{"text":"new"}`),
+				},
+			}},
+		}
+		parts := []providertypes.ContentPart{
+			providertypes.NewTextPart("first"),
+			providertypes.NewTextPart("second"),
+		}
+		got := applyCommandHookUpdateInput(output, parts)
+		if len(got) != 2 {
+			t.Fatalf("got len %d, want 2", len(got))
+		}
+		if got[0].Text != "new" {
+			t.Fatalf("first part text = %q, want 'new'", got[0].Text)
+		}
+		if got[1].Text != "second" {
+			t.Fatalf("second part text = %q, want 'second' (unchanged)", got[1].Text)
+		}
+	})
+
+	t.Run("preserves non-text parts", func(t *testing.T) {
+		t.Parallel()
+		output := runtimehooks.RunOutput{
+			Results: []runtimehooks.HookResult{{
+				Point:  runtimehooks.HookPointUserPromptSubmit,
+				Status: runtimehooks.HookResultPass,
+				Metadata: runtimehooks.HookResultMetadata{
+					UpdateInput: []byte(`{"text":"replaced"}`),
+				},
+			}},
+		}
+		parts := []providertypes.ContentPart{
+			providertypes.NewRemoteImagePart("https://example.com/img.png"),
+			providertypes.NewTextPart("original"),
+		}
+		got := applyCommandHookUpdateInput(output, parts)
+		if len(got) != 2 {
+			t.Fatalf("got len %d, want 2", len(got))
+		}
+		if got[0].Kind != providertypes.ContentPartImage {
+			t.Fatalf("first part kind = %q, want image (unchanged)", got[0].Kind)
+		}
+		if got[1].Text != "replaced" {
+			t.Fatalf("second part text = %q, want 'replaced'", got[1].Text)
+		}
+	})
+}
