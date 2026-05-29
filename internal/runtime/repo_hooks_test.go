@@ -596,27 +596,6 @@ func TestValidateRepoHookItemRejectsExternalKindsWithP6LiteMessage(t *testing.T)
 	}
 }
 
-func TestRuntimeHasWarnOnToolCallTargetsBranches(t *testing.T) {
-	cases := []struct {
-		name   string
-		params map[string]any
-		want   bool
-	}{
-		{name: "nil", params: nil, want: false},
-		{name: "tool_name", params: map[string]any{"tool_name": "bash"}, want: true},
-		{name: "tool_name blank", params: map[string]any{"tool_name": " "}, want: false},
-		{name: "tool_names", params: map[string]any{"tool_names": []any{"bash"}}, want: true},
-		{name: "tool_names blank", params: map[string]any{"tool_names": []any{" "}}, want: false},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			if got := runtimeHasWarnOnToolCallTargets(tc.params); got != tc.want {
-				t.Fatalf("runtimeHasWarnOnToolCallTargets() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
 
 func TestValidateRepoHookItemAllowsWarnOnToolCallWithMatchOnly(t *testing.T) {
 	t.Parallel()

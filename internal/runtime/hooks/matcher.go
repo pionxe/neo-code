@@ -51,8 +51,11 @@ func ValidateHookMatcher(point HookPoint, raw map[string]any) error {
 
 // CompileHookMatcher 将 matcher 原始配置编译为可执行结构，并在点位能力上做 fail-fast 校验。
 func CompileHookMatcher(point HookPoint, raw map[string]any) (*HookMatcher, error) {
-	if !HasHookMatcherConfig(raw) {
+	if len(raw) == 0 {
 		return nil, nil
+	}
+	if !HasHookMatcherConfig(raw) {
+		return nil, fmt.Errorf("match contains no recognized matcher fields (expected: tool_name, tool_name_regex, arguments_contains)")
 	}
 	capability, ok := HookPointCapabilities(point)
 	if !ok {

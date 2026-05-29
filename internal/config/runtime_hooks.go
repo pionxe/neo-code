@@ -286,16 +286,14 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 		default:
 			return fmt.Errorf("handler %q is not supported", c.Handler)
 		}
-		hasExplicitMatcher := hooks.HasHookMatcherConfig(c.Match)
-		if handler == runtimeHookHandlerWarnOnToolCall && !hasExplicitMatcher && !hasWarnOnToolCallTargets(c.Params) {
-			return fmt.Errorf("handler %q requires match or params.tool_name/tool_names", c.Handler)
-		}
-		matcherRaw := resolveRuntimeHookMatcherConfigForValidation(c, handler)
-		if matcherRaw != nil {
-			if err := hooks.ValidateHookMatcher(point, matcherRaw); err != nil {
-				return fmt.Errorf("match: %w", err)
+			if handler == runtimeHookHandlerWarnOnToolCall && !hooks.HasHookMatcherConfig(c.Match) {
+				return fmt.Errorf("handler %q requires match", c.Handler)
 			}
-		}
+			if hooks.HasHookMatcherConfig(c.Match) {
+				if err := hooks.ValidateHookMatcher(point, c.Match); err != nil {
+					return fmt.Errorf("match: %w", err)
+				}
+			}
 	case runtimeHookKindCommand:
 		if normalizedMode != runtimeHookModeSync {
 			return fmt.Errorf("mode %q is not supported for kind command (only sync)", c.Mode)
@@ -419,81 +417,6 @@ func cloneRuntimeHookParamValue(value any) any {
 		return cloned
 	default:
 		return value
-	}
-}
-
-func hasWarnOnToolCallTargets(params map[string]any) bool {
-	if len(params) == 0 {
-		return false
-	}
-	toolNameRaw, hasToolName := params["tool_name"]
-	if hasToolName && strings.TrimSpace(fmt.Sprintf("%v", toolNameRaw)) != "" {
-		return true
-	}
-	toolNamesRaw, hasToolNames := params["tool_names"]
-	if !hasToolNames || toolNamesRaw == nil {
-		return false
-	}
-	switch typed := toolNamesRaw.(type) {
-	case []string:
-		for _, item := range typed {
-			if strings.TrimSpace(item) != "" {
-				return true
-			}
-		}
-	case []any:
-		for _, item := range typed {
-			if strings.TrimSpace(fmt.Sprintf("%v", item)) != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// resolveRuntimeHookMatcherConfigForValidation 返回配置校验阶段的 matcher 配置。
-// 对 warn_on_tool_call 保持旧参数兼容：当未配置 match 时自动桥接 tool_name/tool_names。
-func resolveRuntimeHookMatcherConfigForValidation(item RuntimeHookItemConfig, handler string) map[string]any {
-	if hooks.HasHookMatcherConfig(item.Match) {
-		return item.Match
-	}
-	if strings.EqualFold(strings.TrimSpace(handler), runtimeHookHandlerWarnOnToolCall) && hasWarnOnToolCallTargets(item.Params) {
-		return runtimeHookLegacyWarnMatcherConfig(item.Params)
-	}
-	return nil
-}
-
-// runtimeHookLegacyWarnMatcherConfig 将 warn_on_tool_call 旧参数桥接为 matcher 配置。
-func runtimeHookLegacyWarnMatcherConfig(params map[string]any) map[string]any {
-	if len(params) == 0 {
-		return nil
-	}
-	var toolNames []string
-	if name := strings.TrimSpace(readRuntimeHookParamString(params, "tool_name")); name != "" {
-		toolNames = append(toolNames, name)
-	}
-	if raw, ok := params["tool_names"]; ok && raw != nil {
-		switch typed := raw.(type) {
-		case []string:
-			toolNames = append(toolNames, typed...)
-		case []any:
-			for _, value := range typed {
-				toolNames = append(toolNames, strings.TrimSpace(fmt.Sprintf("%v", value)))
-			}
-		}
-	}
-	filtered := make([]string, 0, len(toolNames))
-	for _, value := range toolNames {
-		if strings.TrimSpace(value) == "" {
-			continue
-		}
-		filtered = append(filtered, value)
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	return map[string]any{
-		"tool_name": filtered,
 	}
 }
 

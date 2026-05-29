@@ -197,10 +197,7 @@ type HookSpec struct {
 	Timeout       time.Duration
 	FailurePolicy FailurePolicy
 	Handler       HookHandler
-	Matcher       *HookMatcher
-
-	// MatcherMigrationWarning 用于在运行时提示 warn_on_tool_call 旧参数与 match 共存时的迁移风险。
-	MatcherMigrationWarning string
+	Matcher *HookMatcher
 }
 
 // normalizeAndValidate 将 HookSpec 归一化并校验当前阶段可用字段。

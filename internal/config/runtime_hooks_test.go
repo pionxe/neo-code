@@ -390,13 +390,15 @@ func TestRuntimeHooksConfigItemDefaultsAndClone(t *testing.T) {
 				ID:      "warn-bash",
 				Point:   string(hooks.HookPointBeforeToolCall),
 				Handler: runtimeHookHandlerWarnOnToolCall,
-				Params: map[string]any{
+				Match: map[string]any{
 					"tool_name": "bash",
-					"tags":      []any{"warn", "tool"},
+				},
+				Params: map[string]any{
+					"tags": []any{"warn", "tool"},
 				},
 			},
 		},
-	}
+}
 	cfg.ApplyDefaults(defaultRuntimeHooksConfig())
 
 	item := cfg.Items[0]
@@ -664,21 +666,6 @@ func TestRuntimeHooksConfigEdgeBranches(t *testing.T) {
 			t.Fatal("expected deep clone for nested map in slice")
 		}
 
-		if hasWarnOnToolCallTargets(nil) {
-			t.Fatal("nil params should be false")
-		}
-		if !hasWarnOnToolCallTargets(map[string]any{"tool_name": "bash"}) {
-			t.Fatal("tool_name should pass")
-		}
-		if !hasWarnOnToolCallTargets(map[string]any{"tool_names": []string{"", "bash"}}) {
-			t.Fatal("tool_names []string should pass")
-		}
-		if !hasWarnOnToolCallTargets(map[string]any{"tool_names": []any{"", "bash"}}) {
-			t.Fatal("tool_names []any should pass")
-		}
-		if hasWarnOnToolCallTargets(map[string]any{"tool_names": "bash"}) {
-			t.Fatal("tool_names scalar should fail")
-		}
 
 		matchCfg := RuntimeHookItemConfig{
 			Match: map[string]any{

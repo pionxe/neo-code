@@ -359,15 +359,14 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 		default:
 			return fmt.Errorf("handler %q is not supported", item.Handler)
 		}
-		hasExplicitMatcher := runtimehooks.HasHookMatcherConfig(item.Match)
-		if handler == "warn_on_tool_call" && !hasExplicitMatcher && !runtimeHasWarnOnToolCallTargets(item.Params) {
-			return fmt.Errorf("handler %q requires match or params.tool_name/tool_names", item.Handler)
-		}
-		if matcherRaw := resolveConfiguredHookMatcherRaw(item); matcherRaw != nil {
-			if err := runtimehooks.ValidateHookMatcher(point, matcherRaw); err != nil {
-				return fmt.Errorf("match: %w", err)
+			if handler == "warn_on_tool_call" && !runtimehooks.HasHookMatcherConfig(item.Match) {
+				return fmt.Errorf("handler %q requires match", item.Handler)
 			}
-		}
+			if runtimehooks.HasHookMatcherConfig(item.Match) {
+				if err := runtimehooks.ValidateHookMatcher(point, item.Match); err != nil {
+					return fmt.Errorf("match: %w", err)
+				}
+			}
 	case repoHookKindCommand:
 		if err := runtimehooks.ValidateCommandParams(item.Params); err != nil {
 			return err
@@ -379,22 +378,6 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 		}
 	}
 	return nil
-}
-
-// runtimeHasWarnOnToolCallTargets 判断 warn_on_tool_call 是否配置了至少一个目标工具。
-func runtimeHasWarnOnToolCallTargets(params map[string]any) bool {
-	if len(params) == 0 {
-		return false
-	}
-	if name := strings.TrimSpace(readHookParamString(params, "tool_name")); name != "" {
-		return true
-	}
-	for _, value := range readHookParamStringSlice(params, "tool_names") {
-		if strings.TrimSpace(value) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // evaluateWorkspaceTrust 根据 trust store 判断 workspace 是否可信并附带容错诊断。

@@ -126,8 +126,9 @@ runtime:
         priority: 100
         timeout_sec: 2
         failure_policy: warn_only
-        params:
+        match:
           tool_name: bash
+        params:
           message: "bash is called"
 `
 	writeLoaderConfig(t, loader, raw)
