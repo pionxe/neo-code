@@ -170,7 +170,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       token: nextConfig.token,
     })
 
-    const api = new GatewayAPI(client)
+    const api = new GatewayAPI(client, nextConfig.gatewayBaseURL, nextConfig.token)
 
     // Register state change handler
     const unsubState = client.onStateChange((wsState) => {

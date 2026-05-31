@@ -306,6 +306,13 @@ type RunParams struct {
 	Mode       string         `json:"mode,omitempty"`        // Agent 工作模式：build|plan，可选，默认沿用 session 当前 mode
 }
 
+type RunInputMedia struct {
+	URI      string `json:"uri,omitempty"`
+	AssetID  string `json:"asset_id,omitempty"`
+	MimeType string `json:"mime_type"`
+	FileName string `json:"file_name,omitempty"`
+}
+
 type RunInputPart struct {
 	Type  string         `json:"type"`            // text|image
 	Text  string         `json:"text,omitempty"`  // text MUST
@@ -318,7 +325,7 @@ type RunInputPart struct {
 1. `input_text` 与 `input_parts` 至少一项非空。  
 2. `input_parts` 中：
 1. `type=text` 时 `text` `MUST` 非空。  
-2. `type=image` 时 `media.uri` 与 `media.mime_type` `MUST` 非空。  
+2. `type=image` 时 `media.mime_type` `MUST` 非空，`media.uri` 与 `media.asset_id` `MUST` 二选一且不能同时提供。Web 上传图片应先调用 `POST /api/session-assets`，再在 `gateway.run` 中用 `asset_id` 引用。
 3. 未知字段会因严格解码触发 `invalid_frame`。  
 4. `run_id` 归一化顺序为：显式 `run_id` > `request_id` > 网关生成 `run_<timestamp>`。  
 5. `mode` 可选值为 `"build"` 或 `"plan"`，为空时默认沿用 session 当前 mode（新会话默认为 `"build"`）。切换 mode 后，后端会更新 session 并影响后续运行的工具可用性和 prompt 策略。  
@@ -396,6 +403,37 @@ sequenceDiagram
   C->>G: gateway.cancel(run_id) (optional)
   G-->>C: ack(cancel)
 ```
+
+### HTTP session asset API
+
+浏览器图片上传使用 HTTP API，不通过 JSON-RPC 传输文件内容。客户端发送图片前需要先拥有有效 `session_id`（新会话可先调用 `gateway.createSession`）。
+
+`POST /api/session-assets`
+
+- Auth Required: `Yes`，使用 `Authorization: Bearer <token>`。
+- Headers: `X-NeoCode-Workspace-Hash` 携带当前工作区哈希；多工作区 Web 客户端必须发送，省略时回落到默认工作区。
+- Content-Type: `multipart/form-data`。
+- 字段：`session_id`（必填）、`file`（必填）。
+- 仅接受 PNG/JPEG/WebP；服务端按文件头检测 MIME，不信任浏览器声明。
+- 空文件返回 `400`，超出 `MaxSessionAssetBytes` 返回 `413`，不支持 MIME 返回 `415`，未认证返回 `401`，Origin/CORS 或 ACL 拒绝返回 `403`。
+- 工作区不存在返回 `404 workspace not found`；目标 session 不在该工作区返回 `404 session not found`。
+- 成功返回：
+
+```json
+{
+  "session_id": "session-1",
+  "asset_id": "asset-1",
+  "mime_type": "image/png",
+  "size": 1024
+}
+```
+
+`GET /api/session-assets/{session_id}/{asset_id}`
+
+- Auth Required: `Yes`。
+- Headers: `X-NeoCode-Workspace-Hash` 携带当前工作区哈希；多工作区 Web 客户端必须发送。
+- 返回图片二进制，用于历史消息缩略图。
+- 工作区不存在返回 `404 workspace not found`；不存在、跨 session 或不可见的 asset 返回 `404 asset not found`。
 
 Observation：
 

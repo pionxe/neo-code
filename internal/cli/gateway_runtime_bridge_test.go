@@ -1550,6 +1550,7 @@ func TestConvertGatewayRunInputAndSessionHelpers(t *testing.T) {
 			{Type: gateway.InputPartTypeImage, Media: nil},
 			{Type: gateway.InputPartTypeImage, Media: &gateway.Media{URI: "   "}},
 			{Type: gateway.InputPartTypeImage, Media: &gateway.Media{URI: " /tmp/a.png ", MimeType: " image/png "}},
+			{Type: gateway.InputPartTypeImage, Media: &gateway.Media{AssetID: " asset-1 ", MimeType: " image/webp "}},
 		},
 		Workdir: " /tmp/work ",
 	})
@@ -1559,8 +1560,14 @@ func TestConvertGatewayRunInputAndSessionHelpers(t *testing.T) {
 	if converted.Text != "base\ntext" {
 		t.Fatalf("text = %q, want %q", converted.Text, "base\ntext")
 	}
-	if len(converted.Images) != 1 || converted.Images[0].Path != "/tmp/a.png" {
-		t.Fatalf("images = %#v, want one valid image", converted.Images)
+	if len(converted.Images) != 2 {
+		t.Fatalf("images = %#v, want two valid images", converted.Images)
+	}
+	if converted.Images[0].Path != "/tmp/a.png" || converted.Images[0].MimeType != "image/png" {
+		t.Fatalf("local image = %#v, want normalized path/mime", converted.Images[0])
+	}
+	if converted.Images[1].AssetID != "asset-1" || converted.Images[1].MimeType != "image/webp" {
+		t.Fatalf("asset image = %#v, want normalized asset_id/mime", converted.Images[1])
 	}
 
 	if got := renderSessionMessageContent(nil); got != "" {

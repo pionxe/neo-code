@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import MessageItem from "./MessageItem";
+
+const mockFetchSessionAsset = vi.hoisted(() => vi.fn());
+const mockGatewayAPI = vi.hoisted(() => ({ fetchSessionAsset: mockFetchSessionAsset }));
 
 vi.mock("./ToolCallCard", () => ({ default: () => <div>tool-card</div> }));
 vi.mock("./AcceptanceMessage", () => ({
@@ -12,9 +15,15 @@ vi.mock("./CodeBlock", () => ({
 vi.mock("./MarkdownContent", () => ({
   default: ({ content }: { content: string }) => <span>{content}</span>,
 }));
-vi.mock("@/context/RuntimeProvider", () => ({ useGatewayAPI: () => null }));
+vi.mock("@/context/RuntimeProvider", () => ({
+  useGatewayAPI: () => mockGatewayAPI,
+}));
 
 describe("MessageItem", () => {
+  beforeEach(() => {
+    mockFetchSessionAsset.mockReset();
+  });
+
   it("renders system message", () => {
     render(
       <MessageItem
@@ -164,5 +173,73 @@ describe("MessageItem", () => {
       />,
     );
     expect(screen.getByText("answer")).toBeInTheDocument();
+  });
+
+  it("renders user image attachments with local preview URLs", () => {
+    render(
+      <MessageItem
+        message={
+          {
+            id: "u1",
+            role: "user",
+            type: "text",
+            content: "look",
+            timestamp: 1,
+            attachments: [
+              {
+                id: "att-1",
+                assetId: "asset-1",
+                mimeType: "image/png",
+                name: "a.png",
+                previewUrl: "blob:preview-1",
+              },
+            ],
+          } as any
+        }
+      />,
+    );
+
+    expect(screen.getByText("look")).toBeInTheDocument();
+    const image = screen.getByAltText("a.png") as HTMLImageElement;
+    expect(image.src).toContain("blob:preview-1");
+  });
+
+  it("fetches historical user image attachments with workspace hash", async () => {
+    const blob = new Blob(["img"], { type: "image/png" });
+    mockFetchSessionAsset.mockResolvedValue(blob);
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn() });
+    }
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:history-1");
+
+    render(
+      <MessageItem
+        message={
+          {
+            id: "u1",
+            role: "user",
+            type: "text",
+            content: "look",
+            timestamp: 1,
+            attachments: [
+              {
+                id: "att-1",
+                sessionId: "session-1",
+                workspaceHash: "workspace-b",
+                assetId: "asset-1",
+                mimeType: "image/png",
+                name: "a.png",
+              },
+            ],
+          } as any
+        }
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetchSessionAsset).toHaveBeenCalledWith("session-1", "asset-1", "workspace-b");
+      expect(screen.getByAltText("a.png")).toHaveAttribute("src", "blob:history-1");
+    });
+    createObjectURL.mockRestore();
   });
 });

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -94,6 +95,46 @@ func TestInputPreparerPrepareTextAndImage(t *testing.T) {
 	}
 }
 
+func TestInputPreparerPrepareSavedAssetReference(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	store := newInputPreparerTestStore(t, workdir)
+	session := NewWithWorkdir("existing", workdir)
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("createSessionForPreparerTest() error = %v", err)
+	}
+	meta, err := store.SaveAsset(context.Background(), session.ID, bytes.NewReader(minimalPNGBytes()), "image/png")
+	if err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+
+	preparer := NewInputPreparer(store, store)
+	result, err := preparer.Prepare(context.Background(), PrepareInput{
+		SessionID:      session.ID,
+		Text:           "describe it",
+		Images:         []PrepareImageInput{{AssetID: meta.ID, MimeType: "image/png"}},
+		DefaultWorkdir: workdir,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if len(result.SavedAssets) != 0 {
+		t.Fatalf("expected no newly saved assets, got %+v", result.SavedAssets)
+	}
+	if len(result.Parts) != 2 {
+		t.Fatalf("expected text and image parts, got %+v", result.Parts)
+	}
+	imagePart := result.Parts[1]
+	if imagePart.Kind != providertypes.ContentPartImage ||
+		imagePart.Image == nil ||
+		imagePart.Image.Asset == nil ||
+		imagePart.Image.Asset.ID != meta.ID ||
+		imagePart.Image.Asset.MimeType != "image/png" {
+		t.Fatalf("unexpected image part: %+v", imagePart)
+	}
+}
+
 func TestInputPreparerPrepareImageInfersMimeWhenMissing(t *testing.T) {
 	t.Parallel()
 
@@ -182,6 +223,51 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 		preparer := NewInputPreparer(store, store)
 		if _, err := preparer.Prepare(context.Background(), PrepareInput{DefaultWorkdir: workdir}); err == nil {
 			t.Fatalf("expected empty content error")
+		}
+	})
+
+	t.Run("missing image reference is rejected", func(t *testing.T) {
+		preparer := NewInputPreparer(store, store)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "bad asset",
+			Images:         []PrepareImageInput{{AssetID: "  ", MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected missing image reference error")
+		}
+		if !strings.Contains(err.Error(), "image path is empty") {
+			t.Fatalf("expected image reference error, got %v", err)
+		}
+	})
+
+	t.Run("missing referenced asset is rejected", func(t *testing.T) {
+		localStore := newInputPreparerTestStore(t, workdir)
+		existing := NewWithWorkdir("asset-missing", workdir)
+		if err := createSessionForPreparerTest(context.Background(), localStore, existing); err != nil {
+			t.Fatalf("createSessionForPreparerTest() error = %v", err)
+		}
+		preparer := NewInputPreparer(localStore, localStore)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			SessionID:      existing.ID,
+			Text:           "bad asset",
+			Images:         []PrepareImageInput{{AssetID: "asset-missing", MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected missing referenced asset error")
+		}
+	})
+
+	t.Run("asset id and path cannot both be set", func(t *testing.T) {
+		preparer := NewInputPreparer(store, store)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "bad asset",
+			Images:         []PrepareImageInput{{Path: "a.png", AssetID: "asset-1", MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected asset id and path conflict error")
 		}
 	})
 

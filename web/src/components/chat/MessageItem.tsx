@@ -1,6 +1,7 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { type ChatMessage } from "@/stores/useChatStore";
 import { type PlanArtifact } from "@/api/protocol";
+import { useGatewayAPI } from "@/context/RuntimeProvider";
 import ToolCallCard from "./ToolCallCard";
 import AcceptanceMessage from "./AcceptanceMessage";
 import CodeBlock from "./CodeBlock";
@@ -81,8 +82,56 @@ function UserMessage({ message }: { message: ChatMessage }) {
   return (
     <div style={styles.userRow} className="animate-slide-up user-row-hoverable">
       <div style={styles.userContent}>
-        <div style={styles.userBubble}>{message.content}</div>
+        <div style={styles.userBubble}>
+          {message.content && <div>{message.content}</div>}
+          <UserAttachments message={message} />
+        </div>
       </div>
+    </div>
+  );
+}
+
+function UserAttachments({ message }: { message: ChatMessage }) {
+  const gatewayAPI = useGatewayAPI();
+  const [loadedURLs, setLoadedURLs] = useState<Record<string, string>>({});
+  const attachments = message.attachments || [];
+
+  useEffect(() => {
+    if (!gatewayAPI || attachments.length === 0) return;
+    let cancelled = false;
+    const created: string[] = [];
+    attachments.forEach((attachment) => {
+      if (attachment.previewUrl || !attachment.sessionId || !attachment.assetId) return;
+      gatewayAPI.fetchSessionAsset(attachment.sessionId, attachment.assetId, attachment.workspaceHash)
+        .then((blob) => {
+          if (cancelled) return;
+          const url = URL.createObjectURL(blob);
+          created.push(url);
+          setLoadedURLs((current) => ({ ...current, [attachment.id]: url }));
+        })
+        .catch(() => {});
+    });
+    return () => {
+      cancelled = true;
+      created.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [attachments, gatewayAPI]);
+
+  if (attachments.length === 0) return null;
+  return (
+    <div style={styles.userAttachmentGrid}>
+      {attachments.map((attachment) => {
+        const src = attachment.previewUrl || loadedURLs[attachment.id] || "";
+        return (
+          <div key={attachment.id} style={styles.userAttachmentThumb}>
+            {src ? (
+              <img src={src} alt={attachment.name || "uploaded image"} style={styles.userAttachmentImage} />
+            ) : (
+              <div style={styles.userAttachmentPlaceholder}>image</div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -345,6 +394,37 @@ const styles: Record<string, React.CSSProperties> = {
     overflowWrap: "anywhere",
     wordBreak: "break-word",
     textWrap: "pretty" as any,
+  },
+  userAttachmentGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))",
+    gap: 8,
+    marginTop: 8,
+    maxWidth: 340,
+  },
+  userAttachmentThumb: {
+    width: 96,
+    height: 72,
+    borderRadius: "var(--radius-md)",
+    border: "1px solid var(--border-primary)",
+    background: "var(--bg-secondary)",
+    overflow: "hidden",
+  },
+  userAttachmentImage: {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    display: "block",
+  },
+  userAttachmentPlaceholder: {
+    width: "100%",
+    height: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "var(--text-tertiary)",
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
   },
   aiRow: {
     display: "flex",

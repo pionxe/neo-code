@@ -148,6 +148,35 @@ describe("useSessionStore", () => {
     });
   });
 
+  it("mapHistoryMessages converts image parts into user attachments", () => {
+    const mapped = mapHistoryMessages([
+      {
+        role: "user",
+        content: "[image]",
+        parts: [
+          { type: "text", text: "describe this" },
+          { type: "image", media: { asset_id: "asset-1", mime_type: "image/png", file_name: "a.png" } },
+        ],
+      },
+    ], "sess-1", "workspace-b");
+
+    expect(mapped).toHaveLength(1);
+    expect(mapped[0]).toMatchObject({
+      role: "user",
+      content: "describe this",
+      attachments: [
+        {
+          id: "hist_att_0_0_asset-1",
+          sessionId: "sess-1",
+          workspaceHash: "workspace-b",
+          assetId: "asset-1",
+          mimeType: "image/png",
+          name: "a.png",
+        },
+      ],
+    });
+  });
+
   it("switchSession restores current_plan as a plan message without duplicated rendered text", async () => {
     const mockBindStream = vi.fn().mockResolvedValue({});
     const mockLoadSession = vi.fn().mockResolvedValue({

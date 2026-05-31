@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `invalid_frame` | `200` | `-32700` / `-32600` / `-32602` | 请求帧结构或编码不合法。包括 JSON 解析失败、请求体包含多余 JSON 值、`id/jsonrpc` 非法、`params` 严格解码失败。 | 非法 JSON；`id` 为 `null`；`params` 含未知字段。 | 不要直接重试，先修复请求构造器。 |
 | `invalid_action` | `200` | `-32602` | 动作参数值非法，但方法本身存在。 | `params.channel` 不在 `all/ipc/ws/sse`；`params.decision` 非 `allow_once/allow_session/reject`。 | 视为调用方输入错误，修正参数后再发。 |
-| `invalid_multimodal_payload` | `200` | `-32602` | `gateway.run` 的 `input_parts` 结构或字段不满足契约。 | `image` 分片缺少 `media.uri` 或 `media.mime_type`；`text` 分片文本为空。 | 校验输入分片后重试，不做盲重试。 |
+| `invalid_multimodal_payload` | `200` | `-32602` | `gateway.run` 的 `input_parts` 结构或字段不满足契约。 | `image` 分片缺少 `media.mime_type`，或 `media.uri` / `media.asset_id` 未满足二选一；`text` 分片文本为空。 | 校验输入分片后重试，不做盲重试。 |
 | `missing_required_field` | `200` | `-32600` / `-32602` | 缺失必填字段。请求层字段缺失多映射为 `-32600`，方法参数层字段缺失多映射为 `-32602`。 | 缺失 `id`；缺失 `params`；`cancel` 缺失 `run_id`。 | 调整参数补齐必填项再重试。 |
 | `unsupported_action` | `200` | `-32601` | 方法未注册或不被网关识别。 | 调用不存在的方法名。 | 客户端按能力探测降级，或升级服务端版本。 |
 | `internal_error` | `200` | `-32603` | 网关内部异常或未分类下游异常。 | 结果编码失败；runtime port 不可用；未知运行时错误。 | 采用指数退避重试；持续失败时告警。 |

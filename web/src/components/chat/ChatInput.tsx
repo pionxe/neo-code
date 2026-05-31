@@ -3,8 +3,14 @@ import { useChatStore, createUserMessage } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore, isValidSessionId } from '@/stores/useSessionStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { useComposerStore } from '@/stores/useComposerStore'
+import {
+  acceptedImageMimeTypes,
+  maxComposerAttachmentBytes,
+  useComposerStore,
+  type ComposerAttachment,
+} from '@/stores/useComposerStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { formatTokenCount } from '@/utils/format'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import {
@@ -19,7 +25,7 @@ import {
 import SlashCommandMenu from './SlashCommandMenu'
 import SkillPicker from './SkillPicker'
 import ModelSelector from './ModelSelector'
-import { Send, Square } from 'lucide-react'
+import { ImagePlus, Loader2, Send, Square, X } from 'lucide-react'
 
 const slashMenuAnchorStyle: React.CSSProperties = {
   position: 'absolute',
@@ -123,14 +129,22 @@ function resolveBudgetRingState(
 export default function ChatInput() {
   const gatewayAPI = useGatewayAPI()
   const text = useComposerStore((state) => state.composerText)
+  const attachments = useComposerStore((state) => state.attachments)
   const setText = useComposerStore((state) => state.setComposerText)
+  const addAttachmentFiles = useComposerStore((state) => state.addAttachmentFiles)
+  const removeAttachment = useComposerStore((state) => state.removeAttachment)
+  const clearAttachments = useComposerStore((state) => state.clearAttachments)
+  const setAttachmentStatus = useComposerStore((state) => state.setAttachmentStatus)
   const [rows, setRows] = useState(1)
+  const [dragActive, setDragActive] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const runCancelledRef = useRef(false)
   const composingRef = useRef(false)
   const isGenerating = useChatStore((state) => state.isGenerating)
   const isCompacting = useChatStore((state) => state.isCompacting)
   const addMessage = useChatStore((state) => state.addMessage)
+  const removeMessage = useChatStore((state) => state.removeMessage)
   const addSystemMessage = useChatStore((state) => state.addSystemMessage)
   const setGenerating = useChatStore((state) => state.setGenerating)
   const sessionId = useSessionStore((state) => state.currentSessionId)
@@ -138,6 +152,7 @@ export default function ChatInput() {
   const setAgentMode = useChatStore((state) => state.setAgentMode)
   const permissionMode = useChatStore((state) => state.permissionMode)
   const setPermissionMode = useChatStore((state) => state.setPermissionMode)
+  const currentWorkspaceHash = useWorkspaceStore((state) => state.currentWorkspaceHash)
 
   const [showSlashMenu, setShowSlashMenu] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -302,7 +317,9 @@ export default function ChatInput() {
 
   async function handleSubmit() {
     const input = text.trim()
-    if (!input) return
+    const pendingAttachments = attachments
+    if (!input && pendingAttachments.length === 0) return
+    let submittedMessageId = ''
 
     if (isCompacting) {
       useUIStore.getState().showToast('Context compaction is still running', 'info')
@@ -314,30 +331,65 @@ export default function ChatInput() {
       return
     }
 
-    if (isSlashCommand(input)) {
+    if (pendingAttachments.length === 0 && isSlashCommand(input)) {
       setText('')
       setShowSlashMenu(false)
       const handled = await executeSlashCommand(input)
       if (handled) return
     }
 
-    setText('')
-    const userMsg = createUserMessage(input)
-    addMessage(userMsg)
-    useRuntimeInsightStore.getState().setTodoSnapshot({
-      items: [],
-      summary: { total: 0, required_total: 0, required_completed: 0, required_failed: 0, required_open: 0 },
-    })
-    setGenerating(true)
-    runCancelledRef.current = false
-
     try {
       if (!gatewayAPI) return
-      const isNewSession = !isValidSessionId(sessionId)
+      let targetSessionId = sessionId
+      if (!isValidSessionId(targetSessionId)) {
+        const created = await gatewayAPI.createSession()
+        targetSessionId = created.payload?.session_id || ''
+        if (!isValidSessionId(targetSessionId)) throw new Error('Create session failed')
+        useSessionStore.getState().setCurrentSessionId(targetSessionId)
+        await gatewayAPI.bindStream({ session_id: targetSessionId, channel: 'all' }).catch(() => {})
+      }
+
+      const workspaceHash = currentWorkspaceHash.trim()
+      const uploaded = []
+      for (const attachment of pendingAttachments) {
+        setAttachmentStatus(attachment.id, 'uploading')
+        try {
+          const meta = await gatewayAPI.uploadSessionAsset(targetSessionId, attachment.file, workspaceHash)
+          setAttachmentStatus(attachment.id, 'uploaded')
+          uploaded.push({ attachment, meta })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Upload failed'
+          setAttachmentStatus(attachment.id, 'error', message)
+          throw err
+        }
+      }
+
+      const inputParts = buildRunInputParts(input, uploaded)
+      const userMsg = createUserMessage(input, uploaded.map(({ attachment, meta }) => ({
+        id: attachment.id,
+        sessionId: targetSessionId,
+        workspaceHash,
+        assetId: meta.asset_id,
+        mimeType: meta.mime_type,
+        name: attachment.file.name,
+        size: meta.size,
+        previewUrl: attachment.previewUrl,
+      })))
+
+      setText('')
+      clearAttachments(false)
+      addMessage(userMsg)
+      submittedMessageId = userMsg.id
+      useRuntimeInsightStore.getState().setTodoSnapshot({
+        items: [],
+        summary: { total: 0, required_total: 0, required_completed: 0, required_failed: 0, required_open: 0 },
+      })
+      setGenerating(true)
+      runCancelledRef.current = false
+
       const ack = await gatewayAPI.run({
-        session_id: isNewSession ? undefined : sessionId,
-        new_session: isNewSession ? true : undefined,
-        input_text: input,
+        session_id: targetSessionId,
+        input_parts: inputParts,
         mode: agentMode,
       })
       if (!runCancelledRef.current) {
@@ -351,10 +403,12 @@ export default function ChatInput() {
       }
     } catch (err) {
       if (!runCancelledRef.current) {
+        if (submittedMessageId) {
+          removeMessage(submittedMessageId)
+        }
         setGenerating(false)
-        useChatStore.getState().removeMessage(userMsg.id)
         console.error('Run failed:', err)
-        useUIStore.getState().showToast('Failed to send message', 'error')
+        useUIStore.getState().showToast(err instanceof Error ? err.message : 'Failed to send message', 'error')
       }
     }
   }
@@ -421,6 +475,33 @@ export default function ChatInput() {
     void executeSlashCommand(cmd.usage)
   }
 
+  function handleFilesSelected(files: FileList | File[]) {
+    const accepted: File[] = []
+    for (const file of Array.from(files)) {
+      if (!acceptedImageMimeTypes.includes(file.type as any)) {
+        useUIStore.getState().showToast('Only PNG, JPEG, and WebP images are supported', 'error')
+        continue
+      }
+      if (file.size <= 0) {
+        useUIStore.getState().showToast('Cannot upload an empty file', 'error')
+        continue
+      }
+      if (file.size > maxComposerAttachmentBytes) {
+        useUIStore.getState().showToast('Image exceeds the 20 MiB limit', 'error')
+        continue
+      }
+      accepted.push(file)
+    }
+    if (accepted.length > 0) addAttachmentFiles(accepted)
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragActive(false)
+    if (controlsLocked) return
+    handleFilesSelected(e.dataTransfer.files)
+  }
+
   async function handleCancel() {
     runCancelledRef.current = true
     const runId = useGatewayStore.getState().currentRunId
@@ -439,7 +520,7 @@ export default function ChatInput() {
     }
   }
 
-  const isEmpty = !text.trim()
+  const isEmpty = !text.trim() && attachments.length === 0
   const controlsLocked = isGenerating || isCompacting
 
   return (
@@ -460,7 +541,16 @@ export default function ChatInput() {
               />
             </div>
           )}
-          <div className={`input-box ${isCompacting ? 'compacting' : ''}`}>
+          <div
+            className={`input-box ${isCompacting ? 'compacting' : ''} ${dragActive ? 'drag-active' : ''}`}
+            onDragOver={(e) => {
+              e.preventDefault()
+              if (!controlsLocked) setDragActive(true)
+            }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={handleDrop}
+          >
+            <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />
             <textarea
               ref={textareaRef}
               value={text}
@@ -473,6 +563,27 @@ export default function ChatInput() {
             />
             <div className="input-toolbar">
               <div className="input-toolbar-left" style={{ flex: 1 }}>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    if (e.target.files) handleFilesSelected(e.target.files)
+                    e.target.value = ''
+                  }}
+                />
+                <button
+                  type="button"
+                  aria-label="添加图片"
+                  title="添加图片"
+                  disabled={controlsLocked}
+                  style={iconButtonStyle(controlsLocked)}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <ImagePlus size={16} />
+                </button>
                 <button
                   className={`input-mode-toggle ${agentMode === 'plan' ? 'plan' : ''}`}
                   title={agentMode === 'plan' ? '规划模式' : '构建模式'}
@@ -539,6 +650,134 @@ export default function ChatInput() {
       </div>
     </>
   )
+}
+
+function buildRunInputParts(
+  input: string,
+  uploaded: Array<{ attachment: ComposerAttachment; meta: { asset_id: string; mime_type: string } }>,
+) {
+  const parts = []
+  if (input.trim()) parts.push({ type: 'text', text: input.trim() })
+  for (const item of uploaded) {
+    parts.push({
+      type: 'image',
+      media: {
+        asset_id: item.meta.asset_id,
+        mime_type: item.meta.mime_type,
+        file_name: item.attachment.file.name,
+      },
+    })
+  }
+  return parts
+}
+
+function AttachmentPreview({
+  attachments,
+  onRemove,
+}: {
+  attachments: ComposerAttachment[]
+  onRemove: (id: string) => void
+}) {
+  if (attachments.length === 0) return null
+  return (
+    <div style={attachmentPreviewStyles.wrap}>
+      {attachments.map((attachment) => (
+        <div key={attachment.id} style={attachmentPreviewStyles.item}>
+          {attachment.previewUrl ? (
+            <img src={attachment.previewUrl} alt={attachment.file.name} style={attachmentPreviewStyles.image} />
+          ) : (
+            <div style={attachmentPreviewStyles.placeholder}>image</div>
+          )}
+          {attachment.status === 'uploading' && (
+            <div style={attachmentPreviewStyles.overlay}><Loader2 size={16} className="animate-spin" /></div>
+          )}
+          <button
+            type="button"
+            aria-label={`删除 ${attachment.file.name}`}
+            title="删除图片"
+            style={attachmentPreviewStyles.remove}
+            onClick={() => onRemove(attachment.id)}
+            disabled={attachment.status === 'uploading'}
+          >
+            <X size={13} />
+          </button>
+          {attachment.error && <div style={attachmentPreviewStyles.error}>{attachment.error}</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const attachmentPreviewStyles: Record<string, React.CSSProperties> = {
+  wrap: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+    padding: '10px 12px 2px',
+  },
+  item: {
+    position: 'relative',
+    width: 84,
+    height: 64,
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-primary)',
+    background: 'var(--bg-secondary)',
+    overflow: 'hidden',
+  },
+  image: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
+  },
+  placeholder: {
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'var(--text-tertiary)',
+    fontSize: 10,
+    fontFamily: 'var(--font-mono)',
+  },
+  overlay: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(0,0,0,0.35)',
+    color: '#fff',
+  },
+  remove: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    border: '1px solid rgba(255,255,255,0.55)',
+    borderRadius: 'var(--radius-sm)',
+    background: 'rgba(0,0,0,0.55)',
+    color: '#fff',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    padding: 0,
+  },
+  error: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    padding: '2px 4px',
+    background: 'var(--error)',
+    color: '#fff',
+    fontSize: 9,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
 }
 
 function BudgetTokenStrip() {
@@ -721,5 +960,21 @@ function permissionModeButtonStyle(active: boolean): React.CSSProperties {
     fontFamily: 'var(--font-ui)',
     cursor: 'pointer',
     transition: 'all var(--duration-fast) var(--ease-out)',
+  }
+}
+
+function iconButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    width: 30,
+    height: 30,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: 'none',
+    borderRadius: 'var(--radius-sm)',
+    background: 'transparent',
+    color: disabled ? 'var(--text-disabled)' : 'var(--text-tertiary)',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    padding: 0,
   }
 }

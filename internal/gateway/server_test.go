@@ -367,7 +367,9 @@ func TestServerHandleConnectionAuthenticateFlow(t *testing.T) {
 }
 
 type runtimePortEventStub struct {
-	events <-chan RuntimeEvent
+	events      <-chan RuntimeEvent
+	saveAssetFn func(context.Context, SaveSessionAssetInput) (SessionAssetMeta, error)
+	openAssetFn func(context.Context, OpenSessionAssetInput) (OpenSessionAssetResult, error)
 }
 
 func (s *runtimePortEventStub) Run(_ context.Context, _ RunInput) error {
@@ -465,6 +467,20 @@ func (s *runtimePortEventStub) GetSessionModel(_ context.Context, _ GetSessionMo
 
 func (s *runtimePortEventStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
 	return "", nil
+}
+
+func (s *runtimePortEventStub) SaveSessionAsset(ctx context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error) {
+	if s.saveAssetFn != nil {
+		return s.saveAssetFn(ctx, input)
+	}
+	return SessionAssetMeta{}, nil
+}
+
+func (s *runtimePortEventStub) OpenSessionAsset(ctx context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+	if s.openAssetFn != nil {
+		return s.openAssetFn(ctx, input)
+	}
+	return OpenSessionAssetResult{}, nil
 }
 
 func (s *runtimePortEventStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {

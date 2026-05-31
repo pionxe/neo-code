@@ -20,6 +20,7 @@ const defaultSessionTitle = "New Session"
 // PrepareImageInput 表示一次用户输入中附带的本地图片引用。
 type PrepareImageInput struct {
 	Path     string
+	AssetID  string
 	MimeType string
 }
 
@@ -128,6 +129,32 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 	savedAssets := make([]AssetMeta, 0, len(input.Images))
 	for index, image := range input.Images {
 		path := strings.TrimSpace(image.Path)
+		assetID := strings.TrimSpace(image.AssetID)
+		if assetID != "" {
+			if path != "" {
+				p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
+				p.cleanupSavedAssets(ctx, session.ID, savedAssets)
+				return PreparedInput{}, &AssetSaveError{
+					SessionID: session.ID,
+					Index:     index,
+					Path:      path,
+					Err:       fmt.Errorf("image input cannot contain both path and asset id"),
+				}
+			}
+			meta, err := p.referenceImageAsset(ctx, session.ID, assetID, image.MimeType)
+			if err != nil {
+				p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
+				p.cleanupSavedAssets(ctx, session.ID, savedAssets)
+				return PreparedInput{}, &AssetSaveError{
+					SessionID: session.ID,
+					Index:     index,
+					Path:      assetID,
+					Err:       err,
+				}
+			}
+			parts = append(parts, providertypes.NewSessionAssetImagePart(meta.ID, meta.MimeType))
+			continue
+		}
 		if path == "" {
 			p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 			p.cleanupSavedAssets(ctx, session.ID, savedAssets)
@@ -216,6 +243,38 @@ func (p *InputPreparer) saveImageAsset(
 	meta, err := p.assetStore.SaveAsset(ctx, sessionID, file, resolvedMimeType)
 	if err != nil {
 		return AssetMeta{}, err
+	}
+	return meta, nil
+}
+
+// referenceImageAsset 校验已保存附件属于当前会话，并返回可进入 provider 的图片元数据。
+func (p *InputPreparer) referenceImageAsset(
+	ctx context.Context,
+	sessionID string,
+	assetID string,
+	mimeType string,
+) (AssetMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
+	if p.assetStore == nil {
+		return AssetMeta{}, fmt.Errorf("session: asset store is not configured")
+	}
+	normalizedAssetID := strings.TrimSpace(assetID)
+	if normalizedAssetID == "" {
+		return AssetMeta{}, fmt.Errorf("image asset id is empty")
+	}
+
+	meta, err := p.assetStore.Stat(ctx, sessionID, normalizedAssetID)
+	if err != nil {
+		return AssetMeta{}, fmt.Errorf("stat image asset: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(meta.MimeType)), "image/") {
+		return AssetMeta{}, fmt.Errorf("asset %q is not an image", normalizedAssetID)
+	}
+	declaredMime := normalizeMimeType(mimeType)
+	if declaredMime != "" && declaredMime != meta.MimeType {
+		return AssetMeta{}, fmt.Errorf("declared mime type %q mismatches saved asset %q", declaredMime, meta.MimeType)
 	}
 	return meta, nil
 }

@@ -130,12 +130,19 @@ function selectSessionDisplayTime(session: APISessionSummary): Date {
 export type BackendMessage = {
   role: string;
   content: string;
+  parts?: Array<{
+    type: string;
+    text?: string;
+    media?: { uri?: string; asset_id?: string; mime_type?: string; file_name?: string };
+  }>;
   tool_calls?: Array<{ id: string; name: string; arguments: string }>;
   tool_call_id?: string;
   is_error?: boolean;
 };
 
 type BackendSessionData = {
+  id?: string;
+  workspace_hash?: string;
   messages?: BackendMessage[];
   agent_mode?: string;
   current_plan?: PlanArtifact;
@@ -156,6 +163,14 @@ export async function loadSessionWithInsights(
       () => null,
     ),
   ]);
+  const sessionPayload = sessionFrame.payload as BackendSessionData | undefined;
+  if (sessionPayload && !sessionPayload.workspace_hash) {
+    const workspaceHash =
+      typeof gatewayAPI.getCurrentWorkspaceHash === "function"
+        ? gatewayAPI.getCurrentWorkspaceHash()
+        : "";
+    sessionPayload.workspace_hash = workspaceHash;
+  }
   const insightStore = useRuntimeInsightStore.getState();
   if (todosResult?.payload) {
     insightStore.setTodoSnapshot(todosResult.payload);
@@ -184,6 +199,8 @@ function isInternalHistoryMessage(msg: BackendMessage): boolean {
 /** 将后端历史消息映射为前端 ChatMessage 列表，正确合并 tool_result 回 tool_call */
 export function mapHistoryMessages(
   backendMessages: BackendMessage[],
+  sessionId = "",
+  workspaceHash = "",
 ): Array<ReturnType<typeof useChatStore.getState>["messages"][0]> {
   let _idCounter = 0;
   // Phase 1: Collect tool results by tool_call_id
@@ -214,7 +231,7 @@ export function mapHistoryMessages(
           id: `hist_${Date.now()}_${_idCounter++}`,
           role: "assistant",
           type: "text",
-          content: msg.content,
+          content: renderBackendMessageText(msg),
           timestamp: Date.now(),
         });
       }
@@ -239,16 +256,46 @@ export function mapHistoryMessages(
         });
       }
     } else {
+      const attachments = extractBackendMessageAttachments(msg, sessionId, workspaceHash, _idCounter);
       result.push({
         id: `hist_${msg.role}_${Date.now()}_${_idCounter++}`,
         role: (msg.role as "user" | "assistant" | "tool") || "assistant",
         type: "text",
-        content: msg.content,
+        content: renderBackendMessageText(msg),
+        attachments: attachments.length > 0 ? attachments : undefined,
         timestamp: Date.now(),
       });
     }
   }
   return result;
+}
+
+function renderBackendMessageText(msg: BackendMessage): string {
+  if (!msg.parts || msg.parts.length === 0) return msg.content;
+  const texts = msg.parts
+    .filter((part) => part.type === "text" && part.text?.trim())
+    .map((part) => part.text!.trim());
+  if (texts.length > 0) return texts.join("\n");
+  return msg.content.trim() === "[image]" ? "" : msg.content;
+}
+
+function extractBackendMessageAttachments(
+  msg: BackendMessage,
+  sessionId: string,
+  workspaceHash: string,
+  counter: number,
+) {
+  if (!msg.parts || msg.parts.length === 0) return [];
+  return msg.parts
+    .filter((part) => part.type === "image" && part.media?.asset_id)
+    .map((part, index) => ({
+      id: `hist_att_${counter}_${index}_${part.media!.asset_id}`,
+      sessionId,
+      workspaceHash,
+      assetId: part.media!.asset_id,
+      mimeType: part.media!.mime_type || "image/*",
+      name: part.media!.file_name,
+    }));
 }
 
 function createHistoryPlanMessage(
@@ -286,7 +333,9 @@ function mapSessionMessages(
 ): Array<ReturnType<typeof useChatStore.getState>["messages"][0]> {
   const plan = sessionData.current_plan;
   const sourceMessages = sessionData.messages || [];
-  if (!plan) return mapHistoryMessages(sourceMessages);
+  const sessionId = sessionData.id || "";
+  const workspaceHash = sessionData.workspace_hash || "";
+  if (!plan) return mapHistoryMessages(sourceMessages, sessionId, workspaceHash);
 
   const mapped: Array<ReturnType<typeof useChatStore.getState>["messages"][0]> =
     [];
@@ -295,7 +344,7 @@ function mapSessionMessages(
 
   const flushPendingSegment = () => {
     if (pendingSegment.length === 0) return;
-    mapped.push(...mapHistoryMessages(pendingSegment));
+    mapped.push(...mapHistoryMessages(pendingSegment, sessionId, workspaceHash));
     pendingSegment = [];
   };
 

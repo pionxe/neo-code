@@ -75,6 +75,7 @@ type UserInput struct {
 // UserImageInput 表示用户输入中附带的单个图片引用（路径 + MIME）。
 type UserImageInput struct {
 	Path     string
+	AssetID  string
 	MimeType string
 }
 

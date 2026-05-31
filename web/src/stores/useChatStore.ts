@@ -8,6 +8,17 @@ import {
 } from "@/api/protocol";
 import { resetEventBridgeCursors } from "@/utils/eventBridge";
 
+export interface ChatAttachment {
+  id: string;
+  sessionId?: string;
+  workspaceHash?: string;
+  assetId?: string;
+  mimeType: string;
+  name?: string;
+  size?: number;
+  previewUrl?: string;
+}
+
 /** 聊天消息 */
 export interface ChatMessage {
   id: string;
@@ -25,6 +36,8 @@ export interface ChatMessage {
     | "plan";
   /** 文本内容 */
   content: string;
+  /** 用户消息中的图片附件 */
+  attachments?: ChatAttachment[];
   /** 工具调用信息 */
   toolName?: string;
   toolCallId?: string;
@@ -133,12 +146,13 @@ function nextMsgId(): string {
 }
 
 /** 创建用户消息 */
-export function createUserMessage(text: string): ChatMessage {
+export function createUserMessage(text: string, attachments?: ChatAttachment[]): ChatMessage {
   return {
     id: nextMsgId(),
     role: "user",
     type: "text",
     content: text,
+    attachments: attachments && attachments.length > 0 ? attachments : undefined,
     timestamp: Date.now(),
   };
 }
