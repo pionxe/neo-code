@@ -41,6 +41,17 @@ func (p *Provider) EstimateInputTokens(
 	ctx context.Context,
 	req providertypes.GenerateRequest,
 ) (providertypes.BudgetEstimate, error) {
+	if provider.RequestContainsImagePart(req) {
+		tokens, err := provider.EstimateProjectedInputTokens(req, provider.ResolveRequestModel(req, p.cfg.DefaultModel))
+		if err != nil {
+			return providertypes.BudgetEstimate{}, err
+		}
+		return providertypes.BudgetEstimate{
+			EstimatedInputTokens: tokens,
+			EstimateSource:       provider.EstimateSourceLocal,
+			GatePolicy:           provider.EstimateGateAdvisory,
+		}, nil
+	}
 	params, err := BuildRequest(ctx, p.cfg, req)
 	if err != nil {
 		return providertypes.BudgetEstimate{}, err

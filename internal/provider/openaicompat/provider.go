@@ -61,6 +61,17 @@ func (p *Provider) EstimateInputTokens(
 	}
 
 	var tokens int
+	if provider.RequestContainsImagePart(req) {
+		tokens, err = provider.EstimateProjectedInputTokens(req, provider.ResolveRequestModel(req, p.cfg.DefaultModel))
+		if err != nil {
+			return providertypes.BudgetEstimate{}, err
+		}
+		return providertypes.BudgetEstimate{
+			EstimatedInputTokens: tokens,
+			EstimateSource:       provider.EstimateSourceLocal,
+			GatePolicy:           provider.EstimateGateAdvisory,
+		}, nil
+	}
 	switch mode {
 	case executionModeCompletions:
 		payload, buildErr := chatcompletions.BuildRequest(ctx, p.cfg, req)
