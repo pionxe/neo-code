@@ -408,6 +408,10 @@ func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, req
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if !s.isHTTPControlPlaneMethodAllowed(sessionAssetUploadMethod) {
+		s.writeHTTPAccessDenied(writer, sessionAssetUploadMethod)
+		return
+	}
 	if runtimePort == nil {
 		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "runtime unavailable"})
 		return
@@ -483,6 +487,10 @@ func (s *NetworkServer) handleSessionAssetRead(writer http.ResponseWriter, reque
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if !s.isHTTPControlPlaneMethodAllowed(sessionAssetReadMethod) {
+		s.writeHTTPAccessDenied(writer, sessionAssetReadMethod)
+		return
+	}
 	if runtimePort == nil {
 		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "runtime unavailable"})
 		return
@@ -539,6 +547,22 @@ func (s *NetworkServer) authenticatedHTTPSubjectID(request *http.Request) (strin
 		return "", false
 	}
 	return strings.TrimSpace(subjectID), true
+}
+
+// isHTTPControlPlaneMethodAllowed 按 HTTP 来源复用控制面 ACL，覆盖非 JSON-RPC 的 HTTP 端点。
+func (s *NetworkServer) isHTTPControlPlaneMethodAllowed(method string) bool {
+	if s == nil || s.acl == nil {
+		return true
+	}
+	return s.acl.IsAllowed(RequestSourceHTTP, method)
+}
+
+// writeHTTPAccessDenied 记录 HTTP 端点 ACL 拒绝并返回统一的 403 JSON 响应。
+func (s *NetworkServer) writeHTTPAccessDenied(writer http.ResponseWriter, method string) {
+	if s != nil && s.metrics != nil {
+		s.metrics.IncACLDenied(string(RequestSourceHTTP), method)
+	}
+	writeJSONResponse(writer, http.StatusForbidden, map[string]string{"error": "access denied"})
 }
 
 // detectAllowedUploadImageMime 用文件头确认上传图片类型，只允许 PNG/JPEG/WebP。

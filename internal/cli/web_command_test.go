@@ -423,6 +423,13 @@ func TestBuildFrontendAndReadGatewayToken(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), authData, 0o644); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
+	originalUserHomeDir := userHomeDirFn
+	userHomeDirFn = func() (string, error) {
+		return homeDir, nil
+	}
+	t.Cleanup(func() {
+		userHomeDirFn = originalUserHomeDir
+	})
 	originalHome := os.Getenv("HOME")
 	if err := os.Setenv("HOME", homeDir); err != nil {
 		t.Fatalf("set HOME: %v", err)
@@ -449,6 +456,13 @@ func TestWaitForGatewayAndOpenBrowserAndResolveListenAddress(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), authData, 0o644); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
+	originalUserHomeDir := userHomeDirFn
+	userHomeDirFn = func() (string, error) {
+		return homeDir, nil
+	}
+	t.Cleanup(func() {
+		userHomeDirFn = originalUserHomeDir
+	})
 	originalHome := os.Getenv("HOME")
 	if err := os.Setenv("HOME", homeDir); err != nil {
 		t.Fatalf("set HOME: %v", err)
@@ -473,6 +487,13 @@ func TestWaitForGatewayAndOpenBrowserAndResolveListenAddress(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = os.Setenv("PATH", originalPath)
+	})
+	originalOpenBrowser := openBrowserFn
+	openBrowserFn = func(url string) error {
+		return os.WriteFile(openLog, []byte(url), 0o644)
+	}
+	t.Cleanup(func() {
+		openBrowserFn = originalOpenBrowser
 	})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -543,6 +564,13 @@ func TestResolveWebStaticDirCurrentWorkdirAndReadGatewayTokenInvalid(t *testing.
 	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), []byte("{invalid"), 0o644); err != nil {
 		t.Fatalf("write invalid auth.json: %v", err)
 	}
+	originalUserHomeDir := userHomeDirFn
+	userHomeDirFn = func() (string, error) {
+		return homeDir, nil
+	}
+	t.Cleanup(func() {
+		userHomeDirFn = originalUserHomeDir
+	})
 	originalHome := os.Getenv("HOME")
 	if err := os.Setenv("HOME", homeDir); err != nil {
 		t.Fatalf("set HOME: %v", err)

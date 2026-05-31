@@ -4,7 +4,11 @@ import (
 	"strings"
 )
 
-const pingMethod = "gateway.ping"
+const (
+	pingMethod               = "gateway.ping"
+	sessionAssetUploadMethod = "gateway.sessionAssetUpload"
+	sessionAssetReadMethod   = "gateway.sessionAssetRead"
+)
 
 // RequestSource 表示控制面请求来源，用于 ACL 与日志分类。
 type RequestSource string
@@ -98,6 +102,8 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"gateway.renameWorkspace",
 		"gateway.deleteWorkspace",
 		"wake.openUrl",
+		sessionAssetUploadMethod,
+		sessionAssetReadMethod,
 	}
 	return normalizedMethodSet(methods...)
 }

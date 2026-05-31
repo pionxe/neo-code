@@ -25,6 +25,8 @@ var (
 	webCommandStartGatewayServer = startGatewayServer
 	webCommandBuildFrontend      = buildFrontend
 	webCommandLookPath           = exec.LookPath
+	openBrowserFn                = openBrowser
+	userHomeDirFn                = os.UserHomeDir
 	webCommandEmbeddedAssets     = func() (fs.FS, bool) {
 		if !webassets.IsAvailable() {
 			return nil, false
@@ -327,7 +329,7 @@ func waitForGatewayAndOpenBrowser(ctx context.Context, address string, logger *l
 					browserURL += "/?token=" + token
 				}
 				logger.Printf("gateway is ready, opening browser: %s", baseURL)
-				if openErr := openBrowser(browserURL); openErr != nil {
+				if openErr := openBrowserFn(browserURL); openErr != nil {
 					logger.Printf("failed to open browser: %v (open %s manually)", openErr, browserURL)
 				}
 				return
@@ -340,7 +342,7 @@ func waitForGatewayAndOpenBrowser(ctx context.Context, address string, logger *l
 
 // readGatewayToken 从 ~/.neocode/auth.json 读取认证 token。
 func readGatewayToken() string {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := userHomeDirFn()
 	if err != nil {
 		return ""
 	}

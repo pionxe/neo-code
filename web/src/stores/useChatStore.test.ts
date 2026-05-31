@@ -1,7 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useChatStore } from './useChatStore'
 
 beforeEach(() => {
+  if (typeof URL.revokeObjectURL !== 'function') {
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
+  }
+  vi.restoreAllMocks()
   useChatStore.setState({
     messages: [],
     isGenerating: false,
@@ -90,10 +94,55 @@ describe('useChatStore', () => {
   })
 
   it('clearMessages removes all messages', () => {
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
     const store = useChatStore.getState()
-    store.addMessage({ id: 'msg-1', role: 'user', content: 'hi', type: 'text', timestamp: 1 })
+    store.addMessage({
+      id: 'msg-1',
+      role: 'user',
+      content: 'hi',
+      type: 'text',
+      timestamp: 1,
+      attachments: [{ id: 'att-1', mimeType: 'image/png', previewUrl: 'blob:clear-preview' }],
+    })
     store.clearMessages()
     expect(useChatStore.getState().messages).toHaveLength(0)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:clear-preview')
+  })
+
+  it('removeMessage revokes sent attachment preview URLs', () => {
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const store = useChatStore.getState()
+    store.addMessage({
+      id: 'msg-1',
+      role: 'user',
+      content: 'image',
+      type: 'text',
+      timestamp: 1,
+      attachments: [{ id: 'att-1', mimeType: 'image/png', previewUrl: 'blob:preview-1' }],
+    })
+
+    store.removeMessage('msg-1')
+
+    expect(useChatStore.getState().messages).toEqual([])
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview-1')
+  })
+
+  it('setMessages revokes preview URLs from replaced messages', () => {
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const store = useChatStore.getState()
+    store.addMessage({
+      id: 'old',
+      role: 'user',
+      content: 'old image',
+      type: 'text',
+      timestamp: 1,
+      attachments: [{ id: 'att-1', mimeType: 'image/png', previewUrl: 'blob:old-preview' }],
+    })
+
+    store.setMessages([{ id: 'new', role: 'assistant', content: 'new', type: 'text', timestamp: 2 }])
+
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(['new'])
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:old-preview')
   })
 
   it('truncateFromMessage removes the target and everything after it', () => {
@@ -105,6 +154,25 @@ describe('useChatStore', () => {
     store.truncateFromMessage('u2')
     const remaining = useChatStore.getState().messages
     expect(remaining.map((m) => m.id)).toEqual(['u1', 'a1'])
+  })
+
+  it('truncateFromMessage revokes preview URLs from removed messages', () => {
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const store = useChatStore.getState()
+    store.addMessage({ id: 'u1', role: 'user', content: 'keep', type: 'text', timestamp: 1 })
+    store.addMessage({
+      id: 'u2',
+      role: 'user',
+      content: 'remove',
+      type: 'text',
+      timestamp: 2,
+      attachments: [{ id: 'att-1', mimeType: 'image/png', previewUrl: 'blob:removed-preview' }],
+    })
+
+    store.truncateFromMessage('u2')
+
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(['u1'])
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:removed-preview')
   })
 
   it('truncateFromMessage clears generation-related state', () => {

@@ -475,6 +475,46 @@ func TestNetworkServerSessionAssetUploadAndRead(t *testing.T) {
 	}
 }
 
+func TestNetworkServerSessionAssetsRespectHTTPACL(t *testing.T) {
+	deniedACL := &ControlPlaneACL{
+		mode:    ACLModeStrict,
+		allow:   map[RequestSource]map[string]struct{}{RequestSourceHTTP: {}},
+		enabled: true,
+	}
+	runtimePort := &runtimePortEventStub{
+		saveAssetFn: func(context.Context, SaveSessionAssetInput) (SessionAssetMeta, error) {
+			t.Fatal("SaveSessionAsset should not be called when ACL denies upload")
+			return SessionAssetMeta{}, nil
+		},
+		openAssetFn: func(context.Context, OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+			t.Fatal("OpenSessionAsset should not be called when ACL denies read")
+			return OpenSessionAssetResult{}, nil
+		},
+	}
+	server := &NetworkServer{
+		authenticator: staticTokenAuthenticator{token: "gateway-token"},
+		acl:           deniedACL,
+		metrics:       NewGatewayMetrics(),
+	}
+	handler := server.buildHandler(runtimePort)
+
+	uploadRequest := newSessionAssetUploadRequest(t, "session-1", "a.png", gatewayMinimalPNGBytes())
+	uploadRequest.Header.Set("Authorization", "Bearer gateway-token")
+	uploadRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(uploadRecorder, uploadRequest)
+	if uploadRecorder.Code != http.StatusForbidden {
+		t.Fatalf("upload status = %d body=%s, want %d", uploadRecorder.Code, uploadRecorder.Body.String(), http.StatusForbidden)
+	}
+
+	readRequest := httptest.NewRequest(http.MethodGet, "/api/session-assets/session-1/asset-1", nil)
+	readRequest.Header.Set("Authorization", "Bearer gateway-token")
+	readRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(readRecorder, readRequest)
+	if readRecorder.Code != http.StatusForbidden {
+		t.Fatalf("read status = %d body=%s, want %d", readRecorder.Code, readRecorder.Body.String(), http.StatusForbidden)
+	}
+}
+
 func TestNetworkServerSessionAssetWorkspaceHeader(t *testing.T) {
 	payload := gatewayMinimalPNGBytes()
 	runtimePort := &runtimePortEventStub{
