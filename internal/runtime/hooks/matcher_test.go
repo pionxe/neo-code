@@ -111,6 +111,12 @@ func TestCompileHookMatcherValidation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected completely unknown matcher field to be rejected")
 	}
+	if _, err := CompileHookMatcher(HookPointBeforeToolCall, map[string]any{
+		"tool_name":  "bash",
+		"tool_names": []any{"filesystem"},
+	}); err == nil {
+		t.Fatal("expected mixed matcher fields with typo to be rejected")
+	}
 
 	if _, err := CompileHookMatcher(HookPointBeforeToolCall, nil); err != nil {
 		t.Fatal("nil raw should succeed with nil matcher")
@@ -306,8 +312,8 @@ func TestCompileHookMatcherRegexWhitespaceSkipped(t *testing.T) {
 	t.Parallel()
 
 	matcher, err := CompileHookMatcher(HookPointBeforeToolCall, map[string]any{
-		"tool_name":          "bash",
-		"tool_name_regex":    []string{"  ", "\t"},
+		"tool_name":       "bash",
+		"tool_name_regex": []string{"  ", "\t"},
 	})
 	if err != nil {
 		t.Fatalf("CompileHookMatcher() error = %v", err)
@@ -319,7 +325,6 @@ func TestCompileHookMatcherRegexWhitespaceSkipped(t *testing.T) {
 		t.Fatalf("expected empty tool_name_regex slice, got %d entries", len(matcher.ToolNameRegex))
 	}
 }
-
 
 func TestCompileHookMatcherRegexOnly(t *testing.T) {
 	t.Parallel()

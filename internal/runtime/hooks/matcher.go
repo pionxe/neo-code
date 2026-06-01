@@ -54,6 +54,9 @@ func CompileHookMatcher(point HookPoint, raw map[string]any) (*HookMatcher, erro
 	if len(raw) == 0 {
 		return nil, nil
 	}
+	if err := validateHookMatcherFields(raw); err != nil {
+		return nil, err
+	}
 	if !HasHookMatcherConfig(raw) {
 		return nil, fmt.Errorf("match contains no recognized matcher fields (expected: tool_name, tool_name_regex, arguments_contains)")
 	}
@@ -102,6 +105,26 @@ func CompileHookMatcher(point HookPoint, raw map[string]any) (*HookMatcher, erro
 		return nil, fmt.Errorf("match must include at least one non-empty matcher field")
 	}
 	return matcher, nil
+}
+
+// validateHookMatcherFields 校验 matcher 配置中不存在未支持字段，避免拼写错误被静默忽略。
+func validateHookMatcherFields(raw map[string]any) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	for key := range raw {
+		normalized := strings.ToLower(strings.TrimSpace(key))
+		switch normalized {
+		case hookMatcherFieldToolName, hookMatcherFieldToolNameRegex, hookMatcherFieldArgumentsContains:
+			continue
+		default:
+			return fmt.Errorf(
+				"match contains unknown field %q (allowed: tool_name, tool_name_regex, arguments_contains)",
+				key,
+			)
+		}
+	}
+	return nil
 }
 
 // IsEmpty 判断 matcher 是否包含可执行维度。
