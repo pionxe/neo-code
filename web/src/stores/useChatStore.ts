@@ -8,6 +8,17 @@ import {
 } from "@/api/protocol";
 import { resetEventBridgeCursors } from "@/utils/eventBridge";
 
+export interface ChatAttachment {
+  id: string;
+  sessionId?: string;
+  workspaceHash?: string;
+  assetId?: string;
+  mimeType: string;
+  name?: string;
+  size?: number;
+  previewUrl?: string;
+}
+
 /** 聊天消息 */
 export interface ChatMessage {
   id: string;
@@ -25,6 +36,8 @@ export interface ChatMessage {
     | "plan";
   /** 文本内容 */
   content: string;
+  /** 用户消息中的图片附件 */
+  attachments?: ChatAttachment[];
   /** 工具调用信息 */
   toolName?: string;
   toolCallId?: string;
@@ -133,14 +146,24 @@ function nextMsgId(): string {
 }
 
 /** 创建用户消息 */
-export function createUserMessage(text: string): ChatMessage {
+export function createUserMessage(text: string, attachments?: ChatAttachment[]): ChatMessage {
   return {
     id: nextMsgId(),
     role: "user",
     type: "text",
     content: text,
+    attachments: attachments && attachments.length > 0 ? attachments : undefined,
     timestamp: Date.now(),
   };
+}
+
+function revokeChatAttachmentPreviewURLs(messages: ChatMessage[]): void {
+  if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
+  messages.forEach((message) => {
+    message.attachments?.forEach((attachment) => {
+      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+    });
+  });
 }
 
 /** 创建 AI 流式消息 */
@@ -216,14 +239,22 @@ export const useChatStore = create<ChatState>((set) => ({
   permissionMode: "default",
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
-  setMessages: (messages) => set({ messages: [...messages] }),
+  setMessages: (messages) =>
+    set((s) => {
+      revokeChatAttachmentPreviewURLs(s.messages);
+      return { messages: [...messages] };
+    }),
   removeMessage: (id) =>
-    set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
+    set((s) => {
+      revokeChatAttachmentPreviewURLs(s.messages.filter((m) => m.id === id));
+      return { messages: s.messages.filter((m) => m.id !== id) };
+    }),
 
   truncateFromMessage: (messageId) =>
     set((s) => {
       const idx = s.messages.findIndex((m) => m.id === messageId);
       if (idx === -1) return s;
+      revokeChatAttachmentPreviewURLs(s.messages.slice(idx));
       return {
         messages: s.messages.slice(0, idx),
         streamingMessageId: "",
@@ -463,6 +494,7 @@ export const useChatStore = create<ChatState>((set) => ({
 
   /** 清理全部聊天状态，并重置 eventBridge 游标，避免跨会话泄漏 */
   clearMessages: () => {
+    revokeChatAttachmentPreviewURLs(useChatStore.getState().messages);
     resetEventBridgeCursors();
     set({
       messages: [],

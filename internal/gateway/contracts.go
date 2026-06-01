@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"neo-code/internal/config"
@@ -225,6 +226,48 @@ type CreateSessionInput struct {
 	SubjectID string
 	// SessionID 是可选会话标识，留空时由 runtime 生成。
 	SessionID string
+}
+
+// SessionAssetMeta 描述 Gateway 可见的会话附件元数据。
+type SessionAssetMeta struct {
+	// SessionID 是附件所属会话标识。
+	SessionID string `json:"session_id"`
+	// AssetID 是附件标识。
+	AssetID string `json:"asset_id"`
+	// MimeType 是服务端确认后的 MIME 类型。
+	MimeType string `json:"mime_type"`
+	// Size 是附件原始字节数。
+	Size int64 `json:"size"`
+}
+
+// SaveSessionAssetInput 表示保存浏览器上传附件的下游输入。
+type SaveSessionAssetInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是附件所属会话标识。
+	SessionID string
+	// Reader 是附件二进制内容。
+	Reader io.Reader
+	// MimeType 是服务端探测确认后的 MIME 类型。
+	MimeType string
+}
+
+// OpenSessionAssetInput 表示读取会话附件的下游输入。
+type OpenSessionAssetInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是附件所属会话标识。
+	SessionID string
+	// AssetID 是附件标识。
+	AssetID string
+}
+
+// OpenSessionAssetResult 表示打开会话附件后的读取结果。
+type OpenSessionAssetResult struct {
+	// Reader 是附件内容流，调用方负责关闭。
+	Reader io.ReadCloser
+	// Meta 是附件元数据。
+	Meta SessionAssetMeta
 }
 
 // DeleteSessionInput 表示 gateway.deleteSession 动作的下游输入。
@@ -694,6 +737,8 @@ type SessionMessage struct {
 	Role string `json:"role"`
 	// Content 是消息内容。
 	Content string `json:"content"`
+	// Parts 是消息的结构化多模态分片，供支持图片的客户端渲染。
+	Parts []InputPart `json:"parts,omitempty"`
 	// ToolCalls 是 assistant 发起的工具调用元数据。
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ToolCallID 是工具消息关联的调用标识。
@@ -920,6 +965,10 @@ type RuntimePort interface {
 	GetRuntimeSnapshot(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error)
 	// CreateSession 创建并返回可用会话标识。
 	CreateSession(ctx context.Context, input CreateSessionInput) (string, error)
+	// SaveSessionAsset 保存会话附件并返回元数据。
+	SaveSessionAsset(ctx context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error)
+	// OpenSessionAsset 打开会话附件供 HTTP 读取接口返回。
+	OpenSessionAsset(ctx context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error)
 	// DeleteSession 删除/归档指定会话。
 	DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error)
 	// RenameSession 重命名指定会话。

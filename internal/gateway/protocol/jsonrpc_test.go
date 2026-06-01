@@ -393,7 +393,8 @@ func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 			"workdir":" /tmp/work ",
 			"input_parts":[
 				{"type":" TEXT ","text":" world "},
-				{"type":" image ","media":{"uri":" /tmp/a.png ","mime_type":" image/png ","file_name":" a.png "}}
+				{"type":" image ","media":{"uri":" /tmp/a.png ","mime_type":" image/png ","file_name":" a.png "}},
+				{"type":" image ","media":{"asset_id":" asset-1 ","mime_type":" image/webp "}}
 			]
 		}`),
 	}
@@ -414,8 +415,8 @@ func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 	if runParams.InputText != "hello" {
 		t.Fatalf("run input_text = %q, want %q", runParams.InputText, "hello")
 	}
-	if len(runParams.InputParts) != 2 {
-		t.Fatalf("run input_parts len = %d, want 2", len(runParams.InputParts))
+	if len(runParams.InputParts) != 3 {
+		t.Fatalf("run input_parts len = %d, want 3", len(runParams.InputParts))
 	}
 	if runParams.InputParts[0].Type != "text" || runParams.InputParts[0].Text != "world" {
 		t.Fatalf("run text part = %#v, want normalized text part", runParams.InputParts[0])
@@ -425,6 +426,12 @@ func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 	}
 	if runParams.InputParts[1].Media.MimeType != "image/png" || runParams.InputParts[1].Media.FileName != "a.png" {
 		t.Fatalf("run image media = %#v, want trimmed mime/file_name", runParams.InputParts[1].Media)
+	}
+	if runParams.InputParts[2].Type != "image" ||
+		runParams.InputParts[2].Media == nil ||
+		runParams.InputParts[2].Media.AssetID != "asset-1" ||
+		runParams.InputParts[2].Media.MimeType != "image/webp" {
+		t.Fatalf("run image asset media = %#v, want trimmed asset_id/mime", runParams.InputParts[2])
 	}
 
 	compactNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{

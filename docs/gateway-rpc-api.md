@@ -155,7 +155,8 @@ type BindStreamParams struct {
 
 ```go
 type RunInputMedia struct {
-	URI      string `json:"uri"`
+	URI      string `json:"uri,omitempty"`
+	AssetID  string `json:"asset_id,omitempty"`
 	MimeType string `json:"mime_type"`
 	FileName string `json:"file_name,omitempty"`
 }
@@ -174,6 +175,12 @@ type RunParams struct {
 	Workdir    string         `json:"workdir,omitempty"`
 }
 ```
+
+- 多模态图片约束：
+  - `type=image` 时 `media.mime_type` 必填。
+  - `media.uri` 与 `media.asset_id` 必须二选一，不能同时为空或同时提供。
+  - `media.uri` 仅用于后端可读取的本地路径；Web 浏览器上传图片应先通过 `POST /api/session-assets` 保存，再在 `gateway.run` 中使用 `media.asset_id` 引用。
+  - `asset_id` 必须属于当前 `session_id`，不存在或跨 session 引用会在 runtime 输入准备阶段失败。
 
 - Response Schema:
   - Success（受理即返回）:
@@ -220,6 +227,49 @@ type RunParams struct {
   - Prometheus: `gateway_requests_total{method="gateway.run",...}`
   - 异步失败日志：`gateway run async failed: request_id=... session_id=... run_id=... code=...`
   - 请求日志：`request_id/method/source/status/gateway_code`
+
+---
+
+## HTTP API: session assets
+
+浏览器图片上传不应把本地伪路径传给 Runtime。Web 客户端需要在发送前先创建或确认 `session_id`，再通过受鉴权保护的 HTTP API 保存图片，最后在 `gateway.run.input_parts[].media.asset_id` 中引用。
+
+### POST /api/session-assets
+
+- Auth Required: Yes（`Authorization: Bearer <token>`）
+- Headers:
+  - `X-NeoCode-Workspace-Hash`: 当前工作区哈希。多工作区 Web 客户端必须发送；单工作区或旧客户端可省略并回落到默认工作区。
+- Content-Type: `multipart/form-data`
+- Fields:
+  - `session_id`: 目标会话 ID，必填。
+  - `file`: 图片文件，必填。
+- Server-side validation:
+  - 仅接受 `image/png`、`image/jpeg`、`image/webp`。
+  - MIME 以服务端文件头检测结果为准，不信任浏览器声明。
+  - 空文件返回 `400`。
+  - 超过 `MaxSessionAssetBytes` 返回 `413`。
+  - 非图片或不支持类型返回 `415`。
+  - 未认证返回 `401`，Origin/CORS 或 ACL 拒绝返回 `403`。
+  - 工作区不存在返回 `404 workspace not found`；目标 session 不在该工作区返回 `404 session not found`。
+- Response:
+
+```json
+{
+  "session_id": "sess-1",
+  "asset_id": "asset-1",
+  "mime_type": "image/png",
+  "size": 1024
+}
+```
+
+### GET /api/session-assets/{session_id}/{asset_id}
+
+- Auth Required: Yes（`Authorization: Bearer <token>`）
+- Headers:
+  - `X-NeoCode-Workspace-Hash`: 当前工作区哈希。多工作区 Web 客户端必须发送；省略时回落到默认工作区。
+- 返回图片二进制，`Content-Type` 为保存时确认的 MIME。
+- 用于历史消息缩略图按需读取。
+- 工作区不存在返回 `404 workspace not found`；不存在或不可见的 asset 返回 `404 asset not found`。
 
 ---
 

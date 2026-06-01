@@ -80,6 +80,21 @@ func TestProviderEstimateGenerateAndThinkingErrors(t *testing.T) {
 	if _, err := p.EstimateInputTokens(context.Background(), req); err != nil {
 		t.Fatalf("EstimateInputTokens() error = %v", err)
 	}
+	imageEstimate, err := p.EstimateInputTokens(context.Background(), providertypes.GenerateRequest{
+		Messages: []providertypes.Message{{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset-1", "image/png")},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("EstimateInputTokens(image) error = %v", err)
+	}
+	if imageEstimate.EstimatedInputTokens <= provider.DefaultImageInputTokenEstimate {
+		t.Fatalf("expected projected image estimate with model text, got %+v", imageEstimate)
+	}
+	if imageEstimate.GatePolicy != provider.EstimateGateAdvisory || imageEstimate.EstimateSource != provider.EstimateSourceLocal {
+		t.Fatalf("unexpected image estimate metadata: %+v", imageEstimate)
+	}
 	events := make(chan providertypes.StreamEvent, 8)
 	if err := p.Generate(context.Background(), req, events); err != nil {
 		t.Fatalf("Generate() error = %v", err)

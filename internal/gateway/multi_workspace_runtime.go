@@ -402,6 +402,22 @@ func (m *MultiWorkspaceRuntime) CreateSession(ctx context.Context, input CreateS
 	return port.CreateSession(ctx, input)
 }
 
+func (m *MultiWorkspaceRuntime) SaveSessionAsset(ctx context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return SessionAssetMeta{}, err
+	}
+	return port.SaveSessionAsset(ctx, input)
+}
+
+func (m *MultiWorkspaceRuntime) OpenSessionAsset(ctx context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return OpenSessionAssetResult{}, err
+	}
+	return port.OpenSessionAsset(ctx, input)
+}
+
 func (m *MultiWorkspaceRuntime) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error) {
 	port, err := m.getPort(ctx)
 	if err != nil {

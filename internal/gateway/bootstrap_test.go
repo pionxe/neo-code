@@ -311,6 +311,14 @@ func (s *bootstrapRuntimeStub) CreateSession(ctx context.Context, input CreateSe
 	return strings.TrimSpace(input.SessionID), nil
 }
 
+func (s *bootstrapRuntimeStub) SaveSessionAsset(ctx context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error) {
+	return SessionAssetMeta{SessionID: input.SessionID, AssetID: "asset_test", MimeType: input.MimeType}, nil
+}
+
+func (s *bootstrapRuntimeStub) OpenSessionAsset(ctx context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+	return OpenSessionAssetResult{}, nil
+}
+
 func (s *bootstrapRuntimeStub) ListCheckpoints(ctx context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error) {
 	if s != nil && s.listCheckpointsFn != nil {
 		return s.listCheckpointsFn(ctx, input)
@@ -5334,6 +5342,12 @@ func (runtimeOnlyStub) GetRuntimeSnapshot(ctx context.Context, input GetRuntimeS
 }
 func (runtimeOnlyStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error) {
 	return "", nil
+}
+func (runtimeOnlyStub) SaveSessionAsset(context.Context, SaveSessionAssetInput) (SessionAssetMeta, error) {
+	return SessionAssetMeta{}, nil
+}
+func (runtimeOnlyStub) OpenSessionAsset(context.Context, OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+	return OpenSessionAssetResult{}, nil
 }
 func (runtimeOnlyStub) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error) {
 	return false, nil

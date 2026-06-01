@@ -585,8 +585,10 @@ func validateInputPart(part InputPart, index int) *FrameError {
 		if part.Media == nil {
 			return NewFrameError(ErrorCodeInvalidMultimodalPayload, "input_parts[image] requires media")
 		}
-		if strings.TrimSpace(part.Media.URI) == "" {
-			return NewFrameError(ErrorCodeInvalidMultimodalPayload, "input_parts[image] requires media.uri")
+		hasURI := strings.TrimSpace(part.Media.URI) != ""
+		hasAssetID := strings.TrimSpace(part.Media.AssetID) != ""
+		if hasURI == hasAssetID {
+			return NewFrameError(ErrorCodeInvalidMultimodalPayload, "input_parts[image] requires exactly one of media.uri or media.asset_id")
 		}
 		if strings.TrimSpace(part.Media.MimeType) == "" {
 			return NewFrameError(ErrorCodeInvalidMultimodalPayload, "input_parts[image] requires media.mime_type")

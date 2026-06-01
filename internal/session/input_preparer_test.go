@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -94,6 +95,46 @@ func TestInputPreparerPrepareTextAndImage(t *testing.T) {
 	}
 }
 
+func TestInputPreparerPrepareSavedAssetReference(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	store := newInputPreparerTestStore(t, workdir)
+	session := NewWithWorkdir("existing", workdir)
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("createSessionForPreparerTest() error = %v", err)
+	}
+	meta, err := store.SaveAsset(context.Background(), session.ID, bytes.NewReader(minimalPNGBytes()), "image/png")
+	if err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+
+	preparer := NewInputPreparer(store, store)
+	result, err := preparer.Prepare(context.Background(), PrepareInput{
+		SessionID:      session.ID,
+		Text:           "describe it",
+		Images:         []PrepareImageInput{{AssetID: meta.ID, MimeType: "image/png"}},
+		DefaultWorkdir: workdir,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if len(result.SavedAssets) != 0 {
+		t.Fatalf("expected no newly saved assets, got %+v", result.SavedAssets)
+	}
+	if len(result.Parts) != 2 {
+		t.Fatalf("expected text and image parts, got %+v", result.Parts)
+	}
+	imagePart := result.Parts[1]
+	if imagePart.Kind != providertypes.ContentPartImage ||
+		imagePart.Image == nil ||
+		imagePart.Image.Asset == nil ||
+		imagePart.Image.Asset.ID != meta.ID ||
+		imagePart.Image.Asset.MimeType != "image/png" {
+		t.Fatalf("unexpected image part: %+v", imagePart)
+	}
+}
+
 func TestInputPreparerPrepareImageInfersMimeWhenMissing(t *testing.T) {
 	t.Parallel()
 
@@ -182,6 +223,51 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 		preparer := NewInputPreparer(store, store)
 		if _, err := preparer.Prepare(context.Background(), PrepareInput{DefaultWorkdir: workdir}); err == nil {
 			t.Fatalf("expected empty content error")
+		}
+	})
+
+	t.Run("missing image reference is rejected", func(t *testing.T) {
+		preparer := NewInputPreparer(store, store)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "bad asset",
+			Images:         []PrepareImageInput{{AssetID: "  ", MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected missing image reference error")
+		}
+		if !strings.Contains(err.Error(), "image path is empty") {
+			t.Fatalf("expected image reference error, got %v", err)
+		}
+	})
+
+	t.Run("missing referenced asset is rejected", func(t *testing.T) {
+		localStore := newInputPreparerTestStore(t, workdir)
+		existing := NewWithWorkdir("asset-missing", workdir)
+		if err := createSessionForPreparerTest(context.Background(), localStore, existing); err != nil {
+			t.Fatalf("createSessionForPreparerTest() error = %v", err)
+		}
+		preparer := NewInputPreparer(localStore, localStore)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			SessionID:      existing.ID,
+			Text:           "bad asset",
+			Images:         []PrepareImageInput{{AssetID: "asset-missing", MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected missing referenced asset error")
+		}
+	})
+
+	t.Run("asset id and path cannot both be set", func(t *testing.T) {
+		preparer := NewInputPreparer(store, store)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "bad asset",
+			Images:         []PrepareImageInput{{Path: "a.png", AssetID: "asset-1", MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected asset id and path conflict error")
 		}
 	})
 
@@ -384,6 +470,92 @@ func TestInputPreparerPrepareImagePathAndMimeValidation(t *testing.T) {
 			t.Fatalf("expected mismatch error, got %v", err)
 		}
 	})
+
+	t.Run("declared mime params are normalized", func(t *testing.T) {
+		imagePath := filepath.Join(workdir, "declared-params.png")
+		if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+
+		result, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "declared params",
+			Images:         []PrepareImageInput{{Path: imagePath, MimeType: " IMAGE/PNG; charset=binary "}},
+			DefaultWorkdir: workdir,
+		})
+		if err != nil {
+			t.Fatalf("Prepare() error = %v", err)
+		}
+		if len(result.SavedAssets) != 1 || result.SavedAssets[0].MimeType != "image/png" {
+			t.Fatalf("unexpected saved assets: %+v", result.SavedAssets)
+		}
+	})
+
+	t.Run("declared non image mime is rejected", func(t *testing.T) {
+		imagePath := filepath.Join(workdir, "declared-text.png")
+		if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "declared text",
+			Images:         []PrepareImageInput{{Path: imagePath, MimeType: "text/plain"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected non-image mime error")
+		}
+		if !strings.Contains(err.Error(), "is not an image") {
+			t.Fatalf("expected non-image mime error, got %v", err)
+		}
+	})
+
+	t.Run("extension mismatch is rejected when mime omitted", func(t *testing.T) {
+		imagePath := filepath.Join(workdir, "wrong.jpg")
+		if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "extension mismatch",
+			Images:         []PrepareImageInput{{Path: imagePath}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected extension mismatch error")
+		}
+		if !strings.Contains(err.Error(), "file extension mime") {
+			t.Fatalf("expected extension mismatch error, got %v", err)
+		}
+	})
+}
+
+func TestInputPreparerPrepareSavedAssetReferenceValidation(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	store := newInputPreparerTestStore(t, workdir)
+	session := NewWithWorkdir("existing", workdir)
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("createSessionForPreparerTest() error = %v", err)
+	}
+	meta, err := store.SaveAsset(context.Background(), session.ID, bytes.NewReader(minimalPNGBytes()), "image/png")
+	if err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+
+	preparer := NewInputPreparer(store, store)
+	_, err = preparer.Prepare(context.Background(), PrepareInput{
+		SessionID:      session.ID,
+		Text:           "bad declared mime",
+		Images:         []PrepareImageInput{{AssetID: meta.ID, MimeType: "image/jpeg"}},
+		DefaultWorkdir: workdir,
+	})
+	if err == nil {
+		t.Fatalf("expected referenced asset mime mismatch")
+	}
+	if !strings.Contains(err.Error(), "mismatches saved asset") {
+		t.Fatalf("expected saved asset mismatch error, got %v", err)
+	}
 }
 
 func TestAssetSaveErrorMethods(t *testing.T) {

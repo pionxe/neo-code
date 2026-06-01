@@ -147,6 +147,14 @@ func (s *runtimePortCompileStub) CreateSession(_ context.Context, _ CreateSessio
 	return "", nil
 }
 
+func (s *runtimePortCompileStub) SaveSessionAsset(_ context.Context, _ SaveSessionAssetInput) (SessionAssetMeta, error) {
+	return SessionAssetMeta{}, nil
+}
+
+func (s *runtimePortCompileStub) OpenSessionAsset(_ context.Context, _ OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+	return OpenSessionAssetResult{}, nil
+}
+
 func (s *runtimePortCompileStub) ListCheckpoints(_ context.Context, _ ListCheckpointsInput) ([]CheckpointEntry, error) {
 	return nil, nil
 }

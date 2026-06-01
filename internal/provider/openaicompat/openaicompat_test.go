@@ -276,6 +276,46 @@ func TestEstimateInputTokensReturnsAdvisoryLocalEstimate(t *testing.T) {
 	}
 }
 
+func TestEstimateInputTokensWithImageUsesProjectedEstimate(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(resolvedConfig("", "gpt-4.1"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	reader := &singleUseSessionAssetReader{
+		assets: map[string]sessionAsset{
+			"asset-1": {data: []byte(strings.Repeat("x", 1024*1024)), mime: "image/png"},
+		},
+	}
+	estimate, err := p.EstimateInputTokens(context.Background(), providertypes.GenerateRequest{
+		Model: "gpt-4.1",
+		Messages: []providertypes.Message{{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("describe"),
+				providertypes.NewSessionAssetImagePart("asset-1", "image/png"),
+			},
+		}},
+		SessionAssetReader: reader,
+	})
+	if err != nil {
+		t.Fatalf("EstimateInputTokens() error = %v", err)
+	}
+	if reader.openCount != 0 {
+		t.Fatalf("expected estimate not to open session asset, got %d opens", reader.openCount)
+	}
+	if estimate.EstimatedInputTokens <= provider.DefaultImageInputTokenEstimate {
+		t.Fatalf("expected projected text+image estimate, got %+v", estimate)
+	}
+	if estimate.EstimatedInputTokens > 10_000 {
+		t.Fatalf("estimate counted base64 transport payload, got %+v", estimate)
+	}
+	if estimate.GatePolicy != provider.EstimateGateAdvisory {
+		t.Fatalf("gate policy = %q, want %q", estimate.GatePolicy, provider.EstimateGateAdvisory)
+	}
+}
+
 func TestEstimateThenGenerateReusesPreparedRequest(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 

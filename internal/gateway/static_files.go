@@ -16,6 +16,7 @@ var knownAPIPrefixes = map[string]bool{
 	"/healthz":      true,
 	"/version":      true,
 	"/rpc":          true,
+	"/api":          true,
 	"/ws":           true,
 	"/sse":          true,
 	"/metrics":      true,

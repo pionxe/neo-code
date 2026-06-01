@@ -2,10 +2,13 @@ package gateway
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +18,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"neo-code/internal/gateway/protocol"
+	agentsession "neo-code/internal/session"
 )
 
 func TestResolveNetworkListenAddress(t *testing.T) {
@@ -398,6 +402,293 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 			t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusForbidden)
 		}
 	})
+}
+
+func TestNetworkServerSessionAssetUploadAndRead(t *testing.T) {
+	payload := gatewayMinimalPNGBytes()
+	var capturedUpload SaveSessionAssetInput
+	runtimePort := &runtimePortEventStub{
+		saveAssetFn: func(_ context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error) {
+			capturedUpload = input
+			got, err := io.ReadAll(input.Reader)
+			if err != nil {
+				t.Fatalf("read uploaded asset: %v", err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatalf("uploaded payload mismatch")
+			}
+			return SessionAssetMeta{
+				SessionID: input.SessionID,
+				AssetID:   "asset-1",
+				MimeType:  input.MimeType,
+				Size:      int64(len(got)),
+			}, nil
+		},
+		openAssetFn: func(_ context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+			if input.SubjectID != "local_admin" || input.SessionID != "session-1" || input.AssetID != "asset-1" {
+				t.Fatalf("open input = %+v, want subject/session/asset", input)
+			}
+			return OpenSessionAssetResult{
+				Reader: io.NopCloser(bytes.NewReader(payload)),
+				Meta: SessionAssetMeta{
+					SessionID: input.SessionID,
+					AssetID:   input.AssetID,
+					MimeType:  "image/png",
+					Size:      int64(len(payload)),
+				},
+			}, nil
+		},
+	}
+	server := &NetworkServer{authenticator: staticTokenAuthenticator{token: "gateway-token"}}
+	handler := server.buildHandler(runtimePort)
+
+	uploadRequest := newSessionAssetUploadRequest(t, "session-1", "a.png", payload)
+	uploadRequest.Header.Set("Authorization", "Bearer gateway-token")
+	uploadRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(uploadRecorder, uploadRequest)
+	if uploadRecorder.Code != http.StatusOK {
+		t.Fatalf("upload status = %d body=%s", uploadRecorder.Code, uploadRecorder.Body.String())
+	}
+	var uploadResponse SessionAssetMeta
+	if err := json.Unmarshal(uploadRecorder.Body.Bytes(), &uploadResponse); err != nil {
+		t.Fatalf("decode upload response: %v", err)
+	}
+	if uploadResponse.AssetID != "asset-1" || uploadResponse.MimeType != "image/png" || uploadResponse.Size != int64(len(payload)) {
+		t.Fatalf("upload response = %+v", uploadResponse)
+	}
+	if capturedUpload.SubjectID != "local_admin" || capturedUpload.SessionID != "session-1" || capturedUpload.MimeType != "image/png" {
+		t.Fatalf("captured upload = %+v", capturedUpload)
+	}
+
+	readRequest := httptest.NewRequest(http.MethodGet, "/api/session-assets/session-1/asset-1", nil)
+	readRequest.Header.Set("Authorization", "Bearer gateway-token")
+	readRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(readRecorder, readRequest)
+	if readRecorder.Code != http.StatusOK {
+		t.Fatalf("read status = %d body=%s", readRecorder.Code, readRecorder.Body.String())
+	}
+	if got := readRecorder.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("read content-type = %q, want image/png", got)
+	}
+	if !bytes.Equal(readRecorder.Body.Bytes(), payload) {
+		t.Fatalf("read payload mismatch")
+	}
+}
+
+func TestNetworkServerSessionAssetsRespectHTTPACL(t *testing.T) {
+	deniedACL := &ControlPlaneACL{
+		mode:    ACLModeStrict,
+		allow:   map[RequestSource]map[string]struct{}{RequestSourceHTTP: {}},
+		enabled: true,
+	}
+	runtimePort := &runtimePortEventStub{
+		saveAssetFn: func(context.Context, SaveSessionAssetInput) (SessionAssetMeta, error) {
+			t.Fatal("SaveSessionAsset should not be called when ACL denies upload")
+			return SessionAssetMeta{}, nil
+		},
+		openAssetFn: func(context.Context, OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+			t.Fatal("OpenSessionAsset should not be called when ACL denies read")
+			return OpenSessionAssetResult{}, nil
+		},
+	}
+	server := &NetworkServer{
+		authenticator: staticTokenAuthenticator{token: "gateway-token"},
+		acl:           deniedACL,
+		metrics:       NewGatewayMetrics(),
+	}
+	handler := server.buildHandler(runtimePort)
+
+	uploadRequest := newSessionAssetUploadRequest(t, "session-1", "a.png", gatewayMinimalPNGBytes())
+	uploadRequest.Header.Set("Authorization", "Bearer gateway-token")
+	uploadRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(uploadRecorder, uploadRequest)
+	if uploadRecorder.Code != http.StatusForbidden {
+		t.Fatalf("upload status = %d body=%s, want %d", uploadRecorder.Code, uploadRecorder.Body.String(), http.StatusForbidden)
+	}
+
+	readRequest := httptest.NewRequest(http.MethodGet, "/api/session-assets/session-1/asset-1", nil)
+	readRequest.Header.Set("Authorization", "Bearer gateway-token")
+	readRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(readRecorder, readRequest)
+	if readRecorder.Code != http.StatusForbidden {
+		t.Fatalf("read status = %d body=%s, want %d", readRecorder.Code, readRecorder.Body.String(), http.StatusForbidden)
+	}
+}
+
+func TestNetworkServerSessionAssetWorkspaceHeader(t *testing.T) {
+	payload := gatewayMinimalPNGBytes()
+	runtimePort := &runtimePortEventStub{
+		saveAssetFn: func(ctx context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error) {
+			if got := WorkspaceHashFromContext(ctx); got != "workspace-b" {
+				t.Fatalf("upload workspace hash = %q, want workspace-b", got)
+			}
+			return SessionAssetMeta{
+				SessionID: input.SessionID,
+				AssetID:   "asset-1",
+				MimeType:  input.MimeType,
+				Size:      int64(len(payload)),
+			}, nil
+		},
+		openAssetFn: func(ctx context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+			if got := WorkspaceHashFromContext(ctx); got != "workspace-b" {
+				t.Fatalf("read workspace hash = %q, want workspace-b", got)
+			}
+			return OpenSessionAssetResult{
+				Reader: io.NopCloser(bytes.NewReader(payload)),
+				Meta: SessionAssetMeta{
+					SessionID: input.SessionID,
+					AssetID:   input.AssetID,
+					MimeType:  "image/png",
+					Size:      int64(len(payload)),
+				},
+			}, nil
+		},
+	}
+	server := &NetworkServer{authenticator: staticTokenAuthenticator{token: "gateway-token"}}
+	handler := server.buildHandler(runtimePort)
+
+	uploadRequest := newSessionAssetUploadRequest(t, "session-1", "a.png", payload)
+	uploadRequest.Header.Set("Authorization", "Bearer gateway-token")
+	uploadRequest.Header.Set(SessionAssetWorkspaceHeader, "workspace-b")
+	uploadRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(uploadRecorder, uploadRequest)
+	if uploadRecorder.Code != http.StatusOK {
+		t.Fatalf("upload status = %d body=%s", uploadRecorder.Code, uploadRecorder.Body.String())
+	}
+
+	readRequest := httptest.NewRequest(http.MethodGet, "/api/session-assets/session-1/asset-1", nil)
+	readRequest.Header.Set("Authorization", "Bearer gateway-token")
+	readRequest.Header.Set(SessionAssetWorkspaceHeader, "workspace-b")
+	readRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(readRecorder, readRequest)
+	if readRecorder.Code != http.StatusOK {
+		t.Fatalf("read status = %d body=%s", readRecorder.Code, readRecorder.Body.String())
+	}
+}
+
+func TestNetworkServerSessionAssetWorkspaceHeaderEmptyFallback(t *testing.T) {
+	runtimePort := &runtimePortEventStub{
+		saveAssetFn: func(ctx context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error) {
+			if got := WorkspaceHashFromContext(ctx); got != "" {
+				t.Fatalf("workspace hash = %q, want empty fallback", got)
+			}
+			return SessionAssetMeta{
+				SessionID: input.SessionID,
+				AssetID:   "asset-1",
+				MimeType:  input.MimeType,
+				Size:      int64(len(gatewayMinimalPNGBytes())),
+			}, nil
+		},
+	}
+	server := &NetworkServer{authenticator: staticTokenAuthenticator{token: "gateway-token"}}
+	handler := server.buildHandler(runtimePort)
+
+	request := newSessionAssetUploadRequest(t, "session-1", "a.png", gatewayMinimalPNGBytes())
+	request.Header.Set("Authorization", "Bearer gateway-token")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestNetworkServerSessionAssetUploadErrors(t *testing.T) {
+	runtimePort := &runtimePortEventStub{}
+	server := &NetworkServer{authenticator: staticTokenAuthenticator{token: "gateway-token"}}
+	handler := server.withCORS(server.buildHandler(runtimePort))
+
+	t.Run("unauthorized", func(t *testing.T) {
+		request := newSessionAssetUploadRequest(t, "session-1", "a.png", gatewayMinimalPNGBytes())
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("forbidden origin", func(t *testing.T) {
+		request := newSessionAssetUploadRequest(t, "session-1", "a.png", gatewayMinimalPNGBytes())
+		request.Header.Set("Authorization", "Bearer gateway-token")
+		request.Header.Set("Origin", "http://evil.example")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+		}
+	})
+
+	t.Run("non image", func(t *testing.T) {
+		request := newSessionAssetUploadRequest(t, "session-1", "bad.txt", []byte("not an image"))
+		request.Header.Set("Authorization", "Bearer gateway-token")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnsupportedMediaType {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnsupportedMediaType)
+		}
+	})
+
+	t.Run("empty file", func(t *testing.T) {
+		request := newSessionAssetUploadRequest(t, "session-1", "empty.png", nil)
+		request.Header.Set("Authorization", "Bearer gateway-token")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+		}
+	})
+
+	t.Run("oversized file", func(t *testing.T) {
+		request := newSessionAssetUploadRequest(
+			t,
+			"session-1",
+			"huge.png",
+			bytes.Repeat([]byte{0}, int(agentsession.MaxSessionAssetBytes)+1),
+		)
+		request.Header.Set("Authorization", "Bearer gateway-token")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+		}
+	})
+
+	t.Run("workspace not found", func(t *testing.T) {
+		runtimePort := &runtimePortEventStub{
+			saveAssetFn: func(context.Context, SaveSessionAssetInput) (SessionAssetMeta, error) {
+				return SessionAssetMeta{}, fmt.Errorf("%w: workspace missing not found", ErrRuntimeResourceNotFound)
+			},
+		}
+		handler := server.withCORS(server.buildHandler(runtimePort))
+		request := newSessionAssetUploadRequest(t, "session-1", "a.png", gatewayMinimalPNGBytes())
+		request.Header.Set("Authorization", "Bearer gateway-token")
+		request.Header.Set(SessionAssetWorkspaceHeader, "missing")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+		}
+		if !strings.Contains(recorder.Body.String(), "workspace not found") {
+			t.Fatalf("body = %s, want workspace not found", recorder.Body.String())
+		}
+	})
+}
+
+func TestNetworkServerSessionAssetReadNotFound(t *testing.T) {
+	runtimePort := &runtimePortEventStub{
+		openAssetFn: func(context.Context, OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+			return OpenSessionAssetResult{}, ErrRuntimeResourceNotFound
+		},
+	}
+	server := &NetworkServer{authenticator: staticTokenAuthenticator{token: "gateway-token"}}
+	handler := server.buildHandler(runtimePort)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/session-assets/session-1/missing", nil)
+	request.Header.Set("Authorization", "Bearer gateway-token")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
 }
 
 func TestNetworkServerWebSocketAndSSEPing(t *testing.T) {
@@ -1320,6 +1611,45 @@ type noFlushResponseWriter struct {
 	header http.Header
 	status int
 	body   strings.Builder
+}
+
+func newSessionAssetUploadRequest(t *testing.T, sessionID, fileName string, payload []byte) *http.Request {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if sessionID != "" {
+		if err := writer.WriteField("session_id", sessionID); err != nil {
+			t.Fatalf("write session_id field: %v", err)
+		}
+	}
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		t.Fatalf("create file part: %v", err)
+	}
+	if _, err := part.Write(payload); err != nil {
+		t.Fatalf("write file part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/session-assets", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+func gatewayMinimalPNGBytes() []byte {
+	return []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
+		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+		0x44, 0xae, 0x42, 0x60, 0x82,
+	}
 }
 
 type staticTokenAuthenticator struct {

@@ -189,6 +189,20 @@ func (s *urlschemeIntegrationRuntimeStub) CreateSession(
 	return strings.TrimSpace("session-review-integration"), nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) SaveSessionAsset(
+	context.Context,
+	gateway.SaveSessionAssetInput,
+) (gateway.SessionAssetMeta, error) {
+	return gateway.SessionAssetMeta{}, nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) OpenSessionAsset(
+	context.Context,
+	gateway.OpenSessionAssetInput,
+) (gateway.OpenSessionAssetResult, error) {
+	return gateway.OpenSessionAssetResult{}, nil
+}
+
 func (s *urlschemeIntegrationRuntimeStub) ListSessionTodos(
 	context.Context,
 	gateway.ListSessionTodosInput,

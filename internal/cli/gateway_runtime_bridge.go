@@ -697,6 +697,66 @@ func (b *gatewayRuntimePortBridge) CreateSession(ctx context.Context, input gate
 	return strings.TrimSpace(session.ID), nil
 }
 
+// SaveSessionAsset 将浏览器上传的附件保存到当前工作区的 session asset store。
+func (b *gatewayRuntimePortBridge) SaveSessionAsset(
+	ctx context.Context,
+	input gateway.SaveSessionAssetInput,
+) (gateway.SessionAssetMeta, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.SessionAssetMeta{}, err
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return gateway.SessionAssetMeta{}, gateway.ErrRuntimeResourceNotFound
+	}
+	assetStore, ok := b.sessionStore.(agentsession.AssetStore)
+	if !ok || assetStore == nil {
+		return gateway.SessionAssetMeta{}, fmt.Errorf("gateway runtime bridge: session asset store is unavailable")
+	}
+	meta, err := assetStore.SaveAsset(ctx, sessionID, input.Reader, strings.TrimSpace(input.MimeType))
+	if err != nil {
+		return gateway.SessionAssetMeta{}, err
+	}
+	return gateway.SessionAssetMeta{
+		SessionID: sessionID,
+		AssetID:   strings.TrimSpace(meta.ID),
+		MimeType:  strings.TrimSpace(meta.MimeType),
+		Size:      meta.Size,
+	}, nil
+}
+
+// OpenSessionAsset 打开当前工作区的会话附件，供 Gateway HTTP 读取端点流式返回。
+func (b *gatewayRuntimePortBridge) OpenSessionAsset(
+	ctx context.Context,
+	input gateway.OpenSessionAssetInput,
+) (gateway.OpenSessionAssetResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.OpenSessionAssetResult{}, err
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	assetID := strings.TrimSpace(input.AssetID)
+	if sessionID == "" || assetID == "" {
+		return gateway.OpenSessionAssetResult{}, gateway.ErrRuntimeResourceNotFound
+	}
+	assetStore, ok := b.sessionStore.(agentsession.AssetStore)
+	if !ok || assetStore == nil {
+		return gateway.OpenSessionAssetResult{}, fmt.Errorf("gateway runtime bridge: session asset store is unavailable")
+	}
+	reader, meta, err := assetStore.Open(ctx, sessionID, assetID)
+	if err != nil {
+		return gateway.OpenSessionAssetResult{}, err
+	}
+	return gateway.OpenSessionAssetResult{
+		Reader: reader,
+		Meta: gateway.SessionAssetMeta{
+			SessionID: sessionID,
+			AssetID:   strings.TrimSpace(meta.ID),
+			MimeType:  strings.TrimSpace(meta.MimeType),
+			Size:      meta.Size,
+		},
+	}, nil
+}
+
 // DeleteSession 删除/归档指定会话。
 func (b *gatewayRuntimePortBridge) DeleteSession(ctx context.Context, input gateway.DeleteSessionInput) (bool, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
@@ -1684,11 +1744,13 @@ func convertGatewayRunInput(input gateway.RunInput) agentruntime.PrepareInput {
 				continue
 			}
 			path := strings.TrimSpace(part.Media.URI)
-			if path == "" {
+			assetID := strings.TrimSpace(part.Media.AssetID)
+			if path == "" && assetID == "" {
 				continue
 			}
 			images = append(images, agentruntime.UserImageInput{
 				Path:     path,
+				AssetID:  assetID,
 				MimeType: strings.TrimSpace(part.Media.MimeType),
 			})
 		}
@@ -1867,6 +1929,7 @@ func convertSessionMessages(messages []providertypes.Message) []gateway.SessionM
 		convertedMessage := gateway.SessionMessage{
 			Role:       strings.TrimSpace(message.Role),
 			Content:    renderSessionMessageContent(message.Parts),
+			Parts:      convertProviderContentParts(message.Parts),
 			ToolCallID: strings.TrimSpace(message.ToolCallID),
 			IsError:    message.IsError,
 		}
@@ -1881,6 +1944,52 @@ func convertSessionMessages(messages []providertypes.Message) []gateway.SessionM
 			}
 		}
 		converted = append(converted, convertedMessage)
+	}
+	return converted
+}
+
+// convertProviderContentParts 将 provider 通用内容分片转换为 Gateway 会话快照分片。
+func convertProviderContentParts(parts []providertypes.ContentPart) []gateway.InputPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	converted := make([]gateway.InputPart, 0, len(parts))
+	for _, part := range parts {
+		switch part.Kind {
+		case providertypes.ContentPartText:
+			if text := strings.TrimSpace(part.Text); text != "" {
+				converted = append(converted, gateway.InputPart{
+					Type: gateway.InputPartTypeText,
+					Text: text,
+				})
+			}
+		case providertypes.ContentPartImage:
+			if part.Image == nil {
+				continue
+			}
+			switch part.Image.SourceType {
+			case providertypes.ImageSourceSessionAsset:
+				if part.Image.Asset == nil || strings.TrimSpace(part.Image.Asset.ID) == "" {
+					continue
+				}
+				converted = append(converted, gateway.InputPart{
+					Type: gateway.InputPartTypeImage,
+					Media: &gateway.Media{
+						AssetID:  strings.TrimSpace(part.Image.Asset.ID),
+						MimeType: strings.TrimSpace(part.Image.Asset.MimeType),
+					},
+				})
+			case providertypes.ImageSourceRemote:
+				if url := strings.TrimSpace(part.Image.URL); url != "" {
+					converted = append(converted, gateway.InputPart{
+						Type: gateway.InputPartTypeImage,
+						Media: &gateway.Media{
+							URI: url,
+						},
+					})
+				}
+			}
+		}
 	}
 	return converted
 }

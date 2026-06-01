@@ -11,6 +11,7 @@ export const Method = {
   Ping: "gateway.ping",
   BindStream: "gateway.bindStream",
   Run: "gateway.run",
+  CreateSession: "gateway.createSession",
   Cancel: "gateway.cancel",
   Compact: "gateway.compact",
   ListSessions: "gateway.listSessions",
@@ -234,8 +235,14 @@ export interface RunParams {
 export interface RunInputPart {
   type: string;
   text?: string;
-  media?: { uri: string; mime_type: string; file_name?: string };
+  media?: { uri?: string; asset_id?: string; mime_type: string; file_name?: string };
 }
+
+export interface CreateSessionParams {
+  session_id?: string;
+}
+
+export type CreateSessionResult = RPCResult<{ session_id: string }>;
 
 /** gateway.cancel 参数 */
 export interface CancelParams {
@@ -307,9 +314,17 @@ export interface SessionSummary {
 export interface SessionMessage {
   role: string;
   content: string;
+  parts?: RunInputPart[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   is_error?: boolean;
+}
+
+export interface SessionAssetUploadResult {
+  session_id: string;
+  asset_id: string;
+  mime_type: string;
+  size: number;
 }
 
 /** 工具调用 */

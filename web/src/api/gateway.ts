@@ -5,6 +5,8 @@ import {
   type AuthenticateParams,
   type BindStreamParams,
   type RunParams,
+  type CreateSessionParams,
+  type CreateSessionResult,
   type CancelParams,
   type LoadSessionParams,
   type ListSessionTodosParams,
@@ -73,14 +75,20 @@ import {
   type RenameWorkspaceResult,
   type DeleteWorkspaceParams,
   type DeleteWorkspaceResult,
+  type SessionAssetUploadResult,
 } from './protocol'
 
 /** Gateway 业务 API 客户端，基于 WebSocket 全双工通道 */
 export class GatewayAPI {
   private ws: WSClient
+  private baseURL: string
+  private token: string
+  private currentWorkspaceHash = ''
 
-  constructor(ws: WSClient) {
+  constructor(ws: WSClient, baseURL = '', token = '') {
     this.ws = ws
+    this.baseURL = baseURL.replace(/\/+$/, '')
+    this.token = token.trim()
   }
 
   /** 认证，返回 ack 结果 */
@@ -93,9 +101,43 @@ export class GatewayAPI {
     return this.ws.call(Method.BindStream, params)
   }
 
+  /** 显式创建一个会话，供发送图片前建立 asset 归属 */
+  async createSession(sessionId?: string) {
+    const params: CreateSessionParams = sessionId ? { session_id: sessionId } : {}
+    return this.ws.call<CreateSessionResult>(Method.CreateSession, params)
+  }
+
   /** 发起一次 run，返回 ack 含 session_id 和 run_id */
   async run(params: RunParams) {
     return this.ws.call<RunAckResult>(Method.Run, params)
+  }
+
+  /** 上传会话图片附件，返回可在 input_parts 中引用的 asset_id */
+  async uploadSessionAsset(sessionId: string, file: File, workspaceHash = '') {
+    const form = new FormData()
+    form.append('session_id', sessionId)
+    form.append('file', file)
+    const res = await fetch(`${this.baseURL}/api/session-assets`, {
+      method: 'POST',
+      headers: this.httpHeaders(workspaceHash),
+      body: form,
+    })
+    if (!res.ok) {
+      throw new Error(await readHTTPError(res, 'Upload failed'))
+    }
+    return res.json() as Promise<SessionAssetUploadResult>
+  }
+
+  /** 读取会话图片附件 Blob，用于历史消息缩略图 */
+  async fetchSessionAsset(sessionId: string, assetId: string, workspaceHash = '') {
+    const res = await fetch(
+      `${this.baseURL}/api/session-assets/${encodeURIComponent(sessionId)}/${encodeURIComponent(assetId)}`,
+      { headers: this.httpHeaders(workspaceHash) },
+    )
+    if (!res.ok) {
+      throw new Error(await readHTTPError(res, 'Asset fetch failed'))
+    }
+    return res.blob()
   }
 
   /** 取消运行，返回取消结果 */
@@ -290,7 +332,9 @@ export class GatewayAPI {
 
   /** 切换工作区 */
   async switchWorkspace(workspaceHash: string) {
-    return this.ws.call<SwitchWorkspaceResult>(Method.SwitchWorkspace, { workspace_hash: workspaceHash } satisfies SwitchWorkspaceParams)
+    const result = await this.ws.call<SwitchWorkspaceResult>(Method.SwitchWorkspace, { workspace_hash: workspaceHash } satisfies SwitchWorkspaceParams)
+    this.currentWorkspaceHash = workspaceHash.trim()
+    return result
   }
 
   /** 重命名工作区 */
@@ -302,4 +346,21 @@ export class GatewayAPI {
   async deleteWorkspace(workspaceHash: string, removeData?: boolean) {
     return this.ws.call<DeleteWorkspaceResult>(Method.DeleteWorkspace, { workspace_hash: workspaceHash, remove_data: removeData } satisfies DeleteWorkspaceParams)
   }
+
+  getCurrentWorkspaceHash() {
+    return this.currentWorkspaceHash
+  }
+
+  private httpHeaders(workspaceHash = '') {
+    const headers: Record<string, string> = {}
+    if (this.token) headers.Authorization = `Bearer ${this.token}`
+    const resolvedWorkspaceHash = workspaceHash.trim() || this.currentWorkspaceHash
+    if (resolvedWorkspaceHash) headers['X-NeoCode-Workspace-Hash'] = resolvedWorkspaceHash
+    return Object.keys(headers).length > 0 ? headers : undefined
+  }
+}
+
+async function readHTTPError(res: Response, fallback: string) {
+  const data = await res.json().catch(() => null) as { error?: string } | null
+  return data?.error || `${fallback} (HTTP ${res.status})`
 }

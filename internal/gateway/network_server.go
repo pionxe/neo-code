@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"neo-code/internal/gateway/protocol"
+	agentsession "neo-code/internal/session"
 )
 
 const (
@@ -40,6 +42,8 @@ const (
 	DefaultNetworkMaxStreamConnections = 128
 	// DefaultWSUnauthenticatedTimeout 定义 WS 未认证连接的最大等待时间。
 	DefaultWSUnauthenticatedTimeout = 3 * time.Second
+	// SessionAssetWorkspaceHeader 定义 Web 上传/读取会话附件时携带当前工作区的 HTTP Header。
+	SessionAssetWorkspaceHeader = "X-NeoCode-Workspace-Hash"
 )
 
 var (
@@ -367,6 +371,12 @@ func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 	mux.HandleFunc("/rpc", func(writer http.ResponseWriter, request *http.Request) {
 		s.handleRPCRequest(writer, request, runtimePort)
 	})
+	mux.HandleFunc("/api/session-assets", func(writer http.ResponseWriter, request *http.Request) {
+		s.handleSessionAssetUpload(writer, request, runtimePort)
+	})
+	mux.HandleFunc("/api/session-assets/", func(writer http.ResponseWriter, request *http.Request) {
+		s.handleSessionAssetRead(writer, request, runtimePort)
+	})
 	mux.Handle("/ws", websocket.Server{
 		Handshake: func(_ *websocket.Config, request *http.Request) error {
 			return s.validateWebSocketOrigin(request)
@@ -385,6 +395,241 @@ func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 		return WithStaticFileHandler(mux, s.staticFileDir, s.logger)
 	}
 	return mux
+}
+
+// handleSessionAssetUpload 接收浏览器上传图片，并保存为当前会话的 session asset。
+func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, request *http.Request, runtimePort RuntimePort) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	subjectID, ok := s.authenticatedHTTPSubjectID(request)
+	if !ok {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.isHTTPControlPlaneMethodAllowed(sessionAssetUploadMethod) {
+		s.writeHTTPAccessDenied(writer, sessionAssetUploadMethod)
+		return
+	}
+	if runtimePort == nil {
+		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "runtime unavailable"})
+		return
+	}
+
+	limit := agentsession.MaxSessionAssetBytes
+	request.Body = http.MaxBytesReader(writer, request.Body, limit+(1<<20))
+	if err := request.ParseMultipartForm(limit + 4096); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "too large") {
+			writeJSONResponse(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": "asset is too large"})
+			return
+		}
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]string{"error": "invalid multipart form"})
+		return
+	}
+
+	sessionID := strings.TrimSpace(request.FormValue("session_id"))
+	if sessionID == "" {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	file, _, err := request.FormFile("file")
+	if err != nil {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]string{"error": "file is required"})
+		return
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	payload, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]string{"error": "read uploaded file failed"})
+		return
+	}
+	if len(payload) == 0 {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]string{"error": "file is empty"})
+		return
+	}
+	if int64(len(payload)) > limit {
+		writeJSONResponse(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": "asset is too large"})
+		return
+	}
+
+	mimeType := detectAllowedUploadImageMime(payload)
+	if mimeType == "" {
+		writeJSONResponse(writer, http.StatusUnsupportedMediaType, map[string]string{"error": "unsupported image type"})
+		return
+	}
+
+	meta, err := runtimePort.SaveSessionAsset(sessionAssetRequestContext(request), SaveSessionAssetInput{
+		SubjectID: subjectID,
+		SessionID: sessionID,
+		Reader:    bytes.NewReader(payload),
+		MimeType:  mimeType,
+	})
+	if err != nil {
+		writeSessionAssetUploadHTTPError(writer, err)
+		return
+	}
+	writeJSONResponse(writer, http.StatusOK, meta)
+}
+
+// handleSessionAssetRead 读取会话图片附件，供 Web 历史消息缩略图展示。
+func (s *NetworkServer) handleSessionAssetRead(writer http.ResponseWriter, request *http.Request, runtimePort RuntimePort) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	subjectID, ok := s.authenticatedHTTPSubjectID(request)
+	if !ok {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.isHTTPControlPlaneMethodAllowed(sessionAssetReadMethod) {
+		s.writeHTTPAccessDenied(writer, sessionAssetReadMethod)
+		return
+	}
+	if runtimePort == nil {
+		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "runtime unavailable"})
+		return
+	}
+
+	sessionID, assetID, ok := parseSessionAssetPath(request.URL.Path)
+	if !ok {
+		http.NotFound(writer, request)
+		return
+	}
+	result, err := runtimePort.OpenSessionAsset(sessionAssetRequestContext(request), OpenSessionAssetInput{
+		SubjectID: subjectID,
+		SessionID: sessionID,
+		AssetID:   assetID,
+	})
+	if err != nil {
+		writeSessionAssetReadHTTPError(writer, err)
+		return
+	}
+	defer func() {
+		_ = result.Reader.Close()
+	}()
+
+	writer.Header().Set("Content-Type", result.Meta.MimeType)
+	if result.Meta.Size > 0 {
+		writer.Header().Set("Content-Length", strconv.FormatInt(result.Meta.Size, 10))
+	}
+	writer.Header().Set("Cache-Control", "private, max-age=300")
+	_, _ = io.Copy(writer, result.Reader)
+}
+
+// sessionAssetRequestContext 将 HTTP Header 中的工作区哈希注入请求上下文，供多工作区 Runtime 路由。
+func sessionAssetRequestContext(request *http.Request) context.Context {
+	if request == nil {
+		return context.Background()
+	}
+	workspaceHash := strings.TrimSpace(request.Header.Get(SessionAssetWorkspaceHeader))
+	if workspaceHash == "" {
+		return request.Context()
+	}
+	state := NewConnectionWorkspaceState()
+	state.SetWorkspaceHash(workspaceHash)
+	return WithConnectionWorkspaceState(request.Context(), state)
+}
+
+// authenticatedHTTPSubjectID 校验 HTTP Bearer Token 并返回主体标识。
+func (s *NetworkServer) authenticatedHTTPSubjectID(request *http.Request) (string, bool) {
+	if s.authenticator == nil {
+		return "", false
+	}
+	token := extractBearerToken(request.Header.Get("Authorization"))
+	subjectID, ok := s.authenticator.ResolveSubjectID(token)
+	if !ok || strings.TrimSpace(subjectID) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(subjectID), true
+}
+
+// isHTTPControlPlaneMethodAllowed 按 HTTP 来源复用控制面 ACL，覆盖非 JSON-RPC 的 HTTP 端点。
+func (s *NetworkServer) isHTTPControlPlaneMethodAllowed(method string) bool {
+	if s == nil || s.acl == nil {
+		return true
+	}
+	return s.acl.IsAllowed(RequestSourceHTTP, method)
+}
+
+// writeHTTPAccessDenied 记录 HTTP 端点 ACL 拒绝并返回统一的 403 JSON 响应。
+func (s *NetworkServer) writeHTTPAccessDenied(writer http.ResponseWriter, method string) {
+	if s != nil && s.metrics != nil {
+		s.metrics.IncACLDenied(string(RequestSourceHTTP), method)
+	}
+	writeJSONResponse(writer, http.StatusForbidden, map[string]string{"error": "access denied"})
+}
+
+// detectAllowedUploadImageMime 用文件头确认上传图片类型，只允许 PNG/JPEG/WebP。
+func detectAllowedUploadImageMime(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	probe := payload
+	if len(probe) > 512 {
+		probe = probe[:512]
+	}
+	mimeType := strings.ToLower(strings.TrimSpace(http.DetectContentType(probe)))
+	switch mimeType {
+	case "image/png", "image/jpeg", "image/webp":
+		return mimeType
+	default:
+		return ""
+	}
+}
+
+// parseSessionAssetPath 从 /api/session-assets/{session_id}/{asset_id} 提取路径参数。
+func parseSessionAssetPath(rawPath string) (string, string, bool) {
+	cleanPath := path.Clean("/" + strings.TrimSpace(rawPath))
+	const prefix = "/api/session-assets/"
+	if !strings.HasPrefix(cleanPath, prefix) {
+		return "", "", false
+	}
+	parts := strings.Split(strings.TrimPrefix(cleanPath, prefix), "/")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	sessionID := strings.TrimSpace(parts[0])
+	assetID := strings.TrimSpace(parts[1])
+	return sessionID, assetID, sessionID != "" && assetID != ""
+}
+
+// writeSessionAssetUploadHTTPError 将上传阶段的下游错误映射为明确 HTTP 状态。
+func writeSessionAssetUploadHTTPError(writer http.ResponseWriter, err error) {
+	writeSessionAssetHTTPError(writer, err, "session not found")
+}
+
+// writeSessionAssetReadHTTPError 将读取阶段的下游错误映射为明确 HTTP 状态。
+func writeSessionAssetReadHTTPError(writer http.ResponseWriter, err error) {
+	writeSessionAssetHTTPError(writer, err, "asset not found")
+}
+
+// writeSessionAssetHTTPError 将下游附件错误映射为明确 HTTP 状态。
+func writeSessionAssetHTTPError(writer http.ResponseWriter, err error, notFoundMessage string) {
+	if err == nil {
+		writeJSONResponse(writer, http.StatusInternalServerError, map[string]string{"error": "unknown asset error"})
+		return
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "workspace") && strings.Contains(message, "not found"):
+		writeJSONResponse(writer, http.StatusNotFound, map[string]string{"error": "workspace not found"})
+	case errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrRuntimeResourceNotFound):
+		writeJSONResponse(writer, http.StatusNotFound, map[string]string{"error": notFoundMessage})
+	case strings.Contains(message, "asset size exceeds"):
+		writeJSONResponse(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+	case strings.Contains(message, "unsupported") || strings.Contains(message, "not an image"):
+		writeJSONResponse(writer, http.StatusUnsupportedMediaType, map[string]string{"error": err.Error()})
+	case strings.Contains(message, "access denied"):
+		writeJSONResponse(writer, http.StatusForbidden, map[string]string{"error": "access denied"})
+	default:
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
 }
 
 // withCORS 为网络入口注入 CORS 头，仅对白名单 Origin 回显允许值。
@@ -406,7 +651,7 @@ func (s *NetworkServer) withCORS(next http.Handler) http.Handler {
 		}
 
 		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+SessionAssetWorkspaceHeader)
 		if request.Method == http.MethodOptions {
 			writer.WriteHeader(http.StatusNoContent)
 			return

@@ -148,6 +148,7 @@ func (p sessionInputPreparer) Prepare(
 	for _, image := range input.Images {
 		sessionImages = append(sessionImages, agentsession.PrepareImageInput{
 			Path:     strings.TrimSpace(image.Path),
+			AssetID:  strings.TrimSpace(image.AssetID),
 			MimeType: strings.TrimSpace(image.MimeType),
 		})
 	}

@@ -6,10 +6,13 @@ import { useComposerStore } from '@/stores/useComposerStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 const mockGatewayAPI = {
   listAvailableSkills: vi.fn(),
   listModels: vi.fn(),
+  createSession: vi.fn(),
+  uploadSessionAsset: vi.fn(),
   run: vi.fn(),
   bindStream: vi.fn(),
   cancel: vi.fn(),
@@ -68,9 +71,23 @@ describe('ChatInput', () => {
         selected_model_id: '',
       },
     })
+    mockGatewayAPI.createSession.mockResolvedValue({ payload: { session_id: 'session-created' } })
+    mockGatewayAPI.uploadSessionAsset.mockResolvedValue({
+      session_id: 'session-created',
+      asset_id: 'asset-1',
+      mime_type: 'image/png',
+      size: 3,
+    })
+    mockGatewayAPI.run.mockResolvedValue({ session_id: 'session-created', run_id: 'run-1' })
+    mockGatewayAPI.bindStream.mockResolvedValue({})
+    if (typeof URL.createObjectURL !== 'function') {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn() })
+    }
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview-1')
 
-    useComposerStore.setState({ composerText: '' })
+    useComposerStore.setState({ composerText: '', attachments: [] })
     useSessionStore.setState({ currentSessionId: '' } as never)
+    useWorkspaceStore.setState({ currentWorkspaceHash: 'workspace-b' } as never)
     useGatewayStore.setState({ currentRunId: '' } as never)
     useRuntimeInsightStore.getState().reset()
     useChatStore.setState({
@@ -157,11 +174,71 @@ describe('ChatInput', () => {
     })
   })
 
-  it('does not render the unimplemented attachment and mention buttons', () => {
+  it('renders the image attachment picker but keeps mention button absent', () => {
     render(<ChatInput />)
 
-    expect(screen.queryByTitle('附件文件')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /添加图片/ })).toBeInTheDocument()
     expect(screen.queryByTitle('引用上下文')).not.toBeInTheDocument()
+  })
+
+  it('uploads selected image and sends image-only input parts after creating a session', async () => {
+    render(<ChatInput />)
+
+    const file = new File(['img'], 'a.png', { type: 'image/png' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => {
+      expect(screen.getByAltText('a.png')).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.createSession).toHaveBeenCalled()
+      expect(mockGatewayAPI.uploadSessionAsset).toHaveBeenCalledWith('session-created', file, 'workspace-b')
+      expect(mockGatewayAPI.run).toHaveBeenCalledWith({
+        session_id: 'session-created',
+        input_parts: [
+          { type: 'image', media: { asset_id: 'asset-1', mime_type: 'image/png', file_name: 'a.png' } },
+        ],
+        mode: 'build',
+      })
+    })
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      role: 'user',
+      attachments: [{ assetId: 'asset-1', previewUrl: 'blob:preview-1', workspaceHash: 'workspace-b' }],
+    })
+  })
+
+  it('treats slash text as a normal message when an image is attached', async () => {
+    useSessionStore.setState({ currentSessionId: 'session-1' } as never)
+    mockGatewayAPI.uploadSessionAsset.mockResolvedValueOnce({
+      session_id: 'session-1',
+      asset_id: 'asset-2',
+      mime_type: 'image/png',
+      size: 3,
+    })
+    render(<ChatInput />)
+
+    const file = new File(['img'], 'slash.png', { type: 'image/png' })
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(fileInput, { target: { files: [file] } })
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/memo' } })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.executeSystemTool).not.toHaveBeenCalled()
+      expect(mockGatewayAPI.uploadSessionAsset).toHaveBeenCalledWith('session-1', file, 'workspace-b')
+      expect(mockGatewayAPI.run).toHaveBeenCalledWith(expect.objectContaining({
+        session_id: 'session-1',
+        input_parts: [
+          { type: 'text', text: '/memo' },
+          { type: 'image', media: { asset_id: 'asset-2', mime_type: 'image/png', file_name: 'slash.png' } },
+        ],
+      }))
+    })
   })
   it('blocks normal sends while compaction is running', async () => {
     useChatStore.getState().startCompacting('manual', 'Compacting context...')

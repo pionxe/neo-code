@@ -250,6 +250,7 @@ const (
 // RunInputMedia 用于承载 gateway.run 中图片分片的媒体元数据。
 type RunInputMedia struct {
 	URI      string `json:"uri"`
+	AssetID  string `json:"asset_id,omitempty"`
 	MimeType string `json:"mime_type"`
 	FileName string `json:"file_name,omitempty"`
 }
@@ -1402,6 +1403,7 @@ func decodeRunParams(raw json.RawMessage) (RunParams, *JSONRPCError) {
 				p.InputParts[i].Text = strings.TrimSpace(p.InputParts[i].Text)
 				if m := p.InputParts[i].Media; m != nil {
 					m.URI = strings.TrimSpace(m.URI)
+					m.AssetID = strings.TrimSpace(m.AssetID)
 					m.MimeType = strings.TrimSpace(m.MimeType)
 					m.FileName = strings.TrimSpace(m.FileName)
 				}

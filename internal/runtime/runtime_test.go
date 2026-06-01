@@ -6374,6 +6374,90 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateAdvisory(t *testing.T)
 	}
 }
 
+func TestServiceRunAllowsImageRequestWithinProjectedBudget(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 5000
+		cfg.Context.Budget.FallbackPromptBudget = 5000
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			tokens, err := provider.EstimateProjectedInputTokens(req, provider.ResolveRequestModel(req, "gpt-4.1"))
+			if err != nil {
+				return providertypes.BudgetEstimate{}, err
+			}
+			return providertypes.BudgetEstimate{
+				EstimatedInputTokens: tokens,
+				EstimateSource:       provider.EstimateSourceLocal,
+				GatePolicy:           provider.EstimateGateAdvisory,
+			}, nil
+		},
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("图片已收到")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{}
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-image-allow",
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart("describe"),
+			providertypes.NewSessionAssetImagePart("asset-1", "image/png"),
+		},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if scripted.callCount != 1 {
+		t.Fatalf("expected provider Generate to be called once, got %d", scripted.callCount)
+	}
+	if compactRunner := service.compactRunner.(*stubCompactRunner); len(compactRunner.calls) != 0 {
+		t.Fatalf("expected no proactive compact for projected image estimate, got %d calls", len(compactRunner.calls))
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	var budgetPayload *BudgetCheckedPayload
+	for _, event := range events {
+		if event.Type != EventBudgetChecked {
+			continue
+		}
+		payload, ok := event.Payload.(BudgetCheckedPayload)
+		if !ok {
+			t.Fatalf("expected BudgetCheckedPayload, got %T", event.Payload)
+		}
+		budgetPayload = &payload
+		break
+	}
+	if budgetPayload == nil {
+		t.Fatalf("expected budget_checked event, got %+v", events)
+	}
+	if budgetPayload.Action != string(controlplane.TurnBudgetActionAllow) ||
+		budgetPayload.Reason != controlplane.BudgetDecisionReasonWithinBudget {
+		t.Fatalf("unexpected budget decision: %+v", budgetPayload)
+	}
+	if budgetPayload.EstimatedInputTokens <= provider.DefaultImageInputTokenEstimate ||
+		budgetPayload.EstimatedInputTokens >= budgetPayload.PromptBudget {
+		t.Fatalf("unexpected projected image estimate: %+v", budgetPayload)
+	}
+}
+
 func TestServiceRunStopsAfterNoOpProactiveCompactWhenEstimateGateable(t *testing.T) {
 	t.Parallel()
 

@@ -28,6 +28,8 @@ type recordingPort struct {
 	approvePlanCalls  atomic.Int32
 	resolveUserCalls  atomic.Int32
 	cancelCalls       atomic.Int32
+	saveAssetCalls    atomic.Int32
+	openAssetCalls    atomic.Int32
 	closed            atomic.Int32
 	closeOnce         sync.Once
 
@@ -133,6 +135,16 @@ func (p *recordingPort) GetRuntimeSnapshot(_ context.Context, _ GetRuntimeSnapsh
 
 func (p *recordingPort) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
 	return p.id, nil
+}
+
+func (p *recordingPort) SaveSessionAsset(_ context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error) {
+	p.saveAssetCalls.Add(1)
+	return SessionAssetMeta{SessionID: input.SessionID, AssetID: p.id, MimeType: input.MimeType}, nil
+}
+
+func (p *recordingPort) OpenSessionAsset(_ context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error) {
+	p.openAssetCalls.Add(1)
+	return OpenSessionAssetResult{Meta: SessionAssetMeta{SessionID: input.SessionID, AssetID: input.AssetID}}, nil
 }
 
 func (p *recordingPort) DeleteSession(_ context.Context, _ DeleteSessionInput) (bool, error) {
@@ -783,6 +795,12 @@ func TestMultiWorkspaceRuntime_RoutingMatrix(t *testing.T) {
 	if _, err := mw.ExecuteSystemTool(alphaCtx, ExecuteSystemToolInput{}); err != nil {
 		t.Fatalf("ExecuteSystemTool alpha: %v", err)
 	}
+	if _, err := mw.SaveSessionAsset(betaCtx, SaveSessionAssetInput{SessionID: "s-1", MimeType: "image/png"}); err != nil {
+		t.Fatalf("SaveSessionAsset beta: %v", err)
+	}
+	if _, err := mw.OpenSessionAsset(alphaCtx, OpenSessionAssetInput{SessionID: "s-1", AssetID: "asset-1"}); err != nil {
+		t.Fatalf("OpenSessionAsset alpha: %v", err)
+	}
 
 	alphaPort := builder.portFor(alpha.Path)
 	betaPort := builder.portFor(beta.Path)
@@ -800,6 +818,12 @@ func TestMultiWorkspaceRuntime_RoutingMatrix(t *testing.T) {
 	}
 	if got := alphaPort.executeSysCalls.Load(); got != 1 {
 		t.Fatalf("alpha ExecuteSystemTool calls = %d, want 1", got)
+	}
+	if got := betaPort.saveAssetCalls.Load(); got != 1 {
+		t.Fatalf("beta SaveSessionAsset calls = %d, want 1", got)
+	}
+	if got := alphaPort.openAssetCalls.Load(); got != 1 {
+		t.Fatalf("alpha OpenSessionAsset calls = %d, want 1", got)
 	}
 }
 
