@@ -217,6 +217,9 @@ func TestHookPointCapabilities(t *testing.T) {
 	if !capability.CanBlock {
 		t.Fatal("before_permission_decision should allow block")
 	}
+	if !capability.Matcher.ToolName || !capability.Matcher.ToolNameRegex {
+		t.Fatal("before_permission_decision should support tool_name/tool_name_regex matcher")
+	}
 
 	capability, ok = HookPointCapabilities(HookPointAfterToolFailure)
 	if !ok {
@@ -224,6 +227,9 @@ func TestHookPointCapabilities(t *testing.T) {
 	}
 	if capability.CanBlock {
 		t.Fatal("after_tool_failure should be observe-only")
+	}
+	if !capability.Matcher.ArgumentsContains {
+		t.Fatal("after_tool_failure should support arguments_contains matcher")
 	}
 
 	capability, ok = HookPointCapabilities(HookPointBeforeCompletionDecision)
@@ -240,6 +246,9 @@ func TestHookPointCapabilities(t *testing.T) {
 	}
 	if !capability.CanBlock {
 		t.Fatal("accept_gate should allow block")
+	}
+	if capability.Matcher.ToolName || capability.Matcher.ToolNameRegex || capability.Matcher.ArgumentsContains {
+		t.Fatal("accept_gate should not expose matcher dimensions")
 	}
 
 	if _, exists := HookPointCapabilities(HookPoint("unknown")); exists {

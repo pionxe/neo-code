@@ -79,6 +79,9 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 		if spec.Scope == HookScopeUser || spec.Scope == HookScopeRepo {
 			hookInput = sanitizeUserHookContext(hookInput)
 		}
+		if spec.Matcher != nil && !spec.Matcher.Match(hookInput) {
+			continue
+		}
 		if spec.Mode == HookModeAsync || spec.Mode == HookModeAsyncRewake {
 			e.runAsync(ctx, spec, hookInput)
 			continue
@@ -340,6 +343,7 @@ func sanitizeUserHookContext(input HookContext) HookContext {
 		"point":                   {},
 		"tool_call_id":            {},
 		"tool_name":               {},
+		"tool_arguments_preview":  {},
 		"is_error":                {},
 		"error_class":             {},
 		"result_content_preview":  {},

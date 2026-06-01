@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
 
 	"neo-code/internal/checkpoint"
 	providertypes "neo-code/internal/provider/types"
@@ -21,6 +23,12 @@ type indexedToolCall struct {
 	index int
 	call  providertypes.ToolCall
 }
+
+const hookToolArgumentsPreviewMaxChars = 512
+
+var hookToolArgumentsSensitivePattern = regexp.MustCompile(
+	`(?i)(token|password|secret|api[_-]?key|access[_-]?key|auth)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s]+)`,
+)
 
 // executeAssistantToolCalls 并发执行 assistant 返回的全部工具调用并返回结构化执行摘要。
 func (s *Service) executeAssistantToolCalls(
@@ -160,10 +168,11 @@ func (s *Service) executeOneToolCallWithoutPersistence(
 
 	beforeToolHookOutput := s.runHookPoint(ctx, state, runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{
 		Metadata: map[string]any{
-			"tool_call_id":   strings.TrimSpace(call.ID),
-			"tool_name":      strings.TrimSpace(call.Name),
-			"tool_arguments": strings.TrimSpace(call.Arguments),
-			"workdir":        strings.TrimSpace(snapshot.Workdir),
+			"tool_call_id":           strings.TrimSpace(call.ID),
+			"tool_name":              strings.TrimSpace(call.Name),
+			"tool_arguments":         strings.TrimSpace(call.Arguments),
+			"tool_arguments_preview": buildToolArgumentsPreview(call.Arguments),
+			"workdir":                strings.TrimSpace(snapshot.Workdir),
 		},
 	})
 	if beforeToolHookOutput.Blocked {
@@ -752,6 +761,122 @@ func summarizeHookResultContent(content string) string {
 	return trimmed[:256]
 }
 
+// buildToolArgumentsPreview 生成 matcher 可用的参数预览，并对敏感键值执行脱敏。
+func buildToolArgumentsPreview(arguments string) string {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" {
+		return ""
+	}
+	masked := sanitizeHookToolArguments(trimmed)
+	return truncateHookTextByChars(masked, hookToolArgumentsPreviewMaxChars)
+}
+
+// sanitizeHookToolArguments 优先按 JSON 结构递归脱敏，非 JSON 输入回退为轻量正则脱敏。
+func sanitizeHookToolArguments(arguments string) string {
+	if masked, ok := sanitizeHookToolArgumentsJSON(arguments); ok {
+		return masked
+	}
+	return hookToolArgumentsSensitivePattern.ReplaceAllString(arguments, `$1=***`)
+}
+
+// sanitizeHookToolArgumentsJSON 尝试解析 JSON 并按敏感键递归替换值。
+func sanitizeHookToolArgumentsJSON(arguments string) (string, bool) {
+	var decoded any
+	if err := json.Unmarshal([]byte(arguments), &decoded); err != nil {
+		return "", false
+	}
+	sanitized := maskHookToolArgumentValue(decoded)
+	encoded, err := json.Marshal(sanitized)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
+}
+
+// maskHookToolArgumentValue 递归处理 JSON 节点，对敏感键对应的值统一替换为 "***"。
+func maskHookToolArgumentValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		masked := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if isSensitiveHookToolArgumentKey(key) {
+				masked[key] = "***"
+				continue
+			}
+			masked[key] = maskHookToolArgumentValue(item)
+		}
+		return masked
+	case []any:
+		masked := make([]any, len(typed))
+		for index, item := range typed {
+			masked[index] = maskHookToolArgumentValue(item)
+		}
+		return masked
+	default:
+		return value
+	}
+}
+
+// isSensitiveHookToolArgumentKey 判断参数键名是否属于敏感信息字段。
+func isSensitiveHookToolArgumentKey(key string) bool {
+	tokens := tokenizeHookToolArgumentKey(key)
+	if len(tokens) == 0 {
+		return false
+	}
+	for index, token := range tokens {
+		switch token {
+		case "password", "passwd", "secret", "token", "auth", "authorization":
+			return true
+		case "apikey", "accesskey", "authtoken", "accesstoken":
+			return true
+		case "api", "access":
+			if index+1 < len(tokens) && tokens[index+1] == "key" {
+				return true
+			}
+		case "key":
+			if index > 0 && (tokens[index-1] == "api" || tokens[index-1] == "access") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// tokenizeHookToolArgumentKey 将参数键拆分为小写词元，兼容 snake/kebab/camelCase。
+func tokenizeHookToolArgumentKey(key string) []string {
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" {
+		return nil
+	}
+	var builder strings.Builder
+	var prev rune
+	for _, current := range trimmed {
+		switch {
+		case unicode.IsLetter(current) || unicode.IsDigit(current):
+			if unicode.IsUpper(current) && unicode.IsLower(prev) {
+				builder.WriteByte(' ')
+			}
+			builder.WriteRune(unicode.ToLower(current))
+		default:
+			builder.WriteByte(' ')
+		}
+		prev = current
+	}
+	return strings.Fields(builder.String())
+}
+
+// truncateHookTextByChars 按字符长度截断文本，避免 metadata 放大。
+func truncateHookTextByChars(text string, maxChars int) string {
+	if maxChars <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxChars {
+		return text
+	}
+	return string(runes[:maxChars])
+}
+
 // extractTodoIDsFromPayload 提取 todo 事件快照中的条目 ID，用于冲突事实去重统计。
 func extractTodoIDsFromPayload(items []TodoViewItem) []string {
 	if len(items) == 0 {
@@ -828,11 +953,12 @@ func (s *Service) emitAfterToolFailureHook(
 	workdir string,
 ) {
 	afterToolFailureMetadata := map[string]any{
-		"tool_call_id": strings.TrimSpace(call.ID),
-		"tool_name":    strings.TrimSpace(call.Name),
-		"is_error":     result.IsError,
-		"error_class":  strings.TrimSpace(result.ErrorClass),
-		"workdir":      strings.TrimSpace(workdir),
+		"tool_call_id":           strings.TrimSpace(call.ID),
+		"tool_name":              strings.TrimSpace(call.Name),
+		"tool_arguments_preview": buildToolArgumentsPreview(call.Arguments),
+		"is_error":               result.IsError,
+		"error_class":            strings.TrimSpace(result.ErrorClass),
+		"workdir":                strings.TrimSpace(workdir),
 	}
 	if execErr != nil {
 		afterToolFailureMetadata["execution_error"] = strings.TrimSpace(execErr.Error())

@@ -64,6 +64,7 @@ type RuntimeHookItemConfig struct {
 	Kind          string         `yaml:"kind,omitempty"`
 	Mode          string         `yaml:"mode,omitempty"`
 	Handler       string         `yaml:"handler,omitempty"`
+	Match         map[string]any `yaml:"match,omitempty"`
 	Priority      int            `yaml:"priority,omitempty"`
 	TimeoutSec    int            `yaml:"timeout_sec,omitempty"`
 	FailurePolicy string         `yaml:"failure_policy,omitempty"`
@@ -189,6 +190,12 @@ func (c RuntimeHookItemConfig) Clone() RuntimeHookItemConfig {
 	if c.Enabled != nil {
 		cloned.Enabled = boolPtr(*c.Enabled)
 	}
+	if len(c.Match) > 0 {
+		cloned.Match = make(map[string]any, len(c.Match))
+		for key, value := range c.Match {
+			cloned.Match[key] = cloneRuntimeHookParamValue(value)
+		}
+	}
 	if len(c.Params) > 0 {
 		cloned.Params = make(map[string]any, len(c.Params))
 		for key, value := range c.Params {
@@ -279,9 +286,14 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 		default:
 			return fmt.Errorf("handler %q is not supported", c.Handler)
 		}
-		if handler == runtimeHookHandlerWarnOnToolCall && !hasWarnOnToolCallTargets(c.Params) {
-			return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", c.Handler)
-		}
+			if handler == runtimeHookHandlerWarnOnToolCall && !hooks.HasHookMatcherConfig(c.Match) {
+				return fmt.Errorf("handler %q requires match", c.Handler)
+			}
+			if hooks.HasHookMatcherConfig(c.Match) {
+				if err := hooks.ValidateHookMatcher(point, c.Match); err != nil {
+					return fmt.Errorf("match: %w", err)
+				}
+			}
 	case runtimeHookKindCommand:
 		if normalizedMode != runtimeHookModeSync {
 			return fmt.Errorf("mode %q is not supported for kind command (only sync)", c.Mode)
@@ -289,12 +301,22 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 		if err := hooks.ValidateCommandParams(c.Params); err != nil {
 			return err
 		}
+		if hooks.HasHookMatcherConfig(c.Match) {
+			if err := hooks.ValidateHookMatcher(point, c.Match); err != nil {
+				return fmt.Errorf("match: %w", err)
+			}
+		}
 	case runtimeHookKindHTTP:
 		if normalizedMode != runtimeHookModeObserve {
 			return fmt.Errorf("mode %q is not supported for kind http (only observe)", c.Mode)
 		}
 		if err := validateRuntimeHTTPObserveItem(c, policy); err != nil {
 			return err
+		}
+		if hooks.HasHookMatcherConfig(c.Match) {
+			if err := hooks.ValidateHookMatcher(point, c.Match); err != nil {
+				return fmt.Errorf("match: %w", err)
+			}
 		}
 	}
 	return nil
@@ -398,35 +420,6 @@ func cloneRuntimeHookParamValue(value any) any {
 	}
 }
 
-func hasWarnOnToolCallTargets(params map[string]any) bool {
-	if len(params) == 0 {
-		return false
-	}
-	toolNameRaw, hasToolName := params["tool_name"]
-	if hasToolName && strings.TrimSpace(fmt.Sprintf("%v", toolNameRaw)) != "" {
-		return true
-	}
-	toolNamesRaw, hasToolNames := params["tool_names"]
-	if !hasToolNames || toolNamesRaw == nil {
-		return false
-	}
-	switch typed := toolNamesRaw.(type) {
-	case []string:
-		for _, item := range typed {
-			if strings.TrimSpace(item) != "" {
-				return true
-			}
-		}
-	case []any:
-		for _, item := range typed {
-			if strings.TrimSpace(fmt.Sprintf("%v", item)) != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // readRuntimeHookParamString 以兼容方式读取 runtime hook 参数中的字符串值。
 func readRuntimeHookParamString(params map[string]any, key string) string {
 	if len(params) == 0 {
@@ -443,4 +436,3 @@ func readRuntimeHookParamString(params map[string]any, key string) string {
 		return fmt.Sprintf("%v", typed)
 	}
 }
-

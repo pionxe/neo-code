@@ -33,8 +33,10 @@ func TestBuildUserHookSpecMapsFailurePolicyAndScope(t *testing.T) {
 		Priority:      99,
 		TimeoutSec:    7,
 		FailurePolicy: "warn_only",
-		Params: map[string]any{
+		Match: map[string]any{
 			"tool_name": "bash",
+		},
+		Params: map[string]any{
 			"message":   "tool call warning",
 		},
 	}
@@ -351,7 +353,6 @@ func TestWarnOnToolCallAndAddContextNoteHandlers(t *testing.T) {
 	t.Parallel()
 
 	warnHandler, err := buildUserBuiltinHookHandler("warn_on_tool_call", map[string]any{
-		"tool_name": "bash",
 		"message":   "bash was called",
 	}, t.TempDir())
 	if err != nil {
@@ -359,7 +360,6 @@ func TestWarnOnToolCallAndAddContextNoteHandlers(t *testing.T) {
 	}
 	warnResult := warnHandler(context.Background(), runtimehooks.HookContext{
 		Metadata: map[string]any{
-			"tool_name": "bash",
 		},
 	})
 	if warnResult.Status != runtimehooks.HookResultPass {
@@ -369,14 +369,14 @@ func TestWarnOnToolCallAndAddContextNoteHandlers(t *testing.T) {
 		t.Fatalf("warn message = %q, want %q", warnResult.Message, "bash was called")
 	}
 
-	ignoreResult := warnHandler(context.Background(), runtimehooks.HookContext{
-		Metadata: map[string]any{
-			"tool_name": "filesystem",
-		},
-	})
-	if strings.TrimSpace(ignoreResult.Message) != "" {
-		t.Fatalf("expected unmatched tool to have empty message, got %q", ignoreResult.Message)
-	}
+		anyToolResult := warnHandler(context.Background(), runtimehooks.HookContext{
+			Metadata: map[string]any{
+				"tool_name": "filesystem",
+			},
+		})
+		if anyToolResult.Message != "bash was called" {
+			t.Fatalf("warn message = %q, want %q", anyToolResult.Message, "bash was called")
+		}
 
 	noteHandler, err := buildUserBuiltinHookHandler("add_context_note", map[string]any{
 		"note": "manual check required",
@@ -407,10 +407,10 @@ func TestConfigureRuntimeHooksFromConfig(t *testing.T) {
 			Scope:   "user",
 			Kind:    "builtin",
 			Mode:    "sync",
-			Handler: "warn_on_tool_call",
-			Params: map[string]any{
-				"tool_name": "bash",
-			},
+				Handler: "warn_on_tool_call",
+				Match: map[string]any{
+					"tool_name": "bash",
+				},
 		},
 	}
 	cfg.Runtime.Hooks.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
@@ -455,9 +455,11 @@ func TestConfigureRuntimeHooksFromConfigKeepsBaseExecutorAndComposes(t *testing.
 			Scope:   "user",
 			Kind:    "builtin",
 			Mode:    "sync",
+				Match: map[string]any{
+					"tool_name": "bash",
+				},
 			Handler: "warn_on_tool_call",
 			Params: map[string]any{
-				"tool_name": "bash",
 				"message":   "warn",
 			},
 		},
@@ -818,11 +820,11 @@ func TestConfigureRuntimeHooksWithoutItemsKeepsBehaviorUnchanged(t *testing.T) {
 	if service.hookExecutor == nil {
 		t.Fatal("expected runtime hooks chain to remain available for repo discovery")
 	}
-	out := service.hookExecutor.Run(
-		context.Background(),
-		runtimehooks.HookPointBeforeToolCall,
-		runtimehooks.HookContext{Metadata: map[string]any{"tool_name": "bash", "workdir": cfg.Workdir}},
-	)
+		out := service.hookExecutor.Run(
+			context.Background(),
+			runtimehooks.HookPointBeforeToolCall,
+			runtimehooks.HookContext{Metadata: map[string]any{"workdir": cfg.Workdir}},
+		)
 	if out.Blocked || len(out.Results) != 0 {
 		t.Fatalf("unexpected hook output without user/repo config: %+v", out)
 	}
@@ -834,8 +836,12 @@ func TestBuildUserBuiltinHookHandlerEdgeCases(t *testing.T) {
 	if _, err := buildUserBuiltinHookHandler("require_file_exists", map[string]any{}, t.TempDir()); err == nil {
 		t.Fatal("expected missing path error")
 	}
-	if _, err := buildUserBuiltinHookHandler("warn_on_tool_call", map[string]any{}, t.TempDir()); err == nil {
-		t.Fatal("expected missing target error")
+	handlerWithoutTarget, err := buildUserBuiltinHookHandler("warn_on_tool_call", map[string]any{}, t.TempDir())
+	if err != nil {
+		t.Fatalf("build warn_on_tool_call without target error: %v", err)
+	}
+	if got := handlerWithoutTarget(context.Background(), runtimehooks.HookContext{}); got.Message == "" {
+		t.Fatalf("expected default warning message when no target is configured, got %+v", got)
 	}
 	if _, err := buildUserBuiltinHookHandler("add_context_note", map[string]any{}, t.TempDir()); err == nil {
 		t.Fatal("expected missing note/message error")
@@ -851,7 +857,7 @@ func TestBuildUserBuiltinHookHandlerEdgeCases(t *testing.T) {
 		t.Fatalf("expected match message, got %q", pass.Message)
 	}
 	noTool := handler(context.Background(), runtimehooks.HookContext{})
-	if noTool.Status != runtimehooks.HookResultPass || noTool.Message != "" {
+	if noTool.Status != runtimehooks.HookResultPass || noTool.Message != "hit" {
 		t.Fatalf("unexpected no-tool result: %+v", noTool)
 	}
 
@@ -1349,6 +1355,7 @@ func TestConfigureRuntimeHooksInjectsAsyncResultSinkIntoBaseExecutor(t *testing.
 	t.Fatal("expected async rewake notification to be enqueued via configured async sink")
 }
 
+
 type countingHookExecutor struct {
 	calls  atomic.Int32
 	output runtimehooks.RunOutput
@@ -1518,8 +1525,8 @@ func TestUserHookHandlersAndPathChecks(t *testing.T) {
 	if _, err := buildUserBuiltinHookHandler("require_file_exists", map[string]any{}, workdir); err == nil {
 		t.Fatal("expected missing path error")
 	}
-	if _, err := buildUserBuiltinHookHandler("warn_on_tool_call", map[string]any{}, workdir); err == nil {
-		t.Fatal("expected missing tool target error")
+	if _, err := buildUserBuiltinHookHandler("warn_on_tool_call", map[string]any{}, workdir); err != nil {
+		t.Fatalf("warn_on_tool_call without target should be allowed for matcher-based filtering: %v", err)
 	}
 	if _, err := buildUserBuiltinHookHandler("add_context_note", map[string]any{}, workdir); err == nil {
 		t.Fatal("expected missing note/message error")
@@ -1538,10 +1545,10 @@ func TestUserHookHandlersAndPathChecks(t *testing.T) {
 	if result.Message == "" {
 		t.Fatalf("expected default warn message for matched tool")
 	}
-	result = warnHandler(context.Background(), runtimehooks.HookContext{})
-	if result.Message != "" {
-		t.Fatalf("expected empty message when no tool_name metadata, got %q", result.Message)
-	}
+		result = warnHandler(context.Background(), runtimehooks.HookContext{})
+		if result.Message == "" {
+			t.Fatalf("expected default warn message, got empty")
+		}
 
 	noteHandler, err := buildUserBuiltinHookHandler("add_context_note", map[string]any{"message": "note-via-message"}, workdir)
 	if err != nil {

@@ -45,22 +45,77 @@ type HookPointCapability struct {
 	CanAnnotate    bool
 	CanUpdateInput bool
 	UserAllowed    bool
+	Matcher        HookMatcherCapability
+}
+
+// HookMatcherCapability 描述点位可用的 matcher 维度。
+type HookMatcherCapability struct {
+	ToolName          bool
+	ToolNameRegex     bool
+	ArgumentsContains bool
 }
 
 var hookPointCapabilities = map[HookPoint]HookPointCapability{
-	HookPointBeforeToolCall:           {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointAfterToolResult:          {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointBeforeCompletionDecision: {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointAcceptGate:               {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointBeforePermissionDecision: {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false},
-	HookPointAfterToolFailure:         {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointSessionStart:             {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointSessionEnd:               {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointUserPromptSubmit:         {CanBlock: true, CanAnnotate: true, CanUpdateInput: true, UserAllowed: true},
-	HookPointPreCompact:               {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false},
-	HookPointPostCompact:              {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointSubAgentStart:            {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false},
-	HookPointSubAgentStop:             {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointBeforeToolCall: {
+		CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{
+			ToolName: true, ToolNameRegex: true, ArgumentsContains: true,
+		},
+	},
+	HookPointAfterToolResult: {
+		CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{
+			ToolName: true, ToolNameRegex: true, ArgumentsContains: false,
+		},
+	},
+	HookPointBeforeCompletionDecision: {
+		CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{},
+	},
+	HookPointAcceptGate: {
+		CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{},
+	},
+	HookPointBeforePermissionDecision: {
+		CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false,
+		Matcher: HookMatcherCapability{
+			ToolName: true, ToolNameRegex: true, ArgumentsContains: false,
+		},
+	},
+	HookPointAfterToolFailure: {
+		CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{
+			ToolName: true, ToolNameRegex: true, ArgumentsContains: true,
+		},
+	},
+	HookPointSessionStart: {
+		CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{},
+	},
+	HookPointSessionEnd: {
+		CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{},
+	},
+	HookPointUserPromptSubmit: {
+		CanBlock: true, CanAnnotate: true, CanUpdateInput: true, UserAllowed: true,
+		Matcher: HookMatcherCapability{},
+	},
+	HookPointPreCompact: {
+		CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false,
+		Matcher: HookMatcherCapability{},
+	},
+	HookPointPostCompact: {
+		CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{},
+	},
+	HookPointSubAgentStart: {
+		CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false,
+		Matcher: HookMatcherCapability{},
+	},
+	HookPointSubAgentStop: {
+		CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true,
+		Matcher: HookMatcherCapability{},
+	},
 }
 
 // HookScope 描述 hook 的权限/上下文裁剪等级。
@@ -142,6 +197,7 @@ type HookSpec struct {
 	Timeout       time.Duration
 	FailurePolicy FailurePolicy
 	Handler       HookHandler
+	Matcher *HookMatcher
 }
 
 // normalizeAndValidate 将 HookSpec 归一化并校验当前阶段可用字段。

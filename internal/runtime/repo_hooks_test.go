@@ -596,25 +596,47 @@ func TestValidateRepoHookItemRejectsExternalKindsWithP6LiteMessage(t *testing.T)
 	}
 }
 
-func TestRuntimeHasWarnOnToolCallTargetsBranches(t *testing.T) {
-	cases := []struct {
-		name   string
-		params map[string]any
-		want   bool
-	}{
-		{name: "nil", params: nil, want: false},
-		{name: "tool_name", params: map[string]any{"tool_name": "bash"}, want: true},
-		{name: "tool_name blank", params: map[string]any{"tool_name": " "}, want: false},
-		{name: "tool_names", params: map[string]any{"tool_names": []any{"bash"}}, want: true},
-		{name: "tool_names blank", params: map[string]any{"tool_names": []any{" "}}, want: false},
+
+func TestValidateRepoHookItemAllowsWarnOnToolCallWithMatchOnly(t *testing.T) {
+	t.Parallel()
+
+	item := config.RuntimeHookItemConfig{
+		ID:            "repo-warn-match",
+		Point:         "before_tool_call",
+		Scope:         "repo",
+		Kind:          "builtin",
+		Mode:          "sync",
+		Handler:       "warn_on_tool_call",
+		TimeoutSec:    2,
+		FailurePolicy: "warn_only",
+		Match: map[string]any{
+			"tool_name": "bash",
+		},
 	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			if got := runtimeHasWarnOnToolCallTargets(tc.params); got != tc.want {
-				t.Fatalf("runtimeHasWarnOnToolCallTargets() = %v, want %v", got, tc.want)
-			}
-		})
+	if err := validateRepoHookItem(item); err != nil {
+		t.Fatalf("validateRepoHookItem() error = %v", err)
+	}
+}
+
+func TestValidateRepoHookItemRejectsUnsupportedMatcherDimension(t *testing.T) {
+	t.Parallel()
+
+	item := config.RuntimeHookItemConfig{
+		ID:            "repo-session-match",
+		Point:         "session_start",
+		Scope:         "repo",
+		Kind:          "builtin",
+		Mode:          "sync",
+		Handler:       "add_context_note",
+		TimeoutSec:    2,
+		FailurePolicy: "warn_only",
+		Params:        map[string]any{"note": "repo"},
+		Match: map[string]any{
+			"tool_name": "bash",
+		},
+	}
+	if err := validateRepoHookItem(item); err == nil {
+		t.Fatal("expected unsupported matcher dimension to fail")
 	}
 }
 

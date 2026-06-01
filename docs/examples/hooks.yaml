@@ -17,8 +17,9 @@ hooks:
       kind: builtin
       mode: sync
       handler: warn_on_tool_call
+      match:
+        tool_name: ["bash"]
       params:
-        tool_names: ["bash"]
         message: "执行 bash 前请确认命令不会破坏工作区。"
 
     - id: require-readme-before-final
