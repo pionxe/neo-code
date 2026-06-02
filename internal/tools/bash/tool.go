@@ -1,13 +1,12 @@
 package bash
 
 import (
-	"neo-code/internal/tools"
 	"context"
 	"encoding/json"
 	"errors"
+	"neo-code/internal/tools"
 	"strings"
 	"time"
-
 )
 
 type Tool struct {

@@ -72,10 +72,6 @@ type RepositoryRetrievalSection struct {
 	Query     string
 }
 
-
-
-
-
 // CompactOptions controls read-time context behavior inside the context builder.
 type CompactOptions struct {
 	ReadTimeMaxMessageSpans int

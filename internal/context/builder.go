@@ -2,7 +2,6 @@ package context
 
 import (
 	"context"
-
 )
 
 // DefaultBuilder preserves the current runtime context-building behavior.
@@ -110,7 +109,7 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 		SystemPrompt:        systemPrompt,
 		StableSystemPrompt:  stablePrompt,
 		DynamicSystemPrompt: dynamicPrompt,
-		Messages: ProjectToolMessagesForModel(
+		Messages: projectReadTimeMessagesForModel(
 			trimPolicy.Trim(input.Messages, input.Compact),
 		),
 	}, nil

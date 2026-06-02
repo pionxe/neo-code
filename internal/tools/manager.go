@@ -68,8 +68,6 @@ func (e *factsEnrichingExecutor) Supports(name string) bool {
 	return e.inner.Supports(name)
 }
 
-
-
 // Execute 在执行后按本地权限动作补齐可信 facts，避免运行时依赖远端 metadata。
 func (e *factsEnrichingExecutor) Execute(ctx context.Context, input ToolCallInput) (ToolResult, error) {
 	result, err := e.inner.Execute(ctx, input)
@@ -305,8 +303,6 @@ func (m *DefaultManager) ListAvailableSpecs(ctx context.Context, input SpecListI
 	}
 	return readOnlyFiltered, nil
 }
-
-
 
 // Execute runs the tool if the permission engine allows it and the sandbox
 // check passes.

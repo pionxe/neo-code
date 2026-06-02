@@ -73,10 +73,10 @@ func defaultBudgetConfig() BudgetConfig {
 // defaultCompactConfig 返回手动 compact 策略的默认配置。
 func defaultCompactConfig() CompactConfig {
 	return CompactConfig{
-		ManualStrategy:                CompactManualStrategyKeepRecent,
-		ManualKeepRecentMessages:      DefaultCompactManualKeepRecentMessages,
-		MaxSummaryChars:               DefaultCompactMaxSummaryChars,
-		ReadTimeMaxMessageSpans:       DefaultCompactReadTimeMaxMessageSpans,
+		ManualStrategy:           CompactManualStrategyKeepRecent,
+		ManualKeepRecentMessages: DefaultCompactManualKeepRecentMessages,
+		MaxSummaryChars:          DefaultCompactMaxSummaryChars,
+		ReadTimeMaxMessageSpans:  DefaultCompactReadTimeMaxMessageSpans,
 	}
 }
 

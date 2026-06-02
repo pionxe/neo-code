@@ -2,7 +2,6 @@ package filesystem
 
 import (
 	"testing"
-
 )
 
 func TestFilesystemToolMetadata(t *testing.T) {
@@ -19,7 +18,7 @@ func TestFilesystemToolMetadata(t *testing.T) {
 			toolName:    NewDelete("/workspace").Name(),
 			description: NewDelete("/workspace").Description(),
 			schema:      NewDelete("/workspace").Schema(),
-			},
+		},
 	}
 
 	for _, tt := range tests {

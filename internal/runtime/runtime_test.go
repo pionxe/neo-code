@@ -799,7 +799,6 @@ func (t *stubTool) Schema() map[string]any {
 	return map[string]any{"type": "object"}
 }
 
-
 func (t *stubTool) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	t.callCount++
 	t.lastInput = input
@@ -870,8 +869,6 @@ func (m *stubToolManager) ListAvailableSpecs(ctx context.Context, input tools.Sp
 	}
 	return append([]providertypes.ToolSpec(nil), m.specs...), nil
 }
-
-
 
 func (m *stubToolManager) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	m.mu.Lock()
@@ -1697,7 +1694,6 @@ func TestServiceRunUsesSessionSelectionForMetadataAndBudget(t *testing.T) {
 	}
 }
 
-
 func TestServiceRunPersistsSessionProviderAndModel(t *testing.T) {
 	t.Parallel()
 
@@ -1726,8 +1722,6 @@ func TestServiceRunPersistsSessionProviderAndModel(t *testing.T) {
 		t.Fatalf("expected session model %q, got %q", cfg.CurrentModel, session.Model)
 	}
 }
-
-
 
 func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T) {
 	t.Parallel()

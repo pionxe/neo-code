@@ -1,16 +1,15 @@
 package filesystem
 
 import (
-	"neo-code/internal/tools"
 	"context"
 	"encoding/json"
 	"errors"
+	"neo-code/internal/tools"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-
 )
 
 type GlobTool struct {

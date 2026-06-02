@@ -184,8 +184,6 @@ func TestRegistryHelpers(t *testing.T) {
 	}
 }
 
-
-
 func TestRegistryRememberSessionDecisionUnsupported(t *testing.T) {
 	t.Parallel()
 

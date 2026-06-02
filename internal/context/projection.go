@@ -14,7 +14,10 @@ const (
 	recentWindowToolContentTailChars = 300
 )
 
-const truncatedExcerptMarker = "\n...[truncated]...\n"
+const (
+	truncatedExcerptMarker          = "\n...[truncated]...\n"
+	contentTruncatedForModelContext = "[content truncated for model context]"
+)
 
 // cloneContextMessages 深拷贝消息切片，避免读时投影污染 runtime 持有的原始会话消息。
 func cloneContextMessages(messages []providertypes.Message) []providertypes.Message {
@@ -53,6 +56,11 @@ func ProjectToolMessagesForModel(messages []providertypes.Message) []providertyp
 		messages[i].ToolMetadata = nil
 	}
 	return messages
+}
+
+// projectReadTimeMessagesForModel 构造 provider 读取路径的只读消息投影，避免改写会话原始消息并限制工具输出体积。
+func projectReadTimeMessagesForModel(messages []providertypes.Message) []providertypes.Message {
+	return sanitizeProjectedToolMessages(ProjectToolMessagesForModel(cloneContextMessages(messages)))
 }
 
 // BuildRecentMessagesForModel 从会话尾部构造 provider-safe 的最近消息窗口，避免保留非法 tool call 片段。
@@ -105,7 +113,7 @@ func BuildRecentMessagesForModel(messages []providertypes.Message, limit int) []
 		return nil
 	}
 
-	return sanitizeRecentWindowToolMessages(ProjectToolMessagesForModel(cloneContextMessages(selected)))
+	return sanitizeProjectedToolMessages(ProjectToolMessagesForModel(cloneContextMessages(selected)))
 }
 
 // BuildMemoExtractionMessagesForModel 构造完整 run 的 provider-safe 记忆提取上下文。
@@ -141,7 +149,7 @@ func BuildMemoExtractionMessagesForModel(messages []providertypes.Message) []pro
 		return nil
 	}
 
-	return sanitizeRecentWindowToolMessages(ProjectToolMessagesForModel(cloneContextMessages(selected)))
+	return sanitizeProjectedToolMessages(ProjectToolMessagesForModel(cloneContextMessages(selected)))
 }
 
 // matchedToolCallSpan 返回 assistant tool call 与其完整 tool 响应组成的合法窗口下标集合。
@@ -228,8 +236,8 @@ func recentWindowMessageBudget(limit int) int {
 	return budget
 }
 
-// sanitizeRecentWindowToolMessages 缩减 tool 消息内容，降低 memo 提取链路对原始工具输出的暴露面。
-func sanitizeRecentWindowToolMessages(messages []providertypes.Message) []providertypes.Message {
+// sanitizeProjectedToolMessages 缩减 tool 消息内容，降低模型上下文对原始工具输出的暴露面。
+func sanitizeProjectedToolMessages(messages []providertypes.Message) []providertypes.Message {
 	for index := range messages {
 		message := messages[index]
 		if message.Role != providertypes.RoleTool {
@@ -258,7 +266,7 @@ func sanitizeProjectedToolContent(content string) string {
 	limited, truncated := sanitizeToolExcerpt(body)
 	lines := []string{prefix, "content_excerpt:", limited}
 	if truncated {
-		lines = append(lines, "[content truncated for memo extraction]")
+		lines = append(lines, contentTruncatedForModelContext)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -276,11 +284,11 @@ func sanitizeRawToolContent(content string) string {
 	return strings.Join([]string{
 		"content_excerpt:",
 		limited,
-		"[content truncated for memo extraction]",
+		contentTruncatedForModelContext,
 	}, "\n")
 }
 
-// sanitizeToolExcerpt 保留工具输出的头尾窗口，避免 memo 提取遗漏尾部关键错误。
+// sanitizeToolExcerpt 保留工具输出的头尾窗口，避免模型上下文遗漏尾部关键错误。
 func sanitizeToolExcerpt(text string) (string, bool) {
 	total := utf8.RuneCountInString(text)
 	limit := recentWindowToolContentHeadChars + recentWindowToolContentTailChars

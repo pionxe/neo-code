@@ -247,7 +247,6 @@ func TestDefaultBuilderBuildIncludesTodosBeforeSystemState(t *testing.T) {
 	}
 }
 
-
 func TestDefaultBuilderBuildPlacesRulesBeforeMemo(t *testing.T) {
 	t.Parallel()
 
@@ -270,7 +269,7 @@ func TestDefaultBuilderBuildPlacesRulesBeforeMemo(t *testing.T) {
 			stubPromptSectionSource{sections: []promptSection{{Title: "Memo", Content: "remember this"}}},
 			&systemStateSource{},
 		},
-		}
+	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
 		Messages: []providertypes.Message{
@@ -316,13 +315,12 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
-		}
+	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
 		Messages:  messages,
 		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
-		Compact: CompactOptions{
-					},
+		Compact:   CompactOptions{},
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -349,11 +347,6 @@ func TestDefaultBuilderBuildReturnsPromptSourceError(t *testing.T) {
 		t.Fatalf("expected source error, got %v", err)
 	}
 }
-
-
-
-
-
 
 func TestNewBuilder(t *testing.T) {
 	t.Parallel()
@@ -389,9 +382,8 @@ func TestNewBuilder(t *testing.T) {
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
 		Messages:  messages,
 		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
-		Compact: CompactOptions{
-					},
-		Metadata: testMetadata(t.TempDir()),
+		Compact:   CompactOptions{},
+		Metadata:  testMetadata(t.TempDir()),
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -404,10 +396,6 @@ func TestNewBuilder(t *testing.T) {
 		)
 	}
 }
-
-
-
-
 
 func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 	t.Parallel()
@@ -616,8 +604,6 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 	}
 }
 
-
-
 func TestNewConfiguredBuilder(t *testing.T) {
 	t.Parallel()
 
@@ -635,8 +621,6 @@ func TestNewConfiguredBuilder(t *testing.T) {
 			t.Fatalf("expected non-empty system prompt")
 		}
 	})
-
-
 
 	t.Run("with extra section sources", func(t *testing.T) {
 		extraSource := stubPromptSectionSource{
@@ -745,6 +729,66 @@ func TestDefaultBuilderBuildProjectsMetadataOnlyToolResult(t *testing.T) {
 	}
 	if toolMessage.ToolMetadata != nil {
 		t.Fatalf("expected projected tool metadata to be cleared, got %#v", toolMessage.ToolMetadata)
+	}
+}
+
+func TestDefaultBuilderBuildBoundsProjectedToolContentWithoutMutatingInput(t *testing.T) {
+	t.Parallel()
+
+	head := strings.Repeat("A", recentWindowToolContentHeadChars)
+	middle := strings.Repeat("M", 64)
+	tail := strings.Repeat("B", recentWindowToolContentTailChars-len("TAIL-MARKER")) + "TAIL-MARKER"
+	rawBody := head + middle + tail
+	originalMetadata := map[string]string{"tool_name": "bash", "workdir": "D:/project"}
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("run command")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "bash", Arguments: `{}`},
+			},
+		},
+		{
+			Role:         providertypes.RoleTool,
+			ToolCallID:   "call-1",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart(rawBody)},
+			ToolMetadata: originalMetadata,
+		},
+	}
+
+	result, err := NewBuilder().Build(stdcontext.Background(), BuildInput{
+		Messages: messages,
+		Metadata: testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	projectedText := renderDisplayParts(result.Messages[2].Parts)
+	if !strings.Contains(projectedText, "tool result") ||
+		!strings.Contains(projectedText, "tool: bash") ||
+		!strings.Contains(projectedText, "content_excerpt:") {
+		t.Fatalf("expected structured excerpted tool result, got %q", projectedText)
+	}
+	if strings.Contains(projectedText, "\ncontent:\n") {
+		t.Fatalf("expected full content marker to be removed, got %q", projectedText)
+	}
+	if strings.Contains(projectedText, middle) {
+		t.Fatalf("expected middle payload to be truncated, got %q", projectedText)
+	}
+	if !strings.Contains(projectedText, truncatedExcerptMarker) ||
+		!strings.Contains(projectedText, "TAIL-MARKER") ||
+		!strings.Contains(projectedText, contentTruncatedForModelContext) {
+		t.Fatalf("expected head/tail truncation markers, got %q", projectedText)
+	}
+	if result.Messages[2].ToolMetadata != nil {
+		t.Fatalf("expected projected metadata to be cleared, got %#v", result.Messages[2].ToolMetadata)
+	}
+	if renderDisplayParts(messages[2].Parts) != rawBody {
+		t.Fatalf("expected source tool content unchanged, got %q", renderDisplayParts(messages[2].Parts))
+	}
+	if messages[2].ToolMetadata["tool_name"] != "bash" || messages[2].ToolMetadata["workdir"] != "D:/project" {
+		t.Fatalf("expected source tool metadata unchanged, got %#v", messages[2].ToolMetadata)
 	}
 }
 
@@ -858,7 +902,7 @@ func TestDefaultBuilderBuildStableAndDynamicPreservesBackwardCompat(t *testing.T
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Old", Content: "old style"}}},
 		},
-		}
+	}
 
 	result, err := builder.Build(stdcontext.Background(), BuildInput{})
 	if err != nil {

@@ -235,8 +235,52 @@ func TestSanitizeProjectedToolContent(t *testing.T) {
 	if !strings.Contains(sanitized, "TAIL-MARKER") {
 		t.Fatalf("expected tail content to be preserved, got %q", sanitized)
 	}
-	if !strings.Contains(sanitized, "[content truncated for memo extraction]") {
+	if !strings.Contains(sanitized, contentTruncatedForModelContext) {
 		t.Fatalf("expected truncation marker, got %q", sanitized)
+	}
+}
+
+func TestProjectReadTimeMessagesForModelBoundaries(t *testing.T) {
+	t.Parallel()
+
+	if got := projectReadTimeMessagesForModel(nil); got != nil {
+		t.Fatalf("expected nil for empty read-time projection, got %+v", got)
+	}
+
+	messages := []providertypes.Message{
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+		{
+			Role:         providertypes.RoleTool,
+			ToolCallID:   "call-1",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("short result")},
+			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
+		},
+	}
+
+	projected := projectReadTimeMessagesForModel(messages)
+	if len(projected) != 2 {
+		t.Fatalf("len(projected) = %d, want 2", len(projected))
+	}
+	projectedText := renderDisplayParts(projected[1].Parts)
+	if !strings.Contains(projectedText, "content_excerpt:") {
+		t.Fatalf("expected read-time tool content to use excerpt marker, got %q", projectedText)
+	}
+	if !strings.Contains(projectedText, "short result") {
+		t.Fatalf("expected short result to remain visible, got %q", projectedText)
+	}
+	if strings.Contains(projectedText, contentTruncatedForModelContext) {
+		t.Fatalf("did not expect truncation marker for short content, got %q", projectedText)
+	}
+	if projected[1].ToolMetadata != nil {
+		t.Fatalf("expected projected metadata to be cleared, got %#v", projected[1].ToolMetadata)
+	}
+	if renderDisplayParts(messages[1].Parts) != "short result" || messages[1].ToolMetadata == nil {
+		t.Fatalf("expected source messages to remain unchanged, got %+v", messages[1])
 	}
 }
 
@@ -393,7 +437,20 @@ func TestSanitizeProjectedToolContentFallsBackForRawPayload(t *testing.T) {
 	if !strings.Contains(sanitized, "...[truncated]...") {
 		t.Fatalf("expected middle truncation marker, got %q", sanitized)
 	}
-	if !strings.Contains(sanitized, "[content truncated for memo extraction]") {
+	if !strings.Contains(sanitized, contentTruncatedForModelContext) {
 		t.Fatalf("expected truncation marker, got %q", sanitized)
+	}
+}
+
+func TestSanitizeProjectedToolContentRawPayloadBoundaries(t *testing.T) {
+	t.Parallel()
+
+	if got := sanitizeProjectedToolContent("   "); got != "" {
+		t.Fatalf("expected blank raw content to sanitize to empty string, got %q", got)
+	}
+
+	const shortRaw = "short raw payload"
+	if got := sanitizeProjectedToolContent(shortRaw); got != shortRaw {
+		t.Fatalf("expected short raw payload unchanged, got %q", got)
 	}
 }

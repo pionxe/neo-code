@@ -13,12 +13,12 @@ import (
 )
 
 type Registry struct {
-	tools                   map[string]Tool
-	mcpMu                   sync.RWMutex
-	mcpRegistry             *mcp.Registry
-	mcpFactory              *mcp.AdapterFactory
-	mcpExposureFilter       mcp.ExposureFilter
-	mcpExposureAudit        []mcp.ExposureDecision
+	tools             map[string]Tool
+	mcpMu             sync.RWMutex
+	mcpRegistry       *mcp.Registry
+	mcpFactory        *mcp.AdapterFactory
+	mcpExposureFilter mcp.ExposureFilter
+	mcpExposureAudit  []mcp.ExposureDecision
 }
 
 func NewRegistry() *Registry {
@@ -107,9 +107,6 @@ func (r *Registry) Supports(name string) bool {
 	}
 	return r.supportsMCPTool(name)
 }
-
-
-
 
 func (r *Registry) GetSpecs() []providertypes.ToolSpec {
 	names := make([]string, 0, len(r.tools))

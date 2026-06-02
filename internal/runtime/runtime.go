@@ -259,8 +259,8 @@ func NewWithFactory(
 		toolManager = tools.NewRegistry()
 	}
 	if contextBuilder == nil {
-			contextBuilder = agentcontext.NewConfiguredBuilder()
-		}
+		contextBuilder = agentcontext.NewConfiguredBuilder()
+	}
 	service := &Service{
 		configManager:      configManager,
 		sessionStore:       sessionStore,

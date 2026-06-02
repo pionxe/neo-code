@@ -29,7 +29,6 @@ func (t *managerStubTool) Description() string { return "stub tool" }
 
 func (t *managerStubTool) Schema() map[string]any { return map[string]any{"type": "object"} }
 
-
 func (t *managerStubTool) Execute(ctx context.Context, call ToolCallInput) (ToolResult, error) {
 	t.callCount++
 	t.lastCall = call
@@ -45,10 +44,6 @@ type stubSandbox struct {
 	callCount  int
 	lastAction security.Action
 }
-
-
-
-
 
 func (s *stubSandbox) Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error) {
 	s.callCount++
@@ -120,8 +115,6 @@ func TestDefaultManagerListAvailableSpecsReadOnlyFiltersWriteTools(t *testing.T)
 		t.Fatalf("unexpected read-only specs: %+v", specs)
 	}
 }
-
-
 
 func TestDefaultManagerListAvailableSpecsBoundaries(t *testing.T) {
 	t.Parallel()

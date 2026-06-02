@@ -1,12 +1,12 @@
 package webfetch
 
 import (
-	"neo-code/internal/tools"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
+	"neo-code/internal/tools"
 	"net"
 	"net/http"
 	"net/url"
