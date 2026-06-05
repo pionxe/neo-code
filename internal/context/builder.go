@@ -8,21 +8,18 @@ import (
 type DefaultBuilder struct {
 	stablePromptSources  []promptSectionSource
 	dynamicPromptSources []promptSectionSource
-	promptSources        []promptSectionSource
 	trimPolicy           messageTrimPolicy
 }
 
 // newStablePromptSources 返回稳定提示词来源列表，适合作为缓存前缀。
-// extra 中的非 nil SectionSource 也会追加到 stable 中（如 memo 持久记忆索引）。
+// extra 会追加到 stable 中（如 memo 持久记忆索引）。
 func newStablePromptSources(extra ...SectionSource) []promptSectionSource {
 	sources := []promptSectionSource{
 		corePromptSource{},
 		newRulesPromptSource(nil),
 	}
 	for _, src := range extra {
-		if src != nil {
-			sources = append(sources, src)
-		}
+		sources = append(sources, src)
 	}
 	return sources
 }
@@ -41,7 +38,6 @@ func newDynamicPromptSources() []promptSectionSource {
 }
 
 // NewConfiguredBuilder 基于可选 SectionSource 列表构建上下文构建器，是推荐的统一构造入口。
-// sources 中 nil 元素会被跳过。
 func NewConfiguredBuilder(sources ...SectionSource) Builder {
 	return &DefaultBuilder{
 		stablePromptSources:  newStablePromptSources(sources...),
@@ -74,29 +70,17 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 		return BuildResult{}, err
 	}
 
-	stableSources := b.stablePromptSources
-	dynamicSources := b.dynamicPromptSources
+	stableSections, err := collectPromptSections(ctx, input, b.stablePromptSources)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	stablePrompt := composeSystemPrompt(stableSections...)
 
-	// 兼容旧构造方式：如果新字段未设置但旧 promptSources 有内容，回退到旧单列表。
-	if len(stableSources) == 0 && len(dynamicSources) == 0 && len(b.promptSources) > 0 {
-		stableSources = b.promptSources
+	dynamicSections, err := collectPromptSections(ctx, input, b.dynamicPromptSources)
+	if err != nil {
+		return BuildResult{}, err
 	}
-
-	var stablePrompt, dynamicPrompt string
-	if stableSources != nil {
-		stableSections, err := collectPromptSections(ctx, input, stableSources)
-		if err != nil {
-			return BuildResult{}, err
-		}
-		stablePrompt = composeSystemPrompt(stableSections...)
-	}
-	if dynamicSources != nil {
-		dynamicSections, err := collectPromptSections(ctx, input, dynamicSources)
-		if err != nil {
-			return BuildResult{}, err
-		}
-		dynamicPrompt = composeSystemPrompt(dynamicSections...)
-	}
+	dynamicPrompt := composeSystemPrompt(dynamicSections...)
 
 	systemPrompt := joinSystemPromptParts(stablePrompt, dynamicPrompt)
 

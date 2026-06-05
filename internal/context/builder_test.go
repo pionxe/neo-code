@@ -263,10 +263,12 @@ func TestDefaultBuilderBuildPlacesRulesBeforeMemo(t *testing.T) {
 	}
 
 	builder := &DefaultBuilder{
-		promptSources: []promptSectionSource{
+		stablePromptSources: []promptSectionSource{
 			corePromptSource{},
 			newRulesPromptSource(rules.NewLoader(baseDir)),
 			stubPromptSectionSource{sections: []promptSection{{Title: "Memo", Content: "remember this"}}},
+		},
+		dynamicPromptSources: []promptSectionSource{
 			&systemStateSource{},
 		},
 	}
@@ -312,7 +314,7 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 	}
 
 	builder := &DefaultBuilder{
-		promptSources: []promptSectionSource{
+		stablePromptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 	}
@@ -337,7 +339,7 @@ func TestDefaultBuilderBuildReturnsPromptSourceError(t *testing.T) {
 	t.Parallel()
 
 	builder := &DefaultBuilder{
-		promptSources: []promptSectionSource{
+		stablePromptSources: []promptSectionSource{
 			stubPromptSectionSource{err: fmt.Errorf("source failed")},
 		},
 	}
@@ -643,10 +645,12 @@ func TestNewConfiguredBuilder(t *testing.T) {
 		}
 	})
 
-	t.Run("nil section sources are skipped", func(t *testing.T) {
-		builder := NewConfiguredBuilder(nil, stubPromptSectionSource{
+	t.Run("multiple extra section sources are appended", func(t *testing.T) {
+		builder := NewConfiguredBuilder(stubPromptSectionSource{
+			sections: []promptSection{{Title: "First", Content: "first body"}},
+		}, stubPromptSectionSource{
 			sections: []promptSection{{Title: "Extra", Content: "extra body"}},
-		}, nil)
+		})
 		input := BuildInput{
 			Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 			Metadata: testMetadata(t.TempDir()),
@@ -657,6 +661,9 @@ func TestNewConfiguredBuilder(t *testing.T) {
 		}
 		if !strings.Contains(result.SystemPrompt, "## Extra") {
 			t.Errorf("expected Extra section in system prompt")
+		}
+		if !strings.Contains(result.SystemPrompt, "## First") {
+			t.Errorf("expected First section in system prompt")
 		}
 	})
 }
@@ -895,23 +902,30 @@ func TestDefaultBuilderBuildMemoIsStable(t *testing.T) {
 	}
 }
 
-func TestDefaultBuilderBuildStableAndDynamicPreservesBackwardCompat(t *testing.T) {
+func TestDefaultBuilderBuildStableAndDynamicFields(t *testing.T) {
 	t.Parallel()
 
 	builder := &DefaultBuilder{
-		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{Title: "Old", Content: "old style"}}},
+		stablePromptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stable", Content: "stable style"}}},
 		},
+		dynamicPromptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{Title: "Dynamic", Content: "dynamic style"}}},
+		},
+		trimPolicy: spanMessageTrimPolicy{},
 	}
 
 	result, err := builder.Build(stdcontext.Background(), BuildInput{})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if !strings.Contains(result.SystemPrompt, "old style") {
-		t.Fatalf("expected old style content in system prompt, got %q", result.SystemPrompt)
+	if !strings.Contains(result.SystemPrompt, "stable style") || !strings.Contains(result.SystemPrompt, "dynamic style") {
+		t.Fatalf("expected stable and dynamic content in system prompt, got %q", result.SystemPrompt)
 	}
-	if !strings.Contains(result.StableSystemPrompt, "old style") {
-		t.Fatalf("expected old style content in StableSystemPrompt, got %q", result.StableSystemPrompt)
+	if !strings.Contains(result.StableSystemPrompt, "stable style") {
+		t.Fatalf("expected stable content in StableSystemPrompt, got %q", result.StableSystemPrompt)
+	}
+	if !strings.Contains(result.DynamicSystemPrompt, "dynamic style") {
+		t.Fatalf("expected dynamic content in DynamicSystemPrompt, got %q", result.DynamicSystemPrompt)
 	}
 }
