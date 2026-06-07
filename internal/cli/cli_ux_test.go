@@ -100,3 +100,4 @@ func TestLegacyFeishuAdapterCommandShowsMigrationHint(t *testing.T) {
 		t.Fatalf("err = %v, want contains adapter feishu", err)
 	}
 }
+

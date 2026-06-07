@@ -1052,3 +1052,4 @@ func TestExecutorSkipsHookWhenMatcherMissed(t *testing.T) {
 		t.Fatalf("len(Results) = %d, want 0 when matcher missed", len(output.Results))
 	}
 }
+

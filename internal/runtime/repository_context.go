@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	agentcontext "neo-code/internal/context"
-	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/repository"
+	providertypes "neo-code/internal/provider/types"
 )
 
 // buildRepositoryContext 返回最小 Git 摘要（迁移期保留），不再自动注入 changed-files 或 retrieval。
