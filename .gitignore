@@ -42,6 +42,7 @@ workspace.xml
 .vscode/
 .claude/
 .windsurf/
+.codebuddy/
 # VitePress / frontend build artifacts
 www/.vitepress/cache/
 www/.vitepress/dist/
