@@ -45,4 +45,3 @@ func normalizeAskMessageRole(role string) string {
 		return "assistant"
 	}
 }
-

@@ -704,6 +704,7 @@ export interface ModelEntry {
   id: string;
   name: string;
   provider: string;
+  capability_hints?: ProviderModelCapabilityHints;
 }
 
 /** gateway.listModels 响应 */

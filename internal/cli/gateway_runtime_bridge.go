@@ -40,6 +40,10 @@ type runtimeRunCanceler interface {
 	CancelRun(runID string) bool
 }
 
+type sessionAssetDeleter interface {
+	DeleteAsset(ctx context.Context, sessionID string, assetID string) error
+}
+
 type runtimeSessionCreator interface {
 	CreateSession(ctx context.Context, id string) (agentsession.Session, error)
 }
@@ -709,6 +713,19 @@ func (b *gatewayRuntimePortBridge) SaveSessionAsset(
 	if sessionID == "" {
 		return gateway.SessionAssetMeta{}, gateway.ErrRuntimeResourceNotFound
 	}
+	if b.sessionStore == nil {
+		return gateway.SessionAssetMeta{}, fmt.Errorf("gateway runtime bridge: session store is unavailable")
+	}
+	loader, ok := b.sessionStore.(bridgeSessionLoader)
+	if !ok {
+		return gateway.SessionAssetMeta{}, fmt.Errorf("gateway runtime bridge: session asset store is unavailable")
+	}
+	if _, err := loader.LoadSession(ctx, sessionID); err != nil {
+		if isRuntimeNotFoundError(err) {
+			return gateway.SessionAssetMeta{}, gateway.ErrRuntimeResourceNotFound
+		}
+		return gateway.SessionAssetMeta{}, err
+	}
 	assetStore, ok := b.sessionStore.(agentsession.AssetStore)
 	if !ok || assetStore == nil {
 		return gateway.SessionAssetMeta{}, fmt.Errorf("gateway runtime bridge: session asset store is unavailable")
@@ -744,6 +761,9 @@ func (b *gatewayRuntimePortBridge) OpenSessionAsset(
 	}
 	reader, meta, err := assetStore.Open(ctx, sessionID, assetID)
 	if err != nil {
+		if isRuntimeNotFoundError(err) || errors.Is(err, os.ErrNotExist) {
+			return gateway.OpenSessionAssetResult{}, gateway.ErrRuntimeResourceNotFound
+		}
 		return gateway.OpenSessionAssetResult{}, err
 	}
 	return gateway.OpenSessionAssetResult{
@@ -755,6 +775,32 @@ func (b *gatewayRuntimePortBridge) OpenSessionAsset(
 			Size:      meta.Size,
 		},
 	}, nil
+}
+
+// DeleteSessionAsset 删除当前工作区的会话附件，供 Web 在取消上传引用时释放服务端文件。
+func (b *gatewayRuntimePortBridge) DeleteSessionAsset(ctx context.Context, input gateway.DeleteSessionAssetInput) error {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return err
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	assetID := strings.TrimSpace(input.AssetID)
+	if sessionID == "" || assetID == "" {
+		return gateway.ErrRuntimeResourceNotFound
+	}
+	if b.sessionStore == nil {
+		return fmt.Errorf("gateway runtime bridge: session store is unavailable")
+	}
+	deleter, ok := b.sessionStore.(sessionAssetDeleter)
+	if !ok || deleter == nil {
+		return fmt.Errorf("gateway runtime bridge: session asset store does not support delete")
+	}
+	if err := deleter.DeleteAsset(ctx, sessionID, assetID); err != nil {
+		if isRuntimeNotFoundError(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // DeleteSession 删除/归档指定会话。
@@ -2645,6 +2691,7 @@ type manualModelPayload struct {
 }
 
 var _ gateway.RuntimePort = (*gatewayRuntimePortBridge)(nil)
+var _ gateway.SessionAssetPort = (*gatewayRuntimePortBridge)(nil)
 
 func (b *gatewayRuntimePortBridge) ListCheckpoints(ctx context.Context, input gateway.ListCheckpointsInput) ([]gateway.CheckpointEntry, error) {
 	cp, ok := b.runtime.(runtimeCheckpointer)

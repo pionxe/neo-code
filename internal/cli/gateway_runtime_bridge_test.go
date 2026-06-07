@@ -1594,6 +1594,7 @@ func TestGatewayRuntimePortBridgeSessionAssets(t *testing.T) {
 
 	workdir := t.TempDir()
 	store := agentsession.NewSQLiteStore(t.TempDir(), workdir)
+	t.Cleanup(func() { _ = store.Close() })
 	session := agentsession.NewWithWorkdir("asset session", workdir)
 	if _, err := store.CreateSession(context.Background(), agentsession.CreateSessionInput{
 		ID:        session.ID,
@@ -1637,13 +1638,37 @@ func TestGatewayRuntimePortBridgeSessionAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSessionAsset() error = %v", err)
 	}
-	defer opened.Reader.Close()
 	got, err := io.ReadAll(opened.Reader)
 	if err != nil {
 		t.Fatalf("ReadAll() error = %v", err)
 	}
 	if string(got) != string(payload) || opened.Meta.AssetID != meta.AssetID || opened.Meta.MimeType != "image/png" {
 		t.Fatalf("unexpected opened asset meta=%+v payload=%q", opened.Meta, string(got))
+	}
+	if err := opened.Reader.Close(); err != nil {
+		t.Fatalf("Close opened asset reader: %v", err)
+	}
+
+	if err := bridge.DeleteSessionAsset(context.Background(), gateway.DeleteSessionAssetInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: session.ID,
+		AssetID:   meta.AssetID,
+	}); err != nil {
+		t.Fatalf("DeleteSessionAsset() error = %v", err)
+	}
+	if err := bridge.DeleteSessionAsset(context.Background(), gateway.DeleteSessionAssetInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: session.ID,
+		AssetID:   meta.AssetID,
+	}); err != nil {
+		t.Fatalf("DeleteSessionAsset() should be idempotent, got %v", err)
+	}
+	if _, err := bridge.OpenSessionAsset(context.Background(), gateway.OpenSessionAssetInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: session.ID,
+		AssetID:   meta.AssetID,
+	}); !errors.Is(err, gateway.ErrRuntimeResourceNotFound) {
+		t.Fatalf("OpenSessionAsset() after delete error = %v, want resource not found", err)
 	}
 }
 
@@ -1683,12 +1708,45 @@ func TestGatewayRuntimePortBridgeSessionAssetErrors(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "asset store is unavailable") {
 		t.Fatalf("expected unavailable asset store save error, got %v", err)
 	}
+	if err := bridge.DeleteSessionAsset(context.Background(), gateway.DeleteSessionAssetInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+		AssetID:   "asset-1",
+	}); err == nil || !strings.Contains(err.Error(), "does not support delete") {
+		t.Fatalf("expected unavailable asset store delete error, got %v", err)
+	}
 	if _, err := bridge.OpenSessionAsset(context.Background(), gateway.OpenSessionAssetInput{
 		SubjectID: testBridgeSubjectID,
 		SessionID: "session-1",
 		AssetID:   "asset-1",
 	}); err == nil || !strings.Contains(err.Error(), "asset store is unavailable") {
 		t.Fatalf("expected unavailable asset store open error, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSessionAssetSaveRequiresExistingSession(t *testing.T) {
+	t.Parallel()
+
+	store := agentsession.NewSQLiteStore(t.TempDir(), t.TempDir())
+	t.Cleanup(func() { _ = store.Close() })
+	bridge, err := newGatewayRuntimePortBridge(
+		context.Background(),
+		&runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)},
+		store,
+	)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	_, err = bridge.SaveSessionAsset(context.Background(), gateway.SaveSessionAssetInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "missing-session",
+		Reader:    strings.NewReader("x"),
+		MimeType:  "image/png",
+	})
+	if !errors.Is(err, gateway.ErrRuntimeResourceNotFound) {
+		t.Fatalf("SaveSessionAsset() missing session error = %v, want resource not found", err)
 	}
 }
 

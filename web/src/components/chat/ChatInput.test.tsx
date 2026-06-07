@@ -13,6 +13,7 @@ const mockGatewayAPI = {
   listModels: vi.fn(),
   createSession: vi.fn(),
   uploadSessionAsset: vi.fn(),
+  deleteSessionAsset: vi.fn(),
   run: vi.fn(),
   bindStream: vi.fn(),
   cancel: vi.fn(),
@@ -78,6 +79,7 @@ describe('ChatInput', () => {
       mime_type: 'image/png',
       size: 3,
     })
+    mockGatewayAPI.deleteSessionAsset.mockResolvedValue({})
     mockGatewayAPI.run.mockResolvedValue({ session_id: 'session-created', run_id: 'run-1' })
     mockGatewayAPI.bindStream.mockResolvedValue({})
     if (typeof URL.createObjectURL !== 'function') {
@@ -205,11 +207,97 @@ describe('ChatInput', () => {
         mode: 'build',
       })
     })
+    expect(mockGatewayAPI.createSession.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGatewayAPI.bindStream.mock.invocationCallOrder[0],
+    )
+    expect(mockGatewayAPI.bindStream.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGatewayAPI.uploadSessionAsset.mock.invocationCallOrder[0],
+    )
+    expect(mockGatewayAPI.uploadSessionAsset.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGatewayAPI.run.mock.invocationCallOrder[0],
+    )
 
     expect(useChatStore.getState().messages[0]).toMatchObject({
       role: 'user',
       attachments: [{ assetId: 'asset-1', previewUrl: 'blob:preview-1', workspaceHash: 'workspace-b' }],
     })
+  })
+
+  it('blocks image selection when the selected model explicitly rejects images', async () => {
+    mockGatewayAPI.listModels.mockResolvedValueOnce({
+      payload: {
+        models: [{
+          id: 'text-model',
+          name: 'Text Model',
+          provider: 'openai',
+          capability_hints: { image_input: 'unsupported' },
+        }],
+        selected_provider_id: 'openai',
+        selected_model_id: 'text-model',
+      },
+    })
+    render(<ChatInput />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /添加图片/ })).toBeDisabled()
+    })
+    const file = new File(['img'], 'a.png', { type: 'image/png' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => {
+      expect(useComposerStore.getState().attachments).toHaveLength(0)
+    })
+  })
+
+  it('blocks sending existing image attachments when the selected model rejects images', async () => {
+    mockGatewayAPI.listModels.mockResolvedValueOnce({
+      payload: {
+        models: [{
+          id: 'text-model',
+          name: 'Text Model',
+          provider: 'openai',
+          capability_hints: { image_input: 'unsupported' },
+        }],
+        selected_provider_id: 'openai',
+        selected_model_id: 'text-model',
+      },
+    })
+    render(<ChatInput />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /添加图片/ })).toBeDisabled()
+    })
+    useComposerStore.getState().addAttachmentFiles([new File(['img'], 'a.png', { type: 'image/png' })])
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.createSession).not.toHaveBeenCalled()
+      expect(mockGatewayAPI.uploadSessionAsset).not.toHaveBeenCalled()
+      expect(mockGatewayAPI.run).not.toHaveBeenCalled()
+    })
+  })
+
+  it('deletes uploaded session assets when run fails', async () => {
+    useSessionStore.setState({ currentSessionId: 'session-1' } as never)
+    mockGatewayAPI.uploadSessionAsset.mockResolvedValueOnce({
+      session_id: 'session-1',
+      asset_id: 'asset-failed',
+      mime_type: 'image/png',
+      size: 3,
+    })
+    mockGatewayAPI.run.mockRejectedValueOnce(new Error('run failed'))
+    render(<ChatInput />)
+
+    const file = new File(['img'], 'failed.png', { type: 'image/png' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.deleteSessionAsset).toHaveBeenCalledWith('session-1', 'asset-failed', 'workspace-b')
+    })
+    expect(useChatStore.getState().messages).toHaveLength(0)
   })
 
   it('treats slash text as a normal message when an image is attached', async () => {

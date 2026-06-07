@@ -262,6 +262,16 @@ type OpenSessionAssetInput struct {
 	AssetID string
 }
 
+// DeleteSessionAssetInput 表示删除会话附件的下游输入。
+type DeleteSessionAssetInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是附件所属会话标识。
+	SessionID string
+	// AssetID 是附件标识。
+	AssetID string
+}
+
 // OpenSessionAssetResult 表示打开会话附件后的读取结果。
 type OpenSessionAssetResult struct {
 	// Reader 是附件内容流，调用方负责关闭。
@@ -965,10 +975,6 @@ type RuntimePort interface {
 	GetRuntimeSnapshot(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error)
 	// CreateSession 创建并返回可用会话标识。
 	CreateSession(ctx context.Context, input CreateSessionInput) (string, error)
-	// SaveSessionAsset 保存会话附件并返回元数据。
-	SaveSessionAsset(ctx context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error)
-	// OpenSessionAsset 打开会话附件供 HTTP 读取接口返回。
-	OpenSessionAsset(ctx context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error)
 	// DeleteSession 删除/归档指定会话。
 	DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error)
 	// RenameSession 重命名指定会话。
@@ -995,6 +1001,16 @@ type RuntimePort interface {
 	UndoRestore(ctx context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error)
 	// CheckpointDiff 查询两个相邻代码检查点之间的差异。
 	CheckpointDiff(ctx context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error)
+}
+
+// SessionAssetPort 定义 Gateway HTTP 资产端点访问会话附件的独立下游端口。
+type SessionAssetPort interface {
+	// SaveSessionAsset 保存会话附件并返回元数据。
+	SaveSessionAsset(ctx context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error)
+	// OpenSessionAsset 打开会话附件供 HTTP 读取接口返回。
+	OpenSessionAsset(ctx context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error)
+	// DeleteSessionAsset 删除已上传但不再需要的会话附件。
+	DeleteSessionAsset(ctx context.Context, input DeleteSessionAssetInput) error
 }
 
 // PlanApprovalRuntimePort 定义批准计划的可选下游能力。

@@ -36,11 +36,11 @@ type ExecuteToolResultParams struct {
 
 // ToolRequestParams 是网关推送给 runner 的工具执行请求。
 type ToolRequestParams struct {
-	RequestID       string                   `json:"request_id"`
-	SessionID       string                   `json:"session_id"`
-	RunID           string                   `json:"run_id"`
-	ToolCallID      string                   `json:"tool_call_id"`
-	ToolName        string                   `json:"tool_name"`
-	Arguments       json.RawMessage          `json:"arguments"`
+	RequestID       string                    `json:"request_id"`
+	SessionID       string                    `json:"session_id"`
+	RunID           string                    `json:"run_id"`
+	ToolCallID      string                    `json:"tool_call_id"`
+	ToolName        string                    `json:"tool_name"`
+	Arguments       json.RawMessage           `json:"arguments"`
 	CapabilityToken *security.CapabilityToken `json:"capability_token,omitempty"`
 }

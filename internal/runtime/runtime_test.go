@@ -4760,8 +4760,215 @@ func TestServiceRunCompactedSessionRequestsRestoreAlignment(t *testing.T) {
 	}
 }
 
+func TestRunRejectsImageInputForUnsupportedModelBeforeProviderBuild(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	configureCurrentModelImageInputForTest(t, manager, providertypes.ModelCapabilityStateUnsupported)
+
+	store := newMemoryStore()
+	factory := &scriptedProviderFactory{provider: &scriptedProvider{}}
+	service := NewWithFactory(manager, tools.NewRegistry(), store, factory, &stubContextBuilder{})
+
+	err := service.Run(context.Background(), UserInput{
+		RunID: "run-image-unsupported",
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart("look at this"),
+			providertypes.NewSessionAssetImagePart("asset-1", "image/png"),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not support image input") {
+		t.Fatalf("Run() error = %v, want image input unsupported", err)
+	}
+	if factory.calls != 0 {
+		t.Fatalf("provider build calls = %d, want 0", factory.calls)
+	}
+}
+
+func TestRunProjectsHistoricalImagesForUnsupportedModelRequest(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	configureCurrentModelImageInputForTest(t, manager, providertypes.ModelCapabilityStateUnsupported)
+
+	store := newMemoryStore()
+	seed := agentsession.New("image history")
+	seed.ID = "session-image-history"
+	seed.Messages = []providertypes.Message{
+		{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("old image"),
+				providertypes.NewSessionAssetImagePart("asset-old", "image/png"),
+			},
+		},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("图片已收到")}},
+	}
+	store.sessions[seed.ID] = cloneSession(seed)
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{{
+			providertypes.NewTextDeltaStreamEvent("done"),
+			providertypes.NewMessageDoneStreamEvent("", nil),
+		}},
+	}
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-project-historical-image",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue without image")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(scripted.requests) != 1 {
+		t.Fatalf("provider requests = %d, want 1", len(scripted.requests))
+	}
+	if messagesContainImages(scripted.requests[0].Messages) {
+		t.Fatalf("provider request still contains image: %+v", scripted.requests[0].Messages)
+	}
+	if got := renderPartsForTest(scripted.requests[0].Messages[0].Parts); !strings.Contains(got, historicalImageOmittedForModel) {
+		t.Fatalf("projected historical image text = %q, want placeholder", got)
+	}
+
+	saved, err := store.Load(context.Background(), seed.ID)
+	if err != nil {
+		t.Fatalf("load saved session: %v", err)
+	}
+	if !messagesContainImages(saved.Messages[:1]) {
+		t.Fatalf("saved historical message lost image: %+v", saved.Messages[:1])
+	}
+}
+
+func TestProjectImagesForModelRequestCapabilityStates(t *testing.T) {
+	imageMessages := []providertypes.Message{{
+		Role:  providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset-1", "image/png")},
+	}}
+	currentText := []providertypes.ContentPart{providertypes.NewTextPart("hello")}
+	currentImage := []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset-new", "image/png")}
+
+	tests := []struct {
+		name        string
+		model       string
+		models      []providertypes.ModelDescriptor
+		current     []providertypes.ContentPart
+		wantErr     bool
+		wantImage   bool
+		wantOmitted bool
+	}{
+		{
+			name:  "unsupported historical image is omitted",
+			model: "model-a",
+			models: []providertypes.ModelDescriptor{{ID: "model-a", CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateUnsupported,
+			}}},
+			current:     currentText,
+			wantOmitted: true,
+		},
+		{
+			name:  "unknown historical image is omitted",
+			model: "model-a",
+			models: []providertypes.ModelDescriptor{{ID: "model-a", CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateUnknown,
+			}}},
+			current:     currentText,
+			wantOmitted: true,
+		},
+		{
+			name:        "missing model historical image is omitted",
+			model:       "missing",
+			models:      []providertypes.ModelDescriptor{{ID: "other"}},
+			current:     currentText,
+			wantOmitted: true,
+		},
+		{
+			name:  "supported historical image is retained",
+			model: "model-a",
+			models: []providertypes.ModelDescriptor{{ID: "model-a", CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateSupported,
+			}}},
+			current:   currentText,
+			wantImage: true,
+		},
+		{
+			name:  "unsupported current image rejects",
+			model: "model-a",
+			models: []providertypes.ModelDescriptor{{ID: "model-a", CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateUnsupported,
+			}}},
+			current: currentImage,
+			wantErr: true,
+		},
+		{
+			name:  "unknown current image is retained",
+			model: "model-a",
+			models: []providertypes.ModelDescriptor{{ID: "model-a", CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateUnknown,
+			}}},
+			current:   currentImage,
+			wantImage: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projected, err := projectImagesForModelRequest(tt.model, tt.models, imageMessages, tt.current)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected unsupported image input error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantErr {
+				return
+			}
+			if got := messagesContainImages(projected); got != tt.wantImage {
+				t.Fatalf("messagesContainImages(projected) = %t, want %t; projected=%+v", got, tt.wantImage, projected)
+			}
+			if got := strings.Contains(renderPartsForTest(projected[0].Parts), historicalImageOmittedForModel); got != tt.wantOmitted {
+				t.Fatalf("placeholder present = %t, want %t; projected=%+v", got, tt.wantOmitted, projected)
+			}
+			if !messagesContainImages(imageMessages) {
+				t.Fatalf("original messages were mutated: %+v", imageMessages)
+			}
+		})
+	}
+}
+
 func newRuntimeConfigManager(t *testing.T) *config.Manager {
 	return newRuntimeConfigManagerWithProviderEnvs(t, nil)
+}
+
+func configureCurrentModelImageInputForTest(
+	t *testing.T,
+	manager *config.Manager,
+	state providertypes.ModelCapabilityState,
+) {
+	t.Helper()
+	providerName := config.OpenAIName
+	modelID := "gpt-4o"
+	apiKeyEnv := config.OpenAIDefaultAPIKeyEnv
+	if state == providertypes.ModelCapabilityStateUnsupported {
+		providerName = config.QiniuName
+		modelID = config.QiniuDefaultModel
+		apiKeyEnv = config.QiniuDefaultAPIKeyEnv
+	}
+	t.Setenv(apiKeyEnv, "test-key")
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		providerIndex := -1
+		for index := range cfg.Providers {
+			if cfg.Providers[index].Name == providerName {
+				providerIndex = index
+				break
+			}
+		}
+		if providerIndex < 0 {
+			return fmt.Errorf("test config has no provider %q", providerName)
+		}
+		cfg.SelectedProvider = providerName
+		cfg.CurrentModel = modelID
+		cfg.Providers[providerIndex].Model = modelID
+		return nil
+	}); err != nil {
+		t.Fatalf("configure image input capability: %v", err)
+	}
 }
 
 func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[string]string) *config.Manager {

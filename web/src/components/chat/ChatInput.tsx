@@ -13,6 +13,7 @@ import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { formatTokenCount } from '@/utils/format'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
+import { type ModelEntry } from '@/api/protocol'
 import {
   builtinSlashCommands,
   matchSlashCommands,
@@ -36,6 +37,12 @@ const slashMenuAnchorStyle: React.CSSProperties = {
 
 const budgetWarningThresholdRatio = 0.9
 const budgetDangerThresholdRatio = 0.95
+const unsupportedImageInputMessage = '当前模型不支持图片输入，请切换支持图片的模型'
+
+type UploadedSessionAsset = {
+  attachment: ComposerAttachment
+  meta: { asset_id: string; mime_type: string; size?: number }
+}
 
 /** 将网关返回的技能列表转换成输入框使用的 slash 命令结构。 */
 function buildSkillSlashCommands(
@@ -153,6 +160,8 @@ export default function ChatInput() {
   const permissionMode = useChatStore((state) => state.permissionMode)
   const setPermissionMode = useChatStore((state) => state.setPermissionMode)
   const currentWorkspaceHash = useWorkspaceStore((state) => state.currentWorkspaceHash)
+  const providerChangeTick = useGatewayStore((state) => state.providerChangeTick)
+  const [currentImageInput, setCurrentImageInput] = useState('')
 
   const [showSlashMenu, setShowSlashMenu] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -178,6 +187,26 @@ export default function ChatInput() {
       cancelled = true
     }
   }, [text, gatewayAPI, sessionId])
+
+  useEffect(() => {
+    if (!gatewayAPI) return
+    let cancelled = false
+    gatewayAPI.listModels(sessionId || undefined).then((result) => {
+      if (cancelled) return
+      const payload = result.payload
+      const selected = resolveSelectedModelEntry(
+        payload?.models || [],
+        payload?.selected_provider_id || '',
+        payload?.selected_model_id || '',
+      )
+      setCurrentImageInput(selected?.capability_hints?.image_input || '')
+    }).catch(() => {
+      if (!cancelled) setCurrentImageInput('')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [gatewayAPI, sessionId, providerChangeTick])
 
   useEffect(() => {
     if (!isSlashCommand(text)) {
@@ -320,6 +349,9 @@ export default function ChatInput() {
     const pendingAttachments = attachments
     if (!input && pendingAttachments.length === 0) return
     let submittedMessageId = ''
+    let targetSessionId = sessionId
+    let workspaceHash = currentWorkspaceHash.trim()
+    let uploaded: UploadedSessionAsset[] = []
 
     if (isCompacting) {
       useUIStore.getState().showToast('Context compaction is still running', 'info')
@@ -338,9 +370,13 @@ export default function ChatInput() {
       if (handled) return
     }
 
+    if (pendingAttachments.length > 0 && currentImageInput === 'unsupported') {
+      useUIStore.getState().showToast(unsupportedImageInputMessage, 'error')
+      return
+    }
+
     try {
       if (!gatewayAPI) return
-      let targetSessionId = sessionId
       if (!isValidSessionId(targetSessionId)) {
         const created = await gatewayAPI.createSession()
         targetSessionId = created.payload?.session_id || ''
@@ -349,8 +385,7 @@ export default function ChatInput() {
         await gatewayAPI.bindStream({ session_id: targetSessionId, channel: 'all' }).catch(() => {})
       }
 
-      const workspaceHash = currentWorkspaceHash.trim()
-      const uploaded = []
+      workspaceHash = currentWorkspaceHash.trim()
       for (const attachment of pendingAttachments) {
         setAttachmentStatus(attachment.id, 'uploading')
         try {
@@ -402,6 +437,9 @@ export default function ChatInput() {
         }
       }
     } catch (err) {
+      if (gatewayAPI && uploaded.length > 0 && isValidSessionId(targetSessionId)) {
+        await cleanupUploadedSessionAssets(gatewayAPI, targetSessionId, workspaceHash, uploaded)
+      }
       if (!runCancelledRef.current) {
         if (submittedMessageId) {
           removeMessage(submittedMessageId)
@@ -476,6 +514,10 @@ export default function ChatInput() {
   }
 
   function handleFilesSelected(files: FileList | File[]) {
+    if (currentImageInput === 'unsupported') {
+      useUIStore.getState().showToast(unsupportedImageInputMessage, 'error')
+      return
+    }
     const accepted: File[] = []
     for (const file of Array.from(files)) {
       if (!acceptedImageMimeTypes.includes(file.type as any)) {
@@ -577,10 +619,16 @@ export default function ChatInput() {
                 <button
                   type="button"
                   aria-label="添加图片"
-                  title="添加图片"
-                  disabled={controlsLocked}
-                  style={iconButtonStyle(controlsLocked)}
-                  onClick={() => fileInputRef.current?.click()}
+                  title={currentImageInput === 'unsupported' ? unsupportedImageInputMessage : '添加图片'}
+                  disabled={controlsLocked || currentImageInput === 'unsupported'}
+                  style={iconButtonStyle(controlsLocked || currentImageInput === 'unsupported')}
+                  onClick={() => {
+                    if (currentImageInput === 'unsupported') {
+                      useUIStore.getState().showToast(unsupportedImageInputMessage, 'error')
+                      return
+                    }
+                    fileInputRef.current?.click()
+                  }}
                 >
                   <ImagePlus size={16} />
                 </button>
@@ -654,7 +702,7 @@ export default function ChatInput() {
 
 function buildRunInputParts(
   input: string,
-  uploaded: Array<{ attachment: ComposerAttachment; meta: { asset_id: string; mime_type: string } }>,
+  uploaded: UploadedSessionAsset[],
 ) {
   const parts = []
   if (input.trim()) parts.push({ type: 'text', text: input.trim() })
@@ -669,6 +717,26 @@ function buildRunInputParts(
     })
   }
   return parts
+}
+
+function resolveSelectedModelEntry(models: ModelEntry[], providerID: string, modelID: string) {
+  const selectedProvider = providerID.trim()
+  const selectedModel = modelID.trim()
+  if (!selectedModel) return null
+  return models.find((entry) => (
+    entry.id === selectedModel && (!selectedProvider || entry.provider === selectedProvider)
+  )) ?? models.find((entry) => entry.id === selectedModel) ?? null
+}
+
+async function cleanupUploadedSessionAssets(
+  gatewayAPI: NonNullable<ReturnType<typeof useGatewayAPI>>,
+  sessionId: string,
+  workspaceHash: string,
+  uploaded: UploadedSessionAsset[],
+) {
+  await Promise.allSettled(uploaded.map((item) => (
+    gatewayAPI.deleteSessionAsset(sessionId, item.meta.asset_id, workspaceHash)
+  )))
 }
 
 function AttachmentPreview({

@@ -596,7 +596,6 @@ func TestValidateRepoHookItemRejectsExternalKindsWithP6LiteMessage(t *testing.T)
 	}
 }
 
-
 func TestValidateRepoHookItemAllowsWarnOnToolCallWithMatchOnly(t *testing.T) {
 	t.Parallel()
 

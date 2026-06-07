@@ -407,6 +407,7 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 func TestNetworkServerSessionAssetUploadAndRead(t *testing.T) {
 	payload := gatewayMinimalPNGBytes()
 	var capturedUpload SaveSessionAssetInput
+	var capturedDelete DeleteSessionAssetInput
 	runtimePort := &runtimePortEventStub{
 		saveAssetFn: func(_ context.Context, input SaveSessionAssetInput) (SessionAssetMeta, error) {
 			capturedUpload = input
@@ -437,6 +438,10 @@ func TestNetworkServerSessionAssetUploadAndRead(t *testing.T) {
 					Size:      int64(len(payload)),
 				},
 			}, nil
+		},
+		deleteAssetFn: func(_ context.Context, input DeleteSessionAssetInput) error {
+			capturedDelete = input
+			return nil
 		},
 	}
 	server := &NetworkServer{authenticator: staticTokenAuthenticator{token: "gateway-token"}}
@@ -473,6 +478,19 @@ func TestNetworkServerSessionAssetUploadAndRead(t *testing.T) {
 	if !bytes.Equal(readRecorder.Body.Bytes(), payload) {
 		t.Fatalf("read payload mismatch")
 	}
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/session-assets/session-1/asset-1", nil)
+	deleteRequest.Header.Set("Authorization", "Bearer gateway-token")
+	deleteRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+	if capturedDelete.SubjectID != "local_admin" ||
+		capturedDelete.SessionID != "session-1" ||
+		capturedDelete.AssetID != "asset-1" {
+		t.Fatalf("captured delete = %+v", capturedDelete)
+	}
 }
 
 func TestNetworkServerSessionAssetsRespectHTTPACL(t *testing.T) {
@@ -489,6 +507,10 @@ func TestNetworkServerSessionAssetsRespectHTTPACL(t *testing.T) {
 		openAssetFn: func(context.Context, OpenSessionAssetInput) (OpenSessionAssetResult, error) {
 			t.Fatal("OpenSessionAsset should not be called when ACL denies read")
 			return OpenSessionAssetResult{}, nil
+		},
+		deleteAssetFn: func(context.Context, DeleteSessionAssetInput) error {
+			t.Fatal("DeleteSessionAsset should not be called when ACL denies delete")
+			return nil
 		},
 	}
 	server := &NetworkServer{
@@ -512,6 +534,14 @@ func TestNetworkServerSessionAssetsRespectHTTPACL(t *testing.T) {
 	handler.ServeHTTP(readRecorder, readRequest)
 	if readRecorder.Code != http.StatusForbidden {
 		t.Fatalf("read status = %d body=%s, want %d", readRecorder.Code, readRecorder.Body.String(), http.StatusForbidden)
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/session-assets/session-1/asset-1", nil)
+	deleteRequest.Header.Set("Authorization", "Bearer gateway-token")
+	deleteRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusForbidden {
+		t.Fatalf("delete status = %d body=%s, want %d", deleteRecorder.Code, deleteRecorder.Body.String(), http.StatusForbidden)
 	}
 }
 
@@ -688,6 +718,62 @@ func TestNetworkServerSessionAssetReadNotFound(t *testing.T) {
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
+func TestNetworkServerSessionAssetDeleteMissingIsIdempotent(t *testing.T) {
+	called := false
+	runtimePort := &runtimePortEventStub{
+		deleteAssetFn: func(_ context.Context, input DeleteSessionAssetInput) error {
+			called = true
+			if input.SubjectID != "local_admin" || input.SessionID != "session-1" || input.AssetID != "missing" {
+				t.Fatalf("delete input = %+v, want subject/session/missing", input)
+			}
+			return nil
+		},
+	}
+	server := &NetworkServer{authenticator: staticTokenAuthenticator{token: "gateway-token"}}
+	handler := server.buildHandler(runtimePort)
+
+	request := httptest.NewRequest(http.MethodDelete, "/api/session-assets/session-1/missing", nil)
+	request.Header.Set("Authorization", "Bearer gateway-token")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want %d", recorder.Code, recorder.Body.String(), http.StatusOK)
+	}
+	if !called {
+		t.Fatal("DeleteSessionAsset was not called")
+	}
+}
+
+func TestNetworkServerSessionAssetsRequireAssetPort(t *testing.T) {
+	runtimePort := &runtimePortWithoutSessionAsset{RuntimePort: &runtimePortEventStub{}}
+	server := &NetworkServer{authenticator: staticTokenAuthenticator{token: "gateway-token"}}
+	handler := server.buildHandler(runtimePort)
+
+	uploadRequest := newSessionAssetUploadRequest(t, "session-1", "a.png", gatewayMinimalPNGBytes())
+	uploadRequest.Header.Set("Authorization", "Bearer gateway-token")
+	uploadRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(uploadRecorder, uploadRequest)
+	if uploadRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("upload status = %d body=%s, want %d", uploadRecorder.Code, uploadRecorder.Body.String(), http.StatusServiceUnavailable)
+	}
+
+	readRequest := httptest.NewRequest(http.MethodGet, "/api/session-assets/session-1/asset-1", nil)
+	readRequest.Header.Set("Authorization", "Bearer gateway-token")
+	readRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(readRecorder, readRequest)
+	if readRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("read status = %d body=%s, want %d", readRecorder.Code, readRecorder.Body.String(), http.StatusServiceUnavailable)
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/session-assets/session-1/asset-1", nil)
+	deleteRequest.Header.Set("Authorization", "Bearer gateway-token")
+	deleteRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("delete status = %d body=%s, want %d", deleteRecorder.Code, deleteRecorder.Body.String(), http.StatusServiceUnavailable)
 	}
 }
 

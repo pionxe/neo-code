@@ -35,6 +35,8 @@ const (
 	maxAcceptanceContinues = 3
 )
 
+const historicalImageOmittedForModel = "[历史图片已省略：当前模型不支持图片输入]"
+
 // computeToolSignature 计算单轮执行的工具签名，用于循环检测。
 func computeToolSignature(calls []providertypes.ToolCall) string {
 	if len(calls) == 0 {
@@ -167,6 +169,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	state.taskID = strings.TrimSpace(input.TaskID)
 	state.agentID = strings.TrimSpace(input.AgentID)
 	state.userGoal = strings.TrimSpace(partsrender.RenderDisplayParts(input.Parts))
+	state.currentInputParts = providertypes.CloneParts(input.Parts)
 	if input.CapabilityToken != nil {
 		token := input.CapabilityToken.Normalize()
 		state.capabilityToken = &token
@@ -211,6 +214,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(err)
 	}
 	if err := s.maybeAppendPlanBootstrapReminder(ctx, &state); err != nil {
+		return s.handleRunError(err)
+	}
+	resolvedProviderForImages, modelForImages, err := resolveCompactProviderSelection(state.session, initialCfg)
+	if err != nil {
+		return s.handleRunError(err)
+	}
+	if err := rejectUnsupportedCurrentImageInput(modelForImages, resolvedProviderForImages.Models, input.Parts); err != nil {
 		return s.handleRunError(err)
 	}
 	s.emitRuntimeSnapshotUpdated(ctx, &state, "session_start")
@@ -629,7 +639,15 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	budgetCfg.SelectedProvider = resolvedProvider.Name
 	budgetCfg.CurrentModel = model
 	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, budgetCfg)
-	requestMessages := append([]providertypes.Message(nil), builtContext.Messages...)
+	requestMessages, err := projectImagesForModelRequest(
+		model,
+		resolvedProvider.Models,
+		builtContext.Messages,
+		state.currentInputParts,
+	)
+	if err != nil {
+		return TurnBudgetSnapshot{}, false, err
+	}
 	thinkingCfg, thinkingErr := resolveThinkingConfig(
 		modelCapabilityHintsForRequest(model, resolvedProvider.Models),
 		state.thinkingOverride,
@@ -1106,6 +1124,91 @@ func hasUserInputParts(parts []providertypes.ContentPart) bool {
 			}
 		case providertypes.ContentPartImage:
 			if part.Image != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// projectImagesForModelRequest 根据当前模型能力生成 provider 可见的图片请求视图，历史图片降级不污染持久化消息。
+func projectImagesForModelRequest(
+	model string,
+	models []providertypes.ModelDescriptor,
+	messages []providertypes.Message,
+	currentInputParts []providertypes.ContentPart,
+) ([]providertypes.Message, error) {
+	if !messagesContainImages(messages) {
+		return cloneMessagesForPersistence(messages), nil
+	}
+	if partsContainImages(currentInputParts) {
+		if err := rejectUnsupportedCurrentImageInput(model, models, currentInputParts); err != nil {
+			return nil, err
+		}
+		return cloneMessagesForPersistence(messages), nil
+	}
+
+	hints := modelCapabilityHintsForRequest(model, models)
+	if hints.ImageInput == providertypes.ModelCapabilityStateSupported {
+		return cloneMessagesForPersistence(messages), nil
+	}
+	return projectHistoricalImagesAsText(messages), nil
+}
+
+// rejectUnsupportedCurrentImageInput 在请求发送前拦截明确不支持本次图片输入的模型，避免上游返回协议级 400。
+func rejectUnsupportedCurrentImageInput(
+	model string,
+	models []providertypes.ModelDescriptor,
+	parts []providertypes.ContentPart,
+) error {
+	if !partsContainImages(parts) {
+		return nil
+	}
+	hints := modelCapabilityHintsForRequest(model, models)
+	if hints.ImageInput != providertypes.ModelCapabilityStateUnsupported {
+		return nil
+	}
+	return fmt.Errorf(
+		"runtime: model %q does not support image input; switch to a multimodal model or remove the image",
+		strings.TrimSpace(model),
+	)
+}
+
+// projectHistoricalImagesAsText 把 provider 请求中的历史图片分片替换为文本占位，保留消息顺序和其他文本内容。
+func projectHistoricalImagesAsText(messages []providertypes.Message) []providertypes.Message {
+	projected := cloneMessagesForPersistence(messages)
+	for messageIndex := range projected {
+		if len(projected[messageIndex].Parts) == 0 {
+			continue
+		}
+		parts := make([]providertypes.ContentPart, 0, len(projected[messageIndex].Parts))
+		for _, part := range projected[messageIndex].Parts {
+			if part.Kind == providertypes.ContentPartImage && part.Image != nil {
+				parts = append(parts, providertypes.NewTextPart(historicalImageOmittedForModel))
+				continue
+			}
+			parts = append(parts, part)
+		}
+		projected[messageIndex].Parts = parts
+	}
+	return projected
+}
+
+// partsContainImages 判断当前输入分片中是否包含图片分片。
+func partsContainImages(parts []providertypes.ContentPart) bool {
+	for _, part := range parts {
+		if part.Kind == providertypes.ContentPartImage && part.Image != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// messagesContainImages 判断上下文消息中是否包含图片分片。
+func messagesContainImages(messages []providertypes.Message) bool {
+	for _, message := range messages {
+		for _, part := range message.Parts {
+			if part.Kind == providertypes.ContentPartImage && part.Image != nil {
 				return true
 			}
 		}

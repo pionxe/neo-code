@@ -286,14 +286,14 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 		default:
 			return fmt.Errorf("handler %q is not supported", c.Handler)
 		}
-			if handler == runtimeHookHandlerWarnOnToolCall && !hooks.HasHookMatcherConfig(c.Match) {
-				return fmt.Errorf("handler %q requires match", c.Handler)
+		if handler == runtimeHookHandlerWarnOnToolCall && !hooks.HasHookMatcherConfig(c.Match) {
+			return fmt.Errorf("handler %q requires match", c.Handler)
+		}
+		if hooks.HasHookMatcherConfig(c.Match) {
+			if err := hooks.ValidateHookMatcher(point, c.Match); err != nil {
+				return fmt.Errorf("match: %w", err)
 			}
-			if hooks.HasHookMatcherConfig(c.Match) {
-				if err := hooks.ValidateHookMatcher(point, c.Match); err != nil {
-					return fmt.Errorf("match: %w", err)
-				}
-			}
+		}
 	case runtimeHookKindCommand:
 		if normalizedMode != runtimeHookModeSync {
 			return fmt.Errorf("mode %q is not supported for kind command (only sync)", c.Mode)

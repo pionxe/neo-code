@@ -110,6 +110,19 @@ describe('GatewayAPI', () => {
 		})
 	})
 
+	it('deletes session assets with bearer auth and workspace header', async () => {
+		const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+		vi.stubGlobal('fetch', fetchMock)
+		api = new GatewayAPI(ws, '/gateway', 'token-1')
+
+		await api.deleteSessionAsset('s 1', 'asset/1', 'workspace-b')
+
+		expect(fetchMock).toHaveBeenCalledWith('/gateway/api/session-assets/s%201/asset%2F1', {
+			method: 'DELETE',
+			headers: { Authorization: 'Bearer token-1', 'X-NeoCode-Workspace-Hash': 'workspace-b' },
+		})
+	})
+
 	it('uses switched workspace as session asset HTTP fallback', async () => {
 		call.mockResolvedValueOnce({ type: 'ack', payload: { workspace_hash: 'workspace-c' } })
 		const fetchMock = vi.fn().mockResolvedValue({
@@ -121,8 +134,13 @@ describe('GatewayAPI', () => {
 
 		await api.switchWorkspace('workspace-c')
 		await api.fetchSessionAsset('s1', 'asset-1')
+		await api.deleteSessionAsset('s1', 'asset-1')
 
-		expect(fetchMock).toHaveBeenCalledWith('/api/session-assets/s1/asset-1', {
+		expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/session-assets/s1/asset-1', {
+			headers: { Authorization: 'Bearer token-1', 'X-NeoCode-Workspace-Hash': 'workspace-c' },
+		})
+		expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/session-assets/s1/asset-1', {
+			method: 'DELETE',
 			headers: { Authorization: 'Bearer token-1', 'X-NeoCode-Workspace-Hash': 'workspace-c' },
 		})
 	})

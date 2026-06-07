@@ -197,7 +197,7 @@ type HookSpec struct {
 	Timeout       time.Duration
 	FailurePolicy FailurePolicy
 	Handler       HookHandler
-	Matcher *HookMatcher
+	Matcher       *HookMatcher
 }
 
 // normalizeAndValidate 将 HookSpec 归一化并校验当前阶段可用字段。

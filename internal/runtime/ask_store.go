@@ -117,4 +117,3 @@ func (s *inMemoryAskSessionStore) cleanupExpiredLocked(now time.Time) {
 		delete(s.sessions, sessionID)
 	}
 }
-

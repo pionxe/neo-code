@@ -233,17 +233,17 @@ func buildConfiguredHookSpec(
 		return runtimehooks.HookSpec{}, buildErr
 	}
 	return runtimehooks.HookSpec{
-		ID:                      strings.TrimSpace(item.ID),
-		Point:                   point,
-		Scope:                   scope,
-		Source:                  source,
-		Kind:                    specKind,
-		Mode:                    specMode,
-		Priority:                item.Priority,
-		Timeout:                 time.Duration(item.TimeoutSec) * time.Second,
-		FailurePolicy:           mapRuntimeHookFailurePolicy(item.FailurePolicy),
-		Handler:                 handler,
-		Matcher:                 matcher,
+		ID:            strings.TrimSpace(item.ID),
+		Point:         point,
+		Scope:         scope,
+		Source:        source,
+		Kind:          specKind,
+		Mode:          specMode,
+		Priority:      item.Priority,
+		Timeout:       time.Duration(item.TimeoutSec) * time.Second,
+		FailurePolicy: mapRuntimeHookFailurePolicy(item.FailurePolicy),
+		Handler:       handler,
+		Matcher:       matcher,
 	}, nil
 }
 
@@ -262,15 +262,15 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 		if mode != configuredHookModeSync {
 			return fmt.Errorf("mode %q is not supported", item.Mode)
 		}
-			handler := strings.ToLower(strings.TrimSpace(item.Handler))
-			if handler == "warn_on_tool_call" && !runtimehooks.HasHookMatcherConfig(item.Match) {
-				return fmt.Errorf("handler %q requires match", item.Handler)
+		handler := strings.ToLower(strings.TrimSpace(item.Handler))
+		if handler == "warn_on_tool_call" && !runtimehooks.HasHookMatcherConfig(item.Match) {
+			return fmt.Errorf("handler %q requires match", item.Handler)
+		}
+		if runtimehooks.HasHookMatcherConfig(item.Match) {
+			if err := runtimehooks.ValidateHookMatcher(runtimehooks.HookPoint(strings.TrimSpace(item.Point)), item.Match); err != nil {
+				return fmt.Errorf("match: %w", err)
 			}
-			if runtimehooks.HasHookMatcherConfig(item.Match) {
-				if err := runtimehooks.ValidateHookMatcher(runtimehooks.HookPoint(strings.TrimSpace(item.Point)), item.Match); err != nil {
-					return fmt.Errorf("match: %w", err)
-				}
-			}
+		}
 	case configuredHookKindCommand:
 		if mode != configuredHookModeSync {
 			return fmt.Errorf("mode %q is not supported for kind command (only sync)", item.Mode)
@@ -307,7 +307,6 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 	}
 	return nil
 }
-
 
 // buildConfiguredHookMatcher 编译 hook matcher。
 func buildConfiguredHookMatcher(item config.RuntimeHookItemConfig, point runtimehooks.HookPoint) (*runtimehooks.HookMatcher, error) {
@@ -376,16 +375,16 @@ func buildUserBuiltinHookHandler(
 			}
 			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
 		}, nil
-		case "warn_on_tool_call":
-			defaultMessage := "tool call matched warn_on_tool_call"
-			if customMessage := strings.TrimSpace(readHookParamString(params, "message")); customMessage != "" {
-				defaultMessage = customMessage
-			}
-			return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
-				_ = ctx
-				_ = input
-				return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: defaultMessage}
-			}, nil
+	case "warn_on_tool_call":
+		defaultMessage := "tool call matched warn_on_tool_call"
+		if customMessage := strings.TrimSpace(readHookParamString(params, "message")); customMessage != "" {
+			defaultMessage = customMessage
+		}
+		return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+			_ = ctx
+			_ = input
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: defaultMessage}
+		}, nil
 	case "add_context_note":
 		note := strings.TrimSpace(readHookParamString(params, "note"))
 		if note == "" {

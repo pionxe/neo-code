@@ -398,7 +398,7 @@ func TestRuntimeHooksConfigItemDefaultsAndClone(t *testing.T) {
 				},
 			},
 		},
-}
+	}
 	cfg.ApplyDefaults(defaultRuntimeHooksConfig())
 
 	item := cfg.Items[0]
@@ -665,7 +665,6 @@ func TestRuntimeHooksConfigEdgeBranches(t *testing.T) {
 		if origNested["b"] == "changed" {
 			t.Fatal("expected deep clone for nested map in slice")
 		}
-
 
 		matchCfg := RuntimeHookItemConfig{
 			Match: map[string]any{

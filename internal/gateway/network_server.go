@@ -375,7 +375,7 @@ func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 		s.handleSessionAssetUpload(writer, request, runtimePort)
 	})
 	mux.HandleFunc("/api/session-assets/", func(writer http.ResponseWriter, request *http.Request) {
-		s.handleSessionAssetRead(writer, request, runtimePort)
+		s.handleSessionAssetRequest(writer, request, runtimePort)
 	})
 	mux.Handle("/ws", websocket.Server{
 		Handshake: func(_ *websocket.Config, request *http.Request) error {
@@ -412,7 +412,8 @@ func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, req
 		s.writeHTTPAccessDenied(writer, sessionAssetUploadMethod)
 		return
 	}
-	if runtimePort == nil {
+	assetPort, ok := runtimePort.(SessionAssetPort)
+	if runtimePort == nil || !ok {
 		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "runtime unavailable"})
 		return
 	}
@@ -463,7 +464,7 @@ func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, req
 		return
 	}
 
-	meta, err := runtimePort.SaveSessionAsset(sessionAssetRequestContext(request), SaveSessionAssetInput{
+	meta, err := assetPort.SaveSessionAsset(sessionAssetRequestContext(request), SaveSessionAssetInput{
 		SubjectID: subjectID,
 		SessionID: sessionID,
 		Reader:    bytes.NewReader(payload),
@@ -476,22 +477,31 @@ func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, req
 	writeJSONResponse(writer, http.StatusOK, meta)
 }
 
+// handleSessionAssetRequest 按 HTTP 方法分发会话附件读取或删除请求。
+func (s *NetworkServer) handleSessionAssetRequest(writer http.ResponseWriter, request *http.Request, runtimePort RuntimePort) {
+	switch request.Method {
+	case http.MethodGet:
+		s.handleSessionAssetRead(writer, request, runtimePort)
+	case http.MethodDelete:
+		s.handleSessionAssetDelete(writer, request, runtimePort)
+	default:
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleSessionAssetRead 读取会话图片附件，供 Web 历史消息缩略图展示。
 func (s *NetworkServer) handleSessionAssetRead(writer http.ResponseWriter, request *http.Request, runtimePort RuntimePort) {
-	if request.Method != http.MethodGet {
-		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	subjectID, ok := s.authenticatedHTTPSubjectID(request)
 	if !ok {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if !s.isHTTPControlPlaneMethodAllowed(sessionAssetReadMethod) {
-		s.writeHTTPAccessDenied(writer, sessionAssetReadMethod)
+	if !s.isHTTPControlPlaneMethodAllowed(sessionAssetDeleteMethod) {
+		s.writeHTTPAccessDenied(writer, sessionAssetDeleteMethod)
 		return
 	}
-	if runtimePort == nil {
+	assetPort, ok := runtimePort.(SessionAssetPort)
+	if runtimePort == nil || !ok {
 		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "runtime unavailable"})
 		return
 	}
@@ -501,7 +511,7 @@ func (s *NetworkServer) handleSessionAssetRead(writer http.ResponseWriter, reque
 		http.NotFound(writer, request)
 		return
 	}
-	result, err := runtimePort.OpenSessionAsset(sessionAssetRequestContext(request), OpenSessionAssetInput{
+	result, err := assetPort.OpenSessionAsset(sessionAssetRequestContext(request), OpenSessionAssetInput{
 		SubjectID: subjectID,
 		SessionID: sessionID,
 		AssetID:   assetID,
@@ -520,6 +530,39 @@ func (s *NetworkServer) handleSessionAssetRead(writer http.ResponseWriter, reque
 	}
 	writer.Header().Set("Cache-Control", "private, max-age=300")
 	_, _ = io.Copy(writer, result.Reader)
+}
+
+// handleSessionAssetDelete 删除用户已上传但不再需要的会话图片附件。
+func (s *NetworkServer) handleSessionAssetDelete(writer http.ResponseWriter, request *http.Request, runtimePort RuntimePort) {
+	subjectID, ok := s.authenticatedHTTPSubjectID(request)
+	if !ok {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.isHTTPControlPlaneMethodAllowed(sessionAssetReadMethod) {
+		s.writeHTTPAccessDenied(writer, sessionAssetReadMethod)
+		return
+	}
+	assetPort, ok := runtimePort.(SessionAssetPort)
+	if runtimePort == nil || !ok {
+		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "runtime unavailable"})
+		return
+	}
+
+	sessionID, assetID, ok := parseSessionAssetPath(request.URL.Path)
+	if !ok {
+		http.NotFound(writer, request)
+		return
+	}
+	if err := assetPort.DeleteSessionAsset(sessionAssetRequestContext(request), DeleteSessionAssetInput{
+		SubjectID: subjectID,
+		SessionID: sessionID,
+		AssetID:   assetID,
+	}); err != nil {
+		writeSessionAssetReadHTTPError(writer, err)
+		return
+	}
+	writeJSONResponse(writer, http.StatusOK, map[string]bool{"deleted": true})
 }
 
 // sessionAssetRequestContext 将 HTTP Header 中的工作区哈希注入请求上下文，供多工作区 Runtime 路由。
@@ -619,6 +662,8 @@ func writeSessionAssetHTTPError(writer http.ResponseWriter, err error, notFoundM
 	switch {
 	case strings.Contains(message, "workspace") && strings.Contains(message, "not found"):
 		writeJSONResponse(writer, http.StatusNotFound, map[string]string{"error": "workspace not found"})
+	case errors.Is(err, ErrRuntimeUnavailable):
+		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "runtime unavailable"})
 	case errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrRuntimeResourceNotFound):
 		writeJSONResponse(writer, http.StatusNotFound, map[string]string{"error": notFoundMessage})
 	case strings.Contains(message, "asset size exceeds"):

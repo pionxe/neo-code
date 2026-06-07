@@ -12,6 +12,7 @@ beforeEach(() => {
       currentSessionId: "",
       currentProjectId: "",
       loading: false,
+      _pendingNewSession: false,
     }) as any,
   );
   useChatStore.setState({
@@ -380,6 +381,7 @@ describe("useSessionStore", () => {
 
     expect(useChatStore.getState().messages).toHaveLength(0);
     expect(useSessionStore.getState().currentSessionId).toBe("");
+    expect((useSessionStore.getState() as any)._pendingNewSession).toBe(true);
   });
 
   it("createSession is blocked while generating", () => {
@@ -416,6 +418,7 @@ describe("useSessionStore", () => {
     expect(useChatStore.getState().messages).toHaveLength(0);
     expect(useSessionStore.getState().currentSessionId).toBe("");
     expect(useSessionStore.getState().currentProjectId).toBe("");
+    expect((useSessionStore.getState() as any)._pendingNewSession).toBe(true);
   });
 
   it("prepareNewChat is blocked while generating", () => {
@@ -693,6 +696,41 @@ describe("useSessionStore", () => {
 
     expect(useSessionStore.getState().currentSessionId).toBe("sess-b");
     expect(mockBindStream).not.toHaveBeenCalled();
+  });
+
+  it("fetchSessions does not auto-select after explicit new session intent", async () => {
+    const mockListSessions = vi.fn().mockResolvedValue({
+      payload: {
+        sessions: [
+          {
+            id: "sess-a",
+            title: "Alpha",
+            created_at: "2026-05-09T01:00:00Z",
+            updated_at: "2026-05-09T02:00:00Z",
+          },
+        ],
+      },
+    });
+    const mockBindStream = vi.fn().mockResolvedValue({});
+    const mockLoadSession = vi.fn().mockResolvedValue({ payload: { messages: [] } });
+    const mockAPI = {
+      listSessions: mockListSessions,
+      bindStream: mockBindStream,
+      loadSession: mockLoadSession,
+    } as any;
+
+    useSessionStore.setState({ currentSessionId: "sess-old" } as any);
+    useSessionStore.getState().createSession();
+    await useSessionStore.getState().fetchSessions(mockAPI, true);
+
+    expect(useSessionStore.getState().currentSessionId).toBe("");
+    expect((useSessionStore.getState() as any)._pendingNewSession).toBe(true);
+    expect(mockBindStream).not.toHaveBeenCalled();
+    expect(mockLoadSession).not.toHaveBeenCalled();
+
+    useSessionStore.getState().setCurrentSessionId("sess-new");
+    expect(useSessionStore.getState().currentSessionId).toBe("sess-new");
+    expect((useSessionStore.getState() as any)._pendingNewSession).toBe(false);
   });
 
   it("fetchSessions ignores stale late response from an older request", async () => {

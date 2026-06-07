@@ -38,6 +38,7 @@ type runState struct {
 	maxTurnsReached           bool
 	maxTurnsLimit             int
 	userGoal                  string
+	currentInputParts         []providertypes.ContentPart
 	pendingSystemReminder     string
 	acceptanceContinueCount   int
 	toolTimeoutBackoff        map[string]int

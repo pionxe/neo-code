@@ -140,6 +140,20 @@ export class GatewayAPI {
     return res.blob()
   }
 
+  /** 删除会话图片附件，用于取消发送或删除已上传引用后的服务端清理 */
+  async deleteSessionAsset(sessionId: string, assetId: string, workspaceHash = '') {
+    const res = await fetch(
+      `${this.baseURL}/api/session-assets/${encodeURIComponent(sessionId)}/${encodeURIComponent(assetId)}`,
+      {
+        method: 'DELETE',
+        headers: this.httpHeaders(workspaceHash),
+      },
+    )
+    if (!res.ok) {
+      throw new Error(await readHTTPError(res, 'Asset delete failed'))
+    }
+  }
+
   /** 取消运行，返回取消结果 */
   async cancel(params: CancelParams) {
     return this.ws.call<CancelResult>(Method.Cancel, params)

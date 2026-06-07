@@ -359,14 +359,14 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 		default:
 			return fmt.Errorf("handler %q is not supported", item.Handler)
 		}
-			if handler == "warn_on_tool_call" && !runtimehooks.HasHookMatcherConfig(item.Match) {
-				return fmt.Errorf("handler %q requires match", item.Handler)
+		if handler == "warn_on_tool_call" && !runtimehooks.HasHookMatcherConfig(item.Match) {
+			return fmt.Errorf("handler %q requires match", item.Handler)
+		}
+		if runtimehooks.HasHookMatcherConfig(item.Match) {
+			if err := runtimehooks.ValidateHookMatcher(point, item.Match); err != nil {
+				return fmt.Errorf("match: %w", err)
 			}
-			if runtimehooks.HasHookMatcherConfig(item.Match) {
-				if err := runtimehooks.ValidateHookMatcher(point, item.Match); err != nil {
-					return fmt.Errorf("match: %w", err)
-				}
-			}
+		}
 	case repoHookKindCommand:
 		if err := runtimehooks.ValidateCommandParams(item.Params); err != nil {
 			return err

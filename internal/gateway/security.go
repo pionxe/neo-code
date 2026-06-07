@@ -8,6 +8,7 @@ const (
 	pingMethod               = "gateway.ping"
 	sessionAssetUploadMethod = "gateway.sessionAssetUpload"
 	sessionAssetReadMethod   = "gateway.sessionAssetRead"
+	sessionAssetDeleteMethod = "gateway.sessionAssetDelete"
 )
 
 // RequestSource 表示控制面请求来源，用于 ACL 与日志分类。
@@ -104,6 +105,7 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"wake.openUrl",
 		sessionAssetUploadMethod,
 		sessionAssetReadMethod,
+		sessionAssetDeleteMethod,
 	}
 	return normalizedMethodSet(methods...)
 }

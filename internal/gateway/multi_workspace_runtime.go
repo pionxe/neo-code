@@ -407,7 +407,11 @@ func (m *MultiWorkspaceRuntime) SaveSessionAsset(ctx context.Context, input Save
 	if err != nil {
 		return SessionAssetMeta{}, err
 	}
-	return port.SaveSessionAsset(ctx, input)
+	assetPort, ok := port.(SessionAssetPort)
+	if !ok {
+		return SessionAssetMeta{}, ErrRuntimeUnavailable
+	}
+	return assetPort.SaveSessionAsset(ctx, input)
 }
 
 func (m *MultiWorkspaceRuntime) OpenSessionAsset(ctx context.Context, input OpenSessionAssetInput) (OpenSessionAssetResult, error) {
@@ -415,7 +419,24 @@ func (m *MultiWorkspaceRuntime) OpenSessionAsset(ctx context.Context, input Open
 	if err != nil {
 		return OpenSessionAssetResult{}, err
 	}
-	return port.OpenSessionAsset(ctx, input)
+	assetPort, ok := port.(SessionAssetPort)
+	if !ok {
+		return OpenSessionAssetResult{}, ErrRuntimeUnavailable
+	}
+	return assetPort.OpenSessionAsset(ctx, input)
+}
+
+// DeleteSessionAsset 按请求上下文中的工作区选择对应运行桥，并转发会话附件删除。
+func (m *MultiWorkspaceRuntime) DeleteSessionAsset(ctx context.Context, input DeleteSessionAssetInput) error {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return err
+	}
+	assetPort, ok := port.(SessionAssetPort)
+	if !ok {
+		return ErrRuntimeUnavailable
+	}
+	return assetPort.DeleteSessionAsset(ctx, input)
 }
 
 func (m *MultiWorkspaceRuntime) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error) {

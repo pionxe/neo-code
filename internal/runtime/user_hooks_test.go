@@ -37,7 +37,7 @@ func TestBuildUserHookSpecMapsFailurePolicyAndScope(t *testing.T) {
 			"tool_name": "bash",
 		},
 		Params: map[string]any{
-			"message":   "tool call warning",
+			"message": "tool call warning",
 		},
 	}
 
@@ -353,14 +353,13 @@ func TestWarnOnToolCallAndAddContextNoteHandlers(t *testing.T) {
 	t.Parallel()
 
 	warnHandler, err := buildUserBuiltinHookHandler("warn_on_tool_call", map[string]any{
-		"message":   "bash was called",
+		"message": "bash was called",
 	}, t.TempDir())
 	if err != nil {
 		t.Fatalf("build warn handler: %v", err)
 	}
 	warnResult := warnHandler(context.Background(), runtimehooks.HookContext{
-		Metadata: map[string]any{
-		},
+		Metadata: map[string]any{},
 	})
 	if warnResult.Status != runtimehooks.HookResultPass {
 		t.Fatalf("warn status = %q, want pass", warnResult.Status)
@@ -369,14 +368,14 @@ func TestWarnOnToolCallAndAddContextNoteHandlers(t *testing.T) {
 		t.Fatalf("warn message = %q, want %q", warnResult.Message, "bash was called")
 	}
 
-		anyToolResult := warnHandler(context.Background(), runtimehooks.HookContext{
-			Metadata: map[string]any{
-				"tool_name": "filesystem",
-			},
-		})
-		if anyToolResult.Message != "bash was called" {
-			t.Fatalf("warn message = %q, want %q", anyToolResult.Message, "bash was called")
-		}
+	anyToolResult := warnHandler(context.Background(), runtimehooks.HookContext{
+		Metadata: map[string]any{
+			"tool_name": "filesystem",
+		},
+	})
+	if anyToolResult.Message != "bash was called" {
+		t.Fatalf("warn message = %q, want %q", anyToolResult.Message, "bash was called")
+	}
 
 	noteHandler, err := buildUserBuiltinHookHandler("add_context_note", map[string]any{
 		"note": "manual check required",
@@ -407,10 +406,10 @@ func TestConfigureRuntimeHooksFromConfig(t *testing.T) {
 			Scope:   "user",
 			Kind:    "builtin",
 			Mode:    "sync",
-				Handler: "warn_on_tool_call",
-				Match: map[string]any{
-					"tool_name": "bash",
-				},
+			Handler: "warn_on_tool_call",
+			Match: map[string]any{
+				"tool_name": "bash",
+			},
 		},
 	}
 	cfg.Runtime.Hooks.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
@@ -455,12 +454,12 @@ func TestConfigureRuntimeHooksFromConfigKeepsBaseExecutorAndComposes(t *testing.
 			Scope:   "user",
 			Kind:    "builtin",
 			Mode:    "sync",
-				Match: map[string]any{
-					"tool_name": "bash",
-				},
+			Match: map[string]any{
+				"tool_name": "bash",
+			},
 			Handler: "warn_on_tool_call",
 			Params: map[string]any{
-				"message":   "warn",
+				"message": "warn",
 			},
 		},
 	}
@@ -820,11 +819,11 @@ func TestConfigureRuntimeHooksWithoutItemsKeepsBehaviorUnchanged(t *testing.T) {
 	if service.hookExecutor == nil {
 		t.Fatal("expected runtime hooks chain to remain available for repo discovery")
 	}
-		out := service.hookExecutor.Run(
-			context.Background(),
-			runtimehooks.HookPointBeforeToolCall,
-			runtimehooks.HookContext{Metadata: map[string]any{"workdir": cfg.Workdir}},
-		)
+	out := service.hookExecutor.Run(
+		context.Background(),
+		runtimehooks.HookPointBeforeToolCall,
+		runtimehooks.HookContext{Metadata: map[string]any{"workdir": cfg.Workdir}},
+	)
 	if out.Blocked || len(out.Results) != 0 {
 		t.Fatalf("unexpected hook output without user/repo config: %+v", out)
 	}
@@ -1355,7 +1354,6 @@ func TestConfigureRuntimeHooksInjectsAsyncResultSinkIntoBaseExecutor(t *testing.
 	t.Fatal("expected async rewake notification to be enqueued via configured async sink")
 }
 
-
 type countingHookExecutor struct {
 	calls  atomic.Int32
 	output runtimehooks.RunOutput
@@ -1545,10 +1543,10 @@ func TestUserHookHandlersAndPathChecks(t *testing.T) {
 	if result.Message == "" {
 		t.Fatalf("expected default warn message for matched tool")
 	}
-		result = warnHandler(context.Background(), runtimehooks.HookContext{})
-		if result.Message == "" {
-			t.Fatalf("expected default warn message, got empty")
-		}
+	result = warnHandler(context.Background(), runtimehooks.HookContext{})
+	if result.Message == "" {
+		t.Fatalf("expected default warn message, got empty")
+	}
 
 	noteHandler, err := buildUserBuiltinHookHandler("add_context_note", map[string]any{"message": "note-via-message"}, workdir)
 	if err != nil {

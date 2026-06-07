@@ -20,14 +20,14 @@ var runtimeContractEventSourceFiles = []string{
 // legacyPassthroughEvents 是已知的遗留透传事件，允许不注册到 contractRegistry。
 // 新增的 runtime Event* 常量必须显式注册到 contractRegistry，否则 CI 失败。
 var legacyPassthroughEvents = map[string]struct{}{
-	"thinking_delta":               {},
-	"plan_updated":                 {},
-	"budget_checked":               {},
-	"budget_estimate_failed":       {},
-	"ledger_reconciled":            {},
+	"thinking_delta":                 {},
+	"plan_updated":                   {},
+	"budget_checked":                 {},
+	"budget_estimate_failed":         {},
+	"ledger_reconciled":              {},
 	"repository_context_unavailable": {},
-	"resume_applied":               {},
-	"run_diff_summary":             {},
+	"resume_applied":                 {},
+	"run_diff_summary":               {},
 }
 
 // TestRegisteredEventTypesSorted 验证 RegisteredEventTypes 返回排序后的列表。
@@ -185,9 +185,9 @@ func TestGatewayDecodeBranchConsistency(t *testing.T) {
 
 	// TUI bridge 事件值
 	bridgeValues := map[string]struct{}{
-		"run_context":   {},
-		"tool_status":   {},
-		"usage":         {},
+		"run_context": {},
+		"tool_status": {},
+		"usage":       {},
 	}
 
 	for _, constName := range decodedConstNames {
@@ -297,10 +297,10 @@ func TestRequireConsumerMustHaveTUIConsumer(t *testing.T) {
 // isTUIBridgeEvent 判断事件是否为 TUI 侧特有的 bridge 事件（非 runtime 产生）。
 func isTUIBridgeEvent(eventType EventType) bool {
 	bridgeEvents := map[EventType]struct{}{
-		EventType(RuntimeEventRunContext):  {},
-		EventType(RuntimeEventToolStatus):  {},
-		EventType(RuntimeEventUsage):       {},
-		EventRunCanceled:                   {},
+		EventType(RuntimeEventRunContext): {},
+		EventType(RuntimeEventToolStatus): {},
+		EventType(RuntimeEventUsage):      {},
+		EventRunCanceled:                  {},
 	}
 	_, ok := bridgeEvents[eventType]
 	return ok
@@ -312,7 +312,7 @@ func resolveConstNameToValue(constName string) (string, bool) {
 	// 从 gateway_stream_client.go 中的 EventType(RuntimeEventXxx) 模式
 	// 这些是 bridge 事件，值在 runtime_bridge.go 中定义
 	bridgeConstMap := map[string]string{
-		"RuntimeEventRunContext":  RuntimeEventRunContext,
+		"RuntimeEventRunContext": RuntimeEventRunContext,
 		"RuntimeEventToolStatus": RuntimeEventToolStatus,
 		"RuntimeEventUsage":      RuntimeEventUsage,
 	}

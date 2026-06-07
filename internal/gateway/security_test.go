@@ -47,6 +47,7 @@ func TestStrictACLAllowlist(t *testing.T) {
 		{source: RequestSourceHTTP, method: "gateway.user_question_answer", want: true},
 		{source: RequestSourceHTTP, method: sessionAssetUploadMethod, want: true},
 		{source: RequestSourceHTTP, method: sessionAssetReadMethod, want: true},
+		{source: RequestSourceHTTP, method: sessionAssetDeleteMethod, want: true},
 		{source: RequestSourceSSE, method: sessionAssetReadMethod, want: false},
 		{source: RequestSourceUnknown, method: "gateway.ping", want: false},
 		{source: RequestSourceUnknown, method: "gateway.approvePlan", want: false},

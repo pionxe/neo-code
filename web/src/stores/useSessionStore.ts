@@ -44,6 +44,8 @@ interface SessionState {
   _switchAbort: AbortController | null;
   /** 初始化时是否已完成 bindStream（避免 fetchSessions 和 initializeActiveSession 重复绑定） */
   _initialBindDone: boolean;
+  /** 用户已明确进入新对话，等待首次发送创建真实后端 session */
+  _pendingNewSession: boolean;
 
   // Actions
   setProjects: (projects: Project[]) => void;
@@ -419,9 +421,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   loading: false,
   _switchAbort: null,
   _initialBindDone: false,
+  _pendingNewSession: false,
 
   setProjects: (projects) => set({ projects }),
-  setCurrentSessionId: (currentSessionId) => set({ currentSessionId }),
+  setCurrentSessionId: (currentSessionId) =>
+    set({ currentSessionId, _pendingNewSession: false }),
   setCurrentProjectId: (currentProjectId) => set({ currentProjectId }),
   setLoading: (loading) => set({ loading }),
 
@@ -459,7 +463,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       useUIStore.getState().clearCheckpointRollbackUndo();
 
       // 2. Update session ID
-      set({ currentSessionId: sessionId });
+      set({ currentSessionId: sessionId, _pendingNewSession: false });
 
       // 3. Bind stream (events will be discarded due to isTransitioning)
       await gatewayAPI.bindStream({ session_id: sessionId, channel: "all" });
@@ -536,7 +540,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     useChatStore.getState().clearMessages();
     useRuntimeInsightStore.getState().reset();
     useUIStore.getState().clearCheckpointRollbackUndo();
-    set({ currentSessionId: "", currentProjectId: "" });
+    set({ currentSessionId: "", currentProjectId: "", _pendingNewSession: true });
   },
 
   initializeActiveSession: async (gatewayAPI) => {
@@ -572,7 +576,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     useChatStore.getState().clearMessages();
     useRuntimeInsightStore.getState().reset();
     useUIStore.getState().clearCheckpointRollbackUndo();
-    set({ currentSessionId: "", currentProjectId: "" });
+    set({ currentSessionId: "", currentProjectId: "", _pendingNewSession: true });
   },
 
   resetForWorkspaceSwitch: () => {
@@ -583,7 +587,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     _fetchSessionsPromise = null;
     _fetchSessionsSeq += 1;
     _switchSessionSeq += 1;
-    set({ _initialBindDone: false, loading: false, _switchAbort: null });
+    set({ _initialBindDone: false, _pendingNewSession: false, loading: false, _switchAbort: null });
   },
 
   removeSessionLocally: (sessionId) => {
@@ -612,7 +616,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
         const state = get();
         if (requestSeq !== _fetchSessionsSeq) return;
-        if (!isValidSessionId(state.currentSessionId) && sessions.length > 0) {
+        if (!state._pendingNewSession && !isValidSessionId(state.currentSessionId) && sessions.length > 0) {
           const firstSession = sessions[0];
           set({ currentSessionId: firstSession.id });
           try {

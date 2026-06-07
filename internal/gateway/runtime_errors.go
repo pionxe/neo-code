@@ -10,6 +10,8 @@ var (
 	ErrRuntimeAccessDenied = errors.New("runtime access denied")
 	// ErrRuntimeResourceNotFound 表示运行时未找到目标资源。
 	ErrRuntimeResourceNotFound = errors.New("runtime resource not found")
+	// ErrRuntimeUnavailable 表示运行时或其可选下游能力不可用。
+	ErrRuntimeUnavailable = errors.New("runtime unavailable")
 	// ErrRuntimeInvalidAction 表示运行时拒绝了语义非法或已过期的动作。
 	ErrRuntimeInvalidAction = errors.New("runtime invalid action")
 	// ErrRuntimeMaxTurnExceeded 表示运行时达到 runtime.max_turns 后受控停止。

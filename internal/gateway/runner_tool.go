@@ -33,14 +33,14 @@ type toolResultEnvelope struct {
 
 // RunnerToolManager 负责将工具调用分发到 runner 并收集结果。
 type RunnerToolManager struct {
-	mu             sync.Mutex
-	pending        map[string]*PendingToolCall // keyed by requestID
-	registry       *RunnerRegistry
-	relay          *StreamRelay
+	mu               sync.Mutex
+	pending          map[string]*PendingToolCall // keyed by requestID
+	registry         *RunnerRegistry
+	relay            *StreamRelay
 	capabilitySigner *security.CapabilitySigner
-	timeout        time.Duration
-	logger         *log.Logger
-	sequence       atomic.Uint64
+	timeout          time.Duration
+	logger           *log.Logger
+	sequence         atomic.Uint64
 }
 
 // NewRunnerToolManager 创建 runner 工具管理器。
@@ -52,12 +52,12 @@ func NewRunnerToolManager(registry *RunnerRegistry, relay *StreamRelay, signer *
 		logger = log.Default()
 	}
 	return &RunnerToolManager{
-		pending:           make(map[string]*PendingToolCall),
-		registry:          registry,
-		relay:             relay,
-		capabilitySigner:  signer,
-		timeout:           timeout,
-		logger:            logger,
+		pending:          make(map[string]*PendingToolCall),
+		registry:         registry,
+		relay:            relay,
+		capabilitySigner: signer,
+		timeout:          timeout,
+		logger:           logger,
 	}
 }
 
