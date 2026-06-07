@@ -33,6 +33,14 @@ func Reduce(current *ViewState, event gateway.GatewayEvent) *ViewState {
 		return appendStream(next, streamEntry(event, "status", payloadString(event.Payload, "message", "decision", "status")))
 	case gateway.EventAskUserQuestion, gateway.EventUserQuestionRequested:
 		return reduceAskUserQuestion(next, event)
+	case gateway.EventUserQuestionAnswered:
+		next.Runtime.Phase = RuntimePhaseRunning
+		next.Input.Mode = InputStateModeMessage
+		next.Input.Text = ""
+		next.Input.Cursor = 0
+		next.Input.Prompt = ""
+		next.Input.Options = nil
+		return appendStream(next, streamEntry(event, "status", payloadString(event.Payload, "message", "answer", "text")))
 	case gateway.EventPhaseChanged:
 		next.Runtime.Phase = payloadString(event.Payload, "phase", "status")
 	case gateway.EventRunStarted:
@@ -82,6 +90,9 @@ func reduceAgentChunk(next *ViewState, event gateway.GatewayEvent) *ViewState {
 			updated.Content += text
 			updated.Metadata = cloneMetadata(last.Metadata)
 			updated.Metadata["done"] = false
+			if _, ok := updated.Metadata["role"].(string); !ok {
+				updated.Metadata["role"] = "assistant"
+			}
 			stream := append([]StreamEntry(nil), next.Stream[:len(next.Stream)-1]...)
 			stream = append(stream, updated)
 			next.Stream = stream
@@ -90,6 +101,7 @@ func reduceAgentChunk(next *ViewState, event gateway.GatewayEvent) *ViewState {
 	}
 	entry := streamEntry(event, "message", text)
 	entry.Metadata["done"] = false
+	entry.Metadata["role"] = "assistant"
 	return appendStream(next, entry)
 }
 
@@ -156,6 +168,7 @@ func cloneViewState(current *ViewState) *ViewState {
 	}
 	next.Stream = append([]StreamEntry(nil), current.Stream...)
 	next.Input.Options = append([]string(nil), current.Input.Options...)
+	next.Input.History = append([]string(nil), current.Input.History...)
 	return &next
 }
 
@@ -167,12 +180,18 @@ func appendStream(next *ViewState, entry StreamEntry) *ViewState {
 
 // streamEntry 将 Gateway 事件转换为 StreamEntry 的通用构造。
 func streamEntry(event gateway.GatewayEvent, entryType string, content string) StreamEntry {
+	metadata := clonePayload(event.Payload)
+	if entryType == "message" {
+		if _, ok := metadata["role"].(string); !ok {
+			metadata["role"] = "assistant"
+		}
+	}
 	return StreamEntry{
 		ID:        payloadString(event.Payload, "id", "entry_id", "message_id"),
 		Type:      entryType,
 		Timestamp: eventTime(event.At),
 		Content:   content,
-		Metadata:  clonePayload(event.Payload),
+		Metadata:  metadata,
 	}
 }
 

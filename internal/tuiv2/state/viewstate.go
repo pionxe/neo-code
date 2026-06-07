@@ -15,6 +15,14 @@ type ViewState struct {
 	Input   InputState
 	Layout  LayoutState
 	Mode    InputMode
+	Overlay OverlayState
+}
+
+// OverlayState 描述当前浮层显示状态。
+type OverlayState struct {
+	Active   string // "", "palette", "help", "session_picker", "confirm"
+	Query    string // 搜索文本
+	Selected int    // 当前选中索引
 }
 
 // GatewayState 描述 Gateway 连接、会话和模型选择状态。
@@ -53,11 +61,14 @@ type StreamEntry struct {
 
 // InputState 描述输入区文本、光标和当前输入任务。
 type InputState struct {
-	Text    string
-	Cursor  int
-	Mode    string
-	Prompt  string
-	Options []string
+	Text          string
+	Cursor        int
+	Mode          string
+	Prompt        string
+	Options       []string
+	History       []string
+	HistoryIndex  int
+	CursorVisible bool
 }
 
 // LayoutState 描述终端布局尺寸和 Soft Inspector 显示状态。
@@ -112,7 +123,7 @@ const (
 func NewViewState() *ViewState {
 	return &ViewState{
 		Runtime: RuntimeState{Phase: RuntimePhaseIdle},
-		Input:   InputState{Mode: InputStateModeMessage},
+		Input:   InputState{Mode: InputStateModeMessage, HistoryIndex: -1, CursorVisible: true},
 		Layout:  LayoutState{AutoScroll: true},
 		Mode:    InputModeInput,
 	}

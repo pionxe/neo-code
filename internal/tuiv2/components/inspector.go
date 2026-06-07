@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"neo-code/internal/tuiv2/state"
 	"neo-code/internal/tuiv2/theme"
 )
@@ -31,7 +32,7 @@ func (c *SoftInspector) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return c, nil
 }
 
-// View 渲染会话、上下文和 token 详情；窄屏隐藏由 App 布局控制。
+// View 渲染会话、上下文、token、工具和文件详情；窄屏隐藏由 App 布局控制。
 func (c *SoftInspector) View() string {
 	if !c.state.Layout.ShowInspector {
 		return ""
@@ -46,6 +47,8 @@ func (c *SoftInspector) View() string {
 	lines = append(lines, c.contextLine())
 	lines = append(lines, "", theme.MutedStyle().Render("Token Usage"))
 	lines = append(lines, fmt.Sprintf("  ↑ %d ↓ %d", c.state.Runtime.Tokens.Input, c.state.Runtime.Tokens.Output))
+	lines = append(lines, c.toolLines()...)
+	lines = append(lines, c.fileLines()...)
 	content := strings.Join(lines, "\n")
 	if width > 0 {
 		return fitBlock(content, width, true)
@@ -76,4 +79,89 @@ func (c *SoftInspector) contextLine() string {
 		return "  " + theme.AccentBar() + "0/100k"
 	}
 	return fmt.Sprintf("  %s%d/100k", theme.AccentBar(), total)
+}
+
+// toolLines 渲染当前活跃工具（已启动但未完成的工具调用）。
+func (c *SoftInspector) toolLines() []string {
+	lines := []string{"", theme.MutedStyle().Render("Active Tools")}
+	activeTools := c.activeToolNames()
+	if len(activeTools) == 0 {
+		return append(lines, "  "+theme.Separator()+" idle")
+	}
+	for _, name := range activeTools {
+		lines = append(lines, "  "+theme.Separator()+" "+theme.ToolNameStyle().Render("tool."+name))
+	}
+	return lines
+}
+
+// activeToolNames 扫描 Stream 查找已启动但未完成的工具调用。
+func (c *SoftInspector) activeToolNames() []string {
+	ended := make(map[string]bool)
+	var started []string
+	for _, entry := range c.state.Stream {
+		switch entry.Type {
+		case "tool_start":
+			if entry.ToolName != "" {
+				started = append(started, entry.ToolName)
+			}
+		case "tool_end":
+			if entry.ToolName != "" {
+				ended[entry.ToolName] = true
+			}
+		}
+	}
+	var active []string
+	for _, name := range started {
+		if !ended[name] {
+			active = append(active, name)
+		}
+	}
+	return active
+}
+
+// fileLines 渲染工具修改过的文件路径列表，使用 DiffAdd/DiffDel 配色。
+func (c *SoftInspector) fileLines() []string {
+	lines := []string{"", theme.MutedStyle().Render("Files")}
+	fileEntries := c.fileEntries()
+	if len(fileEntries) == 0 {
+		return append(lines, "  "+theme.Separator()+" none")
+	}
+	for _, fe := range fileEntries {
+		lines = append(lines, "  "+theme.Separator()+" "+fe)
+	}
+	return lines
+}
+
+// fileEntries 扫描 Stream 中的 tool_end 条目，提取文件路径并使用 DiffAdd/DiffDel 配色。
+func (c *SoftInspector) fileEntries() []string {
+	seen := make(map[string]bool)
+	var entries []string
+	palette := theme.TokyoNight
+	for _, entry := range c.state.Stream {
+		if entry.Type != "tool_end" || entry.Content == "" {
+			continue
+		}
+		path := extractFilePath(entry.Content)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		color := palette.DiffAdd
+		if strings.Contains(entry.Content, "delete") || strings.Contains(entry.Content, "remove") {
+			color = palette.DiffDel
+		}
+		styled := lipgloss.NewStyle().Foreground(color).Render(path)
+		entries = append(entries, styled)
+	}
+	return entries
+}
+
+// extractFilePath 从工具输出内容中提取文件路径（包含 / 或 . 的首段）。
+func extractFilePath(content string) string {
+	for _, part := range strings.Fields(content) {
+		if strings.Contains(part, "/") || (strings.Contains(part, ".") && len(part) > 1) {
+			return part
+		}
+	}
+	return ""
 }

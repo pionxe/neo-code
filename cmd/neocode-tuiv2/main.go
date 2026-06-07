@@ -38,6 +38,7 @@ func main() {
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(os.Stdout),
 		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
 	).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "start TUI v2: %v\n", err)
 		os.Exit(1)

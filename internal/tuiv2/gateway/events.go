@@ -48,6 +48,8 @@ const (
 	EventAskUserQuestion EventType = "ask_user_question"
 	// EventUserQuestionRequested 表示后端请求 UI 回答 ask_user 问题。
 	EventUserQuestionRequested EventType = "user_question_requested"
+	// EventUserQuestionAnswered 表示 ask_user 问题已由 UI 回答。
+	EventUserQuestionAnswered EventType = "user_question_answered"
 	// EventModelChanged 表示当前会话模型已切换。
 	EventModelChanged EventType = "model_changed"
 	// EventHealthChanged 表示 Gateway 健康状态发生变化。
