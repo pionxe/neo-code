@@ -55,22 +55,28 @@ func (p *Palette) Init() tea.Cmd {
 	return nil
 }
 
-// Update 处理命令面板内的键盘和导航。
+// Update 处理命令面板内的键盘、鼠标和导航。
 func (p *Palette) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return p, nil
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		return p, p.handleKey(msg)
+	case tea.MouseMsg:
+		return p, p.handleMouse(msg)
 	}
-	switch key.String() {
+	return p, nil
+}
+
+func (p *Palette) handleKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
 	case "esc", "ctrl+c":
 		p.state.Overlay.Active = ""
 		p.state.Overlay.Query = ""
 		p.state.Overlay.Selected = 0
-		return p, nil
+		return nil
 	case "enter":
 		matched := p.matchedItems()
 		if len(matched) == 0 {
-			return p, nil
+			return nil
 		}
 		idx := p.state.Overlay.Selected
 		if idx >= len(matched) {
@@ -80,33 +86,33 @@ func (p *Palette) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.state.Overlay.Active = ""
 		p.state.Overlay.Query = ""
 		p.state.Overlay.Selected = 0
-		return p, func() tea.Msg {
+		return func() tea.Msg {
 			return PaletteCommandMsg{Name: selected.Name}
 		}
 	case "up", "k":
 		if p.state.Overlay.Selected > 0 {
 			p.state.Overlay.Selected--
 		}
-		return p, nil
+		return nil
 	case "down", "j":
 		matched := p.matchedItems()
 		if p.state.Overlay.Selected < len(matched)-1 {
 			p.state.Overlay.Selected++
 		}
-		return p, nil
+		return nil
 	case "backspace":
 		if len(p.state.Overlay.Query) > 0 {
 			p.state.Overlay.Query = p.state.Overlay.Query[:len(p.state.Overlay.Query)-1]
 			p.state.Overlay.Selected = 0
 		}
-		return p, nil
+		return nil
 	default:
-		runes := key.Runes
+		runes := msg.Runes
 		if len(runes) > 0 && runes[0] >= 32 {
 			p.state.Overlay.Query += string(runes)
 			p.state.Overlay.Selected = 0
 		}
-		return p, nil
+		return nil
 	}
 }
 
@@ -128,6 +134,41 @@ func (p *Palette) matchedItems() []PaletteItem {
 	return result
 }
 
+// handleMouse 处理鼠标滚轮和点击事件。
+func (p *Palette) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if p.state.Overlay.Selected > 0 {
+			p.state.Overlay.Selected--
+		}
+		return nil
+	case tea.MouseButtonWheelDown:
+		matched := p.matchedItems()
+		if p.state.Overlay.Selected < len(matched)-1 {
+			p.state.Overlay.Selected++
+		}
+		return nil
+	case tea.MouseButtonLeft:
+		if msg.Action != tea.MouseActionPress {
+			return nil
+		}
+		// query + 空行 = 2 行头部
+		itemIdx := msg.Y - 2
+		matched := p.matchedItems()
+		if itemIdx >= 0 && itemIdx < len(matched) {
+			selected := matched[itemIdx]
+			p.state.Overlay.Active = ""
+			p.state.Overlay.Query = ""
+			p.state.Overlay.Selected = 0
+			return func() tea.Msg {
+				return PaletteCommandMsg{Name: selected.Name}
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
 // View 渲染 Telescope 风格的命令面板。
 func (p *Palette) View() string {
 	width := p.state.Layout.Width
@@ -141,7 +182,14 @@ func (p *Palette) View() string {
 
 	matched := p.matchedItems()
 	boxW := min(width-4, 60)
-	boxH := min(height-4, 20)
+	boxH := height - 4
+	if boxH < 8 {
+		boxH = 8
+	}
+	maxItems := boxH - 5 // title + query + hint + padding
+	if maxItems < 1 {
+		maxItems = 1
+	}
 
 	var lines []string
 
@@ -152,7 +200,7 @@ func (p *Palette) View() string {
 
 	// 选项列表
 	for i, item := range matched {
-		if len(lines) >= boxH-3 {
+		if i >= maxItems {
 			break
 		}
 		prefix := "  "

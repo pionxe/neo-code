@@ -86,7 +86,10 @@ func scenarioByName(name string) (fakeScenario, bool) {
 		base.details = map[string]gateway.SessionDetail{}
 		base.events = []scheduledEvent{}
 	case ScenarioStreamingChat:
-		base.details[defaultSessionID] = detailWithStream([]gateway.StreamItem{userItem("stream-user", "Explain Ghost Console.")})
+		base.details[defaultSessionID] = detailWithStream([]gateway.StreamItem{
+			userItem("stream-user-1", "What is the Ghost Console design?"),
+			assistantItem("stream-agent-1", "Let me walk you through the Ghost Console architecture step by step."),
+		})
 		base.events = streamingEvents()
 	case ScenarioToolApproval:
 		base.events = toolApprovalEvents()
@@ -133,12 +136,21 @@ func scenarioByName(name string) (fakeScenario, bool) {
 // baseScenario 构造所有场景共享的默认连接、会话和模型状态。
 func baseScenario(name string) fakeScenario {
 	summary := defaultSessionSummary()
+	sessions := []gateway.SessionSummary{
+		summary,
+		{ID: "session-api-debug", Title: "API Debugging Session", Mode: "input", Model: defaultModelID, UpdatedAt: fixtureTime.Add(-30 * time.Minute)},
+		{ID: "session-refactor", Title: "Refactor TUI Components", Mode: "input", Model: defaultModelID, UpdatedAt: fixtureTime.Add(-1 * time.Hour)},
+		{ID: "session-deploy", Title: "Deploy Preparation", Mode: "input", Model: "neo-fake-fast", UpdatedAt: fixtureTime.Add(-2 * time.Hour)},
+	}
+	details := detailsForSessions(sessions)
+	// Override the first session's detail with the richer default
+	details[summary.ID] = defaultSessionDetail()
 	return fakeScenario{
 		name:         name,
 		health:       gateway.HealthResult{OK: true, Status: "ok", Backend: "fake", Message: name},
 		rpcDelay:     tick,
-		sessions:     []gateway.SessionSummary{summary},
-		details:      map[string]gateway.SessionDetail{summary.ID: defaultSessionDetail()},
+		sessions:     sessions,
+		details:      details,
 		models:       defaultModels(),
 		currentModel: defaultModelID,
 		sendAck:      gateway.RunAck{SessionID: summary.ID, RunID: defaultRunID, Accepted: true, Message: "accepted"},

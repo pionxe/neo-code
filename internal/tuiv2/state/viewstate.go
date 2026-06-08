@@ -16,11 +16,12 @@ type ViewState struct {
 	Layout  LayoutState
 	Mode    InputMode
 	Overlay OverlayState
+	Confirm ConfirmState
 }
 
 // OverlayState 描述当前浮层显示状态。
 type OverlayState struct {
-	Active   string // "", "palette", "help", "session_picker", "confirm"
+	Active   string // "", "palette", "help", "session_picker", "model_picker", "confirm"
 	Query    string // 搜索文本
 	Selected int    // 当前选中索引
 }
@@ -36,9 +37,19 @@ type GatewayState struct {
 
 // RuntimeState 描述当前 run 的运行阶段、ID 和 token 用量。
 type RuntimeState struct {
-	Phase  string
-	RunID  string
-	Tokens TokenUsage
+	Phase      string
+	RunID      string
+	Tokens     TokenUsage
+	AgentMode  string // "build" 或 "plan"
+	FullAccess bool
+}
+
+// ConfirmState 描述确认弹窗的上下文信息。
+type ConfirmState struct {
+	Title   string
+	Message string
+	Action  string // "delete_session" 等
+	Data    map[string]any
 }
 
 // TokenUsage 描述 ViewState 中展示所需的 token 用量。

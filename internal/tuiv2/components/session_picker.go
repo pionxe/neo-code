@@ -41,22 +41,28 @@ func (s *SessionPicker) Init() tea.Cmd {
 	return nil
 }
 
-// Update 处理会话选择器内的键盘输入。
+// Update 处理会话选择器内的键盘和鼠标输入。
 func (s *SessionPicker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return s, nil
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		return s, s.handleKey(msg)
+	case tea.MouseMsg:
+		return s, s.handleMouse(msg)
 	}
-	switch key.String() {
+	return s, nil
+}
+
+func (s *SessionPicker) handleKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
 	case "esc", "ctrl+c":
 		s.state.Overlay.Active = ""
 		s.state.Overlay.Query = ""
 		s.state.Overlay.Selected = 0
-		return s, nil
+		return nil
 	case "enter", " ":
 		matched := s.matchedSessions()
 		if len(matched) == 0 {
-			return s, nil
+			return nil
 		}
 		idx := s.state.Overlay.Selected
 		if idx >= len(matched) {
@@ -66,13 +72,13 @@ func (s *SessionPicker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.state.Overlay.Active = ""
 		s.state.Overlay.Query = ""
 		s.state.Overlay.Selected = 0
-		return s, func() tea.Msg {
+		return func() tea.Msg {
 			return SessionSelectMsg{Session: selected}
 		}
 	case "ctrl+d":
 		matched := s.matchedSessions()
 		if len(matched) == 0 {
-			return s, nil
+			return nil
 		}
 		idx := s.state.Overlay.Selected
 		if idx >= len(matched) {
@@ -80,33 +86,33 @@ func (s *SessionPicker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		target := matched[idx]
 		s.state.Overlay.Active = ""
-		return s, func() tea.Msg {
+		return func() tea.Msg {
 			return SessionDeleteMsg{SessionID: target.ID}
 		}
 	case "up", "k":
 		if s.state.Overlay.Selected > 0 {
 			s.state.Overlay.Selected--
 		}
-		return s, nil
+		return nil
 	case "down", "j":
 		matched := s.matchedSessions()
 		if s.state.Overlay.Selected < len(matched)-1 {
 			s.state.Overlay.Selected++
 		}
-		return s, nil
+		return nil
 	case "backspace":
 		if len(s.state.Overlay.Query) > 0 {
 			s.state.Overlay.Query = s.state.Overlay.Query[:len(s.state.Overlay.Query)-1]
 			s.state.Overlay.Selected = 0
 		}
-		return s, nil
+		return nil
 	default:
-		runes := key.Runes
+		runes := msg.Runes
 		if len(runes) > 0 && runes[0] >= 32 {
 			s.state.Overlay.Query += string(runes)
 			s.state.Overlay.Selected = 0
 		}
-		return s, nil
+		return nil
 	}
 }
 
@@ -129,6 +135,41 @@ func (s *SessionPicker) matchedSessions() []gateway.SessionSummary {
 	return result
 }
 
+// handleMouse 处理鼠标滚轮和点击事件。
+func (s *SessionPicker) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if s.state.Overlay.Selected > 0 {
+			s.state.Overlay.Selected--
+		}
+		return nil
+	case tea.MouseButtonWheelDown:
+		matched := s.matchedSessions()
+		if s.state.Overlay.Selected < len(matched)-1 {
+			s.state.Overlay.Selected++
+		}
+		return nil
+	case tea.MouseButtonLeft:
+		if msg.Action != tea.MouseActionPress {
+			return nil
+		}
+		// 标题 + 空行 + query + 空行 = 4 行头部
+		itemIdx := msg.Y - 4
+		matched := s.matchedSessions()
+		if itemIdx >= 0 && itemIdx < len(matched) {
+			selected := matched[itemIdx]
+			s.state.Overlay.Active = ""
+			s.state.Overlay.Query = ""
+			s.state.Overlay.Selected = 0
+			return func() tea.Msg {
+				return SessionSelectMsg{Session: selected}
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
 // View 渲染会话选择器浮层。
 func (s *SessionPicker) View() string {
 	width := s.state.Layout.Width
@@ -141,6 +182,14 @@ func (s *SessionPicker) View() string {
 	}
 
 	boxW := min(width-4, 56)
+	boxH := height - 4
+	if boxH < 8 {
+		boxH = 8
+	}
+	maxItems := boxH - 7 // title + query + hint + separator lines
+	if maxItems < 1 {
+		maxItems = 1
+	}
 	matched := s.matchedSessions()
 
 	var lines []string
@@ -155,7 +204,7 @@ func (s *SessionPicker) View() string {
 
 	// 会话列表
 	for i, sess := range matched {
-		if len(lines) > height-6 {
+		if i >= maxItems {
 			break
 		}
 		prefix := "  "
@@ -193,7 +242,6 @@ func (s *SessionPicker) View() string {
 		Padding(0, 1).
 		Render(content)
 
-	boxH := min(height-2, 22)
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(boxH).

@@ -18,6 +18,7 @@ const (
 	ActionHelp        // ?
 	ActionSlashMode   // / (when input empty)
 	ActionFileRef     // @ (when input empty)
+	ActionLogViewer   // Ctrl+L
 
 	// Normal Mode actions
 	ActionEnterInput     // i
@@ -162,6 +163,8 @@ func MatchInputKey(keyStr string) Action {
 		return ActionCtrlC
 	case "ctrl+p":
 		return ActionOpenPalette
+	case "ctrl+l":
+		return ActionLogViewer
 	}
 	return ActionNone
 }
@@ -193,7 +196,7 @@ func MatchNormalKey(keyStr string) Action {
 		return ActionExCommand
 	case "q":
 		return ActionQuit
-	case " ":
+	case " ", "space":
 		return ActionLeader
 	case "ctrl+c":
 		return ActionCtrlC

@@ -30,8 +30,10 @@ func defaultSessionSummary() gateway.SessionSummary {
 // defaultSessionDetail 返回包含基础对话历史的默认会话详情。
 func defaultSessionDetail() gateway.SessionDetail {
 	return detailWithStream([]gateway.StreamItem{
-		userItem("msg-user-1", "Refactor the TUI without touching v1."),
-		assistantItem("msg-agent-1", "Plan accepted. I will keep all data behind the Gateway client contract."),
+		userItem("msg-user-1", "Build a Ghost Console TUI that does not touch v1."),
+		assistantItem("msg-agent-1", "Plan accepted. I will use the Gateway client contract and pure-function reducers for all state."),
+		userItem("msg-user-2", "What components make up the Focus-Only layout?"),
+		assistantItem("msg-agent-2", "The layout has three tiers: Ambient Status (top), Agent Stream (center), and Command Prompt (bottom). A Soft Inspector appears on the right when the terminal is wide enough."),
 	})
 }
 
@@ -55,26 +57,43 @@ func defaultModels() []gateway.ModelInfo {
 // defaultEvents 返回默认场景的完整演示事件序列。
 func defaultEvents() []scheduledEvent {
 	return []scheduledEvent{
-		{after: tick, event: event(gateway.EventRunStarted, defaultSessionID, defaultRunID, payload("phase", "running"))},
-		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "Ghost Console ready."))},
-		{after: tick, event: event(gateway.EventToolStarted, defaultSessionID, defaultRunID, payload("tool", "filesystem.read"))},
-		{after: tick, event: event(gateway.EventToolFinished, defaultSessionID, defaultRunID, payload("tool", "filesystem.read", "status", "ok"))},
-		{after: tick, event: event(gateway.EventRunFinished, defaultSessionID, defaultRunID, payload("tokens", 384))},
+		{after: tick / 2, event: event(gateway.EventRunStarted, defaultSessionID, defaultRunID, payload("phase", "running"))},
+		{after: tick, event: event(gateway.EventAgentMessageStart, defaultSessionID, defaultRunID, payload("message", "msg-1", "text", "Ghost Console ready."))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "I have loaded the Ghost Console demo."))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", " The TUI v2 architecture uses pure-function reducers and unidirectional data flow."))},
+		{after: tick, event: event(gateway.EventAgentMessageEnd, defaultSessionID, defaultRunID, payload("message_id", "msg-1"))},
+		{after: tick, event: event(gateway.EventToolStarted, defaultSessionID, defaultRunID, payload("tool", "filesystem.read", "input", "internal/tuiv2/state/reducer.go"))},
+		{after: tick, event: event(gateway.EventToolFinished, defaultSessionID, defaultRunID, payload("tool", "filesystem.read", "output", "Reducer handles 22 event types with pure-function mapping", "status", "ok"))},
+		{after: tick, event: event(gateway.EventToolStarted, defaultSessionID, defaultRunID, payload("tool", "filesystem.grep", "input", "tea.Model impl"))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "The layout follows Focus-Only design with 3-tier responsive breakpoints."))},
+		{after: tick, event: event(gateway.EventAgentMessageEnd, defaultSessionID, defaultRunID, payload("message_id", "msg-2"))},
+		{after: tick, event: event(gateway.EventToolFinished, defaultSessionID, defaultRunID, payload("tool", "filesystem.grep", "output", "Found AmbientStatus, AgentStream, CommandPrompt, SoftInspector", "status", "ok"))},
+		{after: tick, event: event(gateway.EventTokenUsage, defaultSessionID, defaultRunID, payload("total", 384, "input", 100, "output", 284))},
+		{after: tick, event: event(gateway.EventRunFinished, defaultSessionID, defaultRunID, payload("phase", "done"))},
 	}
 }
 
 // streamingEvents 返回逐块输出的助手流式事件。
 func streamingEvents() []scheduledEvent {
-	parts := []string{"Streaming ", "chat ", "arrives ", "chunk ", "by ", "chunk."}
-	events := []scheduledEvent{{after: tick, event: event(gateway.EventRunStarted, defaultSessionID, defaultRunID, payload("phase", "streaming"))}}
-	for _, part := range parts {
-		events = append(events, scheduledEvent{
-			after: tick,
-			event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", part)),
-		})
+	return []scheduledEvent{
+		{after: tick, event: event(gateway.EventRunStarted, defaultSessionID, defaultRunID, payload("phase", "streaming"))},
+		{after: tick, event: event(gateway.EventAgentMessageStart, defaultSessionID, defaultRunID, payload("message", "stream-msg-1", "text", "Let me explain the Ghost Console architecture."))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "The Ghost Console"))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", " is a terminal-native "))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "design language for NeoCode. "))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "It emphasizes whitespace, indentation, "))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "and semantic symbols over heavy borders."))},
+		{after: tick, event: event(gateway.EventAgentMessageEnd, defaultSessionID, defaultRunID, payload("message_id", "stream-msg-1"))},
+		{after: tick, event: event(gateway.EventToolStarted, defaultSessionID, defaultRunID, payload("tool", "filesystem.grep", "input", "search NeoCode patterns"))},
+		{after: tick, event: event(gateway.EventToolFinished, defaultSessionID, defaultRunID, payload("tool", "filesystem.grep", "output", "found 15 matches in 8 files", "status", "ok"))},
+		{after: tick, event: event(gateway.EventToolStarted, defaultSessionID, defaultRunID, payload("tool", "filesystem.read", "input", "internal/tuiv2/app.go"))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "Looking at the app structure, "))},
+		{after: tick, event: event(gateway.EventAgentChunk, defaultSessionID, defaultRunID, payload("text", "I can see the Focus-Only layout is already implemented."))},
+		{after: tick, event: event(gateway.EventAgentMessageEnd, defaultSessionID, defaultRunID, payload("message_id", "stream-msg-2"))},
+		{after: tick, event: event(gateway.EventToolFinished, defaultSessionID, defaultRunID, payload("tool", "filesystem.read", "output", "530 lines, layout uses 3-tier responsive design", "status", "ok"))},
+		{after: tick, event: event(gateway.EventTokenUsage, defaultSessionID, defaultRunID, payload("total", 580, "input", 120, "output", 460))},
+		{after: tick, event: event(gateway.EventRunFinished, defaultSessionID, defaultRunID, payload("phase", "done"))},
 	}
-	events = append(events, scheduledEvent{after: tick, event: event(gateway.EventRunFinished, defaultSessionID, defaultRunID, payload("phase", "done"))})
-	return events
 }
 
 // toolApprovalEvents 返回工具权限等待流程的事件序列。

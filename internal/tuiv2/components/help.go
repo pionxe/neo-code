@@ -74,6 +74,15 @@ func (h *HelpOverlay) View() string {
 		lines = append(lines, "")
 	}
 
+	// 约束内容高度到终端限制
+	maxContentLines := height - 5 // border + padding overhead
+	if maxContentLines < 4 {
+		maxContentLines = 4
+	}
+	if len(lines) > maxContentLines {
+		lines = lines[:maxContentLines]
+	}
+
 	hint := theme.MutedStyle().Render("  ␛ : close")
 	lines = append(lines, hint)
 
@@ -85,7 +94,10 @@ func (h *HelpOverlay) View() string {
 		Padding(0, 1).
 		Render(content)
 
-	boxH := min(height-2, 28)
+	boxH := height - 2
+	if boxH < 6 {
+		boxH = 6
+	}
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(boxH).

@@ -46,13 +46,15 @@ type App struct {
 	// Ctrl+C 双退保护
 	lastCtrlC time.Time
 
-	ambientStatus *components.AmbientStatus
-	agentStream   *components.AgentStream
-	commandPrompt *components.CommandPrompt
-	softInspector *components.SoftInspector
-	palette       *components.Palette
-	helpOverlay   *components.HelpOverlay
-	sessionPicker *components.SessionPicker
+	ambientStatus  *components.AmbientStatus
+	agentStream    *components.AgentStream
+	commandPrompt  *components.CommandPrompt
+	softInspector  *components.SoftInspector
+	palette        *components.Palette
+	helpOverlay    *components.HelpOverlay
+	sessionPicker  *components.SessionPicker
+	modelPicker    *components.ModelPicker
+	confirmOverlay *components.ConfirmOverlay
 }
 
 var _ tea.Model = (*App)(nil)
@@ -61,18 +63,20 @@ var _ tea.Model = (*App)(nil)
 func NewApp(cfg StartupConfig) tea.Model {
 	viewState := state.NewViewState()
 	return &App{
-		client:        cfg.Client,
-		state:         viewState,
-		debug:         cfg.Debug,
-		backend:       cfg.Backend,
-		scenario:      cfg.Scenario,
-		ambientStatus: components.NewAmbientStatus(viewState),
-		agentStream:   components.NewAgentStream(viewState),
-		commandPrompt: components.NewCommandPrompt(viewState),
-		softInspector: components.NewSoftInspector(viewState),
-		palette:       components.NewPalette(viewState),
-		helpOverlay:   components.NewHelpOverlay(viewState),
-		sessionPicker: components.NewSessionPicker(viewState),
+		client:         cfg.Client,
+		state:          viewState,
+		debug:          cfg.Debug,
+		backend:        cfg.Backend,
+		scenario:       cfg.Scenario,
+		ambientStatus:  components.NewAmbientStatus(viewState),
+		agentStream:    components.NewAgentStream(viewState),
+		commandPrompt:  components.NewCommandPrompt(viewState),
+		softInspector:  components.NewSoftInspector(viewState),
+		palette:        components.NewPalette(viewState),
+		helpOverlay:    components.NewHelpOverlay(viewState),
+		sessionPicker:  components.NewSessionPicker(viewState),
+		modelPicker:    components.NewModelPicker(viewState),
+		confirmOverlay: components.NewConfirmOverlay(viewState),
 	}
 }
 
@@ -132,6 +136,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.handleSessionSelect(msg)
 	case components.SessionDeleteMsg:
 		return a, a.handleSessionDelete(msg)
+	case components.ModelSelectMsg:
+		return a, a.handleModelSelect(msg)
+	case components.ConfirmYesMsg:
+		return a, a.handleConfirmYes(msg)
+	case components.ConfirmNoMsg:
+		a.state.Confirm = state.ConfirmState{}
+		return a, nil
 	case leaderTimeoutMsg:
 		if a.state.Mode == state.LeaderMode {
 			a.state.Mode = state.NormalMode
@@ -155,6 +166,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, waitEventCmd(a.eventCh)
 		}
 		return a, nil
+	case sessionCreatedMsg:
+		return a, a.handleSessionCreated(msg)
 	}
 	return a, a.routeComponents(msg)
 }
@@ -169,6 +182,10 @@ func (a *App) View() string {
 		return a.fitViewToTerminal(a.helpOverlay.View())
 	case "session_picker":
 		return a.fitViewToTerminal(a.sessionPicker.View())
+	case "model_picker":
+		return a.fitViewToTerminal(a.modelPicker.View())
+	case "confirm":
+		return a.fitViewToTerminal(a.confirmOverlay.View())
 	}
 	lines := []string{
 		a.ambientStatus.View(),
@@ -231,6 +248,9 @@ func (a *App) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case "session_picker":
 		_, cmd := a.sessionPicker.Update(msg)
 		return a, cmd
+	case "model_picker":
+		_, cmd := a.modelPicker.Update(msg)
+		return a, cmd
 	}
 	// 主视图下，滚轮事件交给 Agent Stream
 	switch msg.Type {
@@ -248,6 +268,15 @@ func (a *App) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 // handleKeyMsg 根据当前模式分发键盘消息。
 func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Esc always closes any active overlay first (global escape hatch)
+	if a.state.Overlay.Active != "" {
+		if msg.String() == "esc" {
+			a.state.Overlay.Active = ""
+			a.state.Overlay.Query = ""
+			a.state.Overlay.Selected = 0
+			return a, nil
+		}
+	}
 	// 浮层激活时，键盘消息交给对应浮层组件处理
 	switch a.state.Overlay.Active {
 	case "palette":
@@ -258,6 +287,12 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case "session_picker":
 		_, cmd := a.sessionPicker.Update(msg)
+		return a, cmd
+	case "model_picker":
+		_, cmd := a.modelPicker.Update(msg)
+		return a, cmd
+	case "confirm":
+		_, cmd := a.confirmOverlay.Update(msg)
 		return a, cmd
 	}
 	switch a.state.Mode {
@@ -281,6 +316,15 @@ func (a *App) handleInputModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case keymap.ActionOpenPalette:
 		a.openOverlay("palette")
+		return a, nil
+	case keymap.ActionLogViewer:
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("log-hint-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   "Log viewer not yet available",
+			Metadata:  map[string]any{"done": true},
+		})
 		return a, nil
 	default:
 		_, promptCmd := a.commandPrompt.Update(msg)
@@ -310,7 +354,13 @@ func (a *App) handleNormalModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keymap.ActionQuit:
 		return a, tea.Quit
 	case keymap.ActionSearchForward:
-		// Phase 9b/9c 会实现搜索，此处预留
+		// 搜索功能后续 Phase 实现，此处预留
+		return a, nil
+	case keymap.ActionSearchBackward:
+		a.openOverlay("help")
+		return a, nil
+	case keymap.ActionExCommand:
+		// Ex 命令行后续 Phase 实现，此处预留
 		return a, nil
 	default:
 		_, promptCmd := a.commandPrompt.Update(msg)
@@ -339,6 +389,26 @@ func (a *App) handleLeaderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keymap.ActionLeaderSwitchSession:
 		a.openOverlay("session_picker")
 		return a, nil
+	case keymap.ActionLeaderNewSession:
+		if a.client != nil {
+			return a, createSessionCmd(a.client)
+		}
+		return a, nil
+	case keymap.ActionLeaderToggleMode:
+		return a, a.toggleAgentMode()
+	case keymap.ActionLeaderFullAccess:
+		return a, a.toggleFullAccess()
+	case keymap.ActionLeaderLog:
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("log-hint-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   "Log viewer not yet available",
+			Metadata:  map[string]any{"done": true},
+		})
+		return a, nil
+	case keymap.ActionLeaderCompact:
+		return a, a.triggerCompact()
 	default:
 		return a, nil
 	}
@@ -383,7 +453,18 @@ func leaderTimeoutCmd() tea.Cmd {
 
 // handleSubmitMessage 将用户输入交给 GatewayClient，并让后续 ACK 以事件形式回到 reducer。
 func (a *App) handleSubmitMessage(msg components.SubmitMessageMsg) tea.Cmd {
-	if a.client == nil || strings.TrimSpace(msg.Text) == "" {
+	if strings.TrimSpace(msg.Text) == "" {
+		return nil
+	}
+	// 立即将用户消息追加到 Stream 中以便渲染
+	a.appendStream(state.StreamEntry{
+		ID:        fmt.Sprintf("user-msg-%d", time.Now().UnixNano()),
+		Type:      "message",
+		Timestamp: time.Now(),
+		Content:   msg.Text,
+		Metadata:  map[string]any{"role": "user", "done": true},
+	})
+	if a.client == nil {
 		return nil
 	}
 	sessionID := a.activeSessionID()
@@ -452,6 +533,17 @@ func (a *App) handlePaletteCommand(msg components.PaletteCommandMsg) tea.Cmd {
 	case "/session":
 		a.openOverlay("session_picker")
 		return nil
+	case "/model":
+		a.openOverlay("model_picker")
+		return nil
+	case "/mode":
+		return a.toggleAgentMode()
+	case "/compact":
+		return a.triggerCompact()
+	case "/clear":
+		a.state.Stream = nil
+		a.bindComponents()
+		return nil
 	default:
 		a.appendStream(state.StreamEntry{
 			ID:        fmt.Sprintf("cmd-%s-%d", msg.Name, time.Now().UnixNano()),
@@ -475,6 +567,13 @@ func (a *App) handleSlashCommand(msg components.SlashCommandMsg) tea.Cmd {
 	case "/session":
 		a.openOverlay("session_picker")
 		return nil
+	case "/model":
+		a.openOverlay("model_picker")
+		return nil
+	case "/mode":
+		return a.toggleAgentMode()
+	case "/compact":
+		return a.triggerCompact()
 	case "/clear":
 		a.state.Stream = nil
 		a.bindComponents()
@@ -500,12 +599,102 @@ func (a *App) handleSessionSelect(msg components.SessionSelectMsg) tea.Cmd {
 	return loadSessionCmd(a.client, msg.Session.ID)
 }
 
-// handleSessionDelete 处理会话删除操作。
+// handleSessionDelete 通过确认弹窗处理会话删除操作。
 func (a *App) handleSessionDelete(msg components.SessionDeleteMsg) tea.Cmd {
 	if a.client == nil {
 		return nil
 	}
-	return deleteSessionCmd(a.client, msg.SessionID)
+	a.openConfirm(
+		"Delete Session",
+		fmt.Sprintf("Are you sure you want to delete this session?"),
+		"delete_session",
+		map[string]any{"session_id": msg.SessionID},
+	)
+	return nil
+}
+
+// handleSessionCreated 处理新会话创建完成。
+func (a *App) handleSessionCreated(msg sessionCreatedMsg) tea.Cmd {
+	if msg.err != nil {
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("session-err-%d", time.Now().UnixNano()),
+			Type:      "error",
+			Timestamp: time.Now(),
+			Content:   fmt.Sprintf("Failed to create session: %s", msg.err),
+			Metadata:  map[string]any{"done": true},
+		})
+		return nil
+	}
+	if msg.Session != nil {
+		a.state.Gateway.ActiveSess = msg.Session
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("session-created-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   fmt.Sprintf("New session created: %s", msg.Session.Title),
+			Metadata:  map[string]any{"done": true},
+		})
+		if a.client != nil {
+			return loadSessionCmd(a.client, msg.Session.ID)
+		}
+	}
+	return nil
+}
+
+// handleModelSelect 处理模型切换操作。
+func (a *App) handleModelSelect(msg components.ModelSelectMsg) tea.Cmd {
+	if a.client != nil {
+		sessionID := a.activeSessionID()
+		if err := a.client.SetModel(context.Background(), sessionID, msg.ModelID); err != nil {
+			a.appendStream(state.StreamEntry{
+				ID:        fmt.Sprintf("model-err-%d", time.Now().UnixNano()),
+				Type:      "error",
+				Timestamp: time.Now(),
+				Content:   fmt.Sprintf("Failed to switch model: %s", err),
+				Metadata:  map[string]any{"done": true},
+			})
+			return nil
+		}
+	}
+	if a.state.Gateway.ActiveSess != nil {
+		a.state.Gateway.ActiveSess.Model = msg.ModelID
+	}
+	a.state.Gateway.ActiveModel = msg.ModelID
+	a.appendStream(state.StreamEntry{
+		ID:        fmt.Sprintf("model-switch-%d", time.Now().UnixNano()),
+		Type:      "status",
+		Timestamp: time.Now(),
+		Content:   fmt.Sprintf("Model switched to %s", msg.ModelName),
+		Metadata:  map[string]any{"done": true},
+	})
+	return nil
+}
+
+// handleConfirmYes 处理确认弹窗的确认操作。
+func (a *App) handleConfirmYes(msg components.ConfirmYesMsg) tea.Cmd {
+	confirm := a.state.Confirm
+	a.state.Confirm = state.ConfirmState{}
+	switch confirm.Action {
+	case "delete_session":
+		sessionID, _ := confirm.Data["session_id"].(string)
+		if sessionID != "" && a.client != nil {
+			return deleteSessionCmd(a.client, sessionID)
+		}
+	}
+	return nil
+}
+
+// openConfirm 打开确认弹窗。
+func (a *App) openConfirm(title, message, action string, data map[string]any) {
+	a.state.Confirm = state.ConfirmState{
+		Title:   title,
+		Message: message,
+		Action:  action,
+		Data:    data,
+	}
+	a.state.Overlay.Active = "confirm"
+	a.state.Overlay.Query = ""
+	a.state.Overlay.Selected = 0
 }
 
 // activeSessionID 返回当前会话 ID，缺失时使用空字符串让 GatewayClient 自行决定错误语义。
@@ -617,6 +806,52 @@ func (a *App) bindComponents() {
 	a.agentStream = components.NewAgentStream(a.state)
 	a.commandPrompt = components.NewCommandPrompt(a.state)
 	a.softInspector = components.NewSoftInspector(a.state)
+}
+
+// toggleAgentMode 切换 Agent 模式 (build/plan) 并追加状态提示。
+func (a *App) toggleAgentMode() tea.Cmd {
+	mode := "plan"
+	if a.state.Runtime.AgentMode == "plan" || a.state.Runtime.AgentMode == "" {
+		mode = "build"
+	}
+	a.state.Runtime.AgentMode = mode
+	a.appendStream(state.StreamEntry{
+		ID:        fmt.Sprintf("mode-toggle-%d", time.Now().UnixNano()),
+		Type:      "status",
+		Timestamp: time.Now(),
+		Content:   fmt.Sprintf("Agent mode: %s", mode),
+		Metadata:  map[string]any{"done": true},
+	})
+	return nil
+}
+
+// toggleFullAccess 切换 Full Access 模式并追加状态提示。
+func (a *App) toggleFullAccess() tea.Cmd {
+	a.state.Runtime.FullAccess = !a.state.Runtime.FullAccess
+	label := "off"
+	if a.state.Runtime.FullAccess {
+		label = "on"
+	}
+	a.appendStream(state.StreamEntry{
+		ID:        fmt.Sprintf("access-toggle-%d", time.Now().UnixNano()),
+		Type:      "status",
+		Timestamp: time.Now(),
+		Content:   fmt.Sprintf("Full access: %s", label),
+		Metadata:  map[string]any{"done": true},
+	})
+	return nil
+}
+
+// triggerCompact 触发手动 compact 并追加状态提示。
+func (a *App) triggerCompact() tea.Cmd {
+	a.appendStream(state.StreamEntry{
+		ID:        fmt.Sprintf("compact-%d", time.Now().UnixNano()),
+		Type:      "status",
+		Timestamp: time.Now(),
+		Content:   "Compact triggered",
+		Metadata:  map[string]any{"done": true},
+	})
+	return nil
 }
 
 // debugLine 渲染调试模式下的最小运行信息。
@@ -850,4 +1085,21 @@ type sessionSwitchedMsg struct {
 	sessionID string
 	detail    *gateway.SessionDetail
 	eventCh   <-chan gateway.GatewayEvent
+}
+
+// sessionCreatedMsg 表示新会话创建完成。
+type sessionCreatedMsg struct {
+	Session *gateway.SessionSummary
+	err     error
+}
+
+// createSessionCmd 通过 GatewayClient 创建新会话。
+func createSessionCmd(client gateway.Client) tea.Cmd {
+	return func() tea.Msg {
+		summary, err := client.CreateSession(context.Background())
+		if err != nil {
+			return sessionCreatedMsg{err: err}
+		}
+		return sessionCreatedMsg{Session: summary}
+	}
 }
