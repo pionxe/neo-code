@@ -55,8 +55,8 @@ repo hooks 文件路径固定为：
 <workspace>/.neocode/hooks.yaml
 ```
 
-仅支持与 P2 相同的 builtin 子集（`kind=builtin`、`mode=sync`、`UserAllowed=true` points、3 个 handlers）。
-repo hooks 暂不支持 `kind=http`，external kinds（`command/http/prompt/agent`）在 repo 侧仍显式拒绝。
+支持与 P2 相同的 builtin 子集（`kind=builtin`、`mode=sync`、`UserAllowed=true` points、3 个 handlers），并开放 `kind=command + mode=sync`。
+repo hooks 仍不支持 `kind=http`；external kinds 中当前仅 `command` 开放，`prompt/agent` 仍显式拒绝。
 
 执行顺序固定为：
 
@@ -73,21 +73,54 @@ internal -> user -> repo
 
 ### 上下文裁剪
 
-user/repo hook 接收的 `HookContext` 经过白名单裁剪，仅保留最小必要字段：
+user/repo hook 接收的 `HookContext` 经过点位感知的 payload schema 裁剪，仅保留最小必要字段：
 
-- `run_id` / `session_id`
-- `point` / `tool_call_id` / `tool_name`
-- `tool_arguments_preview`（脱敏+截断后的参数预览）
-- `is_error` / `error_class`
-- `result_content_preview` / `result_metadata_present`
-- `execution_error`
-- `workdir`
+- 顶层字段：`run_id` / `session_id`
+- metadata 字段：按 `point` 不同暴露对应的最小子集，例如 `tool_call_id`、`tool_name`、`workdir`
+- 预览/摘要类字段：`tool_arguments_preview`、`result_content_preview`、`todo_summary`、`recent_tool_summary`
+- 完整机器可读契约见 `docs/reference/hook-payload.v1.json`
 
 不会暴露：
 
 - API key / capability token
 - service 指针与 provider 客户端对象
 - 原始工具参数明文（`tool_arguments`）
+
+### Payload Schema
+
+Hook payload 已从 runtime 内部白名单提升为公开契约：
+
+- 版本号真源：`internal/runtime/hooks.PayloadVersion`
+- 当前版本：`payload_version: "1"`
+- 生成命令：`go generate ./internal/runtime/hooks`
+- 生成产物：`docs/reference/hook-payload.v1.json`
+- command stdin 与 HTTP observe body 都带 `payload_version`
+- HTTP observe 在共享字段之外，继续保留 `scope`、`kind`、`mode`、`triggered_at` 作为 transport 附加字段
+- `metadata.point`、`completion_passed`、`has_tool_calls`、`assistant_role` 这类未由 runtime 真实生产的字段不再公开
+
+稳定性分级：
+
+- `stable`：身份/控制类字段，默认兼容承诺
+- `experimental`：预览/摘要类字段，当前包括 `tool_arguments_preview`、`result_content_preview`、`todo_summary`、`recent_tool_summary`
+- `deprecated`：保留给后续版本迁移，本版未使用
+
+各点位 metadata 字段：
+
+| point | metadata fields |
+|---|---|
+| `before_tool_call` | `run_id`, `session_id`, `tool_call_id`, `tool_name`, `tool_arguments_preview` (experimental), `workdir` |
+| `after_tool_result` | `run_id`, `session_id`, `tool_call_id`, `tool_name`, `is_error`, `error_class`, `result_content_preview` (experimental), `result_metadata_present`, `execution_error`, `workdir` |
+| `before_completion_decision` | `run_id`, `session_id` |
+| `accept_gate` | `run_id`, `session_id`, `workdir`, `workspace_changed`, `assistant_text_empty`, `todo_summary` (experimental), `recent_tool_summary` (experimental) |
+| `before_permission_decision` | `run_id`, `session_id`, `tool_call_id`, `tool_name`, `decision`, `reason`, `rule_id`, `workdir` |
+| `after_tool_failure` | `run_id`, `session_id`, `tool_call_id`, `tool_name`, `tool_arguments_preview` (experimental), `is_error`, `error_class`, `execution_error`, `result_content_preview` (experimental), `workdir` |
+| `session_start` | `run_id`, `session_id`, `workdir` |
+| `session_end` | `run_id`, `session_id`, `stop_reason`, `detail` |
+| `user_prompt_submit` | `run_id`, `session_id`, `workdir` |
+| `pre_compact` | `run_id`, `session_id`, `workdir`, `trigger_mode` |
+| `post_compact` | `run_id`, `session_id`, `workdir`, `trigger_mode`, `applied` |
+| `subagent_start` | `run_id`, `session_id`, `task_id`, `role`, `workspace`, `tool_name`, `trigger`, `workdir` |
+| `subagent_stop` | `run_id`, `session_id`, `task_id`, `role`, `state`, `stop_reason`, `step_count`, `error` |
 
 ### 点位能力矩阵（P4）
 
@@ -184,6 +217,7 @@ trust store 固定路径：
 - `hook_id`：hook 配置中的 `id`
 - `point`：触发点位名称
 - `metadata`：经白名单裁剪后的上下文字段（与 builtin/http hook 相同的 allowlist）
+- 完整字段表与稳定性分级见 `docs/reference/hook-payload.v1.json`
 
 ### stdout 协议
 

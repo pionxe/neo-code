@@ -14,7 +14,7 @@ import (
 )
 
 // CommandHookPayloadVersion 定义 command hook stdin 协议版本号，变更 stdin 结构时递增。
-const CommandHookPayloadVersion = "1"
+const CommandHookPayloadVersion = PayloadVersion
 
 // maxCommandStdoutBytes 限制外部命令 stdout 最大读取字节数，防止 OOM。
 const maxCommandStdoutBytes = 1 << 20 // 1 MiB
@@ -109,14 +109,14 @@ func ParseCommandParams(params map[string]any) (argv []string, shell bool, err e
 // BuildCommandPayload 构造传给外部命令的 stdin JSON payload。
 func BuildCommandPayload(hookID string, point HookPoint, input HookContext) CommandHookPayload {
 	payload := CommandHookPayload{
-		PayloadVersion: CommandHookPayloadVersion,
+		PayloadVersion: PayloadVersion,
 		HookID:         strings.TrimSpace(hookID),
 		Point:          string(point),
 		RunID:          strings.TrimSpace(input.RunID),
 		SessionID:      strings.TrimSpace(input.SessionID),
 	}
-	if len(input.Metadata) > 0 {
-		payload.Metadata = input.Metadata
+	if metadata := sanitizePayloadMetadata(point, input.Metadata); len(metadata) > 0 {
+		payload.Metadata = metadata
 	}
 	return payload
 }
@@ -256,7 +256,7 @@ func buildCommandEnv(spec CommandHookSpec) []string {
 	env := []string{
 		"NEOCODE_HOOK_HOOK_ID=" + spec.HookID,
 		"NEOCODE_HOOK_POINT=" + string(spec.Point),
-		"NEOCODE_HOOK_PAYLOAD_VERSION=" + CommandHookPayloadVersion,
+		"NEOCODE_HOOK_PAYLOAD_VERSION=" + PayloadVersion,
 	}
 	if runtime.GOOS == "windows" {
 		for _, key := range []string{"SystemRoot", "SystemDrive", "USERPROFILE"} {

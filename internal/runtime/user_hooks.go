@@ -233,17 +233,17 @@ func buildConfiguredHookSpec(
 		return runtimehooks.HookSpec{}, buildErr
 	}
 	return runtimehooks.HookSpec{
-		ID:                      strings.TrimSpace(item.ID),
-		Point:                   point,
-		Scope:                   scope,
-		Source:                  source,
-		Kind:                    specKind,
-		Mode:                    specMode,
-		Priority:                item.Priority,
-		Timeout:                 time.Duration(item.TimeoutSec) * time.Second,
-		FailurePolicy:           mapRuntimeHookFailurePolicy(item.FailurePolicy),
-		Handler:                 handler,
-		Matcher:                 matcher,
+		ID:            strings.TrimSpace(item.ID),
+		Point:         point,
+		Scope:         scope,
+		Source:        source,
+		Kind:          specKind,
+		Mode:          specMode,
+		Priority:      item.Priority,
+		Timeout:       time.Duration(item.TimeoutSec) * time.Second,
+		FailurePolicy: mapRuntimeHookFailurePolicy(item.FailurePolicy),
+		Handler:       handler,
+		Matcher:       matcher,
 	}, nil
 }
 
@@ -262,15 +262,15 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 		if mode != configuredHookModeSync {
 			return fmt.Errorf("mode %q is not supported", item.Mode)
 		}
-			handler := strings.ToLower(strings.TrimSpace(item.Handler))
-			if handler == "warn_on_tool_call" && !runtimehooks.HasHookMatcherConfig(item.Match) {
-				return fmt.Errorf("handler %q requires match", item.Handler)
+		handler := strings.ToLower(strings.TrimSpace(item.Handler))
+		if handler == "warn_on_tool_call" && !runtimehooks.HasHookMatcherConfig(item.Match) {
+			return fmt.Errorf("handler %q requires match", item.Handler)
+		}
+		if runtimehooks.HasHookMatcherConfig(item.Match) {
+			if err := runtimehooks.ValidateHookMatcher(runtimehooks.HookPoint(strings.TrimSpace(item.Point)), item.Match); err != nil {
+				return fmt.Errorf("match: %w", err)
 			}
-			if runtimehooks.HasHookMatcherConfig(item.Match) {
-				if err := runtimehooks.ValidateHookMatcher(runtimehooks.HookPoint(strings.TrimSpace(item.Point)), item.Match); err != nil {
-					return fmt.Errorf("match: %w", err)
-				}
-			}
+		}
 	case configuredHookKindCommand:
 		if mode != configuredHookModeSync {
 			return fmt.Errorf("mode %q is not supported for kind command (only sync)", item.Mode)
@@ -307,7 +307,6 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 	}
 	return nil
 }
-
 
 // buildConfiguredHookMatcher 编译 hook matcher。
 func buildConfiguredHookMatcher(item config.RuntimeHookItemConfig, point runtimehooks.HookPoint) (*runtimehooks.HookMatcher, error) {
@@ -376,16 +375,16 @@ func buildUserBuiltinHookHandler(
 			}
 			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
 		}, nil
-		case "warn_on_tool_call":
-			defaultMessage := "tool call matched warn_on_tool_call"
-			if customMessage := strings.TrimSpace(readHookParamString(params, "message")); customMessage != "" {
-				defaultMessage = customMessage
-			}
-			return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
-				_ = ctx
-				_ = input
-				return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: defaultMessage}
-			}, nil
+	case "warn_on_tool_call":
+		defaultMessage := "tool call matched warn_on_tool_call"
+		if customMessage := strings.TrimSpace(readHookParamString(params, "message")); customMessage != "" {
+			defaultMessage = customMessage
+		}
+		return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+			_ = ctx
+			_ = input
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: defaultMessage}
+		}, nil
 	case "add_context_note":
 		note := strings.TrimSpace(readHookParamString(params, "note"))
 		if note == "" {
@@ -441,21 +440,23 @@ func buildUserHTTPObserveHookHandler(item config.RuntimeHookItemConfig) (runtime
 	}
 	includeMetadata := readHookParamBool(item.Params, "include_metadata", false)
 	hookID := strings.TrimSpace(item.ID)
-	point := strings.TrimSpace(item.Point)
+	pointName := strings.TrimSpace(item.Point)
+	point := runtimehooks.HookPoint(pointName)
 
 	return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
 		payload := map[string]any{
-			"hook_id":      hookID,
-			"point":        point,
-			"scope":        "user",
-			"kind":         configuredHookKindHTTP,
-			"mode":         configuredHookModeObserve,
-			"run_id":       strings.TrimSpace(input.RunID),
-			"session_id":   strings.TrimSpace(input.SessionID),
-			"triggered_at": time.Now().UTC().Format(time.RFC3339Nano),
+			"payload_version": runtimehooks.PayloadVersion,
+			"hook_id":         hookID,
+			"point":           pointName,
+			"scope":           "user",
+			"kind":            configuredHookKindHTTP,
+			"mode":            configuredHookModeObserve,
+			"run_id":          strings.TrimSpace(input.RunID),
+			"session_id":      strings.TrimSpace(input.SessionID),
+			"triggered_at":    time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		if includeMetadata && len(input.Metadata) > 0 {
-			payload["metadata"] = sanitizeHTTPObserveMetadata(input.Metadata)
+			payload["metadata"] = sanitizeHTTPObserveMetadata(point, input.Metadata)
 		}
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -493,17 +494,31 @@ func buildUserHTTPObserveHookHandler(item config.RuntimeHookItemConfig) (runtime
 }
 
 // sanitizeHTTPObserveMetadata 对外发 payload 前剥离敏感预览字段，避免意外外传。
-func sanitizeHTTPObserveMetadata(metadata map[string]any) map[string]any {
+func sanitizeHTTPObserveMetadata(point runtimehooks.HookPoint, metadata map[string]any) map[string]any {
 	if len(metadata) == 0 {
 		return nil
 	}
-	sanitized := make(map[string]any, len(metadata))
+	allowedFields := runtimehooks.PayloadSchema(point).Metadata
+	if len(allowedFields) == 0 {
+		return nil
+	}
+	allowedNames := make(map[string]struct{}, len(allowedFields))
+	for _, field := range allowedFields {
+		allowedNames[strings.ToLower(strings.TrimSpace(field.Name))] = struct{}{}
+	}
+	sanitized := make(map[string]any, len(allowedFields))
 	for key, value := range metadata {
 		normalized := strings.ToLower(strings.TrimSpace(key))
+		if _, allowed := allowedNames[normalized]; !allowed {
+			continue
+		}
 		if _, blocked := httpObserveSensitiveMetadataKeys[normalized]; blocked {
 			continue
 		}
 		sanitized[key] = value
+	}
+	if len(sanitized) == 0 {
+		return nil
 	}
 	return sanitized
 }
