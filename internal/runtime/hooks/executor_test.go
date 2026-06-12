@@ -959,6 +959,8 @@ func TestExecutorSanitizeUserHookContext(t *testing.T) {
 			"tool_arguments":         "--secret-token=abc",
 			"tool_arguments_preview": "token=***",
 			"capability_token":       "should-not-leak",
+			"completion_passed":      true,
+			"assistant_role":         "assistant",
 			"workdir":                "/tmp/work",
 		},
 	})
@@ -977,6 +979,12 @@ func TestExecutorSanitizeUserHookContext(t *testing.T) {
 	}
 	if _, exists := captured.Metadata["capability_token"]; exists {
 		t.Fatal("capability_token should be stripped for user hook context")
+	}
+	if _, exists := captured.Metadata["completion_passed"]; exists {
+		t.Fatal("completion_passed should be stripped when not produced by runtime")
+	}
+	if _, exists := captured.Metadata["assistant_role"]; exists {
+		t.Fatal("assistant_role should be stripped when not produced by runtime")
 	}
 }
 
@@ -1007,6 +1015,8 @@ func TestExecutorSanitizeRepoHookContext(t *testing.T) {
 			"tool_arguments":         "--secret-token=abc",
 			"tool_arguments_preview": "token=***",
 			"capability_token":       "should-not-leak",
+			"completion_passed":      true,
+			"assistant_role":         "assistant",
 			"workdir":                "/tmp/work",
 		},
 	})
@@ -1022,6 +1032,12 @@ func TestExecutorSanitizeRepoHookContext(t *testing.T) {
 	}
 	if _, exists := captured.Metadata["capability_token"]; exists {
 		t.Fatal("capability_token should be stripped for repo hook context")
+	}
+	if _, exists := captured.Metadata["completion_passed"]; exists {
+		t.Fatal("completion_passed should be stripped for repo hook context")
+	}
+	if _, exists := captured.Metadata["assistant_role"]; exists {
+		t.Fatal("assistant_role should be stripped for repo hook context")
 	}
 }
 
@@ -1052,4 +1068,3 @@ func TestExecutorSkipsHookWhenMatcherMissed(t *testing.T) {
 		t.Fatalf("len(Results) = %d, want 0 when matcher missed", len(output.Results))
 	}
 }
-

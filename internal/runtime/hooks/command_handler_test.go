@@ -18,12 +18,14 @@ func TestBuildCommandPayload(t *testing.T) {
 		RunID:     "run-123",
 		SessionID: "sess-456",
 		Metadata: map[string]any{
-			"tool_name": "bash",
-			"workdir":   "/tmp",
+			"tool_name":        "bash",
+			"workdir":          "/tmp",
+			"tool_arguments":   "rm -rf /tmp",
+			"capability_token": "secret",
 		},
 	})
-	if payload.PayloadVersion != CommandHookPayloadVersion {
-		t.Fatalf("payload_version = %q, want %q", payload.PayloadVersion, CommandHookPayloadVersion)
+	if payload.PayloadVersion != PayloadVersion {
+		t.Fatalf("payload_version = %q, want %q", payload.PayloadVersion, PayloadVersion)
 	}
 	if payload.HookID != "my-hook" {
 		t.Fatalf("hook_id = %q, want %q", payload.HookID, "my-hook")
@@ -39,6 +41,12 @@ func TestBuildCommandPayload(t *testing.T) {
 	}
 	if payload.Metadata["tool_name"] != "bash" {
 		t.Fatalf("metadata[tool_name] = %v, want %q", payload.Metadata["tool_name"], "bash")
+	}
+	if _, exists := payload.Metadata["tool_arguments"]; exists {
+		t.Fatal("metadata[tool_arguments] should be stripped by payload schema")
+	}
+	if _, exists := payload.Metadata["capability_token"]; exists {
+		t.Fatal("metadata[capability_token] should be stripped by payload schema")
 	}
 }
 
@@ -723,13 +731,13 @@ func TestRunCommandHookStdinPayloadWithMetadata(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		spec = CommandHookSpec{
 			HookID:  "stdin-meta",
-			Point:   HookPointUserPromptSubmit,
+			Point:   HookPointBeforeToolCall,
 			Command: []string{"powershell", "-Command", "$input"},
 		}
 	} else {
 		spec = CommandHookSpec{
 			HookID:  "stdin-meta",
-			Point:   HookPointUserPromptSubmit,
+			Point:   HookPointBeforeToolCall,
 			Command: []string{"cat"},
 		}
 	}

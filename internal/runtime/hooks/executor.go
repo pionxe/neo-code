@@ -77,7 +77,7 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 	for _, spec := range specs {
 		hookInput := input.Clone()
 		if spec.Scope == HookScopeUser || spec.Scope == HookScopeRepo {
-			hookInput = sanitizeUserHookContext(hookInput)
+			hookInput = sanitizeUserHookContext(spec.Point, hookInput)
 		}
 		if spec.Matcher != nil && !spec.Matcher.Match(hookInput) {
 			continue
@@ -331,59 +331,12 @@ func (e *Executor) callHandler(
 	}
 }
 
-func sanitizeUserHookContext(input HookContext) HookContext {
+func sanitizeUserHookContext(point HookPoint, input HookContext) HookContext {
 	sanitized := HookContext{
 		RunID:     strings.TrimSpace(input.RunID),
 		SessionID: strings.TrimSpace(input.SessionID),
 	}
-	if len(input.Metadata) == 0 {
-		return sanitized
-	}
-	allowedMetadataKeys := map[string]struct{}{
-		"point":                   {},
-		"tool_call_id":            {},
-		"tool_name":               {},
-		"tool_arguments_preview":  {},
-		"is_error":                {},
-		"error_class":             {},
-		"result_content_preview":  {},
-		"result_metadata_present": {},
-		"execution_error":         {},
-		"workdir":                 {},
-		"session_id":              {},
-		"run_id":                  {},
-		"task_id":                 {},
-		"role":                    {},
-		"workspace":               {},
-		"trigger":                 {},
-		"state":                   {},
-		"stop_reason":             {},
-		"step_count":              {},
-		"error":                   {},
-		"trigger_mode":            {},
-		"applied":                 {},
-		"decision":                {},
-		"reason":                  {},
-		"rule_id":                 {},
-		"completion_passed":       {},
-		"has_tool_calls":          {},
-		"assistant_role":          {},
-		"detail":                  {},
-		"workspace_changed":       {},
-		"assistant_text_empty":    {},
-		"todo_summary":            {},
-		"recent_tool_summary":     {},
-	}
-	for key, value := range input.Metadata {
-		normalizedKey := strings.ToLower(strings.TrimSpace(key))
-		if _, ok := allowedMetadataKeys[normalizedKey]; !ok {
-			continue
-		}
-		if sanitized.Metadata == nil {
-			sanitized.Metadata = make(map[string]any, len(input.Metadata))
-		}
-		sanitized.Metadata[normalizedKey] = cloneMetadataValue(value)
-	}
+	sanitized.Metadata = sanitizePayloadMetadata(point, input.Metadata)
 	return sanitized
 }
 

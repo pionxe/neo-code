@@ -1,0 +1,1301 @@
+{
+  "$id": "https://neocode.dev/schemas/hook-payload.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Public hook payload contract for command stdin and shared HTTP observe fields.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "assistant_text_empty": {
+              "description": "assistant 文本输出是否为空。",
+              "type": "boolean",
+              "x-stability": "stable"
+            },
+            "recent_tool_summary": {
+              "description": "最近一批工具调用摘要，结构仍可能继续演进。",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "is_error": {
+                    "description": "该工具结果是否为错误。",
+                    "type": "boolean",
+                    "x-stability": "stable"
+                  },
+                  "name": {
+                    "description": "工具名称。",
+                    "type": "string",
+                    "x-stability": "stable"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array",
+              "x-stability": "experimental"
+            },
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "todo_summary": {
+              "additionalProperties": false,
+              "description": "当前 todo 摘要，字段仍可能继续演进。",
+              "properties": {
+                "required_completed": {
+                  "description": "已完成的 required todo 数量。",
+                  "type": "integer",
+                  "x-stability": "stable"
+                },
+                "required_failed": {
+                  "description": "已失败的 required todo 数量。",
+                  "type": "integer",
+                  "x-stability": "stable"
+                },
+                "required_open": {
+                  "description": "尚未终态的 required todo 数量。",
+                  "type": "integer",
+                  "x-stability": "stable"
+                },
+                "required_total": {
+                  "description": "required todo 总数。",
+                  "type": "integer",
+                  "x-stability": "stable"
+                },
+                "total": {
+                  "description": "todo 总数。",
+                  "type": "integer",
+                  "x-stability": "stable"
+                }
+              },
+              "type": "object",
+              "x-stability": "experimental"
+            },
+            "workdir": {
+              "description": "本次运行的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workspace_changed": {
+              "description": "当前 run 是否已产生 workspace 写入。",
+              "type": "boolean",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "accept_gate",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "accept_gate",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "error_class": {
+              "description": "工具错误分类。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "execution_error": {
+              "description": "工具执行层错误文本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "is_error": {
+              "description": "工具结果是否为错误。",
+              "type": "boolean",
+              "x-stability": "stable"
+            },
+            "result_content_preview": {
+              "description": "工具结果内容预览。",
+              "type": "string",
+              "x-stability": "experimental"
+            },
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_arguments_preview": {
+              "description": "脱敏并截断后的工具参数预览。",
+              "type": "string",
+              "x-stability": "experimental"
+            },
+            "tool_call_id": {
+              "description": "当前工具调用标识。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_name": {
+              "description": "当前工具名称。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "本次运行的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "after_tool_failure",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "after_tool_failure",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "error_class": {
+              "description": "工具错误分类。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "execution_error": {
+              "description": "工具执行层错误文本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "is_error": {
+              "description": "工具结果是否为错误。",
+              "type": "boolean",
+              "x-stability": "stable"
+            },
+            "result_content_preview": {
+              "description": "工具结果内容预览。",
+              "type": "string",
+              "x-stability": "experimental"
+            },
+            "result_metadata_present": {
+              "description": "工具结果 metadata 是否非空。",
+              "type": "boolean",
+              "x-stability": "stable"
+            },
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_call_id": {
+              "description": "当前工具调用标识。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_name": {
+              "description": "当前工具名称。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "本次运行的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "after_tool_result",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "after_tool_result",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "before_completion_decision",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "before_completion_decision",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "decision": {
+              "description": "权限决策结果。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "reason": {
+              "description": "权限决策原因。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "rule_id": {
+              "description": "命中的权限规则标识。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_call_id": {
+              "description": "当前工具调用标识。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_name": {
+              "description": "当前工具名称。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "本次运行的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "before_permission_decision",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "before_permission_decision",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_arguments_preview": {
+              "description": "脱敏并截断后的工具参数预览。",
+              "type": "string",
+              "x-stability": "experimental"
+            },
+            "tool_call_id": {
+              "description": "当前工具调用标识。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_name": {
+              "description": "当前工具名称。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "本次运行的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "before_tool_call",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "before_tool_call",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "applied": {
+              "description": "compact 结果是否已应用。",
+              "type": "boolean",
+              "x-stability": "stable"
+            },
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "trigger_mode": {
+              "description": "触发 compact 的模式。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "compact 使用的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "post_compact",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "post_compact",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "trigger_mode": {
+              "description": "触发 compact 的模式。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "compact 使用的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "pre_compact",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "pre_compact",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "detail": {
+              "description": "停止原因的补充说明。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "stop_reason": {
+              "description": "当前运行的停止原因。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "session_end",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "session_end",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "本次运行的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "session_start",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "session_start",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "role": {
+              "description": "子代理角色。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "task_id": {
+              "description": "子代理任务标识。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "tool_name": {
+              "description": "触发子代理的工具名。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "trigger": {
+              "description": "触发子代理的来源。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "子代理运行工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workspace": {
+              "description": "子代理工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "subagent_start",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "subagent_start",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "error": {
+              "description": "子代理错误信息。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "role": {
+              "description": "子代理角色。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "state": {
+              "description": "子代理结束时状态。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "step_count": {
+              "description": "子代理累计步数。",
+              "type": "integer",
+              "x-stability": "stable"
+            },
+            "stop_reason": {
+              "description": "子代理停止原因。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "task_id": {
+              "description": "子代理任务标识。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "subagent_stop",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "subagent_stop",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "hook_id": {
+          "description": "触发当前 payload 的 hook 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "kind": {
+          "description": "hook 的 kind；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Point-specific hook metadata fields.",
+          "properties": {
+            "run_id": {
+              "description": "当前 run 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "session_id": {
+              "description": "当前 session 标识的 metadata 冗余副本。",
+              "type": "string",
+              "x-stability": "stable"
+            },
+            "workdir": {
+              "description": "本次运行的工作目录。",
+              "type": "string",
+              "x-stability": "stable"
+            }
+          },
+          "type": "object"
+        },
+        "mode": {
+          "description": "hook 的 mode；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "payload_version": {
+          "const": "1",
+          "description": "公开 payload 协议版本号。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "point": {
+          "const": "user_prompt_submit",
+          "description": "当前 payload 对应的 hook 点位。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "run_id": {
+          "description": "本次运行的 run 标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "scope": {
+          "description": "hook 的 scope；HTTP observe 作为传输附加字段透传。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "session_id": {
+          "description": "当前会话标识。",
+          "type": "string",
+          "x-stability": "stable"
+        },
+        "triggered_at": {
+          "description": "HTTP observe payload 发出时的 UTC 时间戳。",
+          "type": "string",
+          "x-stability": "stable"
+        }
+      },
+      "required": [
+        "payload_version",
+        "hook_id",
+        "point"
+      ],
+      "title": "user_prompt_submit",
+      "type": "object"
+    }
+  ],
+  "title": "NeoCode Hook Payload v1",
+  "type": "object"
+}

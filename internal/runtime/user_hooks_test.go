@@ -119,6 +119,9 @@ func TestBuildUserHookSpecAllowsHTTPObserve(t *testing.T) {
 	if mode, _ := captured["mode"].(string); mode != "observe" {
 		t.Fatalf("payload.mode = %v, want observe", captured["mode"])
 	}
+	if payloadVersion, _ := captured["payload_version"].(string); payloadVersion != runtimehooks.PayloadVersion {
+		t.Fatalf("payload.payload_version = %v, want %q", captured["payload_version"], runtimehooks.PayloadVersion)
+	}
 	if hookID, _ := captured["hook_id"].(string); hookID != "http-observe" {
 		t.Fatalf("payload.hook_id = %v, want http-observe", captured["hook_id"])
 	}
@@ -243,6 +246,7 @@ func TestBuildUserHookSpecHTTPObserveCanIncludeSanitizedMetadata(t *testing.T) {
 			"tool_name":              "bash",
 			"result_content_preview": "should_not_leak",
 			"execution_error":        "should_not_leak",
+			"phase":                  "plan",
 		},
 	})
 	if result.Status != runtimehooks.HookResultPass {
@@ -260,6 +264,9 @@ func TestBuildUserHookSpecHTTPObserveCanIncludeSanitizedMetadata(t *testing.T) {
 	}
 	if _, exists := rawMeta["execution_error"]; exists {
 		t.Fatal("execution_error should be stripped from http observe payload metadata")
+	}
+	if _, exists := rawMeta["phase"]; exists {
+		t.Fatal("phase should be stripped by payload schema before HTTP observe")
 	}
 }
 
@@ -1046,10 +1053,10 @@ func TestHTTPObserveHelperBranches(t *testing.T) {
 		if !readHookParamBool(map[string]any{"x": struct{}{}}, "x", true) {
 			t.Fatal("unsupported type should return default")
 		}
-		if sanitizeHTTPObserveMetadata(nil) != nil {
+		if sanitizeHTTPObserveMetadata(runtimehooks.HookPointBeforeToolCall, nil) != nil {
 			t.Fatal("nil metadata should stay nil")
 		}
-		if sanitizeHTTPObserveMetadata(map[string]any{}) != nil {
+		if sanitizeHTTPObserveMetadata(runtimehooks.HookPointBeforeToolCall, map[string]any{}) != nil {
 			t.Fatal("empty metadata should stay nil")
 		}
 	})
@@ -1145,7 +1152,7 @@ func TestHTTPObserveHelperBranches(t *testing.T) {
 			t.Fatalf("buildUserHTTPObserveHookHandler(marshal) error = %v", err)
 		}
 		result = handler(context.Background(), runtimehooks.HookContext{
-			Metadata: map[string]any{"bad": func() {}},
+			Metadata: map[string]any{"tool_name": func() {}},
 		})
 		if result.Status != runtimehooks.HookResultFailed || !strings.Contains(result.Error, "marshal payload failed") {
 			t.Fatalf("unexpected marshal failure result: %+v", result)
