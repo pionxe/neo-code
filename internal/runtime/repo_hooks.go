@@ -85,7 +85,7 @@ func buildUserHookExecutor(
 		if !item.IsEnabled() {
 			continue
 		}
-		spec, err := buildUserHookSpec(item, cfg.Workdir)
+		spec, err := BuildUserHookSpec(item, cfg.Workdir)
 		if err != nil {
 			return nil, fmt.Errorf("runtime.hooks.items[%d]: %w", index, err)
 		}
@@ -206,7 +206,7 @@ func buildRepoHookExecutorForWorkspace(
 
 	registry := runtimehooks.NewRegistry()
 	for index, item := range items {
-		spec, err := buildRepoHookSpec(item, workspace)
+		spec, err := BuildRepoHookSpec(item, workspace)
 		if err != nil {
 			return nil, fmt.Errorf("%s: hooks.items[%d]: %w", hooksPath, index, err)
 		}
@@ -315,8 +315,8 @@ func applyRepoHookItemDefaults(item *config.RuntimeHookItemConfig, defaults conf
 	}
 }
 
-// validateRepoHookItem 校验 repo hook item 是否满足 P3 限定能力范围。
-func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
+// ValidateRepoHookItem 校验 repo hook item 是否满足当前阶段允许的能力范围。
+func ValidateRepoHookItem(item config.RuntimeHookItemConfig) error {
 	if strings.TrimSpace(item.ID) == "" {
 		return fmt.Errorf("id is required")
 	}
@@ -378,6 +378,11 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 		}
 	}
 	return nil
+}
+
+// validateRepoHookItem 兼容包内既有调用，内部统一转向导出实现。
+func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
+	return ValidateRepoHookItem(item)
 }
 
 // evaluateWorkspaceTrust 根据 trust store 判断 workspace 是否可信并附带容错诊断。

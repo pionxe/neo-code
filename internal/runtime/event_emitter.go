@@ -52,6 +52,9 @@ func (s *Service) emitWithEnvelope(ctx context.Context, evt RuntimeEvent) error 
 		evt.Timestamp = time.Now()
 	}
 	s.captureAskRuntimeEvent(evt)
+	if s != nil && s.eventRecorder != nil {
+		s.eventRecorder.RecordRuntimeEvent(ctx, evt)
+	}
 	if err := s.deliverEvent(ctx, evt); err != nil {
 		return err
 	}

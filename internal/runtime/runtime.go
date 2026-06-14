@@ -215,6 +215,7 @@ type Service struct {
 	thinkingEnabled bool
 
 	runnerToolDispatcher RunnerToolDispatcher
+	eventRecorder        RuntimeEventRecorder
 }
 
 // RunnerToolDispatcher 可选：将工具执行分发到远程 runner。
@@ -226,6 +227,11 @@ type RunnerToolDispatcher interface {
 // SetRunnerToolDispatcher 设置远程工具分发器。
 func (s *Service) SetRunnerToolDispatcher(d RunnerToolDispatcher) {
 	s.runnerToolDispatcher = d
+}
+
+// RuntimeEventRecorder 定义 runtime 事件旁路记录器，用于追加可观测持久化而不影响主链事件消费。
+type RuntimeEventRecorder interface {
+	RecordRuntimeEvent(ctx context.Context, event RuntimeEvent)
 }
 
 // sessionLockEntry 维护单个会话读写锁及其当前引用计数，用于在无引用时回收 map 项。
@@ -659,6 +665,11 @@ func (s *Service) SetHookExecutor(executor HookExecutor) {
 		base.SetAsyncResultSink(newHookAsyncResultSink(s))
 	}
 	s.hookExecutor = executor
+}
+
+// SetRuntimeEventRecorder 设置可选的 runtime 事件记录器，供 CLI trace 等旁路观测能力复用。
+func (s *Service) SetRuntimeEventRecorder(recorder RuntimeEventRecorder) {
+	s.eventRecorder = recorder
 }
 
 // SetCheckpointDependencies 注入 checkpoint 存储与版本化文件历史快照后端，用于 pre-write checkpoint gate。

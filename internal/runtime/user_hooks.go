@@ -166,9 +166,9 @@ func runHookExecutorSafely(
 	return executor.Run(ctx, point, input)
 }
 
-// buildUserHookSpec 将 user hook 配置转换为 runtime 可执行 HookSpec。
-func buildUserHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
-	return buildConfiguredHookSpec(
+// BuildUserHookSpec 将 user hook 配置转换为 runtime 可执行 HookSpec。
+func BuildUserHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
+	return BuildConfiguredHookSpec(
 		item,
 		defaultWorkdir,
 		runtimehooks.HookScopeUser,
@@ -176,9 +176,14 @@ func buildUserHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string)
 	)
 }
 
-// buildRepoHookSpec 将 repo hook 配置转换为 runtime 可执行 HookSpec。
-func buildRepoHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
-	return buildConfiguredHookSpec(
+// buildUserHookSpec 兼容同包历史测试与旧调用，内部统一转到导出实现。
+func buildUserHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
+	return BuildUserHookSpec(item, defaultWorkdir)
+}
+
+// BuildRepoHookSpec 将 repo hook 配置转换为 runtime 可执行 HookSpec。
+func BuildRepoHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
+	return BuildConfiguredHookSpec(
 		item,
 		defaultWorkdir,
 		runtimehooks.HookScopeRepo,
@@ -186,14 +191,19 @@ func buildRepoHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string)
 	)
 }
 
-// buildConfiguredHookSpec 按给定 scope/source 构建配置化 hook 执行定义。
-func buildConfiguredHookSpec(
+// buildRepoHookSpec 兼容同包历史测试与旧调用，内部统一转到导出实现。
+func buildRepoHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
+	return BuildRepoHookSpec(item, defaultWorkdir)
+}
+
+// BuildConfiguredHookSpec 按给定 scope/source 构建配置化 hook 执行定义。
+func BuildConfiguredHookSpec(
 	item config.RuntimeHookItemConfig,
 	defaultWorkdir string,
 	scope runtimehooks.HookScope,
 	source runtimehooks.HookSource,
 ) (runtimehooks.HookSpec, error) {
-	if err := validateConfiguredHookItemForP6Lite(item, scope); err != nil {
+	if err := ValidateConfiguredHookItemForP6Lite(item, scope); err != nil {
 		return runtimehooks.HookSpec{}, err
 	}
 	point := runtimehooks.HookPoint(strings.TrimSpace(item.Point))
@@ -247,8 +257,8 @@ func buildConfiguredHookSpec(
 	}, nil
 }
 
-// validateConfiguredHookItemForP6Lite 在 runtime 装配阶段执行兜底校验，防止绕过配置层校验后出现半生效。
-func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scope runtimehooks.HookScope) error {
+// ValidateConfiguredHookItemForP6Lite 在 runtime 装配阶段执行兜底校验，防止绕过配置层校验后出现半生效。
+func ValidateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scope runtimehooks.HookScope) error {
 	expectedScope := strings.TrimSpace(string(scope))
 	actualScope := strings.ToLower(strings.TrimSpace(item.Scope))
 	if actualScope != expectedScope {
@@ -306,6 +316,11 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 		return fmt.Errorf("kind %q is not supported", item.Kind)
 	}
 	return nil
+}
+
+// validateConfiguredHookItemForP6Lite 兼容同包历史测试与旧调用，内部统一转到导出实现。
+func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scope runtimehooks.HookScope) error {
+	return ValidateConfiguredHookItemForP6Lite(item, scope)
 }
 
 // buildConfiguredHookMatcher 编译 hook matcher。

@@ -3909,7 +3909,7 @@ func TestDefaultBuildGatewayRuntimePortListSessionsWithoutExplicitWorkdir(t *tes
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
-	port, cleanup, err := defaultBuildGatewayRuntimePort(context.Background(), "")
+	port, cleanup, err := defaultBuildGatewayRuntimePort(context.Background(), "", false)
 	if err != nil {
 		t.Fatalf("defaultBuildGatewayRuntimePort() error = %v", err)
 	}

@@ -389,7 +389,7 @@ func TestDefaultGatewayCommandRunnerReturnsBuildRuntimePortError(t *testing.T) {
 	prepareGatewayCommandRunnerTestEnv(t)
 	newAuthManager = stubGatewayAuthManagerBuilder()
 
-	buildGatewayRuntimePort = func(context.Context, string) (gateway.RuntimePort, func() error, error) {
+	buildGatewayRuntimePort = func(context.Context, string, bool) (gateway.RuntimePort, func() error, error) {
 		return nil, nil, errors.New("build runtime port failed")
 	}
 
@@ -1181,8 +1181,8 @@ func prepareGatewayCommandRunnerTestEnv(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", homeDir)
 }
 
-func stubGatewayRuntimePortBuilder() func(context.Context, string) (gateway.RuntimePort, func() error, error) {
-	return func(context.Context, string) (gateway.RuntimePort, func() error, error) {
+func stubGatewayRuntimePortBuilder() func(context.Context, string, bool) (gateway.RuntimePort, func() error, error) {
+	return func(context.Context, string, bool) (gateway.RuntimePort, func() error, error) {
 		return stubRuntimePort{}, func() error { return nil }, nil
 	}
 }

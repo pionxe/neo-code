@@ -79,6 +79,7 @@ Feishu：
 更多端侧截图与交互说明：
 - [Web UI 使用指南](https://neocode-docs.pages.dev/guide/web-ui)
 - [飞书远程接入配置](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
+- [Hooks CLI 指南](docs/guides/hooks-cli.md)
 
 ---
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -11,6 +12,11 @@ import (
 func main() {
 	if err := cli.ExecuteGatewayServer(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "neocode-gateway: %v\n", err)
-		os.Exit(1)
+		exitCode := 1
+		var exitCoder interface{ ExitCode() int }
+		if errors.As(err, &exitCoder) {
+			exitCode = exitCoder.ExitCode()
+		}
+		os.Exit(exitCode)
 	}
 }

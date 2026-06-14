@@ -24,6 +24,7 @@ import (
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
+	runtimehooks "neo-code/internal/runtime/hooks"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
@@ -915,6 +916,94 @@ func TestBuildRuntimeUsesWorkdirOverride(t *testing.T) {
 		t.Cleanup(func() {
 			_ = bundle.Close()
 		})
+	}
+}
+
+func TestBuildRuntimeTraceHooksPersistsHookEvents(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	workdir := t.TempDir()
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{
+		Workdir:    workdir,
+		TraceHooks: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if bundle.Close != nil {
+			if closeErr := bundle.Close(); closeErr != nil {
+				t.Fatalf("bundle.Close() error = %v", closeErr)
+			}
+		}
+	})
+
+	service, ok := bundle.Runtime.(*agentruntime.Service)
+	if !ok {
+		t.Fatalf("bundle.Runtime type = %T, want *runtime.Service", bundle.Runtime)
+	}
+	service.SetHookExecutor(traceBlockingHookExecutor{})
+	session, err := service.CreateSession(context.Background(), "trace-session")
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	runID := "trace-run-1"
+	_, err = service.Compact(context.Background(), agentruntime.CompactInput{
+		SessionID: session.ID,
+		RunID:     runID,
+	})
+	if err == nil || !strings.Contains(err.Error(), "trace guard blocked compact") {
+		t.Fatalf("Compact() error = %v, want hook block error", err)
+	}
+
+	tracePath, err := agentruntime.HookTracePath(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir, runID)
+	if err != nil {
+		t.Fatalf("HookTracePath() error = %v", err)
+	}
+	data, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("ReadFile(trace) error = %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `"event_type":"hook_blocked"`) {
+		t.Fatalf("trace file missing hook_blocked: %s", text)
+	}
+	if !strings.Contains(text, `"hook_id":"trace-pre-compact"`) {
+		t.Fatalf("trace file missing hook id: %s", text)
+	}
+}
+
+type traceBlockingHookExecutor struct{}
+
+func (traceBlockingHookExecutor) Run(
+	ctx context.Context,
+	point runtimehooks.HookPoint,
+	input runtimehooks.HookContext,
+) runtimehooks.RunOutput {
+	_ = ctx
+	_ = input
+	if point != runtimehooks.HookPointPreCompact {
+		return runtimehooks.RunOutput{}
+	}
+	return runtimehooks.RunOutput{
+		Blocked:       true,
+		BlockedBy:     "trace-pre-compact",
+		BlockedSource: runtimehooks.HookSourceUser,
+		Results: []runtimehooks.HookResult{
+			{
+				HookID:  "trace-pre-compact",
+				Point:   runtimehooks.HookPointPreCompact,
+				Scope:   runtimehooks.HookScopeUser,
+				Source:  runtimehooks.HookSourceUser,
+				Status:  runtimehooks.HookResultBlock,
+				Message: "trace guard blocked compact",
+			},
+		},
 	}
 }
 
