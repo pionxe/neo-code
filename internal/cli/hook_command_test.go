@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -559,9 +560,7 @@ func TestHookDryRunCommandSupportsBuiltinHandlersAndExitCodes(t *testing.T) {
 			Scope:   "user",
 			Kind:    "command",
 			Mode:    "sync",
-			Params: map[string]any{
-				"command": []string{"cmd", "/c", "exit", "1"},
-			},
+			Params:  commandHookExitParamsForTest(1),
 		},
 		{
 			ID:      "fail-tool",
@@ -570,9 +569,7 @@ func TestHookDryRunCommandSupportsBuiltinHandlersAndExitCodes(t *testing.T) {
 			Scope:   "user",
 			Kind:    "command",
 			Mode:    "sync",
-			Params: map[string]any{
-				"command": []string{"cmd", "/c", "exit", "9"},
-			},
+			Params:  commandHookExitParamsForTest(9),
 		},
 	})
 
@@ -642,6 +639,79 @@ metadata:
 			t.Fatalf("expected failed output, got %q", output)
 		}
 	})
+}
+
+func TestHookDryRunCommandSkipsMissingDefaultUserConfigWhenRepoHookExists(t *testing.T) {
+	runGlobalPreload = func(context.Context) error { return nil }
+	t.Cleanup(func() { runGlobalPreload = defaultGlobalPreload })
+
+	homeDir := t.TempDir()
+	setHookTestHome(t, homeDir)
+	workdir := t.TempDir()
+
+	repoHooksPath := filepath.Join(workdir, ".neocode", "hooks.yaml")
+	if err := os.MkdirAll(filepath.Dir(repoHooksPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(repo hooks dir) error = %v", err)
+	}
+	repoHooks := `
+hooks:
+  items:
+    - id: repo-only
+      point: before_tool_call
+      handler: warn_on_tool_call
+      match:
+        tool_name: bash
+      params:
+        message: from repo only
+`
+	if err := os.WriteFile(repoHooksPath, []byte(strings.TrimSpace(repoHooks)+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(repo hooks) error = %v", err)
+	}
+
+	fixturePath := writeHookFixture(t, "fixture.yaml", `
+payload_version: "1"
+point: before_tool_call
+metadata:
+  tool_name: bash
+  tool_call_id: call-1
+  tool_arguments_preview: echo hello
+  workdir: `+workdir+`
+`)
+
+	output, err := runHookCommand(t, workdir, []string{"hook", "dry-run", "--repo", "--hook", "repo-only", "--fixture", fixturePath})
+	if err != nil {
+		t.Fatalf("repo-only dry-run error = %v", err)
+	}
+	if !strings.Contains(output, "message: from repo only") {
+		t.Fatalf("expected repo-only output, got %q", output)
+	}
+}
+
+func TestHookLintCommandUsesRepoDefaults(t *testing.T) {
+	runGlobalPreload = func(context.Context) error { return nil }
+	t.Cleanup(func() { runGlobalPreload = defaultGlobalPreload })
+
+	repoHooksPath := filepath.Join(t.TempDir(), "hooks.yaml")
+	repoHooks := `
+hooks:
+  items:
+    - id: repo-defaults
+      point: before_tool_call
+      handler: warn_on_tool_call
+      match:
+        tool_name: bash
+`
+	if err := os.WriteFile(repoHooksPath, []byte(strings.TrimSpace(repoHooks)+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(repo hooks) error = %v", err)
+	}
+
+	output, err := runHookCommand(t, t.TempDir(), []string{"hook", "lint", repoHooksPath})
+	if err != nil {
+		t.Fatalf("repo lint error = %v, output = %q", err, output)
+	}
+	if !strings.Contains(output, "hook lint passed") {
+		t.Fatalf("expected lint pass output, got %q", output)
+	}
 }
 
 func TestHookDryRunCommandRejectsInvalidFixtureAndPointMismatch(t *testing.T) {
@@ -861,4 +931,11 @@ func setHookTestHome(t *testing.T, homeDir string) {
 
 func boolPtrForHookTest(value bool) *bool {
 	return &value
+}
+
+func commandHookExitParamsForTest(code int) map[string]any {
+	return map[string]any{
+		"command": "exit " + strconv.Itoa(code),
+		"shell":   true,
+	}
 }

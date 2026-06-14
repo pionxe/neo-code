@@ -407,10 +407,11 @@ func findMappingValue(node *yaml.Node, key string) *yaml.Node {
 func validateLintItem(item config.RuntimeHookItemConfig, scope string) error {
 	defaults := config.StaticDefaults().Runtime.Hooks
 	clone := item.Clone()
-	clone.ApplyDefaults(defaults)
 	if scope == "repo" {
+		agentruntime.ApplyRepoHookItemDefaults(&clone, defaults)
 		return agentruntime.ValidateRepoHookItem(clone)
 	}
+	clone.ApplyDefaults(defaults)
 	return clone.Validate(defaults.DefaultFailurePolicy)
 }
 
@@ -491,6 +492,9 @@ func loadHookCandidates(workdir string, explicitTarget string) ([]hookCandidate,
 		if strings.EqualFold(filepath.Base(target), "config.yaml") {
 			items, err := loadUserHookItems(target)
 			if err != nil {
+				if strings.TrimSpace(explicitTarget) == "" && os.IsNotExist(err) {
+					continue
+				}
 				return nil, err
 			}
 			for _, item := range items {
@@ -549,7 +553,14 @@ func loadRepoHookItemsForCLI(path string) ([]config.RuntimeHookItemConfig, error
 	if err := decoder.Decode(&parsed); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	return append([]config.RuntimeHookItemConfig(nil), parsed.Hooks.Items...), nil
+	defaults := config.StaticDefaults().Runtime.Hooks
+	items := make([]config.RuntimeHookItemConfig, 0, len(parsed.Hooks.Items))
+	for _, item := range parsed.Hooks.Items {
+		clone := item.Clone()
+		agentruntime.ApplyRepoHookItemDefaults(&clone, defaults)
+		items = append(items, clone)
+	}
+	return items, nil
 }
 
 // buildHookSpecForCandidate 复用 runtime 的公共构建入口，把配置项编译成可执行 HookSpec。
@@ -559,10 +570,12 @@ func buildHookSpecForCandidate(candidate hookCandidate, workdir string) (runtime
 		defaultWorkdir = filepath.Dir(candidate.Path)
 	}
 	item := candidate.Item.Clone()
-	item.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
+	defaults := config.StaticDefaults().Runtime.Hooks
 	if candidate.Scope == "repo" {
+		agentruntime.ApplyRepoHookItemDefaults(&item, defaults)
 		return agentruntime.BuildRepoHookSpec(item, defaultWorkdir)
 	}
+	item.ApplyDefaults(defaults)
 	return agentruntime.BuildUserHookSpec(item, defaultWorkdir)
 }
 

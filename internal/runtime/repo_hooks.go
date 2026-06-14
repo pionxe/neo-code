@@ -290,8 +290,8 @@ func loadRepoHookItems(path string, defaults config.RuntimeHooksConfig) ([]confi
 	return items, nil
 }
 
-// applyRepoHookItemDefaults 为 repo hook item 注入默认值并锁定 scope/kind/mode 约束。
-func applyRepoHookItemDefaults(item *config.RuntimeHookItemConfig, defaults config.RuntimeHooksConfig) {
+// ApplyRepoHookItemDefaults 为 repo hook item 注入默认值，并保持与 runtime 加载路径一致。
+func ApplyRepoHookItemDefaults(item *config.RuntimeHookItemConfig, defaults config.RuntimeHooksConfig) {
 	if item == nil {
 		return
 	}
@@ -313,6 +313,11 @@ func applyRepoHookItemDefaults(item *config.RuntimeHookItemConfig, defaults conf
 	if strings.TrimSpace(item.FailurePolicy) == "" {
 		item.FailurePolicy = defaults.DefaultFailurePolicy
 	}
+}
+
+// applyRepoHookItemDefaults 兼容包内既有调用，内部统一转向导出实现。
+func applyRepoHookItemDefaults(item *config.RuntimeHookItemConfig, defaults config.RuntimeHooksConfig) {
+	ApplyRepoHookItemDefaults(item, defaults)
 }
 
 // ValidateRepoHookItem 校验 repo hook item 是否满足当前阶段允许的能力范围。

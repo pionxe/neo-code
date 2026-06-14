@@ -14,6 +14,8 @@ import (
 	agentsession "neo-code/internal/session"
 )
 
+const hookTraceSafeRunIDAlphabet = "0123456789abcdef"
+
 var hookTraceEventTypes = map[EventType]struct{}{
 	EventHookStarted:  {},
 	EventHookFinished: {},
@@ -139,7 +141,7 @@ func HookTracePath(baseDir string, workspaceRoot string, runID string) (string, 
 		"projects",
 		agentsession.HashWorkspaceRoot(trimmedWorkspace),
 		"hook-traces",
-		trimmedRunID+".jsonl",
+		escapeHookTraceRunID(trimmedRunID)+".jsonl",
 	), nil
 }
 
@@ -202,4 +204,41 @@ func buildHookTraceRecord(event RuntimeEvent) (HookTraceRecord, bool) {
 		return HookTraceRecord{}, false
 	}
 	return record, true
+}
+
+// escapeHookTraceRunID 将任意 run_id 编码为仅包含安全文件名字节的稳定 token。
+func escapeHookTraceRunID(runID string) string {
+	trimmed := strings.TrimSpace(runID)
+	if trimmed == "" {
+		return ""
+	}
+	var builder strings.Builder
+	builder.Grow(len(trimmed))
+	for index := 0; index < len(trimmed); index++ {
+		value := trimmed[index]
+		if isHookTraceSafeRunIDByte(value) {
+			builder.WriteByte(value)
+			continue
+		}
+		builder.WriteByte('~')
+		builder.WriteByte(hookTraceSafeRunIDAlphabet[value>>4])
+		builder.WriteByte(hookTraceSafeRunIDAlphabet[value&0x0f])
+	}
+	return builder.String()
+}
+
+// isHookTraceSafeRunIDByte 判断单个字节能否直接作为 trace 文件名的一部分。
+func isHookTraceSafeRunIDByte(value byte) bool {
+	switch {
+	case value >= 'a' && value <= 'z':
+		return true
+	case value >= 'A' && value <= 'Z':
+		return true
+	case value >= '0' && value <= '9':
+		return true
+	case value == '-', value == '_':
+		return true
+	default:
+		return false
+	}
 }

@@ -19,6 +19,22 @@ func TestHookTracePath(t *testing.T) {
 	}
 }
 
+func TestHookTracePathEscapesRunID(t *testing.T) {
+	path, err := HookTracePath(t.TempDir(), t.TempDir(), "../../../../.ssh/foo")
+	if err != nil {
+		t.Fatalf("HookTracePath() error = %v", err)
+	}
+	if strings.Contains(path, "..") {
+		t.Fatalf("expected escaped trace path, got %s", path)
+	}
+	if strings.Contains(path, string(filepath.Separator)+".ssh"+string(filepath.Separator)) {
+		t.Fatalf("expected run_id to stay inside hook-traces dir, got %s", path)
+	}
+	if filepath.Base(path) != "~2e~2e~2f~2e~2e~2f~2e~2e~2f~2e~2e~2f~2essh~2ffoo.jsonl" {
+		t.Fatalf("unexpected escaped file name: %s", filepath.Base(path))
+	}
+}
+
 func TestHookTraceRecorderWritesHookEvents(t *testing.T) {
 	baseDir := t.TempDir()
 	workspace := t.TempDir()
