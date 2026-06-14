@@ -658,6 +658,11 @@ func (s *Service) SetBudgetResolver(resolver BudgetResolver) {
 	s.budgetResolver = resolver
 }
 
+// SetProviderFactory 设置运行时 provider 构建器，便于装配层或测试替换模型调用后端。
+func (s *Service) SetProviderFactory(factory ProviderFactory) {
+	s.providerFactory = factory
+}
+
 // SetHookExecutor 设置 runtime 生命周期 hook 执行器；传入 nil 可禁用 hook 执行。
 func (s *Service) SetHookExecutor(executor HookExecutor) {
 	if base, ok := executor.(*runtimehooks.Executor); ok {
