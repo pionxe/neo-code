@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	"neo-code/internal/config"
 	agentruntime "neo-code/internal/runtime"
 )
@@ -108,6 +109,71 @@ func TestReadHookTraceRecordsAndAggregate(t *testing.T) {
 	}
 	if got := renderHookTraceHistogram(120); !strings.Contains(got, "#") {
 		t.Fatalf("expected histogram bars, got %q", got)
+	}
+}
+
+func TestReadHookTraceRecordsSkipsBlanksSortsAndReportsScannerErrors(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "run.jsonl")
+	content := strings.Join([]string{
+		"",
+		`{"event_type":"hook_finished","timestamp":"2026-01-01T00:00:02Z","run_id":"run-1","hook_id":"b","duration_ms":5}`,
+		"   ",
+		`{"event_type":"hook_finished","timestamp":"2026-01-01T00:00:01Z","run_id":"run-1","hook_id":"a","duration_ms":7}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(tracePath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(trace) error = %v", err)
+	}
+	records, err := readHookTraceRecords(tracePath)
+	if err != nil {
+		t.Fatalf("readHookTraceRecords() error = %v", err)
+	}
+	if len(records) != 2 || records[0].HookID != "a" || records[1].HookID != "b" {
+		t.Fatalf("records = %#v, want sorted non-blank records", records)
+	}
+
+	hugeLinePath := filepath.Join(t.TempDir(), "huge.jsonl")
+	if err := os.WriteFile(hugeLinePath, []byte(strings.Repeat("x", 70*1024)), 0o644); err != nil {
+		t.Fatalf("WriteFile(huge trace) error = %v", err)
+	}
+	if _, err := readHookTraceRecords(hugeLinePath); err == nil || !strings.Contains(err.Error(), "token too long") {
+		t.Fatalf("expected scanner token-too-long error, got %v", err)
+	}
+}
+
+func TestAggregateAndFormatHookTraceEdgeCases(t *testing.T) {
+	records := []agentruntime.HookTraceRecord{
+		{EventType: "hook_started", HookID: "ignored", DurationMS: 100},
+		{EventType: "hook_finished", HookID: " ", DurationMS: 100},
+		{EventType: "hook_failed", HookID: "b", DurationMS: 5},
+		{EventType: "hook_finished", HookID: "a", DurationMS: 12},
+		{EventType: "hook_blocked", HookID: "a", DurationMS: 30},
+	}
+	aggregates := aggregateHookTraceRecords(records)
+	if len(aggregates) != 2 {
+		t.Fatalf("aggregates len = %d, want 2: %#v", len(aggregates), aggregates)
+	}
+	if aggregates[0].HookID != "a" || aggregates[0].Count != 2 || aggregates[0].DurationMS != 42 || aggregates[0].MaxDuration != 30 {
+		t.Fatalf("aggregate[0] = %#v, want sorted aggregate for a", aggregates[0])
+	}
+
+	line := formatHookTraceRecord(agentruntime.HookTraceRecord{
+		EventType:  "hook_failed",
+		Timestamp:  time.Unix(1, 2).UTC(),
+		HookID:     " warn ",
+		Point:      " before_tool_call ",
+		Status:     " failed ",
+		Error:      " boom ",
+		DurationMS: 3,
+	})
+	if !strings.Contains(line, "error=boom") || !strings.Contains(line, "duration_ms=3") || strings.Contains(line, " warn ") {
+		t.Fatalf("unexpected formatted line: %q", line)
+	}
+	if got := renderHookTraceHistogram(1000); len(got) != 24 {
+		t.Fatalf("histogram len = %d, want capped width 24", len(got))
+	}
+	if !isHookTraceTerminalRecord(agentruntime.HookTraceRecord{EventType: " hook_finished "}) {
+		t.Fatal("expected trimmed hook_finished to be terminal")
 	}
 }
 
@@ -458,6 +524,74 @@ func TestHookLintCommandSkipsMissingDefaultFiles(t *testing.T) {
 	}
 	if !strings.Contains(buffer.String(), "hook lint passed") {
 		t.Fatalf("expected success message, got %q", buffer.String())
+	}
+}
+
+func TestHookLintTargetsRejectsDirectoriesAndMalformedYAML(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := lintHookTargets([]string{dir}); err == nil || !strings.Contains(err.Error(), "target is a directory") {
+		t.Fatalf("expected directory target error, got %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "hooks.yaml")
+	if err := os.WriteFile(path, []byte("hooks: ["), 0o644); err != nil {
+		t.Fatalf("WriteFile(bad yaml) error = %v", err)
+	}
+	if _, err := lintHookTargets([]string{path}); err == nil || !strings.Contains(err.Error(), "parse hook yaml") {
+		t.Fatalf("expected parse hook yaml error, got %v", err)
+	}
+}
+
+func TestHookLintHelpersCoverMissingMappingsAndDefaultHint(t *testing.T) {
+	var emptyRoot yaml.Node
+	if lines := collectHookItemLines(&emptyRoot, "repo"); lines != nil {
+		t.Fatalf("empty root lines = %#v, want nil", lines)
+	}
+	scalar := &yaml.Node{Kind: yaml.ScalarNode, Value: "not-a-map"}
+	if got := findMappingValue(scalar, "hooks"); got != nil {
+		t.Fatalf("findMappingValue(non-map) = %#v, want nil", got)
+	}
+	if got := hookLintHint("something else"); got != "fix the hook item so it matches current runtime hook schema" {
+		t.Fatalf("hookLintHint(default) = %q", got)
+	}
+}
+
+func TestResolveHookLintTargetsExplicitAndWorkspaceErrors(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "hooks.yaml")
+	targets, err := resolveHookLintTargets("ignored", []string{target})
+	if err != nil {
+		t.Fatalf("resolveHookLintTargets(explicit) error = %v", err)
+	}
+	if len(targets) != 1 || targets[0] != target {
+		t.Fatalf("targets = %#v, want explicit absolute path", targets)
+	}
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := resolveHookLintTargets(missing, nil); err == nil {
+		t.Fatal("expected missing workspace error")
+	}
+}
+
+func TestResolveHookWorkspaceUsesCurrentDirectory(t *testing.T) {
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	tempDir := t.TempDir()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir(temp) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalCwd); err != nil {
+			t.Fatalf("restore cwd error = %v", err)
+		}
+	})
+	resolved, err := resolveHookWorkspace("")
+	if err != nil {
+		t.Fatalf("resolveHookWorkspace(empty) error = %v", err)
+	}
+	if resolved != tempDir {
+		t.Fatalf("resolved = %q, want %q", resolved, tempDir)
 	}
 }
 
@@ -889,6 +1023,46 @@ metadata:
 	}
 	if !strings.Contains(output, "message: from repo") {
 		t.Fatalf("expected explicit repo path output, got %q", output)
+	}
+}
+
+func TestResolveHookCandidateReportsMissingHooks(t *testing.T) {
+	homeDir := t.TempDir()
+	setHookTestHome(t, homeDir)
+	workdir := t.TempDir()
+
+	if _, err := resolveHookCandidate(workdir, "missing", false, ""); err == nil || !strings.Contains(err.Error(), `hook "missing" not found`) {
+		t.Fatalf("expected missing hook error, got %v", err)
+	}
+	if _, err := resolveHookCandidate(workdir, "missing", true, ""); err == nil || !strings.Contains(err.Error(), `repo hook "missing" not found`) {
+		t.Fatalf("expected missing repo hook error, got %v", err)
+	}
+}
+
+func TestBuildHookSpecForCandidateDefaultsWorkdirToConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	candidate := hookCandidate{
+		Path:  filepath.Join(dir, "config.yaml"),
+		Scope: "user",
+		Item: config.RuntimeHookItemConfig{
+			ID:      "note",
+			Enabled: boolPtrForHookTest(true),
+			Point:   "session_start",
+			Scope:   "user",
+			Kind:    "builtin",
+			Mode:    "sync",
+			Handler: "add_context_note",
+			Params: map[string]any{
+				"note": "hello",
+			},
+		},
+	}
+	spec, err := buildHookSpecForCandidate(candidate, "")
+	if err != nil {
+		t.Fatalf("buildHookSpecForCandidate() error = %v", err)
+	}
+	if string(spec.Point) != "session_start" || spec.ID != "note" {
+		t.Fatalf("spec = %#v, want compiled note hook", spec)
 	}
 }
 

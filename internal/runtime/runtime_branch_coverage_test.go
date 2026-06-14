@@ -11,6 +11,14 @@ import (
 	agentsession "neo-code/internal/session"
 )
 
+type recordingRuntimeEventRecorder struct {
+	events []RuntimeEvent
+}
+
+func (r *recordingRuntimeEventRecorder) RecordRuntimeEvent(_ context.Context, event RuntimeEvent) {
+	r.events = append(r.events, event)
+}
+
 func TestExecuteAssistantToolCallsReturnsNilForEmptyCalls(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +154,28 @@ func TestEmitWithEnvelopeBackfillsVersionAndTimestamp(t *testing.T) {
 	}
 	if event.Timestamp.IsZero() {
 		t.Fatalf("expected timestamp to be set")
+	}
+}
+
+func TestSetRuntimeEventRecorderReceivesEmittedEvents(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingRuntimeEventRecorder{}
+	service := &Service{events: make(chan RuntimeEvent, 4)}
+	service.SetRuntimeEventRecorder(recorder)
+
+	if err := service.emitWithEnvelope(context.Background(), RuntimeEvent{
+		Type:    EventAgentChunk,
+		RunID:   "run-recorder",
+		Payload: "chunk",
+	}); err != nil {
+		t.Fatalf("emitWithEnvelope() error = %v", err)
+	}
+	if len(recorder.events) != 1 {
+		t.Fatalf("recorded events = %d, want 1", len(recorder.events))
+	}
+	if recorder.events[0].RunID != "run-recorder" {
+		t.Fatalf("recorded event = %+v, want run_id", recorder.events[0])
 	}
 }
 

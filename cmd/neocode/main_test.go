@@ -47,6 +47,31 @@ func TestRunMainReturnsExitCodeFromCLI(t *testing.T) {
 	}
 }
 
+func TestMainInvokesExitProcessWithRunMainResult(t *testing.T) {
+	originalExecute := executeCLI
+	originalConsume := consumeCLIUpdateNotice
+	originalExit := exitProcess
+	t.Cleanup(func() {
+		executeCLI = originalExecute
+		consumeCLIUpdateNotice = originalConsume
+		exitProcess = originalExit
+	})
+
+	executeCLI = func(context.Context) error {
+		return testExitError{message: "boom", code: 6}
+	}
+	consumeCLIUpdateNotice = func() string { return "" }
+	var gotExitCode int
+	exitProcess = func(code int) {
+		gotExitCode = code
+	}
+
+	main()
+	if gotExitCode != 6 {
+		t.Fatalf("exit code = %d, want 6", gotExitCode)
+	}
+}
+
 func TestRunMainPrintsUpdateNoticeOnSuccess(t *testing.T) {
 	originalExecute := executeCLI
 	originalConsume := consumeCLIUpdateNotice
