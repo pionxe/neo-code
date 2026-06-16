@@ -64,7 +64,9 @@ type HelpGroup struct {
 func InputBindings() []key.Binding {
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send message")),
-		key.NewBinding(key.WithKeys("shift+enter"), key.WithHelp("shift+enter", "new line")),
+		// Shift+Enter 在多数终端里与 Enter 不可区分（bubbletea 也未映射），
+		// 这里登记可用的 Alt+Enter / Ctrl+J 作为换行键。
+		key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"), key.WithHelp("alt+enter", "new line")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "normal mode")),
 		key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "cancel/quit")),
 		key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "command palette")),
@@ -78,7 +80,7 @@ func InputHelp() []HelpGroup {
 			Title: "Input Mode",
 			Entries: []HelpEntry{
 				{Key: "Enter", Desc: "Send message"},
-				{Key: "Shift+Enter", Desc: "New line"},
+				{Key: "Alt+Enter / Ctrl+J", Desc: "New line"},
 				{Key: "Ctrl+C", Desc: "Cancel agent (double to quit)"},
 				{Key: "Ctrl+P", Desc: "Command palette"},
 				{Key: "?", Desc: "This help"},

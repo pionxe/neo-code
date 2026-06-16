@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"neo-code/internal/tuiv2/gateway"
 	"neo-code/internal/tuiv2/state"
@@ -147,6 +148,42 @@ func TestCommandPromptModeLineUsesSessionAndModel(t *testing.T) {
 	for _, want := range []string{"[input]", "ghost-console", "claude-sonnet-4-6"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("mode line missing %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestCommandPromptCtrlJInsertsNewline(t *testing.T) {
+	viewState := promptState()
+	prompt := NewCommandPrompt(viewState)
+
+	_, _ = prompt.Update(keyMsg("hello"))
+	_, cmd := prompt.Update(keyType(tea.KeyCtrlJ))
+	if cmd != nil {
+		t.Fatalf("ctrl+j returned command %T, want nil", cmd)
+	}
+	if viewState.Input.Text != "hello\n" {
+		t.Fatalf("Input.Text = %q, want %q", viewState.Input.Text, "hello\n")
+	}
+}
+
+func TestCommandPromptMultilineContinuationAligns(t *testing.T) {
+	viewState := promptState()
+	viewState.Input.Text = "first\nsecond"
+	viewState.Input.Cursor = 0
+	viewState.Input.CursorVisible = true
+	prompt := NewCommandPrompt(viewState)
+
+	// 用确定性双宽符号，确保续行缩进等于首行前缀显示宽度。
+	const symbol = "你"
+	wantIndent := theme.DisplayWidth(symbol + " ")
+	rendered := prompt.renderPromptInput(symbol)
+	for index, line := range strings.Split(ansi.Strip(rendered), "\n") {
+		if index == 0 {
+			continue
+		}
+		leading := len(line) - len(strings.TrimLeft(line, " "))
+		if leading != wantIndent {
+			t.Fatalf("line %d leading spaces = %d, want %d: %q", index, leading, wantIndent, line)
 		}
 	}
 }

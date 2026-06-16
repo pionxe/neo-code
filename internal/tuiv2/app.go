@@ -142,6 +142,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.handleConfirmYes(msg)
 	case components.ConfirmNoMsg:
 		a.state.Confirm = state.ConfirmState{}
+		a.closeOverlay()
 		return a, nil
 	case leaderTimeoutMsg:
 		if a.state.Mode == state.LeaderMode {
@@ -161,6 +162,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.appendStream(streamEntryFromItem(item))
 			}
 		}
+		// 会话历史重载会清空 Stream，因此切换提示必须在重载之后追加，
+		// 否则用户无法确认是否切换成功。
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("session-switch-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   fmt.Sprintf("Switched to session: %s", a.activeSessionTitle()),
+			Metadata:  map[string]any{"done": true},
+		})
 		a.bindComponents()
 		if a.eventCh != nil {
 			return a, waitEventCmd(a.eventCh)
@@ -522,6 +532,13 @@ func (a *App) openOverlay(overlayType string) {
 	a.state.Overlay.Selected = 0
 }
 
+// closeOverlay 关闭当前浮层，重置搜索与选中状态。
+func (a *App) closeOverlay() {
+	a.state.Overlay.Active = ""
+	a.state.Overlay.Query = ""
+	a.state.Overlay.Selected = 0
+}
+
 // handlePaletteCommand 处理命令面板选择的命令。
 func (a *App) handlePaletteCommand(msg components.PaletteCommandMsg) tea.Cmd {
 	switch msg.Name {
@@ -674,6 +691,7 @@ func (a *App) handleModelSelect(msg components.ModelSelectMsg) tea.Cmd {
 func (a *App) handleConfirmYes(msg components.ConfirmYesMsg) tea.Cmd {
 	confirm := a.state.Confirm
 	a.state.Confirm = state.ConfirmState{}
+	a.closeOverlay()
 	switch confirm.Action {
 	case "delete_session":
 		sessionID, _ := confirm.Data["session_id"].(string)
@@ -703,6 +721,17 @@ func (a *App) activeSessionID() string {
 		return a.state.Gateway.ActiveSess.ID
 	}
 	return ""
+}
+
+// activeSessionTitle 返回当前会话标题，缺失时回退到会话 ID 或占位文本。
+func (a *App) activeSessionTitle() string {
+	if a.state.Gateway.ActiveSess != nil {
+		if a.state.Gateway.ActiveSess.Title != "" {
+			return a.state.Gateway.ActiveSess.Title
+		}
+		return a.state.Gateway.ActiveSess.ID
+	}
+	return "untitled"
 }
 
 // mainArea 渲染中部区域，按终端宽度决定 Inspector 右侧或纵向压缩显示。
@@ -801,11 +830,20 @@ func (a *App) appendStream(entry state.StreamEntry) {
 }
 
 // bindComponents 将子组件重新绑定到当前 ViewState 指针。
+// 注意：state.Reduce 每次返回新的 *ViewState，a.state 会被替换，因此所有
+// 子组件（含浮层：palette / help / sessionPicker / modelPicker / confirmOverlay）
+// 都必须在这里重新绑定，否则会持有旧指针，导致浮层交互改到废弃状态上、
+// 出现"回车不关闭面板、跳回第一项"等问题。
 func (a *App) bindComponents() {
 	a.ambientStatus = components.NewAmbientStatus(a.state)
 	a.agentStream = components.NewAgentStream(a.state)
 	a.commandPrompt = components.NewCommandPrompt(a.state)
 	a.softInspector = components.NewSoftInspector(a.state)
+	a.palette = components.NewPalette(a.state)
+	a.helpOverlay = components.NewHelpOverlay(a.state)
+	a.sessionPicker = components.NewSessionPicker(a.state)
+	a.modelPicker = components.NewModelPicker(a.state)
+	a.confirmOverlay = components.NewConfirmOverlay(a.state)
 }
 
 // toggleAgentMode 切换 Agent 模式 (build/plan) 并追加状态提示。

@@ -231,7 +231,7 @@ func (s *SessionPicker) View() string {
 	}
 
 	// 提示行
-	hint := "  ␣ : switch   Ctrl+D : delete   ␛ : cancel"
+	hint := "  ⏎ / ␣ : switch   Ctrl+D : delete   ␛ : cancel"
 	lines = append(lines, "", theme.MutedStyle().Render(hint))
 
 	content := strings.Join(lines, "\n")

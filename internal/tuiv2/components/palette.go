@@ -8,8 +8,6 @@ import (
 
 	"neo-code/internal/tuiv2/state"
 	"neo-code/internal/tuiv2/theme"
-
-	"github.com/sahilm/fuzzy"
 )
 
 // PaletteItem 描述命令面板中的一个可选项。
@@ -73,7 +71,7 @@ func (p *Palette) handleKey(msg tea.KeyMsg) tea.Cmd {
 		p.state.Overlay.Query = ""
 		p.state.Overlay.Selected = 0
 		return nil
-	case "enter":
+	case "enter", " ":
 		matched := p.matchedItems()
 		if len(matched) == 0 {
 			return nil
@@ -116,22 +114,27 @@ func (p *Palette) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 }
 
-// matchedItems 根据当前查询进行模糊匹配。
+// matchedItems 按确定性的优先级匹配命令：先精确名、再前缀、最后子串。
+// 不使用模糊匹配，避免 "mode" 因为评分排序命中 /model 而不是 /mode。
 func (p *Palette) matchedItems() []PaletteItem {
-	query := strings.ToLower(p.state.Overlay.Query)
+	query := strings.ToLower(strings.TrimPrefix(p.state.Overlay.Query, "/"))
 	if query == "" {
 		return p.items
 	}
-	targets := make([]string, len(p.items))
-	for i, item := range p.items {
-		targets[i] = strings.ToLower(item.Name) + " " + strings.ToLower(item.Description)
+	var exact, prefix, substr []PaletteItem
+	for _, item := range p.items {
+		name := strings.ToLower(strings.TrimPrefix(item.Name, "/"))
+		desc := strings.ToLower(item.Description)
+		switch {
+		case name == query:
+			exact = append(exact, item)
+		case strings.HasPrefix(name, query):
+			prefix = append(prefix, item)
+		case strings.Contains(name, query) || strings.Contains(desc, query):
+			substr = append(substr, item)
+		}
 	}
-	matches := fuzzy.Find(query, targets)
-	result := make([]PaletteItem, 0, len(matches))
-	for _, m := range matches {
-		result = append(result, p.items[m.Index])
-	}
-	return result
+	return append(append(exact, prefix...), substr...)
 }
 
 // handleMouse 处理鼠标滚轮和点击事件。
@@ -223,7 +226,7 @@ func (p *Palette) View() string {
 	}
 
 	// 底部提示行
-	hint := "  ␣ : close   ⏎ : execute   ␛ : dismiss"
+	hint := "  ⏎ / ␣ : execute   ␛ : dismiss"
 	lines = append(lines, "", theme.MutedStyle().Render(hint))
 
 	// 边框容器

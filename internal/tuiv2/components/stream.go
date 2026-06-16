@@ -229,24 +229,29 @@ func (c *AgentStream) renderMessage(entry state.StreamEntry) []string {
 		role = v
 	}
 	var label string
-	var styledLines []string
+	switch role {
+	case "user":
+		label = "  " + theme.InfoStyle().Render("you") + " "
+	default: // "assistant" or empty
+		label = "  " + theme.AccentStyle().Render("neo") + " "
+	}
+	// 续行缩进与首行标签（"  you "/"  neo "）的显示宽度一致，
+	// 使多行消息的正文逐行对齐，不再出现第二行起缩进不足导致的错位。
+	indent := strings.Repeat(" ", theme.DisplayWidth(label))
 	text := entry.Content
 	if text == "" {
 		text = "-"
 	}
-	switch role {
-	case "user":
-		label = "  " + theme.InfoStyle().Render("you") + " "
-		styledLines = renderWrappedLines(text, "  ", theme.BaseStyle())
-	default: // "assistant" or empty
-		label = "  " + theme.AccentStyle().Render("neo") + " "
-		styledLines = renderWrappedLines(text, "  ", theme.BaseStyle())
+	parts := strings.Split(text, "\n")
+	lines := make([]string, 0, len(parts))
+	for index, part := range parts {
+		if index == 0 {
+			lines = append(lines, label+theme.BaseStyle().Render(part))
+			continue
+		}
+		lines = append(lines, theme.BaseStyle().Render(indent+part))
 	}
-	result := []string{label + strings.TrimPrefix(styledLines[0], "  ")}
-	for _, line := range styledLines[1:] {
-		result = append(result, line)
-	}
-	return result
+	return lines
 }
 
 // renderToolStart 渲染工具调用开始行。

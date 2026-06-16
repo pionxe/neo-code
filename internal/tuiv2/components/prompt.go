@@ -16,6 +16,10 @@ import (
 const (
 	cursorBlinkInterval = 500 * time.Millisecond
 	promptWrapIndent    = "    "
+	// promptSymbol 用作输入行前缀。选用 ASCII '>' 而非 Unicode 右尖括号（如 ›）：
+	// 后者是东亚宽度「歧义」字符，会在 CJK 终端/字体下被渲染成双宽，
+	// 导致首行前缀与续行缩进的列数不一致、换行后错位。
+	promptSymbol = ">"
 )
 
 // SubmitMessageMsg 表示用户在消息模式下提交了一条待发送文本。
@@ -126,7 +130,7 @@ func (c *CommandPrompt) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 		c.deleteBeforeCursor()
 	case "delete":
 		c.deleteAtCursor()
-	case "shift+enter", "alt+enter":
+	case "shift+enter", "alt+enter", "ctrl+j":
 		c.insertText("\n")
 	case "enter":
 		text := strings.TrimSpace(c.state.Input.Text)
@@ -212,7 +216,7 @@ func (c *CommandPrompt) handleQuestionKey(msg tea.KeyMsg) tea.Cmd {
 
 // messageLines 渲染命令和普通消息模式下的输入行。
 func (c *CommandPrompt) messageLines() []string {
-	return []string{c.renderPromptInput("›")}
+	return []string{c.renderPromptInput(promptSymbol)}
 }
 
 // permissionLines 渲染权限确认的提示、输入和快捷操作栏。
@@ -224,7 +228,7 @@ func (c *CommandPrompt) permissionLines() []string {
 	return []string{
 		theme.WarningStyle().Render(theme.StatusSymbol(theme.PhaseWaitingPermission)+" ") +
 			theme.SubtleStyle().Render(prompt),
-		c.renderPromptInput("›"),
+		c.renderPromptInput(promptSymbol),
 		c.renderShortcutBar([]shortcutItem{
 			{Key: "Y", Text: "允许"},
 			{Key: "n", Text: "拒绝"},
@@ -242,7 +246,7 @@ func (c *CommandPrompt) questionLines() []string {
 	}
 	lines := []string{
 		theme.AccentStyle().Render(theme.Separator()+" ") + theme.BaseStyle().Render(prompt),
-		c.renderPromptInput("›"),
+		c.renderPromptInput(promptSymbol),
 	}
 	if len(c.state.Input.Options) > 0 {
 		lines = append(lines, "")
@@ -259,13 +263,15 @@ func (c *CommandPrompt) renderPromptInput(symbol string) string {
 	if len(rawLines) == 0 {
 		rawLines = []string{""}
 	}
+	// 续行缩进与首行前缀（symbol + 空格）显示宽度一致；symbol 用 ASCII，宽度恒为 1。
+	indent := strings.Repeat(" ", theme.DisplayWidth(symbol+" "))
 	lines := make([]string, 0, len(rawLines))
 	for index, line := range rawLines {
 		if index == 0 {
 			lines = append(lines, theme.AccentStyle().Render(symbol+" ")+theme.BaseStyle().Render(line))
 			continue
 		}
-		lines = append(lines, theme.MutedStyle().Render("  ")+theme.BaseStyle().Render(line))
+		lines = append(lines, theme.MutedStyle().Render(indent)+theme.BaseStyle().Render(line))
 	}
 	return strings.Join(lines, "\n")
 }

@@ -53,7 +53,7 @@ func (m *ModelPicker) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.state.Overlay.Query = ""
 		m.state.Overlay.Selected = 0
 		return nil
-	case "enter":
+	case "enter", " ":
 		matched := m.matchedModels()
 		if len(matched) == 0 {
 			return nil
@@ -221,7 +221,7 @@ func (m *ModelPicker) View() string {
 	}
 
 	// 提示行
-	hint := "  ⏎ : select   ␛ : cancel"
+	hint := "  ⏎ / ␣ : select   ␛ : cancel"
 	lines = append(lines, "", theme.MutedStyle().Render(hint))
 
 	content := strings.Join(lines, "\n")
