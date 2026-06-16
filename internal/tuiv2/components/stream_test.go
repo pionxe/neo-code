@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"neo-code/internal/tuiv2/state"
 	"neo-code/internal/tuiv2/theme"
 )
@@ -121,6 +122,37 @@ func TestAgentStreamTimestampGap(t *testing.T) {
 	view := NewAgentStream(viewState).View()
 	if !strings.Contains(view, "12:06") {
 		t.Fatalf("View() missing timestamp gap:\n%s", view)
+	}
+}
+
+func TestAgentStreamMultilineMessageAlignsUnderLabel(t *testing.T) {
+	viewState := state.NewViewState()
+	viewState.Layout.Width = 80
+	viewState.Layout.Height = 20
+	viewState.Stream = []state.StreamEntry{
+		{ID: "m", Type: "message", Content: "第一行\n第二行内容\n第三行", Metadata: map[string]any{"role": "user"}},
+	}
+	stream := NewAgentStream(viewState)
+
+	lines := stream.renderMessage(viewState.Stream[0])
+	plain := make([]string, len(lines))
+	for i, l := range lines {
+		plain[i] = ansi.Strip(l)
+	}
+	if len(plain) != 3 {
+		t.Fatalf("rendered lines = %d, want 3: %v", len(plain), plain)
+	}
+	// 首行 = "  you " + 内容（you 占 3 列，前后各 2/1 空格，共 6 列）。
+	wantIndent := theme.DisplayWidth("  you ")
+	if !strings.HasPrefix(plain[0], "  you ") {
+		t.Fatalf("line 0 = %q, want prefix %q", plain[0], "  you ")
+	}
+	// 续行必须是 wantIndent 个前导空格，使正文与首行正文逐列对齐。
+	for i, line := range plain[1:] {
+		leading := len(line) - len(strings.TrimLeft(line, " "))
+		if leading != wantIndent {
+			t.Fatalf("continuation line %d leading = %d, want %d: %q", i+1, leading, wantIndent, line)
+		}
 	}
 }
 

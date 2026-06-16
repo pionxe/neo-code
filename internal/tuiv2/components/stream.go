@@ -55,6 +55,14 @@ func (c *AgentStream) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "G":
 		c.state.Layout.ScrollOffset = 0
 		c.state.Layout.AutoScroll = true
+	case "ctrl+u":
+		halfPage := c.halfPageSize()
+		c.state.Layout.ScrollOffset = clampScroll(c.state.Layout.ScrollOffset+halfPage, maxOffset)
+		c.state.Layout.AutoScroll = false
+	case "ctrl+d":
+		halfPage := c.halfPageSize()
+		c.state.Layout.ScrollOffset = clampScroll(c.state.Layout.ScrollOffset-halfPage, maxOffset)
+		c.state.Layout.AutoScroll = c.state.Layout.ScrollOffset == 0
 	}
 	return c, nil
 }
@@ -87,7 +95,6 @@ func (c *AgentStream) headerText() string {
 }
 
 // streamWidth 根据布局断点计算 Agent Stream 可用宽度。
-// streamWidth 根据布局断点计算 Agent Stream 可用宽度。
 func (c *AgentStream) streamWidth() int {
 	width := c.state.Layout.Width
 	if width >= 100 && c.state.Layout.ShowInspector {
@@ -96,7 +103,6 @@ func (c *AgentStream) streamWidth() int {
 	return width
 }
 
-// visibleLineCount 根据终端高度估算可展示的流行数。
 // visibleLineCount 根据终端高度估算可展示的流行数。
 func (c *AgentStream) visibleLineCount() int {
 	height := c.state.Layout.Height
@@ -108,6 +114,15 @@ func (c *AgentStream) visibleLineCount() int {
 		return 4
 	}
 	return limit
+}
+
+// halfPageSize 返回半页滚动所需的行数，至少为 1。
+func (c *AgentStream) halfPageSize() int {
+	h := c.visibleLineCount() / 2
+	if h < 1 {
+		return 1
+	}
+	return h
 }
 
 // maxScrollOffset 计算当前渲染内容允许的最大手动滚动偏移。
@@ -207,13 +222,36 @@ func (c *AgentStream) renderEntry(entry state.StreamEntry) []string {
 	}
 }
 
-// renderMessage 渲染普通消息正文，支持换行。
+// renderMessage 渲染角色感知的消息正文，支持换行。
 func (c *AgentStream) renderMessage(entry state.StreamEntry) []string {
+	role := ""
+	if v, ok := entry.Metadata["role"].(string); ok {
+		role = v
+	}
+	var label string
+	switch role {
+	case "user":
+		label = "  " + theme.InfoStyle().Render("you") + " "
+	default: // "assistant" or empty
+		label = "  " + theme.AccentStyle().Render("neo") + " "
+	}
+	// 续行缩进与首行标签（"  you "/"  neo "）的显示宽度一致，
+	// 使多行消息的正文逐行对齐，不再出现第二行起缩进不足导致的错位。
+	indent := strings.Repeat(" ", theme.DisplayWidth(label))
 	text := entry.Content
 	if text == "" {
 		text = "-"
 	}
-	return renderWrappedLines(text, "", theme.BaseStyle())
+	parts := strings.Split(text, "\n")
+	lines := make([]string, 0, len(parts))
+	for index, part := range parts {
+		if index == 0 {
+			lines = append(lines, label+theme.BaseStyle().Render(part))
+			continue
+		}
+		lines = append(lines, theme.BaseStyle().Render(indent+part))
+	}
+	return lines
 }
 
 // renderToolStart 渲染工具调用开始行。

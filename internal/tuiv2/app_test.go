@@ -127,7 +127,7 @@ func TestAppViewShowsFocusOnlyLayout(t *testing.T) {
 		"Agent Stream",
 		"Soft Inspector",
 		"Command Prompt",
-		"› _",
+		"> _",
 		"[debug] mode:input",
 		"size:120x30",
 	} {

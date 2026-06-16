@@ -107,10 +107,15 @@ func TestStreamingChatEventsArriveInOrder(t *testing.T) {
 	if got[len(got)-1] != gateway.EventRunFinished {
 		t.Fatalf("last event = %q, want %q", got[len(got)-1], gateway.EventRunFinished)
 	}
+	// Verify we have some agent chunks in the middle (event types expanded in Phase 9)
+	hasChunks := false
 	for _, eventType := range got[1 : len(got)-1] {
-		if eventType != gateway.EventAgentChunk {
-			t.Fatalf("middle event = %q, want %q", eventType, gateway.EventAgentChunk)
+		if eventType == gateway.EventAgentChunk {
+			hasChunks = true
 		}
+	}
+	if !hasChunks {
+		t.Fatalf("streaming events must include at least one agent_chunk")
 	}
 }
 

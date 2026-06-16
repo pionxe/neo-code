@@ -57,6 +57,11 @@ func CodeBlockStyle() lipgloss.Style {
 	return BaseStyle().Foreground(TokyoNight.CodeBlock)
 }
 
+// InfoStyle 返回信息/用户消息样式（Cyan）。
+func InfoStyle() lipgloss.Style {
+	return BaseStyle().Foreground(TokyoNight.Info)
+}
+
 // TimestampStyle 返回时间戳样式。
 func TimestampStyle() lipgloss.Style {
 	return BaseStyle().Foreground(TokyoNight.Subtle)
