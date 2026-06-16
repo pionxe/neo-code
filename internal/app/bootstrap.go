@@ -64,6 +64,7 @@ type BootstrapOptions struct {
 	Workdir      string
 	SessionID    string
 	WakeInputB64 string
+	TraceHooks   bool
 }
 
 type memoExtractorScheduler interface {
@@ -269,6 +270,11 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 
 	runtimeImpl := agentruntime.Runtime(runtimeSvc)
 	closeFns := []func() error{toolsCleanup, checkpointStore.Close, sessionStore.Close}
+	if opts.TraceHooks {
+		recorder := agentruntime.NewHookTraceRecorder(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
+		runtimeSvc.SetRuntimeEventRecorder(recorder)
+		closeFns = append(closeFns, recorder.Close)
+	}
 
 	needCleanup = false
 

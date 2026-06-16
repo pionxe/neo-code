@@ -104,6 +104,7 @@ func NewRootCommand() *cobra.Command {
 	_ = settings.BindPFlag("session", cmd.PersistentFlags().Lookup("session"))
 	_ = settings.BindPFlag("wake-input-b64", cmd.PersistentFlags().Lookup("wake-input-b64"))
 	cmd.AddCommand(
+		newHookCommand(),
 		newGatewayCommand(),
 		newAdapterCommand(),
 		newLegacyFeishuAdapterCommand(),

@@ -24,6 +24,7 @@ import (
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
+	runtimehooks "neo-code/internal/runtime/hooks"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
@@ -915,6 +916,124 @@ func TestBuildRuntimeUsesWorkdirOverride(t *testing.T) {
 		t.Cleanup(func() {
 			_ = bundle.Close()
 		})
+	}
+}
+
+func TestBuildRuntimeTraceHooksPersistsHookEvents(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	workdir := t.TempDir()
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	configRaw := strings.Join([]string{
+		"selected_provider: openai",
+		"current_model: " + config.OpenAIDefaultModel,
+		"shell: powershell",
+	}, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(configRaw), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{
+		Workdir:    workdir,
+		TraceHooks: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if bundle.Close != nil {
+			if closeErr := bundle.Close(); closeErr != nil {
+				t.Fatalf("bundle.Close() error = %v", closeErr)
+			}
+		}
+	})
+
+	service, ok := bundle.Runtime.(*agentruntime.Service)
+	if !ok {
+		t.Fatalf("bundle.Runtime type = %T, want *runtime.Service", bundle.Runtime)
+	}
+	service.SetProviderFactory(&traceScriptedProviderFactory{
+		provider: &traceScriptedProvider{
+			streams: [][]providertypes.StreamEvent{
+				{
+					providertypes.NewToolCallStartStreamEvent(0, "call-trace-1", "filesystem_read_file"),
+					providertypes.NewToolCallDeltaStreamEvent(0, "call-trace-1", `{"path":"README.md"}`),
+					providertypes.NewMessageDoneStreamEvent("tool_calls", nil),
+				},
+				{
+					providertypes.NewTextDeltaStreamEvent("trace complete"),
+					providertypes.NewMessageDoneStreamEvent("stop", nil),
+				},
+			},
+		},
+	})
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:     "trace-before-tool-call",
+		Point:  runtimehooks.HookPointBeforeToolCall,
+		Scope:  runtimehooks.HookScopeUser,
+		Source: runtimehooks.HookSourceUser,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			return runtimehooks.HookResult{
+				Status:  runtimehooks.HookResultBlock,
+				Message: "trace guard blocked before_tool_call",
+			}
+		},
+	}); err != nil {
+		t.Fatalf("register trace hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, agentruntime.NewHookRuntimeEventEmitterForTests(service), time.Second))
+
+	runID := "trace-run-1"
+	err = service.Run(context.Background(), agentruntime.UserInput{
+		RunID:   runID,
+		Workdir: workdir,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart("trigger before_tool_call trace"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	tracePath, err := agentruntime.HookTracePath(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir, runID)
+	if err != nil {
+		t.Fatalf("HookTracePath() error = %v", err)
+	}
+	data, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("ReadFile(trace) error = %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `"event_type":"hook_blocked"`) {
+		t.Fatalf("trace file missing hook_blocked: %s", text)
+	}
+	if !strings.Contains(text, `"hook_id":"trace-before-tool-call"`) {
+		t.Fatalf("trace file missing hook id: %s", text)
+	}
+	if !strings.Contains(text, `"point":"before_tool_call"`) {
+		t.Fatalf("trace file missing before_tool_call point: %s", text)
+	}
+	if !strings.Contains(text, `"event_type":"hook_started"`) || !strings.Contains(text, `"event_type":"hook_finished"`) {
+		t.Fatalf("trace file missing hook lifecycle events: %s", text)
+	}
+	startedIndex := strings.Index(text, `"event_type":"hook_started"`)
+	finishedIndex := strings.Index(text, `"event_type":"hook_finished"`)
+	blockedIndex := strings.Index(text, `"event_type":"hook_blocked"`)
+	if startedIndex < 0 || finishedIndex < 0 || blockedIndex < 0 {
+		t.Fatalf("trace file missing ordered lifecycle events: %s", text)
+	}
+	if !(startedIndex < finishedIndex && finishedIndex < blockedIndex) {
+		t.Fatalf("unexpected hook trace order: %s", text)
 	}
 }
 
@@ -2273,6 +2392,55 @@ func (s *stubMemoProviderFactory) Build(ctx context.Context, cfg provider.Runtim
 		return s.provider, nil
 	}
 	return &stubMemoProvider{}, nil
+}
+
+type traceScriptedProvider struct {
+	streams   [][]providertypes.StreamEvent
+	callCount int
+}
+
+func (p *traceScriptedProvider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	_ = ctx
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: provider.EstimateTextTokens(req.SystemPrompt),
+		EstimateSource:       provider.EstimateSourceLocal,
+		GatePolicy:           provider.EstimateGateGateable,
+	}, nil
+}
+
+func (p *traceScriptedProvider) Generate(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+	events chan<- providertypes.StreamEvent,
+) error {
+	_ = req
+	index := p.callCount
+	p.callCount++
+	if index >= len(p.streams) {
+		events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+		return nil
+	}
+	for _, event := range p.streams[index] {
+		select {
+		case events <- event:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+type traceScriptedProviderFactory struct {
+	provider provider.Provider
+}
+
+func (f *traceScriptedProviderFactory) Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+	_ = ctx
+	_ = cfg
+	return f.provider, nil
 }
 
 type stubMemoProvider struct {

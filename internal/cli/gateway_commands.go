@@ -45,6 +45,7 @@ type gatewayCommandOptions struct {
 	TokenFile     string
 	ACLMode       string
 	Workdir       string
+	TraceHooks    bool
 
 	MaxFrameBytes            int
 	IPCMaxConnections        int
@@ -108,6 +109,7 @@ func newGatewayServerCommand(use, short string, readWorkdir func(*cobra.Command)
 				TokenFile:     strings.TrimSpace(options.TokenFile),
 				ACLMode:       strings.TrimSpace(options.ACLMode),
 				Workdir:       normalizedWorkdir,
+				TraceHooks:    options.TraceHooks,
 
 				MaxFrameBytes:            options.MaxFrameBytes,
 				IPCMaxConnections:        options.IPCMaxConnections,
@@ -161,6 +163,7 @@ func newGatewayServerCommand(use, short string, readWorkdir func(*cobra.Command)
 		"gateway http shutdown timeout seconds override",
 	)
 	cmd.Flags().BoolVar(&options.MetricsEnabled, "metrics-enabled", false, "gateway metrics enable override")
+	cmd.Flags().BoolVar(&options.TraceHooks, "trace-hooks", false, "persist hook runtime trace events for this workspace")
 
 	return cmd
 }
@@ -253,7 +256,7 @@ func startGatewayServer(ctx context.Context, options gatewayCommandOptions, stat
 		logger,
 	)
 
-	runtimePort, closeRuntimePort, err := buildGatewayRuntimePort(signalContext, options.Workdir)
+	runtimePort, closeRuntimePort, err := buildGatewayRuntimePort(signalContext, options.Workdir, options.TraceHooks)
 	if err != nil {
 		return fmt.Errorf("initialize gateway runtime: %w", err)
 	}

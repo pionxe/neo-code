@@ -3909,7 +3909,7 @@ func TestDefaultBuildGatewayRuntimePortListSessionsWithoutExplicitWorkdir(t *tes
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
-	port, cleanup, err := defaultBuildGatewayRuntimePort(context.Background(), "")
+	port, cleanup, err := defaultBuildGatewayRuntimePort(context.Background(), "", false)
 	if err != nil {
 		t.Fatalf("defaultBuildGatewayRuntimePort() error = %v", err)
 	}
@@ -3919,6 +3919,42 @@ func TestDefaultBuildGatewayRuntimePortListSessionsWithoutExplicitWorkdir(t *tes
 
 	if _, err := port.ListSessions(context.Background()); err != nil {
 		t.Fatalf("ListSessions() with empty cli workdir should succeed, got %v", err)
+	}
+}
+
+func TestDefaultBuildGatewayRuntimePortAcceptsTraceHooks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	workdir := t.TempDir()
+	secondaryWorkdir := t.TempDir()
+	index := agentsession.NewWorkspaceIndex(filepath.Join(home, ".neocode"))
+	secondaryRecord, err := index.Register(secondaryWorkdir, "")
+	if err != nil {
+		t.Fatalf("Register(secondary workspace) error = %v", err)
+	}
+	if err := index.Save(); err != nil {
+		t.Fatalf("Save(workspace index) error = %v", err)
+	}
+
+	port, cleanup, err := defaultBuildGatewayRuntimePort(context.Background(), workdir, true)
+	if err != nil {
+		t.Fatalf("defaultBuildGatewayRuntimePort(traceHooks) error = %v", err)
+	}
+	if cleanup != nil {
+		defer func() { _ = cleanup() }()
+	}
+
+	if _, err := port.ListSessions(context.Background()); err != nil {
+		t.Fatalf("ListSessions() with trace hooks should succeed, got %v", err)
+	}
+
+	state := gateway.NewConnectionWorkspaceState()
+	state.SetWorkspaceHash(secondaryRecord.Hash)
+	if _, err := port.ListSessions(gateway.WithConnectionWorkspaceState(context.Background(), state)); err != nil {
+		t.Fatalf("ListSessions() for secondary trace workspace should succeed, got %v", err)
 	}
 }
 

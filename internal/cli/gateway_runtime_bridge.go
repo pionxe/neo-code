@@ -100,11 +100,18 @@ type bridgeSessionLoader interface {
 
 // defaultBuildGatewayRuntimePort 构建网关运行时 RuntimePort 适配器，并返回对应资源清理函数。
 // 当启用多工作区时，返回 MultiWorkspaceRuntime 路由代理，每个工作区拥有独立的 RuntimeBundle。
-func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gateway.RuntimePort, func() error, error) {
+func defaultBuildGatewayRuntimePort(
+	ctx context.Context,
+	workdir string,
+	traceHooks bool,
+) (gateway.RuntimePort, func() error, error) {
 	trimmedWorkdir := strings.TrimSpace(workdir)
 
 	// 先构建默认工作区的 bundle，用于获取 baseDir 和共享组件。
-	bundle, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: trimmedWorkdir})
+	bundle, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{
+		Workdir:    trimmedWorkdir,
+		TraceHooks: traceHooks,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -140,7 +147,10 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		if trimmedWd != "" {
 			_ = os.MkdirAll(trimmedWd, 0o755)
 		}
-		b, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: trimmedWd})
+		b, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{
+			Workdir:    trimmedWd,
+			TraceHooks: traceHooks,
+		})
 		if err != nil {
 			return nil, nil, err
 		}

@@ -559,6 +559,34 @@ func TestHookRuntimeEventEmitterBranches(t *testing.T) {
 	}
 }
 
+func TestNewHookRuntimeEventEmitterForTestsDelegates(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 8)}
+	emitter := NewHookRuntimeEventEmitterForTests(service)
+	ctx := withRuntimeHookEnvelope(context.Background(), hookRuntimeEnvelope{
+		RunID:     "run-exported-emitter",
+		SessionID: "session-exported-emitter",
+		Turn:      3,
+		Phase:     "execute",
+	})
+	if err := emitter.EmitHookEvent(ctx, runtimehooks.HookEvent{
+		Type:   runtimehooks.HookEventStarted,
+		HookID: "hook-exported",
+		Point:  runtimehooks.HookPointBeforeToolCall,
+	}); err != nil {
+		t.Fatalf("EmitHookEvent() error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(events))
+	}
+	if events[0].Type != EventHookStarted || events[0].RunID != "run-exported-emitter" {
+		t.Fatalf("unexpected runtime event: %+v", events[0])
+	}
+}
+
 func TestHookRuntimeEventEmitterNotificationPayloadBranch(t *testing.T) {
 	t.Parallel()
 

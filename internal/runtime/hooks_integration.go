@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	runtimehooks "neo-code/internal/runtime/hooks"
 	providertypes "neo-code/internal/provider/types"
+	runtimehooks "neo-code/internal/runtime/hooks"
 )
 
 const (
@@ -36,6 +36,11 @@ type hookRuntimeEventEmitter struct {
 
 func newHookRuntimeEventEmitter(service *Service) *hookRuntimeEventEmitter {
 	return &hookRuntimeEventEmitter{service: service}
+}
+
+// NewHookRuntimeEventEmitterForTests 暴露 runtime hook 事件桥接器，供跨包集成测试复用真实 hook 生命周期发射链路。
+func NewHookRuntimeEventEmitterForTests(service *Service) runtimehooks.EventEmitter {
+	return newHookRuntimeEventEmitter(service)
 }
 
 // EmitHookEvent 将 hooks 包内事件桥接为 runtime 事件，供 TUI 与日志统一消费。

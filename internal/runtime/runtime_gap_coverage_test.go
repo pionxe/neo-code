@@ -160,6 +160,17 @@ func TestCompactProviderSelectionErrorBranches(t *testing.T) {
 	}
 }
 
+func TestSetProviderFactorySetter(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	factory := &scriptedProviderFactory{provider: &scriptedProvider{}}
+	service.SetProviderFactory(factory)
+	if service.providerFactory != factory {
+		t.Fatalf("providerFactory = %#v, want %#v", service.providerFactory, factory)
+	}
+}
+
 func TestCompactSummaryGeneratorErrorBranches(t *testing.T) {
 	t.Parallel()
 
