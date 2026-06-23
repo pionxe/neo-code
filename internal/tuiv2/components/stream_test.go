@@ -344,3 +344,79 @@ func TestScrollToEntryTargetVisible(t *testing.T) {
 		t.Fatalf("after ScrollToEntry(15), target not visible.\noffset=%d\nview:\n%s", vs.Layout.ScrollOffset, view)
 	}
 }
+
+// TestVirtualEntriesLargeStreamAfterScroll 回归保护：>1000 条异构 stream 下，ScrollToEntry 后
+// virtualEntries 返回的窗口包含目标 entry，且连续两帧渲染不振荡（ScrollOffset 不被
+// 局部 clamp 破坏）。用异构 entry（message/tool_start 交替触发 shouldSeparate）确保
+// 旧 bug 代码（entry 索引差 + 局部 clamp）无法通过。
+func TestVirtualEntriesLargeStreamAfterScroll(t *testing.T) {
+	vs := state.NewViewState()
+	vs.Layout.Width = 80
+	vs.Layout.Height = 24
+	// 异构 entry：message/tool_start 交替，触发 shouldSeparate 分隔空行，
+	// 使 entry 索引 ≠ 渲染行号，旧代码会定位错误。
+	entries := make([]state.StreamEntry, 0, 1200)
+	for i := 0; i < 1200; i++ {
+		tp := "message"
+		if i%2 == 0 {
+			tp = "tool_start"
+		}
+		entries = append(entries, state.StreamEntry{
+			ID:      fmt.Sprintf("entry-%d", i),
+			Type:    tp,
+			Content: fmt.Sprintf("content-%d", i),
+		})
+	}
+	vs.Stream = entries
+	stream := NewAgentStream(vs)
+	// 跳到 entry 1000（远端，异构区域）
+	stream.ScrollToEntry(1000)
+	// 1) 窗口必须包含 entry 1000
+	virtual := stream.virtualEntries()
+	found := false
+	for _, e := range virtual {
+		if e.ID == "entry-1000" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("virtualEntries after ScrollToEntry(1000) missing target: window=[%s..%s] size=%d",
+			virtual[0].ID, virtual[len(virtual)-1].ID, len(virtual))
+	}
+	// 2) 连续两帧 View 不振荡（ScrollOffset 不被局部 clamp 破坏）
+	v1 := stream.View()
+	v2 := stream.View()
+	if v1 != v2 {
+		t.Fatal("OSCILLATION: consecutive View() frames differ after ScrollToEntry (ScrollOffset corrupted by local clamp)")
+	}
+	// 3) 目标内容在视口可见
+	if !strings.Contains(v1, "content-1000") {
+		t.Fatal("target content-1000 not visible after ScrollToEntry")
+	}
+}
+
+// TestEntryIndexAtLineCorrectness 验证渲染行偏移到 entry 索引的映射。
+func TestEntryIndexAtLineCorrectness(t *testing.T) {
+	vs := state.NewViewState()
+	vs.Layout.Width = 80
+	vs.Layout.Height = 24
+	vs.Stream = numberedEntries(5) // lineMap=[0,1,2,3,4] totalLines=5
+	stream := NewAgentStream(vs)
+	lineMap := stream.entryLineMap()
+	totalLines := lineMap[len(lineMap)-1] + 1 // 单行 entry，最后起始行4 + 1行 = 5
+	if got := stream.entryIndexAtLine(0, vs.Stream, lineMap, totalLines); got != 5 {
+		t.Fatalf("entryIndexAtLine(0)=%d want 5", got)
+	}
+	if got := stream.entryIndexAtLine(5, vs.Stream, lineMap, totalLines); got != 0 {
+		t.Fatalf("entryIndexAtLine(5)=%d want 0", got)
+	}
+	if got := stream.entryIndexAtLine(2, vs.Stream, lineMap, totalLines); got != 4 {
+		t.Fatalf("entryIndexAtLine(2)=%d want 4", got)
+	}
+	vs2 := state.NewViewState()
+	stream2 := NewAgentStream(vs2)
+	if got := stream2.entryIndexAtLine(0, vs2.Stream, stream2.entryLineMap(), 0); got != 0 {
+		t.Fatalf("empty stream entryIndexAtLine=%d want 0", got)
+	}
+}
