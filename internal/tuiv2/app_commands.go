@@ -45,8 +45,6 @@ type gatewayEventMsg struct {
 }
 
 // loadInitialCmd 通过 Gateway 客户端加载初始状态，并建立首个会话的事件订阅。
-
-// loadInitialCmd 通过 Gateway 客户端加载初始状态，并建立首个会话的事件订阅。
 func loadInitialCmd(client gateway.Client) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -94,16 +92,12 @@ func loadInitialCmd(client gateway.Client) tea.Cmd {
 }
 
 // waitEventCmd 等待 Gateway 事件 channel 的下一条事件，保持异步事件逐条进入 Update。
-
-// waitEventCmd 等待 Gateway 事件 channel 的下一条事件，保持异步事件逐条进入 Update。
 func waitEventCmd(events <-chan gateway.GatewayEvent) tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-events
 		return gatewayEventMsg{event: event, closed: !ok}
 	}
 }
-
-// submitMessageCmd 调用 GatewayClient 发送用户消息，并把 ACK 转成 reducer 可消费事件。
 
 // submitMessageCmd 调用 GatewayClient 发送用户消息，并把 ACK 转成 reducer 可消费事件。
 func submitMessageCmd(client gateway.Client, sessionID string, text string) tea.Cmd {
@@ -121,8 +115,6 @@ func submitMessageCmd(client gateway.Client, sessionID string, text string) tea.
 		}}
 	}
 }
-
-// resolvePermissionCmd 调用 GatewayClient 提交权限决策，并把完成结果转成 GatewayEvent。
 
 // resolvePermissionCmd 调用 GatewayClient 提交权限决策，并把完成结果转成 GatewayEvent。
 func resolvePermissionCmd(client gateway.Client, decision gateway.PermissionDecision) tea.Cmd {
@@ -145,8 +137,6 @@ func resolvePermissionCmd(client gateway.Client, decision gateway.PermissionDeci
 }
 
 // answerQuestionCmd 调用 GatewayClient 提交 ask_user 回答，并把完成结果转成 GatewayEvent。
-
-// answerQuestionCmd 调用 GatewayClient 提交 ask_user 回答，并把完成结果转成 GatewayEvent。
 func answerQuestionCmd(client gateway.Client, answer gateway.UserQuestionAnswer) tea.Cmd {
 	return func() tea.Msg {
 		if err := client.AnswerUserQuestion(context.Background(), answer); err != nil {
@@ -163,8 +153,6 @@ func answerQuestionCmd(client gateway.Client, answer gateway.UserQuestionAnswer)
 }
 
 // errorEvent 将 GatewayClient RPC 错误包装成统一错误事件。
-
-// errorEvent 将 GatewayClient RPC 错误包装成统一错误事件。
 func errorEvent(err error) gateway.GatewayEvent {
 	return gateway.GatewayEvent{
 		Type:    gateway.EventError,
@@ -172,8 +160,6 @@ func errorEvent(err error) gateway.GatewayEvent {
 		At:      time.Now(),
 	}
 }
-
-// cancelRunCmd 调用 GatewayClient 取消运行中的 Agent，并把完成结果转成 GatewayEvent。
 
 // cancelRunCmd 调用 GatewayClient 取消运行中的 Agent，并把完成结果转成 GatewayEvent。
 func cancelRunCmd(client gateway.Client, sessionID string, runID string) tea.Cmd {
@@ -192,8 +178,6 @@ func cancelRunCmd(client gateway.Client, sessionID string, runID string) tea.Cmd
 }
 
 // loadSessionCmd 切换到指定会话并建立新的事件订阅。
-
-// loadSessionCmd 切换到指定会话并建立新的事件订阅。
 func loadSessionCmd(client gateway.Client, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := client.LoadSession(context.Background(), sessionID)
@@ -207,8 +191,6 @@ func loadSessionCmd(client gateway.Client, sessionID string) tea.Cmd {
 		return sessionSwitchedMsg{sessionID: sessionID, detail: detail, eventCh: eventCh}
 	}
 }
-
-// deleteSessionCmd 调用 GatewayClient 删除会话。
 
 // deleteSessionCmd 调用 GatewayClient 删除会话。
 func deleteSessionCmd(client gateway.Client, sessionID string) tea.Cmd {
@@ -239,8 +221,6 @@ type sessionCreatedMsg struct {
 	Session *gateway.SessionSummary
 	err     error
 }
-
-// createSessionCmd 通过 GatewayClient 创建新会话。
 
 // createSessionCmd 通过 GatewayClient 创建新会话。
 func createSessionCmd(client gateway.Client) tea.Cmd {

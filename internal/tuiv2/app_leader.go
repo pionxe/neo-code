@@ -91,8 +91,6 @@ func (a *App) cancelCurrentRun() tea.Cmd {
 }
 
 // retryLastRun 重试最近一次用户输入；无历史输入时提示。
-
-// retryLastRun 重试最近一次用户输入；无历史输入时提示。
 func (a *App) retryLastRun() tea.Cmd {
 	if strings.TrimSpace(a.lastUserText) == "" {
 		a.appendStream(state.StreamEntry{
@@ -106,8 +104,6 @@ func (a *App) retryLastRun() tea.Cmd {
 	}
 	return a.handleSubmitMessage(components.SubmitMessageMsg{Text: a.lastUserText})
 }
-
-// switchToLastSession 切换到上一个会话；无上一会话时提示。
 
 // switchToLastSession 切换到上一个会话；无上一会话时提示。
 func (a *App) switchToLastSession() tea.Cmd {
