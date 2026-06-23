@@ -19,6 +19,10 @@ const (
 	ActionSlashMode   // / (when input empty)
 	ActionFileRef     // @ (when input empty)
 	ActionLogViewer   // Ctrl+L
+	ActionLineStart   // Ctrl+A 行首
+	ActionLineEnd     // Ctrl+E 行尾
+	ActionKillLine    // Ctrl+K 删除到行尾
+	ActionDeleteWord  // Ctrl+W 删除前一个词
 
 	// Normal Mode actions
 	ActionEnterInput     // i
@@ -26,6 +30,8 @@ const (
 	ActionScrollUp       // k
 	ActionHalfPageDown   // Ctrl+D
 	ActionHalfPageUp     // Ctrl+U
+	ActionFullPageDown   // Ctrl+F 整页下翻
+	ActionFullPageUp     // Ctrl+B 整页上翻
 	ActionScrollTop      // g
 	ActionScrollBottom   // G
 	ActionSearchForward  // /
@@ -41,10 +47,14 @@ const (
 	ActionLeaderNewSession    // Space n
 	ActionLeaderSwitchSession // Space s
 	ActionLeaderHelp          // Space h
-	ActionLeaderToggleMode    // Space m
+	ActionLeaderModelPicker   // Space m 模型选择器
+	ActionLeaderToggleMode    // Space m 旧绑定，Step 7 迁移到 :mode 后删除
 	ActionLeaderFullAccess    // Space f
 	ActionLeaderLog           // Space l
-	ActionLeaderCompact       // Space c
+	ActionLeaderCancelRun     // Space c 取消当前运行
+	ActionLeaderCompact       // Space c 旧绑定，Step 7 迁移到 :compact 后删除
+	ActionLeaderRetry         // Space r 重试上次运行
+	ActionLeaderLastSession   // Space Space 切换上一会话
 	ActionLeaderQuit          // Space q
 )
 
@@ -64,8 +74,9 @@ type HelpGroup struct {
 func InputBindings() []key.Binding {
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send message")),
-		// Shift+Enter 在多数终端里与 Enter 不可区分（bubbletea 也未映射），
-		// 这里登记可用的 Alt+Enter / Ctrl+J 作为换行键。
+		// Shift+Enter 仅在支持 kitty keyboard protocol 的终端（Kitty/WezTerm/Alacritty）
+		// 可与 Enter 区分；多数终端（GNOME Terminal、tmux、screen、VS Code）不可区分，
+		// 这里登记可用的 Alt+Enter / Ctrl+J 作为换行键兜底。
 		key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"), key.WithHelp("alt+enter", "new line")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "normal mode")),
 		key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "cancel/quit")),
@@ -80,7 +91,11 @@ func InputHelp() []HelpGroup {
 			Title: "Input Mode",
 			Entries: []HelpEntry{
 				{Key: "Enter", Desc: "Send message"},
-				{Key: "Alt+Enter / Ctrl+J", Desc: "New line"},
+				{Key: "Alt+Enter / Ctrl+J", Desc: "New line (Shift+Enter 仅 kitty 协议终端可用)"},
+				{Key: "Ctrl+A / Ctrl+E", Desc: "行首 / 行尾"},
+				{Key: "Ctrl+K", Desc: "删除到行尾"},
+				{Key: "Ctrl+W", Desc: "删除前一个词"},
+				{Key: "Ctrl+D", Desc: "空输入时 EOF 退出；非空时删除光标后字符"},
 				{Key: "Ctrl+C", Desc: "Cancel agent (double to quit)"},
 				{Key: "Ctrl+P", Desc: "Command palette"},
 				{Key: "?", Desc: "This help"},
@@ -100,7 +115,7 @@ func NormalHelp() []HelpGroup {
 			Entries: []HelpEntry{
 				{Key: "i", Desc: "Enter Input Mode"},
 				{Key: "/", Desc: "Search in stream"},
-				{Key: ":", Desc: "Command line"},
+				{Key: ":", Desc: "Command line (:q / :debug / :compact / :mode)"},
 				{Key: "q", Desc: "Quit"},
 			},
 		},
@@ -116,12 +131,15 @@ func LeaderHelp() []HelpGroup {
 				{Key: "Space p", Desc: "Command palette"},
 				{Key: "Space n", Desc: "New session"},
 				{Key: "Space s", Desc: "Switch session"},
+				{Key: "Space m", Desc: "Model picker"},
 				{Key: "Space h", Desc: "Help"},
-				{Key: "Space m", Desc: "Toggle Agent mode (build/plan)"},
+				{Key: "Space r", Desc: "Retry last run"},
+				{Key: "Space c", Desc: "Cancel current run"},
+				{Key: "Space Space", Desc: "Switch to last session"},
 				{Key: "Space f", Desc: "Toggle Full Access"},
 				{Key: "Space l", Desc: "Log viewer"},
-				{Key: "Space c", Desc: "Manual compact"},
 				{Key: "Space q", Desc: "Quit"},
+				{Key: "---", Desc: "已移除：compact → :compact，toggle-mode → :mode"},
 			},
 		},
 	}
@@ -135,7 +153,9 @@ func NavigationHelp() []HelpGroup {
 			Entries: []HelpEntry{
 				{Key: "j / k", Desc: "Scroll down / up"},
 				{Key: "Ctrl+D / U", Desc: "Half-page down / up"},
+				{Key: "Ctrl+F / B", Desc: "Full-page down / up"},
 				{Key: "g / G", Desc: "Jump to top / bottom"},
+				{Key: "n / N", Desc: "Search next / previous (循环)"},
 				{Key: "Mouse wheel", Desc: "Scroll"},
 			},
 		},
@@ -153,6 +173,10 @@ func FullHelp() []HelpGroup {
 }
 
 // MatchInputKey 匹配 Input Mode 按键到动作。
+//
+// 注意：ctrl+d 不在此函数映射。Input Mode 下 Ctrl+D 的行为依赖输入框是否为空
+// （空 → EOF 退出程序；非空 → 删除光标后字符），由 app.handleInputModeKey 层
+// 按上下文决定。这里不映射可避免 keymap 层对上下文语义做错误假设。
 func MatchInputKey(keyStr string) Action {
 	switch keyStr {
 	case "enter":
@@ -167,6 +191,14 @@ func MatchInputKey(keyStr string) Action {
 		return ActionOpenPalette
 	case "ctrl+l":
 		return ActionLogViewer
+	case "ctrl+a":
+		return ActionLineStart
+	case "ctrl+e":
+		return ActionLineEnd
+	case "ctrl+k":
+		return ActionKillLine
+	case "ctrl+w":
+		return ActionDeleteWord
 	}
 	return ActionNone
 }
@@ -184,6 +216,10 @@ func MatchNormalKey(keyStr string) Action {
 		return ActionHalfPageDown
 	case "ctrl+u":
 		return ActionHalfPageUp
+	case "ctrl+f":
+		return ActionFullPageDown
+	case "ctrl+b":
+		return ActionFullPageUp
 	case "g":
 		return ActionScrollTop
 	case "G":
@@ -207,6 +243,10 @@ func MatchNormalKey(keyStr string) Action {
 }
 
 // MatchLeaderKey 匹配 Leader 后缀按键到动作。
+//
+// 注意：m 暂时仍映射到 ActionLeaderToggleMode、c 仍映射到 ActionLeaderCompact，
+// Step 7 改造 Leader handler 时会切换为 ModelPicker/CancelRun 并删除旧常量。
+// r 和 space 已在此提前映射，供 Step 7 使用。
 func MatchLeaderKey(keyStr string) Action {
 	switch keyStr {
 	case "p":
@@ -225,6 +265,10 @@ func MatchLeaderKey(keyStr string) Action {
 		return ActionLeaderLog
 	case "c":
 		return ActionLeaderCompact
+	case "r":
+		return ActionLeaderRetry
+	case " ", "space":
+		return ActionLeaderLastSession
 	case "q":
 		return ActionLeaderQuit
 	}
