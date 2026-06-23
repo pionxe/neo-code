@@ -62,12 +62,6 @@ func (a *App) handleNormalModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handleLeaderKey 处理 Leader Key 后缀。
-//
-// 行为约定（plan-v4）：Leader 是独占捕获，非后缀键或超时(1s)时立即静默回到
-// Normal（不泄漏给 Normal handler）。后缀键执行动作后回到 Normal，除非打开了
-// 需要保持的面板（palette/session_picker/help/model_picker）。
-
 // enterInputFromNormal 从 Normal 进入 Input Mode，并清除 Normal 专属子状态（搜索）。
 func (a *App) enterInputFromNormal() {
 	a.state.Mode = state.InputModeInput
@@ -205,11 +199,8 @@ func (a *App) scrollToStreamIndex(targetIndex int) {
 	// 渲染时的 visibleLines 兜底（超出范围会被 clamp）。
 	a.state.Layout.AutoScroll = false
 	// 反向估算：偏移越大表示越靠顶部。目标越靠后(索引大)越接近底部，偏移越小。
-	estimated := len(a.state.Stream) - targetIndex
-	if estimated < 0 {
-		estimated = 0
-	}
-	a.state.Layout.ScrollOffset = estimated
+	// targetIndex 已被上方 guard 限制在 [0, len)，故 estimated 恒 > 0，无需再判负。
+	a.state.Layout.ScrollOffset = len(a.state.Stream) - targetIndex
 }
 
 // handlePaletteCommand 处理命令面板选择的命令。

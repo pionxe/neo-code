@@ -809,3 +809,130 @@ func separatorLineHelper(width int) string {
 	app.state.Layout.Width = width
 	return app.separatorLine()
 }
+
+// ---- 第 1 轮审查盲区补测 ----
+
+// TestLeaderTimeoutCmdAndRecovery 覆盖 leaderTimeoutCmd 与超时回退分支（原 50%）。
+func TestLeaderTimeoutCmdAndRecovery(t *testing.T) {
+	cmd := leaderTimeoutCmd()
+	if cmd == nil {
+		t.Fatal("leaderTimeoutCmd should return non-nil cmd")
+	}
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("leader timeout cmd produced nil msg")
+	}
+	app := newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.Update(msg)
+	if app.state.Mode != state.NormalMode {
+		t.Fatalf("leader timeout should reset to normal, mode=%v", app.state.Mode)
+	}
+	app = newReadyApp(t)
+	app.state.Mode = state.InputModeInput
+	beforeMode := app.state.Mode
+	app.Update(msg)
+	if app.state.Mode != beforeMode {
+		t.Fatalf("leader timeout in non-leader mode should be no-op, mode=%v", app.state.Mode)
+	}
+}
+
+// TestScrollToStreamIndexBoundaries 直接覆盖 scrollToStreamIndex 边界（原 71.4%）。
+func TestScrollToStreamIndexBoundaries(t *testing.T) {
+	app := newReadyApp(t)
+	app.appendStream(state.StreamEntry{ID: "1", Type: "message", Content: "a"})
+	app.appendStream(state.StreamEntry{ID: "2", Type: "message", Content: "b"})
+	app.scrollToStreamIndex(0)
+	if app.state.Layout.AutoScroll {
+		t.Fatal("scrollToStreamIndex should disable AutoScroll")
+	}
+	prevOffset := app.state.Layout.ScrollOffset
+	app.scrollToStreamIndex(-1)
+	if app.state.Layout.ScrollOffset != prevOffset {
+		t.Fatal("scrollToStreamIndex(-1) should be no-op")
+	}
+	app.scrollToStreamIndex(100)
+	if app.state.Layout.ScrollOffset != prevOffset {
+		t.Fatal("scrollToStreamIndex(overflow) should be no-op")
+	}
+	emptyApp := newReadyApp(t)
+	emptyApp.state.Stream = nil
+	emptyApp.scrollToStreamIndex(0)
+}
+
+// TestCancelCurrentRunNoClient 覆盖 cancelCurrentRun 在 client==nil 的分支（原 71.4%）。
+func TestCancelCurrentRunNoClient(t *testing.T) {
+	app := NewApp(StartupConfig{Backend: "fake", Scenario: "default"}).(*App)
+	app.state.Runtime.Phase = state.RuntimePhaseRunning
+	cmd := app.cancelCurrentRun()
+	if cmd != nil {
+		t.Fatal("cancelCurrentRun without client should return nil cmd")
+	}
+	if app.state.Runtime.Phase != state.RuntimePhaseCancelled {
+		t.Fatalf("phase=%s, want cancelled", app.state.Runtime.Phase)
+	}
+	app2 := NewApp(StartupConfig{Backend: "fake", Scenario: "default"}).(*App)
+	app2.state.Runtime.Phase = state.RuntimePhaseIdle
+	cmd = app2.cancelCurrentRun()
+	if cmd != nil {
+		t.Fatal("cancelCurrentRun idle without client should return nil")
+	}
+	if app2.state.Runtime.Phase != state.RuntimePhaseIdle {
+		t.Fatal("idle phase should be unchanged")
+	}
+}
+
+// TestPromptModeLineExported 覆盖导出的 ModeLine 方法（原 0%）。
+func TestPromptModeLineExported(t *testing.T) {
+	vs := state.NewViewState()
+	vs.Layout.Width = 80
+	p := components.NewCommandPrompt(vs)
+	for _, mode := range []state.InputMode{state.InputModeInput, state.NormalMode, state.LeaderMode} {
+		vs.Mode = mode
+		if v := p.ModeLine(); v == "" {
+			t.Fatalf("ModeLine() empty for mode %v", mode)
+		}
+	}
+}
+
+// TestLoadInitialCmdErrorPaths 覆盖 loadInitialCmd 的失败分支（原 71.4%）。
+func TestLoadInitialCmdErrorPaths(t *testing.T) {
+	client, _ := fakegateway.NewFakeClient(fakegateway.ScenarioGatewayOffline)
+	msg := loadInitialCmd(client)()
+	loaded, ok := msg.(initialLoadedMsg)
+	if !ok {
+		t.Fatalf("expected initialLoadedMsg, got %T", msg)
+	}
+	if loaded.errText == "" {
+		t.Fatal("offline scenario should set errText")
+	}
+	client2, _ := fakegateway.NewFakeClient(fakegateway.ScenarioDefault)
+	_ = client2.Close()
+	msg2 := loadInitialCmd(client2)()
+	loaded2, ok := msg2.(initialLoadedMsg)
+	if !ok {
+		t.Fatalf("expected initialLoadedMsg on closed client, got %T", msg2)
+	}
+	if loaded2.errText == "" {
+		t.Fatal("closed client should set errText")
+	}
+}
+
+// TestExecuteSearchEmptyStream 覆盖空 stream 下的搜索（边界）。
+func TestExecuteSearchEmptyStream(t *testing.T) {
+	app := newReadyApp(t)
+	app.state.Stream = nil
+	app.executeSearch("anything")
+	if app.state.Search.Matches != nil {
+		t.Fatal("empty stream search should yield nil matches")
+	}
+}
+
+// TestExecuteExCommandEmpty 覆盖空 ex 命令的提示分支。
+func TestExecuteExCommandEmpty(t *testing.T) {
+	app := newReadyApp(t)
+	app.executeExCommand("")
+	if !lastContains(app, "Unknown ex command") {
+		t.Fatalf("empty ex command should hint unknown, stream=%v", streamContents(app))
+	}
+}
