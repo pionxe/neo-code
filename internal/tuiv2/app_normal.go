@@ -162,21 +162,14 @@ func (a *App) jumpSearchMatch(direction int) {
 	a.scrollToStreamIndex(matches[a.state.Search.MatchIndex])
 }
 
-// scrollToStreamIndex 滚动 stream 使指定全局 entry 索引尽量可见。
+// scrollToStreamIndex 滚动 stream 使指定全局 entry 索引落到视口顶部附近。
 //
-// 由于 state.Stream 是 append-only 且全量在内存，这里基于目标索引估算
-// 滚动偏移（粗略：将目标定位到视口中部），足够满足跳转可见需求。
+// 委托给 AgentStream.ScrollToEntry，由 stream 组件用 entryLineMap 计算正确的
+// 渲染行偏移（而非 entry 索引差），app 层不越界假设 entry↔渲染行映射。
+// 早期实现直接用 len(Stream)-targetIndex 赋值 ScrollOffset，与 visibleLines
+// 的渲染行偏移语义维度错配，已在 Step 2/3 修正。
 func (a *App) scrollToStreamIndex(targetIndex int) {
-	if targetIndex < 0 || targetIndex >= len(a.state.Stream) {
-		return
-	}
-	// 粗略估计：stream 行数约为 entry 数的倍数，这里直接用 entry 索引作为
-	// 偏移参考，关闭自动滚动并尝试把目标带到视口。精确视口定位由 stream
-	// 渲染时的 visibleLines 兜底（超出范围会被 clamp）。
-	a.state.Layout.AutoScroll = false
-	// 反向估算：偏移越大表示越靠顶部。目标越靠后(索引大)越接近底部，偏移越小。
-	// targetIndex 已被上方 guard 限制在 [0, len)，故 estimated 恒 > 0，无需再判负。
-	a.state.Layout.ScrollOffset = len(a.state.Stream) - targetIndex
+	a.agentStream.ScrollToEntry(targetIndex)
 }
 
 // handlePaletteCommand 处理命令面板选择的命令。
