@@ -119,6 +119,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(a.state.Stream) > beforeStreamLen {
 			a.state.Layout.AutoScroll = true
 			a.state.Layout.ScrollOffset = 0
+			// stream 增长后，已有搜索结果不再包含新内容，标记 stale 提示用户。
+			if len(a.state.Search.Matches) > 0 {
+				a.state.Search.Stale = true
+			}
+		}
+		// 新 run 开始或会话相关事件时清理 Normal 子状态（搜索/Ex），避免跨 run/会话残留。
+		switch msg.event.Type {
+		case gateway.EventRunStarted:
+			a.clearSearchAndEx()
 		}
 		a.bindComponents()
 		if a.state.Runtime.Phase == state.RuntimePhaseError && len(a.state.Stream) > 0 {
@@ -133,6 +142,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.handleQuestionAnswer(msg)
 	case components.PromptCancelMsg:
 		a.cancelPrompt(msg.Mode)
+		return a, nil
+	case components.ExCommandMsg:
+		// : 命令行提交：执行命令并关闭 Ex overlay（命令打开新 overlay 者除外）。
+		cmd := a.executeExCommand(msg.Command)
+		if a.state.Overlay.Active == state.OverlayEx {
+			a.closeOverlay()
+			a.state.Ex = state.ExState{}
+		}
+		return a, cmd
+	case components.SearchSubmitMsg:
+		// / 搜索提交：执行扫描并关闭搜索 overlay 回 Normal。
+		cmd := a.executeSearch(msg.Query)
+		a.closeOverlay()
+		a.state.Search.Active = false
+		return a, cmd
+	case components.CmdLineCancelMsg:
+		// Esc/Ctrl+C 取消 Ex/Search 输入：关闭 overlay 回 Normal。
+		a.closeOverlay()
+		a.clearSearchAndEx()
 		return a, nil
 	case components.SlashCommandMsg:
 		return a, a.handleSlashCommand(msg)
@@ -210,7 +238,13 @@ func (a *App) View() string {
 	if a.lastErr != "" {
 		lines = append(lines, theme.ErrorStyle().Render("  "+theme.StatusSymbol(theme.PhaseError)+" "+a.lastErr))
 	}
-	lines = append(lines, a.mainArea(), a.separatorLine(), a.commandPrompt.View())
+	// Ex/Search 输入 overlay：渲染 cmdline 输入行（替代普通 prompt 输入区），
+	// 不覆盖主视图，仍保留 ambient/stream 可见。
+	promptView := a.commandPrompt.View()
+	if a.state.Overlay.Active == state.OverlayEx || a.state.Overlay.Active == state.OverlaySearch {
+		promptView = a.cmdLine.View() + "\n" + a.commandPrompt.ModeLine()
+	}
+	lines = append(lines, a.mainArea(), a.separatorLine(), promptView)
 	if a.debug {
 		lines = append(lines, "", theme.WarningStyle().Render(a.debugLine()))
 	}
@@ -287,9 +321,9 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc always closes any active overlay first (global escape hatch)
 	if a.state.Overlay.Active != state.OverlayNone {
 		if msg.String() == "esc" {
-			a.state.Overlay.Active = state.OverlayNone
-			a.state.Overlay.Query = ""
-			a.state.Overlay.Selected = 0
+			// 关闭 overlay 并清理 Normal 子状态（搜索/Ex 输入）。
+			a.closeOverlay()
+			a.clearSearchAndEx()
 			return a, nil
 		}
 	}
@@ -310,6 +344,12 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case state.OverlayConfirm:
 		_, cmd := a.confirmOverlay.Update(msg)
 		return a, cmd
+	case state.OverlayEx, state.OverlaySearch:
+		// Ex/Search 输入 overlay：所有按键路由给 cmdline 组件，
+		// 由它处理字符/Backspace/Enter/Esc（Esc/Ctrl+C 已在上方被全局拦截
+		// 关闭 overlay，此处主要处理字符输入与提交）。
+		_, cmd := a.cmdLine.Update(msg)
+		return a, cmd
 	}
 	switch a.state.Mode {
 	case state.LeaderMode:
@@ -322,7 +362,20 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleInputModeKey 处理 Input Mode 下的键盘输入。
+//
+// 分层约定（plan-v4）：模式切换键在此拦截，不传给 prompt 编辑器。
+// Ctrl+D 不进 MatchInputKey，由本函数按输入框是否为空决定：
+//   - 输入为空 → EOF 退出程序
+//   - 输入非空 → 删除光标后字符（等同 delete），委派 prompt 处理
 func (a *App) handleInputModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+D 上下文分发
+	if msg.String() == "ctrl+d" {
+		if strings.TrimSpace(a.state.Input.Text) == "" {
+			return a, tea.Quit
+		}
+		_, cmd := a.commandPrompt.Update(tea.KeyMsg{Type: tea.KeyDelete})
+		return a, cmd
+	}
 	action := keymap.MatchInputKey(msg.String())
 	switch action {
 	case keymap.ActionCtrlC:
@@ -349,13 +402,17 @@ func (a *App) handleInputModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleNormalModeKey 处理 Normal Mode 下的键盘输入。
+//
+// 分层约定（plan-v4）：模式切换键（i/Enter→Input、Space→Leader、:→Ex、
+// /→Search）优先拦截；n/N 在搜索 Matches 非空时跳转；Ctrl+D 半页下翻；
+// 其余导航键交给 stream。
 func (a *App) handleNormalModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	action := keymap.MatchNormalKey(msg.String())
 	switch action {
 	case keymap.ActionCtrlC:
 		return a.handleCtrlC()
 	case keymap.ActionEnterInput:
-		a.state.Mode = state.InputModeInput
+		a.enterInputFromNormal()
 		return a, nil
 	case keymap.ActionScrollDown, keymap.ActionScrollUp,
 		keymap.ActionScrollTop, keymap.ActionScrollBottom:
@@ -364,19 +421,27 @@ func (a *App) handleNormalModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keymap.ActionHalfPageDown, keymap.ActionHalfPageUp:
 		_, cmd := a.agentStream.Update(msg)
 		return a, cmd
+	case keymap.ActionFullPageDown, keymap.ActionFullPageUp:
+		_, cmd := a.agentStream.Update(msg)
+		return a, cmd
 	case keymap.ActionLeader:
 		a.state.Mode = state.LeaderMode
 		return a, leaderTimeoutCmd()
 	case keymap.ActionQuit:
 		return a, tea.Quit
 	case keymap.ActionSearchForward:
-		// 搜索功能后续 Phase 实现，此处预留
+		// / 进入搜索输入 overlay
+		a.openSearch()
 		return a, nil
-	case keymap.ActionSearchBackward:
-		a.openOverlay(state.OverlayHelp)
+	case keymap.ActionSearchNext:
+		a.jumpSearchMatch(1)
+		return a, nil
+	case keymap.ActionSearchPrev:
+		a.jumpSearchMatch(-1)
 		return a, nil
 	case keymap.ActionExCommand:
-		// Ex 命令行后续 Phase 实现，此处预留
+		// : 进入 Ex 命令行输入 overlay
+		a.openEx()
 		return a, nil
 	default:
 		_, promptCmd := a.commandPrompt.Update(msg)
@@ -608,6 +673,126 @@ func (a *App) closeOverlay() {
 	a.state.Overlay.Active = state.OverlayNone
 	a.state.Overlay.Query = ""
 	a.state.Overlay.Selected = 0
+}
+
+// enterInputFromNormal 从 Normal 进入 Input Mode，并清除 Normal 专属子状态（搜索）。
+func (a *App) enterInputFromNormal() {
+	a.state.Mode = state.InputModeInput
+	a.clearSearchAndEx()
+}
+
+// openEx 打开 : 命令行输入 overlay。
+func (a *App) openEx() {
+	a.state.Ex.Active = true
+	a.state.Ex.Input = ""
+	a.openOverlay(state.OverlayEx)
+}
+
+// openSearch 打开 / 搜索输入 overlay。
+func (a *App) openSearch() {
+	a.state.Search.Active = true
+	a.state.Search.Query = ""
+	a.openOverlay(state.OverlaySearch)
+}
+
+// clearSearchAndEx 清除搜索与 Ex 输入状态（切出 Normal 或事件触发时调用）。
+func (a *App) clearSearchAndEx() {
+	a.state.Search = state.SearchState{}
+	a.state.Ex = state.ExState{}
+}
+
+// executeExCommand 解释并执行 : 命令（已去除前缀 ":"），返回副作用 cmd。
+//
+// 支持命令：q/quit/exit=退出、debug=切调试、help=开帮助、compact=触发压缩、
+// mode=切换 Agent 模式。空或未知命令给出提示。
+func (a *App) executeExCommand(command string) tea.Cmd {
+	switch command {
+	case "q", "quit", "exit":
+		return tea.Quit
+	case "debug":
+		a.debug = !a.debug
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("debug-toggle-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   fmt.Sprintf("Debug: %v", a.debug),
+			Metadata:  map[string]any{"done": true},
+		})
+		return nil
+	case "help":
+		a.openOverlay(state.OverlayHelp)
+		return nil
+	case "compact":
+		return a.triggerCompact()
+	case "mode":
+		return a.toggleAgentMode()
+	default:
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("ex-unknown-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   fmt.Sprintf("Unknown ex command: %s", emptyDash(command)),
+			Metadata:  map[string]any{"done": true},
+		})
+		return nil
+	}
+}
+
+// executeSearch 执行全量扫描并记录匹配索引到 Search.Matches，滚动到首个匹配。
+//
+// 空 query 为 no-op（关闭搜索 overlay）；无匹配给出提示。
+func (a *App) executeSearch(query string) tea.Cmd {
+	if strings.TrimSpace(query) == "" {
+		return nil
+	}
+	matches := components.RunSearch(a.state.Stream, query)
+	a.state.Search.Matches = matches
+	a.state.Search.MatchIndex = 0
+	a.state.Search.Stale = false
+	if len(matches) == 0 {
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("search-empty-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   fmt.Sprintf("No matches: %s", query),
+			Metadata:  map[string]any{"done": true},
+		})
+		return nil
+	}
+	a.scrollToStreamIndex(matches[0])
+	return nil
+}
+
+// jumpSearchMatch 在搜索匹配间循环跳转（direction=1 下一个，-1 上一个）。
+//
+// 无匹配时静默 no-op；到末尾/首位循环折返。
+func (a *App) jumpSearchMatch(direction int) {
+	matches := a.state.Search.Matches
+	if len(matches) == 0 {
+		return
+	}
+	a.state.Search.MatchIndex = (a.state.Search.MatchIndex + direction + len(matches)) % len(matches)
+	a.scrollToStreamIndex(matches[a.state.Search.MatchIndex])
+}
+
+// scrollToStreamIndex 滚动 stream 使指定全局 entry 索引尽量可见。
+//
+// 由于 state.Stream 是 append-only 且全量在内存，这里基于目标索引估算
+// 滚动偏移（粗略：将目标定位到视口中部），足够满足跳转可见需求。
+func (a *App) scrollToStreamIndex(targetIndex int) {
+	if targetIndex < 0 || targetIndex >= len(a.state.Stream) {
+		return
+	}
+	// 粗略估计：stream 行数约为 entry 数的倍数，这里直接用 entry 索引作为
+	// 偏移参考，关闭自动滚动并尝试把目标带到视口。精确视口定位由 stream
+	// 渲染时的 visibleLines 兜底（超出范围会被 clamp）。
+	a.state.Layout.AutoScroll = false
+	// 反向估算：偏移越大表示越靠顶部。目标越靠后(索引大)越接近底部，偏移越小。
+	estimated := len(a.state.Stream) - targetIndex
+	if estimated < 0 {
+		estimated = 0
+	}
+	a.state.Layout.ScrollOffset = estimated
 }
 
 // handlePaletteCommand 处理命令面板选择的命令。

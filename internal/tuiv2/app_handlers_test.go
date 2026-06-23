@@ -3,6 +3,7 @@ package tuiv2
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -480,6 +481,176 @@ func TestInputModeKeyDispatch(t *testing.T) {
 	app.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
 	if !lastContains(app, "Log viewer not yet available") {
 		t.Fatalf("ctrl+l not logged: %v", streamContents(app))
+	}
+}
+
+// TestCtrlDContextual 覆盖 Ctrl+D 三态分发。
+func TestCtrlDContextual(t *testing.T) {
+	// Input 空输入 → EOF 退出（tea.Quit）
+	app := newReadyApp(t)
+	app.state.Mode = state.InputModeInput
+	app.state.Input.Text = ""
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if cmd == nil {
+		t.Fatal("ctrl+d empty input should return quit cmd")
+	}
+
+	// Input 非空 → 删字符（不退出）
+	app = newReadyApp(t)
+	app.state.Mode = state.InputModeInput
+	app.state.Input.Text = "abc"
+	app.state.Input.Cursor = 3
+	_, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	// 删除后文本应变少（delete 删光标后字符，光标在末尾时 no-op，移到中间验证）
+	app.state.Input.Cursor = 1
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if app.state.Input.Text != "ac" {
+		t.Fatalf("ctrl+d non-empty should delete char after cursor, text=%q", app.state.Input.Text)
+	}
+
+	// Normal → 半页下翻（路由 stream，不退出）
+	app = newReadyApp(t)
+	app.state.Mode = state.NormalMode
+	_, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if cmd != nil {
+		t.Fatal("normal ctrl+d should route to stream, nil cmd")
+	}
+}
+
+// TestExCommand 覆盖 : 命令行各分支。
+func TestExCommand(t *testing.T) {
+	cases := map[string]func(*App) bool{
+		"":        func(a *App) bool { return lastContains(a, "Unknown ex command") },
+		"debug":   func(a *App) bool { return a.debug },
+		"help":    func(a *App) bool { return a.state.Overlay.Active == state.OverlayHelp },
+		"compact": func(a *App) bool { return lastContains(a, "Compact triggered") },
+		"mode":    func(a *App) bool { return a.state.Runtime.AgentMode == "build" },
+		"bogus":   func(a *App) bool { return lastContains(a, "Unknown ex command") },
+	}
+	for cmd, check := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			app := newReadyApp(t)
+			app.Update(components.ExCommandMsg{Command: cmd})
+			if !check(app) {
+				t.Fatalf("ex %q failed: overlay=%q stream=%v", cmd, app.state.Overlay.Active, streamContents(app))
+			}
+		})
+	}
+	// q/quit/exit → tea.Quit
+	app := newReadyApp(t)
+	if _, cmd := app.Update(components.ExCommandMsg{Command: "q"}); cmd == nil {
+		t.Fatal("ex q should return quit cmd")
+	}
+}
+
+// TestExAndSearchOverlayFlow 覆盖 Normal 下 : 与 / 进入输入、提交、取消。
+func TestExAndSearchOverlayFlow(t *testing.T) {
+	// Normal 下 : → 打开 Ex overlay
+	app := newReadyApp(t)
+	app.state.Mode = state.NormalMode
+	app.Update(keyRunes(":"))
+	if app.state.Overlay.Active != state.OverlayEx {
+		t.Fatalf("normal : should open ex overlay, got %q", app.state.Overlay.Active)
+	}
+	// 字符路由给 cmdLine
+	app.Update(keyRunes("q"))
+	if app.state.Ex.Input != "q" {
+		t.Fatalf("ex input=%q, want q", app.state.Ex.Input)
+	}
+	// Backspace 删除
+	app.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if app.state.Ex.Input != "" {
+		t.Fatalf("ex backspace input=%q, want empty", app.state.Ex.Input)
+	}
+	// ExCommandMsg 提交后关闭 Ex overlay（直接驱动，模拟 runtime 投递）
+	app.openEx()
+	app.Update(components.ExCommandMsg{Command: "debug"})
+	if app.state.Overlay.Active != state.OverlayNone {
+		t.Fatalf("ex command submit should close overlay, got %q", app.state.Overlay.Active)
+	}
+
+	// Normal 下 / → 打开 Search overlay
+	app = newReadyApp(t)
+	app.state.Mode = state.NormalMode
+	app.Update(keyRunes("/"))
+	if app.state.Overlay.Active != state.OverlaySearch {
+		t.Fatalf("normal / should open search overlay, got %q", app.state.Overlay.Active)
+	}
+	app.Update(keyRunes("e"))
+	app.Update(keyRunes("r"))
+	app.Update(keyRunes("r"))
+	if app.state.Search.Query != "err" {
+		t.Fatalf("search query=%q, want err", app.state.Search.Query)
+	}
+
+	// Esc 关闭 overlay 并清理
+	app = newReadyApp(t)
+	app.openSearch()
+	app.state.Search.Query = "x"
+	app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if app.state.Overlay.Active != state.OverlayNone {
+		t.Fatal("esc should close search overlay")
+	}
+	if app.state.Search.Query != "" {
+		t.Fatalf("esc should clear search query, got %q", app.state.Search.Query)
+	}
+}
+
+// TestSearchSubmitAndJump 覆盖搜索提交、n/N 跳转、stale 标记。
+func TestSearchSubmitAndJump(t *testing.T) {
+	app := newReadyApp(t)
+	// 注入含匹配的 stream 内容
+	app.appendStream(state.StreamEntry{ID: "1", Type: "message", Content: "hello error world"})
+	app.appendStream(state.StreamEntry{ID: "2", Type: "message", Content: "all good"})
+	app.appendStream(state.StreamEntry{ID: "3", Type: "message", Content: "another ERROR"})
+
+	// 提交搜索 error
+	app.Update(components.SearchSubmitMsg{Query: "error"})
+	if len(app.state.Search.Matches) != 2 {
+		t.Fatalf("matches=%v, want 2", app.state.Search.Matches)
+	}
+	if app.state.Search.Stale {
+		t.Fatal("fresh search should not be stale")
+	}
+
+	// n → 跳到下一个
+	firstIdx := app.state.Search.MatchIndex
+	app.state.Mode = state.NormalMode
+	app.Update(keyRunes("n"))
+	if app.state.Search.MatchIndex == firstIdx {
+		t.Fatal("n should advance match index")
+	}
+	// N → 回到上一个
+	app.Update(keyRunes("N"))
+
+	// 无匹配搜索
+	app.Update(components.SearchSubmitMsg{Query: "zzz"})
+	if app.state.Search.Matches != nil {
+		t.Fatalf("no match should set Matches nil, got %v", app.state.Search.Matches)
+	}
+	// n 在无匹配时 no-op 不崩溃
+	app.Update(keyRunes("n"))
+
+	// 空查询 no-op
+	app.Update(components.SearchSubmitMsg{Query: "   "})
+}
+
+// TestSearchStaleOnStreamGrowth 覆盖 stream 增长后 stale 标记。
+func TestSearchStaleOnStreamGrowth(t *testing.T) {
+	app := newReadyApp(t)
+	app.appendStream(state.StreamEntry{ID: "1", Type: "message", Content: "error one"})
+	app.Update(components.SearchSubmitMsg{Query: "error"})
+	if app.state.Search.Stale {
+		t.Fatal("search should not be stale initially")
+	}
+	// 模拟 gateway 事件追加 stream
+	app.Update(gatewayEventMsg{event: gateway.GatewayEvent{
+		Type:    gateway.EventAgentMessageStart,
+		At:      time.Now(),
+		Payload: map[string]any{"text": "new error"},
+	}})
+	if !app.state.Search.Stale {
+		t.Fatal("search should be stale after stream growth")
 	}
 }
 

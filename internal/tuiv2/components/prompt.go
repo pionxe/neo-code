@@ -110,9 +110,9 @@ func (c *CommandPrompt) View() string {
 
 // handleInputKey 处理普通消息输入、历史切换、换行和提交。
 //
-// 注意：模式切换键（Esc 进 Normal、i 在 Normal 下进 Input）当前仍在此处理，
-// Step 8 app 层接管后会迁移到 app.handleInputModeKey/handleNormalModeKey，
-// 届时删除此处对应分支，prompt 只保留编辑操作。
+// 分层约定（plan-v4）：模式切换键（Esc 进 Normal、i 在 Normal 下进 Input）已
+// 由 app 层 handleInputModeKey/handleNormalModeKey 拦截，不会到达本函数。
+// 本函数只负责编辑操作（字符插入、删除、光标移动、行编辑、发送、历史切换）。
 func (c *CommandPrompt) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "ctrl+a":
@@ -129,14 +129,6 @@ func (c *CommandPrompt) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 	case "ctrl+w":
 		c.deleteWordBack()
 		return nil
-	case "esc":
-		c.state.Mode = state.NormalMode
-	case "i":
-		if c.state.Mode == state.NormalMode {
-			c.state.Mode = state.InputModeInput
-		} else {
-			c.insertRunes(msg.Runes)
-		}
 	case "left":
 		c.moveCursor(-1)
 	case "right":
@@ -394,6 +386,16 @@ func (c *CommandPrompt) renderQuestionHint() string {
 // leader=AccentStyle 加粗（不加闪烁，加粗已足够区分）。右侧会话与模型信息
 // 始终用 SubtleStyle。
 func (c *CommandPrompt) modeLine() string {
+	return c.renderModeLine()
+}
+
+// ModeLine 导出 modeLine 渲染，供 App 在 Ex/Search overlay 时复用状态行。
+func (c *CommandPrompt) ModeLine() string {
+	return c.renderModeLine()
+}
+
+// renderModeLine 是 modeLine 的实际实现，供 modeLine 与 ModeLine 共用。
+func (c *CommandPrompt) renderModeLine() string {
 	leftText := fmt.Sprintf("[%s]", inputModeName(c.state.Mode))
 	rightText := strings.TrimSpace(sessionTitle(c.state) + "   " + stringOrDash(c.state.Gateway.ActiveModel))
 	leftStyled := modeIndicatorStyle(c.state.Mode).Render(leftText)
