@@ -80,6 +80,39 @@ func TestAgentStreamManualAndAutoScroll(t *testing.T) {
 	}
 }
 
+// TestAgentStreamFullPageScroll 覆盖 Ctrl+F/Ctrl+B 整页翻页。
+func TestAgentStreamFullPageScroll(t *testing.T) {
+	viewState := state.NewViewState()
+	viewState.Layout.Width = 80
+	viewState.Layout.Height = 12
+	viewState.Stream = numberedEntries(40)
+	stream := NewAgentStream(viewState)
+
+	// Ctrl+B 在底部(自动滚动, offset=0)上翻一页 → offset 增加
+	_, _ = stream.Update(keyMsg("ctrl+b"))
+	if viewState.Layout.AutoScroll {
+		t.Fatal("ctrl+b should disable AutoScroll")
+	}
+	offsetAfterB := viewState.Layout.ScrollOffset
+	if offsetAfterB == 0 {
+		t.Fatal("ctrl+b should increase ScrollOffset")
+	}
+
+	// Ctrl+F 下翻一页 → offset 减少
+	_, _ = stream.Update(keyMsg("ctrl+f"))
+	if viewState.Layout.ScrollOffset >= offsetAfterB {
+		t.Fatalf("ctrl+f should decrease offset: before=%d after=%d", offsetAfterB, viewState.Layout.ScrollOffset)
+	}
+
+	// 空流下 ctrl+f/b 不崩溃
+	emptyVS := state.NewViewState()
+	emptyVS.Layout.Width = 80
+	emptyVS.Layout.Height = 10
+	emptyStream := NewAgentStream(emptyVS)
+	_, _ = emptyStream.Update(keyMsg("ctrl+f"))
+	_, _ = emptyStream.Update(keyMsg("ctrl+b"))
+}
+
 func TestAgentStreamWidthIsSafe(t *testing.T) {
 	viewState := state.NewViewState()
 	viewState.Layout.Width = 40

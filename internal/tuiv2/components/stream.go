@@ -63,6 +63,16 @@ func (c *AgentStream) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		halfPage := c.halfPageSize()
 		c.state.Layout.ScrollOffset = clampScroll(c.state.Layout.ScrollOffset-halfPage, maxOffset)
 		c.state.Layout.AutoScroll = c.state.Layout.ScrollOffset == 0
+	case "ctrl+b":
+		// 整页上翻，步长为可见行数（vim Ctrl+B 语义）。
+		fullPage := c.visibleLineCount()
+		c.state.Layout.ScrollOffset = clampScroll(c.state.Layout.ScrollOffset+fullPage, maxOffset)
+		c.state.Layout.AutoScroll = false
+	case "ctrl+f":
+		// 整页下翻，步长为可见行数（vim Ctrl+F 语义）。
+		fullPage := c.visibleLineCount()
+		c.state.Layout.ScrollOffset = clampScroll(c.state.Layout.ScrollOffset-fullPage, maxOffset)
+		c.state.Layout.AutoScroll = c.state.Layout.ScrollOffset == 0
 	}
 	return c, nil
 }
