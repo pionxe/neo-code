@@ -48,11 +48,9 @@ const (
 	ActionLeaderSwitchSession // Space s
 	ActionLeaderHelp          // Space h
 	ActionLeaderModelPicker   // Space m 模型选择器
-	ActionLeaderToggleMode    // Space m 旧绑定，Step 7 迁移到 :mode 后删除
 	ActionLeaderFullAccess    // Space f
 	ActionLeaderLog           // Space l
 	ActionLeaderCancelRun     // Space c 取消当前运行
-	ActionLeaderCompact       // Space c 旧绑定，Step 7 迁移到 :compact 后删除
 	ActionLeaderRetry         // Space r 重试上次运行
 	ActionLeaderLastSession   // Space Space 切换上一会话
 	ActionLeaderQuit          // Space q
@@ -243,10 +241,6 @@ func MatchNormalKey(keyStr string) Action {
 }
 
 // MatchLeaderKey 匹配 Leader 后缀按键到动作。
-//
-// 注意：m 暂时仍映射到 ActionLeaderToggleMode、c 仍映射到 ActionLeaderCompact，
-// Step 7 改造 Leader handler 时会切换为 ModelPicker/CancelRun 并删除旧常量。
-// r 和 space 已在此提前映射，供 Step 7 使用。
 func MatchLeaderKey(keyStr string) Action {
 	switch keyStr {
 	case "p":
@@ -258,13 +252,13 @@ func MatchLeaderKey(keyStr string) Action {
 	case "h":
 		return ActionLeaderHelp
 	case "m":
-		return ActionLeaderToggleMode
+		return ActionLeaderModelPicker
 	case "f":
 		return ActionLeaderFullAccess
 	case "l":
 		return ActionLeaderLog
 	case "c":
-		return ActionLeaderCompact
+		return ActionLeaderCancelRun
 	case "r":
 		return ActionLeaderRetry
 	case " ", "space":
