@@ -208,6 +208,68 @@ func (c *AgentStream) virtualEntries() []state.StreamEntry {
 	return entries[start:end]
 }
 
+// entryLineMap 遍历全量 state.Stream（不走 virtualEntries，保证全局正确），
+// 按 renderAllEntries 的同款逻辑（含 shouldSeparate 空行、shouldShowTimestamp
+// 时间戳行、renderEntry 多行）累加每个 entry 的起始渲染行号。
+//
+// 返回的 slice 长度等于 len(state.Stream)，lineMap[i] 为第 i 个 entry 在完整
+// 渲染输出中的起始行号。O(n) 冷路径，仅在搜索跳转触发，5000 entry <1ms。
+func (c *AgentStream) entryLineMap() []int {
+	entries := c.state.Stream
+	lineMap := make([]int, len(entries))
+	line := 0
+	var previous *state.StreamEntry
+	for i := range entries {
+		entry := entries[i]
+		// 与 renderAllEntries 一致：先判定分隔空行与时间戳行
+		if shouldSeparate(previous, &entry) && line > 0 {
+			line++ // 空行分隔
+		}
+		if shouldShowTimestamp(previous, &entry) {
+			line++ // 时间戳行
+		}
+		lineMap[i] = line
+		line += len(c.renderEntry(entry)) // entry 占用的渲染行数
+		previous = &entry
+	}
+	return lineMap
+}
+
+// ScrollToEntry 滚动 stream 使指定全局 entry 索引落到视口顶部附近。
+//
+// 通过 entryLineMap 计算 entry→渲染行映射，再换算为 ScrollOffset（其语义为
+// "视口底部之上隐藏的渲染行数"，见 visibleLines 的 end := len(lines) - ScrollOffset），
+// 消除原先直接用 entry 索引差的维度错配。跳转后关闭 AutoScroll。越界时 no-op。
+//
+// 定位策略：视口顶部（与 less/grep 跳转一致，只读浏览场景用户跳转后向下阅读）。
+//
+// 已知限制：当 state.Stream > 1000 条时，virtualEntries 仍把 ScrollOffset 当
+// entry 索引用（见 virtualEntries L197），可能导致大 stream 下窗口定位偏差。
+// 该限制在 Step 3 改写 virtualEntries（用 entryIndexAtLine 映射回 entry 窗口）后消除。
+func (c *AgentStream) ScrollToEntry(entryIndex int) {
+	entries := c.state.Stream
+	if entryIndex < 0 || entryIndex >= len(entries) {
+		return
+	}
+	lineMap := c.entryLineMap()
+	targetLine := lineMap[entryIndex]
+	// 计算总渲染行数：最后 entry 起始行 + 其渲染行数
+	totalLines := lineMap[len(lineMap)-1] + len(c.renderEntry(entries[len(entries)-1]))
+	visible := c.visibleLineCount()
+	// 令目标行落在视口顶部：start = targetLine，而 start = (totalLines - offset) - visible，
+	// 故 offset = totalLines - visible - targetLine。
+	maxOffset := totalLines - visible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	offset := maxOffset - targetLine
+	if offset < 0 {
+		offset = 0
+	}
+	c.state.Layout.AutoScroll = false
+	c.state.Layout.ScrollOffset = offset
+}
+
 // renderEntry 将单条 StreamEntry 渲染为一种或多种 Ghost Console 行。
 func (c *AgentStream) renderEntry(entry state.StreamEntry) []string {
 	switch entry.Type {
