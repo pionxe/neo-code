@@ -135,8 +135,11 @@ func TestAgentStreamLargeStreamRenderBudget(t *testing.T) {
 
 	start := time.Now()
 	view := stream.View()
-	if elapsed := time.Since(start); elapsed > 16*time.Millisecond {
-		t.Fatalf("View() elapsed = %v, want <= 16ms", elapsed)
+	// -race 插桩会使耗时放大数倍，墙钟预算仅在正常构建下断言（race_enabled.go）。
+	if !raceEnabled {
+		if elapsed := time.Since(start); elapsed > 16*time.Millisecond {
+			t.Fatalf("View() elapsed = %v, want <= 16ms", elapsed)
+		}
 	}
 	if !strings.Contains(view, "line 1199") {
 		t.Fatalf("View() does not include tail entry:\n%s", view)

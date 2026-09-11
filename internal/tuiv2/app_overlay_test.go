@@ -137,13 +137,13 @@ func TestPaletteCtrlPOpenNavigateEnter(t *testing.T) {
 	}
 }
 
-// TestPaletteStaleStateAfterEvents 复现真实 bug：事件流会通过 state.Reduce
-// 把 a.state 替换成新指针，而 bindComponents 没有重新绑定浮层组件，导致
-// palette/model/session 选择器持有旧的 state 指针——于是下移/回车改的是旧 state，
-// App 的当前 state 里 Overlay.Active 始终不变，面板"回车不关闭、跳回第一项"。
+// TestPaletteStaleStateAfterEvents 是历史 bug 的回归守卫：旧实现中事件经
+// state.Reduce 把 a.state 换成新指针，浮层组件持有旧指针，导致"回车不关闭、
+// 跳回第一项"。指针全程稳定后（TUIv2-01，就地语义 + 组件终身绑定）该 bug
+// 在结构上不可能复现，本测试保留以锁定该语义。
 func TestPaletteStaleStateAfterEvents(t *testing.T) {
 	app := newReadyApp(t)
-	// 走真实事件处理路径：a.state = state.Reduce(...) 后调用 bindComponents。
+	// 走真实事件处理路径：Update 内 a.state = state.Reduce(...) 就地变更。
 	updated, _ := app.Update(gatewayEventMsg{event: gateway.GatewayEvent{
 		Type:    gateway.EventPhaseChanged,
 		Payload: map[string]any{"phase": state.RuntimePhaseIdle},

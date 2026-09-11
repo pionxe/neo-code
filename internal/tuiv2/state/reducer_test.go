@@ -11,14 +11,15 @@ func TestReduceAgentChunkMergesUnfinishedMessage(t *testing.T) {
 	first := Reduce(current, event(gateway.EventAgentChunk, map[string]any{"text": "hel"}))
 	second := Reduce(first, event(gateway.EventAgentChunk, map[string]any{"text": "lo"}))
 
+	// 就地语义守卫（ADR-001）：Reduce 返回同一指针，状态指针全程稳定。
+	if first != current || second != current {
+		t.Fatalf("Reduce must return the same pointer: first=%p second=%p current=%p", first, second, current)
+	}
 	if len(second.Stream) != 1 {
 		t.Fatalf("stream len = %d, want 1", len(second.Stream))
 	}
 	if second.Stream[0].Content != "hello" {
 		t.Fatalf("content = %q, want hello", second.Stream[0].Content)
-	}
-	if len(first.Stream) != 1 && first.Stream[0].Content != "hel" {
-		t.Fatalf("input state was mutated: %+v", first.Stream)
 	}
 }
 
@@ -37,25 +38,69 @@ func TestReduceAgentChunkCreatesNewMessageAfterDoneOrNonMessage(t *testing.T) {
 	}
 }
 
-func TestReduceDoesNotMutateInputSlices(t *testing.T) {
+func TestReduceMutatesStateInPlace(t *testing.T) {
 	current := NewViewState()
 	current.Stream = []StreamEntry{{ID: "old", Type: "message", Content: "old", Metadata: map[string]any{"done": true}}}
 	current.Gateway.Sessions = []gateway.SessionSummary{{ID: "s1", Title: "one"}}
 
+	// 就地语义（ADR-001）：事件直接修改传入状态，不复制、不换指针。
 	next := Reduce(current, event(gateway.EventSessionCreated, map[string]any{"id": "s2", "title": "two"}))
-	if len(current.Gateway.Sessions) != 1 {
-		t.Fatalf("input sessions mutated: %+v", current.Gateway.Sessions)
+	if next != current {
+		t.Fatalf("Reduce must return the same pointer, got %p want %p", next, current)
 	}
-	if len(next.Gateway.Sessions) != 2 {
-		t.Fatalf("next sessions len = %d, want 2", len(next.Gateway.Sessions))
+	if len(current.Gateway.Sessions) != 2 {
+		t.Fatalf("sessions len = %d, want 2", len(current.Gateway.Sessions))
 	}
 
 	next = Reduce(current, event(gateway.EventAgentChunk, map[string]any{"text": "new"}))
-	if len(current.Stream) != 1 || current.Stream[0].Content != "old" {
-		t.Fatalf("input stream mutated: %+v", current.Stream)
+	if next != current {
+		t.Fatalf("Reduce must return the same pointer, got %p want %p", next, current)
 	}
-	if len(next.Stream) != 2 {
-		t.Fatalf("next stream len = %d, want 2", len(next.Stream))
+	if len(current.Stream) != 2 || current.Stream[0].Content != "old" || current.Stream[1].Content != "new" {
+		t.Fatalf("stream = %+v, want [old new]", current.Stream)
+	}
+}
+
+// TestReduceReturnsSamePointerForAllEvents 是就地语义的总守卫：
+// 全部事件常量经 Reduce 后必须返回与输入相同的指针，防止有人重新引入换指针实现。
+func TestReduceReturnsSamePointerForAllEvents(t *testing.T) {
+	allEvents := []gateway.EventType{
+		gateway.EventAgentChunk,
+		gateway.EventAssistantDelta,
+		gateway.EventAgentMessageStart,
+		gateway.EventAgentMessageEnd,
+		gateway.EventToolStart,
+		gateway.EventToolStarted,
+		gateway.EventToolEnd,
+		gateway.EventToolFinished,
+		gateway.EventToolOutput,
+		gateway.EventPermissionRequested,
+		gateway.EventPermissionResolved,
+		gateway.EventAskUserQuestion,
+		gateway.EventUserQuestionRequested,
+		gateway.EventUserQuestionAnswered,
+		gateway.EventPhaseChanged,
+		gateway.EventRunStarted,
+		gateway.EventRunFinished,
+		gateway.EventRunError,
+		gateway.EventError,
+		gateway.EventRunCancelled,
+		gateway.EventTokenUsage,
+		gateway.EventSessionCreated,
+		gateway.EventSessionDeleted,
+		gateway.EventSessionUpdated,
+		gateway.EventModelChanged,
+		gateway.EventHealthChanged,
+		gateway.EventGatewayOffline,
+	}
+	for _, eventType := range allEvents {
+		t.Run(string(eventType), func(t *testing.T) {
+			current := NewViewState()
+			next := Reduce(current, event(eventType, map[string]any{"text": "x"}))
+			if next != current {
+				t.Fatalf("event %q: Reduce broke pointer stability: got %p want %p", eventType, next, current)
+			}
+		})
 	}
 }
 
