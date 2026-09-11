@@ -7,176 +7,159 @@ import (
 	"neo-code/internal/tuiv2/gateway"
 )
 
-// Reduce 将 GatewayEvent 纯函数式地映射为新的 ViewState，不修改输入状态。
+// Reduce 将 GatewayEvent 就地映射到 ViewState：直接修改传入的状态并返回同一指针
+// （状态指针全程稳定，见 docs/tui-v2/tui-v2-redesign-2026-09.md ADR-001）。
+// nil 输入返回新建的空状态。单线程契约：仅在 Bubble Tea Update 循环内调用。
 func Reduce(current *ViewState, event gateway.GatewayEvent) *ViewState {
-	next := cloneViewState(current)
+	if current == nil {
+		current = NewViewState()
+	}
 	switch event.Type {
 	case gateway.EventAgentChunk, gateway.EventAssistantDelta:
-		return reduceAgentChunk(next, event)
+		return reduceAgentChunk(current, event)
 	case gateway.EventAgentMessageStart:
-		return appendStream(next, streamEntry(event, "message", payloadString(event.Payload, "text", "content", "message")))
+		return appendStream(current, streamEntry(event, "message", payloadString(event.Payload, "text", "content", "message")))
 	case gateway.EventAgentMessageEnd:
-		return reduceAgentMessageEnd(next, event)
+		return reduceAgentMessageEnd(current, event)
 	case gateway.EventToolStart, gateway.EventToolStarted:
-		return reduceToolStart(next, event)
+		return reduceToolStart(current, event)
 	case gateway.EventToolEnd, gateway.EventToolFinished:
-		return reduceToolEnd(next, event)
+		return reduceToolEnd(current, event)
 	case gateway.EventToolOutput:
-		return appendStream(next, streamEntry(event, "tool_output", payloadString(event.Payload, "text", "output", "content")))
+		return appendStream(current, streamEntry(event, "tool_output", payloadString(event.Payload, "text", "output", "content")))
 	case gateway.EventPermissionRequested:
-		return reducePermissionRequested(next, event)
+		return reducePermissionRequested(current, event)
 	case gateway.EventPermissionResolved:
-		next.Runtime.Phase = RuntimePhaseRunning
-		next.Input.Mode = InputStateModeMessage
-		next.Input.Prompt = ""
-		next.Input.Options = nil
-		return appendStream(next, streamEntry(event, "status", payloadString(event.Payload, "message", "decision", "status")))
+		current.Runtime.Phase = RuntimePhaseRunning
+		current.Input.Mode = InputStateModeMessage
+		current.Input.Prompt = ""
+		current.Input.Options = nil
+		return appendStream(current, streamEntry(event, "status", payloadString(event.Payload, "message", "decision", "status")))
 	case gateway.EventAskUserQuestion, gateway.EventUserQuestionRequested:
-		return reduceAskUserQuestion(next, event)
+		return reduceAskUserQuestion(current, event)
 	case gateway.EventUserQuestionAnswered:
-		next.Runtime.Phase = RuntimePhaseRunning
-		next.Input.Mode = InputStateModeMessage
-		next.Input.Text = ""
-		next.Input.Cursor = 0
-		next.Input.Prompt = ""
-		next.Input.Options = nil
-		return appendStream(next, streamEntry(event, "status", payloadString(event.Payload, "message", "answer", "text")))
+		current.Runtime.Phase = RuntimePhaseRunning
+		current.Input.Mode = InputStateModeMessage
+		current.Input.Text = ""
+		current.Input.Cursor = 0
+		current.Input.Prompt = ""
+		current.Input.Options = nil
+		return appendStream(current, streamEntry(event, "status", payloadString(event.Payload, "message", "answer", "text")))
 	case gateway.EventPhaseChanged:
-		next.Runtime.Phase = payloadString(event.Payload, "phase", "status")
+		current.Runtime.Phase = payloadString(event.Payload, "phase", "status")
 	case gateway.EventRunStarted:
-		next.Runtime.Phase = RuntimePhaseRunning
-		next.Runtime.RunID = event.RunID
+		current.Runtime.Phase = RuntimePhaseRunning
+		current.Runtime.RunID = event.RunID
 	case gateway.EventRunFinished:
-		if next.Runtime.Phase != RuntimePhaseError && next.Runtime.Phase != RuntimePhaseCancelled {
-			next.Runtime.Phase = RuntimePhaseIdle
+		if current.Runtime.Phase != RuntimePhaseError && current.Runtime.Phase != RuntimePhaseCancelled {
+			current.Runtime.Phase = RuntimePhaseIdle
 		}
-		next.Runtime.Tokens = tokenUsageFromPayload(event.Payload, next.Runtime.Tokens)
+		current.Runtime.Tokens = tokenUsageFromPayload(event.Payload, current.Runtime.Tokens)
 	case gateway.EventRunError, gateway.EventError:
-		next.Runtime.Phase = RuntimePhaseError
-		return appendStream(next, streamEntry(event, "error", payloadString(event.Payload, "message", "error", "text")))
+		current.Runtime.Phase = RuntimePhaseError
+		return appendStream(current, streamEntry(event, "error", payloadString(event.Payload, "message", "error", "text")))
 	case gateway.EventRunCancelled:
-		next.Runtime.Phase = RuntimePhaseCancelled
-		next.Input.Mode = InputStateModeMessage
-		next.Input.Prompt = ""
-		next.Input.Options = nil
-		return appendStream(next, streamEntry(event, "status", payloadString(event.Payload, "message", "phase", "status")))
+		current.Runtime.Phase = RuntimePhaseCancelled
+		current.Input.Mode = InputStateModeMessage
+		current.Input.Prompt = ""
+		current.Input.Options = nil
+		return appendStream(current, streamEntry(event, "status", payloadString(event.Payload, "message", "phase", "status")))
 	case gateway.EventTokenUsage:
-		next.Runtime.Tokens = tokenUsageFromPayload(event.Payload, next.Runtime.Tokens)
+		current.Runtime.Tokens = tokenUsageFromPayload(event.Payload, current.Runtime.Tokens)
 	case gateway.EventSessionCreated:
-		next.Gateway.Sessions = append(next.Gateway.Sessions, sessionFromPayload(event.Payload))
+		current.Gateway.Sessions = append(current.Gateway.Sessions, sessionFromPayload(event.Payload))
 	case gateway.EventSessionDeleted:
-		next.Gateway.Sessions = deleteSession(next.Gateway.Sessions, payloadString(event.Payload, "id", "session_id"))
+		current.Gateway.Sessions = deleteSession(current.Gateway.Sessions, payloadString(event.Payload, "id", "session_id"))
 	case gateway.EventSessionUpdated:
-		next.Gateway.Sessions = upsertSession(next.Gateway.Sessions, sessionFromPayload(event.Payload))
+		current.Gateway.Sessions = upsertSession(current.Gateway.Sessions, sessionFromPayload(event.Payload))
 	case gateway.EventModelChanged:
-		next.Gateway.ActiveModel = payloadString(event.Payload, "model_id", "model", "id")
+		current.Gateway.ActiveModel = payloadString(event.Payload, "model_id", "model", "id")
 	case gateway.EventHealthChanged:
-		next.Gateway.Connected = payloadBool(event.Payload, "connected", "ok")
+		current.Gateway.Connected = payloadBool(event.Payload, "connected", "ok")
 	case gateway.EventGatewayOffline:
-		next.Gateway.Connected = false
-		next.Runtime.Phase = RuntimePhaseError
-		return appendStream(next, streamEntry(event, "error", payloadString(event.Payload, "message", "error")))
+		current.Gateway.Connected = false
+		current.Runtime.Phase = RuntimePhaseError
+		return appendStream(current, streamEntry(event, "error", payloadString(event.Payload, "message", "error")))
 	}
-	return next
+	return current
 }
 
-// reduceAgentChunk 合并助手流式文本，最后一条未完成消息可被增量追加。
-func reduceAgentChunk(next *ViewState, event gateway.GatewayEvent) *ViewState {
+// reduceAgentChunk 合并助手流式文本：最后一条未完成消息被就地增量追加。
+// 取末条目指针直改，取代旧实现的整段 slice 拷贝（copy-then-replace）；
+// Metadata 为 nil 时惰性建表，保持 nil 输入契约与旧实现等价。
+func reduceAgentChunk(current *ViewState, event gateway.GatewayEvent) *ViewState {
 	text := payloadString(event.Payload, "text", "delta", "content")
-	if len(next.Stream) > 0 {
-		last := next.Stream[len(next.Stream)-1]
-		if last.Type == "message" && !streamEntryDone(last) {
-			updated := last
-			updated.Content += text
-			updated.Metadata = cloneMetadata(last.Metadata)
-			updated.Metadata["done"] = false
-			if _, ok := updated.Metadata["role"].(string); !ok {
-				updated.Metadata["role"] = "assistant"
+	if len(current.Stream) > 0 {
+		last := &current.Stream[len(current.Stream)-1]
+		if last.Type == "message" && !streamEntryDone(*last) {
+			last.Content += text
+			if last.Metadata == nil {
+				last.Metadata = map[string]any{}
 			}
-			stream := append([]StreamEntry(nil), next.Stream[:len(next.Stream)-1]...)
-			stream = append(stream, updated)
-			next.Stream = stream
-			return next
+			last.Metadata["done"] = false
+			if _, ok := last.Metadata["role"].(string); !ok {
+				last.Metadata["role"] = "assistant"
+			}
+			return current
 		}
 	}
 	entry := streamEntry(event, "message", text)
 	entry.Metadata["done"] = false
 	entry.Metadata["role"] = "assistant"
-	return appendStream(next, entry)
+	return appendStream(current, entry)
 }
 
-// reduceAgentMessageEnd 标记最后一条消息完成，并同步 token 用量。
-func reduceAgentMessageEnd(next *ViewState, event gateway.GatewayEvent) *ViewState {
-	if len(next.Stream) > 0 {
-		last := next.Stream[len(next.Stream)-1]
+// reduceAgentMessageEnd 标记最后一条消息完成（就地置位），并同步 token 用量。
+func reduceAgentMessageEnd(current *ViewState, event gateway.GatewayEvent) *ViewState {
+	if len(current.Stream) > 0 {
+		last := &current.Stream[len(current.Stream)-1]
 		if last.Type == "message" {
-			updated := last
-			updated.Metadata = cloneMetadata(last.Metadata)
-			updated.Metadata["done"] = true
-			stream := append([]StreamEntry(nil), next.Stream[:len(next.Stream)-1]...)
-			stream = append(stream, updated)
-			next.Stream = stream
+			if last.Metadata == nil {
+				last.Metadata = map[string]any{}
+			}
+			last.Metadata["done"] = true
 		}
 	}
-	next.Runtime.Tokens = tokenUsageFromPayload(event.Payload, next.Runtime.Tokens)
-	return next
+	current.Runtime.Tokens = tokenUsageFromPayload(event.Payload, current.Runtime.Tokens)
+	return current
 }
 
 // reduceToolStart 追加工具开始条目，保留工具名和输入摘要。
-func reduceToolStart(next *ViewState, event gateway.GatewayEvent) *ViewState {
+func reduceToolStart(current *ViewState, event gateway.GatewayEvent) *ViewState {
 	entry := streamEntry(event, "tool_start", payloadString(event.Payload, "command", "input", "text"))
 	entry.ToolName = payloadString(event.Payload, "tool", "tool_name", "name")
 	entry.ToolInput = payloadString(event.Payload, "input", "command")
-	return appendStream(next, entry)
+	return appendStream(current, entry)
 }
 
 // reduceToolEnd 追加工具结束条目，记录输出或状态摘要。
-func reduceToolEnd(next *ViewState, event gateway.GatewayEvent) *ViewState {
+func reduceToolEnd(current *ViewState, event gateway.GatewayEvent) *ViewState {
 	entry := streamEntry(event, "tool_end", payloadString(event.Payload, "output", "content", "status", "text"))
 	entry.ToolName = payloadString(event.Payload, "tool", "tool_name", "name")
-	return appendStream(next, entry)
+	return appendStream(current, entry)
 }
 
 // reducePermissionRequested 进入权限等待态，并追加权限状态条目。
-func reducePermissionRequested(next *ViewState, event gateway.GatewayEvent) *ViewState {
-	next.Runtime.Phase = RuntimePhaseWaitingPermission
-	next.Input.Mode = InputStateModePermissionResponse
-	next.Input.Prompt = payloadString(event.Payload, "prompt", "message", "tool")
-	return appendStream(next, streamEntry(event, "permission", next.Input.Prompt))
+func reducePermissionRequested(current *ViewState, event gateway.GatewayEvent) *ViewState {
+	current.Runtime.Phase = RuntimePhaseWaitingPermission
+	current.Input.Mode = InputStateModePermissionResponse
+	current.Input.Prompt = payloadString(event.Payload, "prompt", "message", "tool")
+	return appendStream(current, streamEntry(event, "permission", current.Input.Prompt))
 }
 
 // reduceAskUserQuestion 进入用户问答态，并更新输入区提示和选项。
-func reduceAskUserQuestion(next *ViewState, event gateway.GatewayEvent) *ViewState {
-	next.Runtime.Phase = RuntimePhaseWaitingUser
-	next.Input.Mode = InputStateModeQuestionAnswer
-	next.Input.Prompt = payloadString(event.Payload, "question", "prompt", "message")
-	next.Input.Options = payloadStringSlice(event.Payload, "options")
-	return appendStream(next, streamEntry(event, "question", next.Input.Prompt))
+func reduceAskUserQuestion(current *ViewState, event gateway.GatewayEvent) *ViewState {
+	current.Runtime.Phase = RuntimePhaseWaitingUser
+	current.Input.Mode = InputStateModeQuestionAnswer
+	current.Input.Prompt = payloadString(event.Payload, "question", "prompt", "message")
+	current.Input.Options = payloadStringSlice(event.Payload, "options")
+	return appendStream(current, streamEntry(event, "question", current.Input.Prompt))
 }
 
-// cloneViewState 复制 ViewState 的顶层结构和切片，避免 reducer 修改输入状态。
-func cloneViewState(current *ViewState) *ViewState {
-	if current == nil {
-		return NewViewState()
-	}
-	next := *current
-	next.Gateway.Sessions = append([]gateway.SessionSummary(nil), current.Gateway.Sessions...)
-	next.Gateway.Models = append([]gateway.ModelInfo(nil), current.Gateway.Models...)
-	if current.Gateway.ActiveSess != nil {
-		active := *current.Gateway.ActiveSess
-		next.Gateway.ActiveSess = &active
-	}
-	next.Stream = append([]StreamEntry(nil), current.Stream...)
-	next.Input.Options = append([]string(nil), current.Input.Options...)
-	next.Input.History = append([]string(nil), current.Input.History...)
-	next.Search.Matches = append([]int(nil), current.Search.Matches...)
-	return &next
-}
-
-// appendStream 使用新 slice 追加流条目，保持历史序列不可变。
-func appendStream(next *ViewState, entry StreamEntry) *ViewState {
-	next.Stream = append(append([]StreamEntry(nil), next.Stream...), entry)
-	return next
+// appendStream 在流尾部追加条目：就地修改当前状态（指针语义见 Reduce）。
+func appendStream(current *ViewState, entry StreamEntry) *ViewState {
+	current.Stream = append(current.Stream, entry)
+	return current
 }
 
 // streamEntry 将 Gateway 事件转换为 StreamEntry 的通用构造。
@@ -328,18 +311,6 @@ func clonePayload(payload map[string]any) map[string]any {
 	}
 	clone := make(map[string]any, len(payload)+1)
 	for key, value := range payload {
-		clone[key] = value
-	}
-	return clone
-}
-
-// cloneMetadata 复制条目 metadata，用于合并流式文本时保留不可变语义。
-func cloneMetadata(metadata map[string]any) map[string]any {
-	if metadata == nil {
-		return map[string]any{}
-	}
-	clone := make(map[string]any, len(metadata)+1)
-	for key, value := range metadata {
 		clone[key] = value
 	}
 	return clone
