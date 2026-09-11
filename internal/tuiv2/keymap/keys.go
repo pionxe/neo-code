@@ -19,10 +19,6 @@ const (
 	ActionSlashMode   // / (when input empty)
 	ActionFileRef     // @ (when input empty)
 	ActionLogViewer   // Ctrl+L
-	ActionLineStart   // Ctrl+A 行首
-	ActionLineEnd     // Ctrl+E 行尾
-	ActionKillLine    // Ctrl+K 删除到行尾
-	ActionDeleteWord  // Ctrl+W 删除前一个词
 
 	// Normal Mode actions
 	ActionEnterInput    // i
@@ -188,14 +184,6 @@ func MatchInputKey(keyStr string) Action {
 		return ActionOpenPalette
 	case "ctrl+l":
 		return ActionLogViewer
-	case "ctrl+a":
-		return ActionLineStart
-	case "ctrl+e":
-		return ActionLineEnd
-	case "ctrl+k":
-		return ActionKillLine
-	case "ctrl+w":
-		return ActionDeleteWord
 	}
 	return ActionNone
 }

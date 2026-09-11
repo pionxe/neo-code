@@ -45,8 +45,6 @@ func (a *App) mainArea() string {
 }
 
 // separatorLine 渲染单条细线，用于区分主要区域而不使用边框。
-
-// separatorLine 渲染单条细线，用于区分主要区域而不使用边框。
 func (a *App) separatorLine() string {
 	width := a.state.Layout.Width
 	if width <= 0 {
@@ -54,8 +52,6 @@ func (a *App) separatorLine() string {
 	}
 	return theme.SubtleStyle().Render(strings.Repeat("─", width))
 }
-
-// fitViewToTerminal 将视图约束到当前终端尺寸，避免 resize 后自动换行或旧行残留。
 
 // fitViewToTerminal 将视图约束到当前终端尺寸，避免 resize 后自动换行或旧行残留。
 func (a *App) fitViewToTerminal(view string) string {
@@ -82,8 +78,6 @@ func (a *App) fitViewToTerminal(view string) string {
 }
 
 // fitLine 截断并补齐单行显示宽度，保留 ANSI 样式同时防止终端自动 wrap。
-
-// fitLine 截断并补齐单行显示宽度，保留 ANSI 样式同时防止终端自动 wrap。
 func fitLine(line string, width int) string {
 	if width <= 0 {
 		return line
@@ -99,8 +93,6 @@ func fitLine(line string, width int) string {
 	}
 	return fitted
 }
-
-// applyInitialLoaded 将 Gateway 初始 RPC 结果写入 ViewState。
 
 // applyInitialLoaded 将 Gateway 初始 RPC 结果写入 ViewState。
 func (a *App) applyInitialLoaded(msg initialLoadedMsg) {

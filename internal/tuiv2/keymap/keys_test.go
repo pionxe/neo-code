@@ -13,10 +13,6 @@ func TestMatchInputKey(t *testing.T) {
 		{"ctrl+c", ActionCtrlC},
 		{"ctrl+p", ActionOpenPalette},
 		{"ctrl+l", ActionLogViewer},
-		{"ctrl+a", ActionLineStart},
-		{"ctrl+e", ActionLineEnd},
-		{"ctrl+k", ActionKillLine},
-		{"ctrl+w", ActionDeleteWord},
 		// ctrl+d 不在 MatchInputKey 映射（由 app 层按输入框空否决定）。
 		{"ctrl+d", ActionNone},
 		{"a", ActionNone},

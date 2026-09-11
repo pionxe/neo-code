@@ -69,15 +69,11 @@ func (a *App) enterInputFromNormal() {
 }
 
 // openEx 打开 : 命令行输入 overlay。
-
-// openEx 打开 : 命令行输入 overlay。
 func (a *App) openEx() {
 	a.state.Ex.Active = true
 	a.state.Ex.Input = ""
 	a.openOverlay(state.OverlayEx)
 }
-
-// openSearch 打开 / 搜索输入 overlay。
 
 // openSearch 打开 / 搜索输入 overlay。
 func (a *App) openSearch() {
@@ -87,17 +83,10 @@ func (a *App) openSearch() {
 }
 
 // clearSearchAndEx 清除搜索与 Ex 输入状态（切出 Normal 或事件触发时调用）。
-
-// clearSearchAndEx 清除搜索与 Ex 输入状态（切出 Normal 或事件触发时调用）。
 func (a *App) clearSearchAndEx() {
 	a.state.Search = state.SearchState{}
 	a.state.Ex = state.ExState{}
 }
-
-// executeExCommand 解释并执行 : 命令（已去除前缀 ":"），返回副作用 cmd。
-//
-// 支持命令：q/quit/exit=退出、debug=切调试、help=开帮助、compact=触发压缩、
-// mode=切换 Agent 模式。空或未知命令给出提示。
 
 // executeExCommand 解释并执行 : 命令（已去除前缀 ":"），返回副作用 cmd。
 //
@@ -139,10 +128,6 @@ func (a *App) executeExCommand(command string) tea.Cmd {
 // executeSearch 执行全量扫描并记录匹配索引到 Search.Matches，滚动到首个匹配。
 //
 // 空 query 为 no-op（关闭搜索 overlay）；无匹配给出提示。
-
-// executeSearch 执行全量扫描并记录匹配索引到 Search.Matches，滚动到首个匹配。
-//
-// 空 query 为 no-op（关闭搜索 overlay）；无匹配给出提示。
 func (a *App) executeSearch(query string) tea.Cmd {
 	if strings.TrimSpace(query) == "" {
 		return nil
@@ -168,10 +153,6 @@ func (a *App) executeSearch(query string) tea.Cmd {
 // jumpSearchMatch 在搜索匹配间循环跳转（direction=1 下一个，-1 上一个）。
 //
 // 无匹配时静默 no-op；到末尾/首位循环折返。
-
-// jumpSearchMatch 在搜索匹配间循环跳转（direction=1 下一个，-1 上一个）。
-//
-// 无匹配时静默 no-op；到末尾/首位循环折返。
 func (a *App) jumpSearchMatch(direction int) {
 	matches := a.state.Search.Matches
 	if len(matches) == 0 {
@@ -180,11 +161,6 @@ func (a *App) jumpSearchMatch(direction int) {
 	a.state.Search.MatchIndex = (a.state.Search.MatchIndex + direction + len(matches)) % len(matches)
 	a.scrollToStreamIndex(matches[a.state.Search.MatchIndex])
 }
-
-// scrollToStreamIndex 滚动 stream 使指定全局 entry 索引尽量可见。
-//
-// 由于 state.Stream 是 append-only 且全量在内存，这里基于目标索引估算
-// 滚动偏移（粗略：将目标定位到视口中部），足够满足跳转可见需求。
 
 // scrollToStreamIndex 滚动 stream 使指定全局 entry 索引尽量可见。
 //
