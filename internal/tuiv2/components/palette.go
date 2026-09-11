@@ -10,42 +10,28 @@ import (
 	"neo-code/internal/tuiv2/theme"
 )
 
-// PaletteItem 描述命令面板中的一个可选项。
-type PaletteItem struct {
-	Name        string
-	Description string
-}
+// PaletteItem 是 CommandDef 的类型别名，保持向后兼容（picker_test 等仍可用）。
+type PaletteItem = CommandDef
 
 // PaletteCommandMsg 表示用户选择了某个命令面板项。
+//
+// 携带 Name（用户可见标识，用于日志/提示）与 Action（具名常量，用于 app 层路由），
+// 消除 handlePaletteCommand 对字符串命令名的硬编码依赖。
 type PaletteCommandMsg struct {
-	Name string
-}
-
-var defaultPaletteItems = []PaletteItem{
-	{Name: "/model", Description: "Change the current model"},
-	{Name: "/mode", Description: "Switch between build and plan"},
-	{Name: "/session", Description: "Browse and switch sessions"},
-	{Name: "/compact", Description: "Compact current session"},
-	{Name: "/checkpoint", Description: "Manage checkpoints"},
-	{Name: "/skills", Description: "Manage session skills"},
-	{Name: "/help", Description: "Show keyboard shortcuts"},
-	{Name: "/exit", Description: "Quit NeoCode"},
+	Name   string
+	Action PaletteAction
 }
 
 // Palette 是 Telescope 风格的命令面板组件。
 type Palette struct {
 	state *state.ViewState
-	items []PaletteItem
 }
 
 var _ tea.Model = (*Palette)(nil)
 
 // NewPalette 创建命令面板组件。
 func NewPalette(viewState *state.ViewState) *Palette {
-	return &Palette{
-		state: viewState,
-		items: defaultPaletteItems,
-	}
+	return &Palette{state: viewState}
 }
 
 // Init 不启动额外命令。
@@ -67,7 +53,7 @@ func (p *Palette) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (p *Palette) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "ctrl+c":
-		p.state.Overlay.Active = ""
+		p.state.Overlay.Active = state.OverlayNone
 		p.state.Overlay.Query = ""
 		p.state.Overlay.Selected = 0
 		return nil
@@ -81,28 +67,25 @@ func (p *Palette) handleKey(msg tea.KeyMsg) tea.Cmd {
 			idx = len(matched) - 1
 		}
 		selected := matched[idx]
-		p.state.Overlay.Active = ""
+		p.state.Overlay.Active = state.OverlayNone
 		p.state.Overlay.Query = ""
 		p.state.Overlay.Selected = 0
-		return func() tea.Msg {
-			return PaletteCommandMsg{Name: selected.Name}
-		}
-	case "up", "k":
+		return emitMsg(PaletteCommandMsg{Name: selected.Name, Action: selected.Action})
+	case "up", "ctrl+k":
 		if p.state.Overlay.Selected > 0 {
 			p.state.Overlay.Selected--
 		}
 		return nil
-	case "down", "j":
+	case "down", "ctrl+j":
 		matched := p.matchedItems()
 		if p.state.Overlay.Selected < len(matched)-1 {
 			p.state.Overlay.Selected++
 		}
 		return nil
 	case "backspace":
-		if len(p.state.Overlay.Query) > 0 {
-			p.state.Overlay.Query = p.state.Overlay.Query[:len(p.state.Overlay.Query)-1]
-			p.state.Overlay.Selected = 0
-		}
+		// 用 deleteLastRune 正确处理多字节 UTF-8（中文/emoji），与 cmdline 一致。
+		p.state.Overlay.Query = deleteLastRune(p.state.Overlay.Query)
+		p.state.Overlay.Selected = 0
 		return nil
 	default:
 		runes := msg.Runes
@@ -118,11 +101,12 @@ func (p *Palette) handleKey(msg tea.KeyMsg) tea.Cmd {
 // 不使用模糊匹配，避免 "mode" 因为评分排序命中 /model 而不是 /mode。
 func (p *Palette) matchedItems() []PaletteItem {
 	query := strings.ToLower(strings.TrimPrefix(p.state.Overlay.Query, "/"))
+	all := PaletteCommands()
 	if query == "" {
-		return p.items
+		return all
 	}
 	var exact, prefix, substr []PaletteItem
-	for _, item := range p.items {
+	for _, item := range all {
 		name := strings.ToLower(strings.TrimPrefix(item.Name, "/"))
 		desc := strings.ToLower(item.Description)
 		switch {
@@ -160,12 +144,10 @@ func (p *Palette) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		matched := p.matchedItems()
 		if itemIdx >= 0 && itemIdx < len(matched) {
 			selected := matched[itemIdx]
-			p.state.Overlay.Active = ""
+			p.state.Overlay.Active = state.OverlayNone
 			p.state.Overlay.Query = ""
 			p.state.Overlay.Selected = 0
-			return func() tea.Msg {
-				return PaletteCommandMsg{Name: selected.Name}
-			}
+			return emitMsg(PaletteCommandMsg{Name: selected.Name, Action: selected.Action})
 		}
 		return nil
 	}
@@ -201,7 +183,7 @@ func (p *Palette) View() string {
 	queryLine = theme.AccentStyle().Render(queryLine)
 	lines = append(lines, queryLine, "")
 
-	// 选项列表
+	// 选项列表：铺平展示，每行 = 选中标记 + Name + Description + 右对齐 Shortcut
 	for i, item := range matched {
 		if i >= maxItems {
 			break
@@ -209,15 +191,26 @@ func (p *Palette) View() string {
 		prefix := "  "
 		name := item.Name
 		desc := theme.MutedStyle().Render(item.Description)
+		shortcut := theme.SubtleStyle().Render(item.Shortcut)
 
 		if i == p.state.Overlay.Selected {
 			prefix = theme.AccentStyle().Render("▎ ")
 			name = theme.AccentStyle().Bold(true).Render(name)
 		}
-		line := prefix + name + "  " + desc
-		if displayW := theme.DisplayWidth(line); displayW > boxW-2 {
-			line = theme.Truncate(line, boxW-2)
+		// 左侧内容（标记+名+描述），右侧快捷键右对齐
+		left := prefix + name + "  " + desc
+		leftW := theme.DisplayWidth(left)
+		shortcutW := theme.DisplayWidth(item.Shortcut)
+		// 计算填充：boxW - 左侧 - 快捷键 - 间隔
+		gap := (boxW - 2) - leftW - shortcutW - 2
+		if gap < 1 {
+			gap = 1
 		}
+		// 若空间不足，先截断左侧
+		if leftW+shortcutW+3 > boxW-2 {
+			left = theme.Truncate(left, (boxW-2)-shortcutW-3)
+		}
+		line := left + strings.Repeat(" ", gap) + shortcut
 		lines = append(lines, line)
 	}
 

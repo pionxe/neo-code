@@ -84,7 +84,7 @@ func TestLeaderSessionPickerFlow(t *testing.T) {
 // 再回车能正常选中并关闭（用户反馈的"选择器回车不关闭"）。
 func TestModelPickerViaPaletteCloses(t *testing.T) {
 	app := newReadyApp(t)
-	app.openOverlay("palette")
+	app.openOverlay(state.OverlayPalette)
 	for _, r := range "model" {
 		app = send(t, app, runesKey(string(r)))
 	}
@@ -101,7 +101,7 @@ func TestModelPickerViaPaletteCloses(t *testing.T) {
 // TestPaletteTypeModeEnter 模拟在命令面板里输入 "mode" 过滤后回车。
 func TestPaletteTypeModeEnter(t *testing.T) {
 	app := newReadyApp(t)
-	app.openOverlay("palette")
+	app.openOverlay(state.OverlayPalette)
 	for _, r := range "mode" {
 		app = send(t, app, runesKey(string(r)))
 	}
@@ -114,16 +114,17 @@ func TestPaletteTypeModeEnter(t *testing.T) {
 }
 
 // TestPaletteCtrlPOpenNavigateEnter 模拟真实路径：InputMode 下 Ctrl+P 打开面板，
-// 下移选中 /mode，回车。验证面板关闭且回到对话界面。
+// 输入 "mode" 过滤定位 /mode，回车。验证面板关闭且回到对话界面。
+// 用搜索查询定位（而非 down 次数），不依赖命令列表固定顺序，更健壮。
 func TestPaletteCtrlPOpenNavigateEnter(t *testing.T) {
 	app := newReadyApp(t)
 	app = send(t, app, tea.KeyMsg{Type: tea.KeyCtrlP}) // 打开面板
 	if app.state.Overlay.Active != "palette" {
 		t.Fatalf("palette did not open via Ctrl+P, active=%q", app.state.Overlay.Active)
 	}
-	app = send(t, app, tea.KeyMsg{Type: tea.KeyDown}) // /model -> /mode
-	if app.state.Overlay.Selected != 1 {
-		t.Fatalf("selected=%d, want 1 after one down", app.state.Overlay.Selected)
+	// 输入 "mode" 过滤，/mode 精确匹配排第一，Selected 重置为 0
+	for _, r := range "mode" {
+		app = send(t, app, runesKey(string(r)))
 	}
 	app = send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
 	last := ""
@@ -148,20 +149,26 @@ func TestPaletteStaleStateAfterEvents(t *testing.T) {
 		Payload: map[string]any{"phase": state.RuntimePhaseIdle},
 	}})
 	app = updated.(*App)
-	app.openOverlay("palette")
-	app = send(t, app, tea.KeyMsg{Type: tea.KeyDown}) // 高亮到 /mode
+	app.openOverlay(state.OverlayPalette)
+	// 输入 "exit" 过滤定位 /exit（不打开新 overlay，Enter 后关闭面板）
+	for _, r := range "exit" {
+		app = send(t, app, runesKey(string(r)))
+	}
 	app = send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
 	if app.state.Overlay.Active != "" {
 		t.Fatalf("palette did NOT close after Enter (overlay components hold stale state pointer): active=%q", app.state.Overlay.Active)
 	}
 }
 
-// 空格应像回车一样执行当前高亮项并关闭面板，而不是被当成查询字符重置到 /model。
+// 空格应像回车一样执行当前高亮项并关闭面板。
+// 输入 "mode" 过滤定位 /mode，空格确认执行。
 func TestPaletteSpaceSelects(t *testing.T) {
 	app := newReadyApp(t)
-	app.openOverlay("palette")
-	app = send(t, app, tea.KeyMsg{Type: tea.KeyDown}) // 选中 /mode
-	app = send(t, app, runesKey(" "))                 // 空格确认
+	app.openOverlay(state.OverlayPalette)
+	for _, r := range "mode" {
+		app = send(t, app, runesKey(string(r)))
+	}
+	app = send(t, app, runesKey(" ")) // 空格确认
 	last := ""
 	if n := len(app.state.Stream); n > 0 {
 		last = app.state.Stream[n-1].Content
@@ -175,23 +182,23 @@ func TestPaletteSpaceSelects(t *testing.T) {
 	}
 }
 
-// TestPaletteNavigateSelectsTarget 模拟用户在面板里用下移键选中
-// /mode、/compact、/checkpoint 后回车，验证面板会关闭且回到对话界面。
+// TestPaletteNavigateSelectsTarget 用搜索查询定位各命令，验证选中执行后面板关闭。
+// 不依赖固定 down 次数，仅依赖搜索过滤（更健壮）。
 func TestPaletteNavigateSelectsTarget(t *testing.T) {
 	cases := []struct {
-		name  string
-		downs int
+		name   string
+		search string
 	}{
-		{"mode", 1},       // /model(0) -> /mode(1)
-		{"compact", 3},    // -> /compact(3)
-		{"checkpoint", 4}, // -> /checkpoint(4)
+		{"mode", "mode"},
+		{"compact", "compact"},
+		{"checkpoint", "checkpoint"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			app := newReadyApp(t)
-			app.openOverlay("palette")
-			for i := 0; i < tc.downs; i++ {
-				app = send(t, app, tea.KeyMsg{Type: tea.KeyDown})
+			app.openOverlay(state.OverlayPalette)
+			for _, r := range tc.search {
+				app = send(t, app, runesKey(string(r)))
 			}
 			t.Logf("selected index before Enter=%d", app.state.Overlay.Selected)
 			app = send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
@@ -210,7 +217,7 @@ func TestPaletteNavigateSelectsTarget(t *testing.T) {
 func TestModelPickerEnterCloses(t *testing.T) {
 	app := newReadyApp(t)
 	t.Logf("models=%d sessions=%d", len(app.state.Gateway.Models), len(app.state.Gateway.Sessions))
-	app.openOverlay("model_picker")
+	app.openOverlay(state.OverlayModelPicker)
 
 	updated, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	app = updated.(*App)
@@ -223,7 +230,7 @@ func TestModelPickerEnterCloses(t *testing.T) {
 
 func TestSessionPickerEnterCloses(t *testing.T) {
 	app := newReadyApp(t)
-	app.openOverlay("session_picker")
+	app.openOverlay(state.OverlaySessionPicker)
 
 	updated, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	app = updated.(*App)
@@ -236,7 +243,7 @@ func TestSessionPickerEnterCloses(t *testing.T) {
 
 func TestConfirmEnterConfirms(t *testing.T) {
 	app := newReadyApp(t)
-	app.openOverlay("session_picker")
+	app.openOverlay(state.OverlaySessionPicker)
 	// Ctrl+D 在 session picker 中触发删除请求 -> 应打开 confirm
 	updated, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
 	app = updated.(*App)
@@ -256,7 +263,7 @@ func TestConfirmEnterConfirms(t *testing.T) {
 
 func TestSessionSwitchShowsConfirmation(t *testing.T) {
 	app := newReadyApp(t)
-	app.openOverlay("session_picker")
+	app.openOverlay(state.OverlaySessionPicker)
 	// 下移到第二个会话后回车切换
 	updated, _ := app.Update(tea.KeyMsg{Type: tea.KeyDown})
 	app = updated.(*App)
