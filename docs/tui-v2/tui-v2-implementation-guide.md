@@ -314,6 +314,7 @@ TUI v2 的 Gateway 通信层有两个选择：
 
 - **Phase 9（交互增强）**：Leader 键、模型选择器、确认弹窗、鼠标、命令路由（已交付，见 git 历史 `feat(tui-v2): Phase 9` 系列 commit）。
 - **Phase 10（全新快捷键系统）**：三层键位（Input/Normal/Leader）补全 Input Mode 行编辑（Ctrl+A/E/K/W）、Normal Mode 整页翻页（Ctrl+F/B）与 stream 搜索（`/` + `n/N` + stale 提示）、`:` 命令行（q/debug/help/compact/mode）、Leader 动作调整（m=模型选择器、c=取消运行、r=重试、Space=切上一会话）、模式指示配色、Ctrl+D 上下文分发、Overlay typed 常量。详细键位与验收标准见规划文档 `phase-10-keybinding-system.md`。
+- **Phase 11（命令面板）**：Telescope 风格命令面板重构——`components/commands.go` 统一命令注册表（CommandDef + PaletteAction 常量 + Category 优先级）、`palette.go` 改用确定性分桶匹配（精确>前缀>子串，不引入 fuzzy/评分）、铺平渲染 + 快捷键右对齐列、`PaletteCommandMsg` 携带 Action、`handlePaletteCommand` switch Action 分发（15 个命令含 /delete /info 完整实现）、toggleDebug 单一真源共享、palette Backspace 多字节 UTF-8 修复。详见 `phase-11-command-palette.md`。
 
 > 注：Phase 10 不引入 `ModeChangedMsg`——模式切换通过同步修改 `ViewState.Mode` 完成（遵循 AGENTS.md「代码为准」原则，规划文档已同步）。
 
