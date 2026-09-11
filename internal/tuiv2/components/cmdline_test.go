@@ -2,6 +2,7 @@ package components
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -223,4 +224,91 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// TestCmdLineBackspaceUnicode 验证非 ASCII（中文/emoji）Backspace 不破坏 UTF-8。
+// 回归保护：早期字节切片实现会让"错"(3字节)删1字节产生无效 UTF-8。
+func TestCmdLineBackspaceUnicode(t *testing.T) {
+	// 中文搜索词
+	vs := cmdlineViewState()
+	vs.Overlay.Active = state.OverlaySearch
+	vs.Search.Query = "错误"
+	c := NewCmdLine(vs)
+	c.Update(keyType(tea.KeyBackspace))
+	if vs.Search.Query != "错" {
+		t.Fatalf("中文 backspace query=%q, want 错", vs.Search.Query)
+	}
+	if !utf8.ValidString(vs.Search.Query) {
+		t.Fatalf("中文 backspace 产生无效 UTF-8: %q", vs.Search.Query)
+	}
+	// emoji
+	vs2 := cmdlineViewState()
+	vs2.Overlay.Active = state.OverlaySearch
+	vs2.Search.Query = "😀ab"
+	c2 := NewCmdLine(vs2)
+	c2.Update(keyType(tea.KeyBackspace))
+	if vs2.Search.Query != "😀a" {
+		t.Fatalf("emoji backspace query=%q, want 😀a", vs2.Search.Query)
+	}
+	// Ex 输入中文
+	vs3 := cmdlineViewState()
+	vs3.Overlay.Active = state.OverlayEx
+	vs3.Ex.Input = "测试"
+	c3 := NewCmdLine(vs3)
+	c3.Update(keyType(tea.KeyBackspace))
+	if vs3.Ex.Input != "测" {
+		t.Fatalf("ex 中文 backspace=%q, want 测", vs3.Ex.Input)
+	}
+	// 空输入 backspace 不崩溃
+	vs4 := cmdlineViewState()
+	vs4.Overlay.Active = state.OverlaySearch
+	c4 := NewCmdLine(vs4)
+	c4.Update(keyType(tea.KeyBackspace))
+	if vs4.Search.Query != "" {
+		t.Fatalf("empty backspace query=%q, want empty", vs4.Search.Query)
+	}
+}
+
+// TestDeleteLastRune 单元测试包级辅助函数。
+func TestDeleteLastRune(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"a", ""},
+		{"ab", "a"},
+		{"错", ""},
+		{"错误", "错"},
+		{"😀", ""},
+		{"a错", "a"},
+		{"错a", "错"},
+	}
+	for _, tc := range cases {
+		got := deleteLastRune(tc.in)
+		if got != tc.want {
+			t.Fatalf("deleteLastRune(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestCmdLineBackspaceUnicodeConsecutive 验证连续多次 backspace 逐 rune 删除多字节序列。
+// 覆盖第 2 轮审核指出的集成层盲区：cmdline.Update 路径下连续删除 "你好" → "你" → ""。
+func TestCmdLineBackspaceUnicodeConsecutive(t *testing.T) {
+	vs := cmdlineViewState()
+	vs.Overlay.Active = state.OverlaySearch
+	vs.Search.Query = "你好"
+	c := NewCmdLine(vs)
+	// 第一次：你好 → 你
+	c.Update(keyType(tea.KeyBackspace))
+	if vs.Search.Query != "你" || !utf8.ValidString(vs.Search.Query) {
+		t.Fatalf("1st backspace query=%q valid=%v, want 你", vs.Search.Query, utf8.ValidString(vs.Search.Query))
+	}
+	// 第二次：你 → 空
+	c.Update(keyType(tea.KeyBackspace))
+	if vs.Search.Query != "" {
+		t.Fatalf("2nd backspace query=%q, want empty", vs.Search.Query)
+	}
+	// 第三次：空 → 空（no-op）
+	c.Update(keyType(tea.KeyBackspace))
+	if vs.Search.Query != "" {
+		t.Fatalf("3rd backspace on empty query=%q, want empty", vs.Search.Query)
+	}
 }

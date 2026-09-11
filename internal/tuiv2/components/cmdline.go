@@ -88,17 +88,17 @@ func (c *CmdLine) handleSubmit() tea.Cmd {
 	return nil
 }
 
-// handleBackspace 删除当前输入末尾字符。
+// handleBackspace 删除当前输入末尾一个 rune，按 rune 编辑以正确处理多字节 UTF-8。
+//
+// 早期实现按字节切片（Input[:len-1]）会破坏中文/emoji（如"错"3字节删1字节产生
+// 无效 UTF-8），现改为 deleteLastRune（utf8.DecodeLastRuneInString），与主 prompt
+// 编辑器行为一致。
 func (c *CmdLine) handleBackspace() {
 	switch c.state.Overlay.Active {
 	case state.OverlayEx:
-		if len(c.state.Ex.Input) > 0 {
-			c.state.Ex.Input = c.state.Ex.Input[:len(c.state.Ex.Input)-1]
-		}
+		c.state.Ex.Input = deleteLastRune(c.state.Ex.Input)
 	case state.OverlaySearch:
-		if len(c.state.Search.Query) > 0 {
-			c.state.Search.Query = c.state.Search.Query[:len(c.state.Search.Query)-1]
-		}
+		c.state.Search.Query = deleteLastRune(c.state.Search.Query)
 	}
 }
 

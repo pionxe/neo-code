@@ -621,6 +621,19 @@ func runeLen(text string) int {
 	return len([]rune(text))
 }
 
+// deleteLastRune 删除字符串末尾一个 rune，正确处理多字节 UTF-8（中文/emoji/组合字符）。
+// 空字符串原样返回。使用 utf8.DecodeLastRuneInString 零分配计算末尾 rune 字节数。
+// 灵感来自 v1 的 trimLastRune（v1 多了 size 边界防御守卫，此处省略——在 Go stdlib
+// 合约下 DecodeLastRuneInString 对合法 UTF-8 输入恒返回 size>=1，对无效序列返回
+// (RuneError,1) 逐字节自愈，无需额外守卫）。供 cmdline 的 Backspace 编辑复用。
+func deleteLastRune(s string) string {
+	if s == "" {
+		return s
+	}
+	_, size := utf8.DecodeLastRuneInString(s)
+	return s[:len(s)-size]
+}
+
 // clampInt 将整数限制在给定闭区间内。
 func clampInt(value int, min int, max int) int {
 	if value < min {
