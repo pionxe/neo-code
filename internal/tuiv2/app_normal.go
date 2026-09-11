@@ -97,15 +97,7 @@ func (a *App) executeExCommand(command string) tea.Cmd {
 	case "q", "quit", "exit":
 		return tea.Quit
 	case "debug":
-		a.debug = !a.debug
-		a.appendStream(state.StreamEntry{
-			ID:        fmt.Sprintf("debug-toggle-%d", time.Now().UnixNano()),
-			Type:      "status",
-			Timestamp: time.Now(),
-			Content:   fmt.Sprintf("Debug: %v", a.debug),
-			Metadata:  map[string]any{"done": true},
-		})
-		return nil
+		return a.toggleDebug()
 	case "help":
 		a.openOverlay(state.OverlayHelp)
 		return nil
@@ -172,4 +164,4 @@ func (a *App) scrollToStreamIndex(targetIndex int) {
 	a.agentStream.ScrollToEntry(targetIndex)
 }
 
-// handlePaletteCommand 处理命令面板选择的命令。
+// handlePaletteCommand 的实现在 app.go（按 Action 常量分发）。

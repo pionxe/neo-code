@@ -498,28 +498,73 @@ func (a *App) closeOverlay() {
 	a.state.Overlay.Selected = 0
 }
 
+// handlePaletteCommand 根据命令面板选择的 Action 常量分发执行。
+//
+// switch msg.Action（具名常量）而非 msg.Name（字符串），消除硬编码业务字符串。
+// 复用现有 handler 函数（retryLastRun/cancelCurrentRun/toggleAgentMode 等），
+// 与 Ex 命令行(executeExCommand)共享同一套 handler。
 func (a *App) handlePaletteCommand(msg components.PaletteCommandMsg) tea.Cmd {
-	switch msg.Name {
-	case "/exit":
+	switch msg.Action {
+	case components.PaletteActionExit:
 		return tea.Quit
-	case "/help":
+	case components.PaletteActionHelp:
 		a.openOverlay(state.OverlayHelp)
 		return nil
-	case "/session":
+	case components.PaletteActionSwitchSession:
 		a.openOverlay(state.OverlaySessionPicker)
 		return nil
-	case "/model":
+	case components.PaletteActionModel:
 		a.openOverlay(state.OverlayModelPicker)
 		return nil
-	case "/mode":
+	case components.PaletteActionMode:
 		return a.toggleAgentMode()
-	case "/compact":
+	case components.PaletteActionCompact:
 		return a.triggerCompact()
-	case "/clear":
+	case components.PaletteActionClear:
 		a.state.Stream = nil
 		a.bindComponents()
 		return nil
+	case components.PaletteActionNewSession:
+		if a.client != nil {
+			return createSessionCmd(a.client)
+		}
+		return nil
+	case components.PaletteActionRetry:
+		return a.retryLastRun()
+	case components.PaletteActionCancel:
+		return a.cancelCurrentRun()
+	case components.PaletteActionDebug:
+		return a.toggleDebug()
+	case components.PaletteActionDeleteSession:
+		sid := a.activeSessionID()
+		if sid == "" {
+			a.appendStream(state.StreamEntry{
+				ID:        fmt.Sprintf("delete-no-sess-%d", time.Now().UnixNano()),
+				Type:      "status",
+				Timestamp: time.Now(),
+				Content:   "No active session to delete",
+				Metadata:  map[string]any{"done": true},
+			})
+			return nil
+		}
+		a.openConfirm("Delete Session",
+			fmt.Sprintf("Delete session %q?", a.activeSessionTitle()),
+			"delete_session", map[string]any{"session_id": sid})
+		return nil
+	case components.PaletteActionSessionInfo:
+		tokens := a.state.Runtime.Tokens
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("sess-info-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content: fmt.Sprintf("Session: %s | Mode: %s | Tokens: %d total (%d in, %d out)",
+				a.activeSessionTitle(), a.state.Runtime.AgentMode,
+				tokens.Total, tokens.Input, tokens.Output),
+			Metadata: map[string]any{"done": true},
+		})
+		return nil
 	default:
+		// checkpoint/skills 等未实现命令
 		a.appendStream(state.StreamEntry{
 			ID:        fmt.Sprintf("cmd-%s-%d", msg.Name, time.Now().UnixNano()),
 			Type:      "status",
@@ -760,6 +805,22 @@ func (a *App) triggerCompact() tea.Cmd {
 		Type:      "status",
 		Timestamp: time.Now(),
 		Content:   "Compact triggered",
+		Metadata:  map[string]any{"done": true},
+	})
+	return nil
+}
+
+// toggleDebug 切换调试模式并追加状态提示。
+//
+// 作为单一真源，供 Palette 的 /debug 与 Ex 命令行的 :debug 共享调用，
+// 保证提示文案一致。
+func (a *App) toggleDebug() tea.Cmd {
+	a.debug = !a.debug
+	a.appendStream(state.StreamEntry{
+		ID:        fmt.Sprintf("debug-toggle-%d", time.Now().UnixNano()),
+		Type:      "status",
+		Timestamp: time.Now(),
+		Content:   fmt.Sprintf("Debug: %v", a.debug),
 		Metadata:  map[string]any{"done": true},
 	})
 	return nil

@@ -109,26 +109,27 @@ func TestSlashCommandDispatch(t *testing.T) {
 }
 
 func TestPaletteCommandDispatch(t *testing.T) {
-	cases := map[string]func(*App) bool{
-		"/session":    func(a *App) bool { return a.state.Overlay.Active == state.OverlaySessionPicker },
-		"/model":      func(a *App) bool { return a.state.Overlay.Active == state.OverlayModelPicker },
-		"/help":       func(a *App) bool { return a.state.Overlay.Active == state.OverlayHelp },
-		"/mode":       func(a *App) bool { return a.state.Runtime.AgentMode == "build" },
-		"/compact":    func(a *App) bool { return lastContains(a, "Compact triggered") },
-		"/checkpoint": func(a *App) bool { return lastContains(a, "not yet implemented") },
+	cases := map[components.PaletteAction]func(*App) bool{
+		components.PaletteActionSwitchSession: func(a *App) bool { return a.state.Overlay.Active == state.OverlaySessionPicker },
+		components.PaletteActionModel:         func(a *App) bool { return a.state.Overlay.Active == state.OverlayModelPicker },
+		components.PaletteActionHelp:          func(a *App) bool { return a.state.Overlay.Active == state.OverlayHelp },
+		components.PaletteActionMode:          func(a *App) bool { return a.state.Runtime.AgentMode == "build" },
+		components.PaletteActionCompact:       func(a *App) bool { return lastContains(a, "Compact triggered") },
+		components.PaletteActionClear:         func(a *App) bool { return len(a.state.Stream) == 0 },
+		components.PaletteActionCheckpoint:    func(a *App) bool { return lastContains(a, "not yet implemented") },
 	}
-	for name, check := range cases {
-		t.Run(name, func(t *testing.T) {
+	for action, check := range cases {
+		t.Run(string(action), func(t *testing.T) {
 			app := newReadyApp(t)
-			app.Update(components.PaletteCommandMsg{Name: name})
+			app.Update(components.PaletteCommandMsg{Action: action})
 			if !check(app) {
-				t.Fatalf("%s did not produce expected effect: overlay=%q stream=%v", name, app.state.Overlay.Active, streamContents(app))
+				t.Fatalf("%s did not produce expected effect: overlay=%q stream=%v", action, app.state.Overlay.Active, streamContents(app))
 			}
 		})
 	}
 	app := newReadyApp(t)
-	if _, cmd := app.Update(components.PaletteCommandMsg{Name: "/exit"}); cmd == nil {
-		t.Fatal("/exit should return quit cmd")
+	if _, cmd := app.Update(components.PaletteCommandMsg{Action: components.PaletteActionExit}); cmd == nil {
+		t.Fatal("exit should return quit cmd")
 	}
 }
 
