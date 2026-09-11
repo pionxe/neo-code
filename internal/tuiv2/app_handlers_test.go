@@ -962,3 +962,76 @@ func TestSearchJumpTargetVisibleInAppView(t *testing.T) {
 		t.Fatalf("search jump: target content-28 not visible after jump, offset=%d", app.state.Layout.ScrollOffset)
 	}
 }
+
+// ---- Phase 11 Step 5 测试补全 ----
+
+// TestPaletteCommandAllActions 覆盖 handlePaletteCommand 剩余 Action 分支。
+func TestPaletteCommandAllActions(t *testing.T) {
+	// /new 有 client -> create cmd
+	app := newReadyApp(t)
+	if _, cmd := app.Update(components.PaletteCommandMsg{Action: components.PaletteActionNewSession}); cmd == nil {
+		t.Fatal("/new should return create cmd")
+	}
+	// /retry 无历史 -> 提示 nil
+	app = newReadyApp(t)
+	if _, cmd := app.Update(components.PaletteCommandMsg{Action: components.PaletteActionRetry}); cmd != nil {
+		t.Fatal("/retry no history should return nil")
+	}
+	if !lastContains(app, "No previous run") {
+		t.Fatalf("/retry hint missing: %v", streamContents(app))
+	}
+	// /retry 有历史 -> submit cmd
+	app = newReadyApp(t)
+	app.lastUserText = "hi"
+	if _, cmd := app.Update(components.PaletteCommandMsg{Action: components.PaletteActionRetry}); cmd == nil {
+		t.Fatal("/retry with history should return submit cmd")
+	}
+	// /cancel 空闲 -> nil
+	app = newReadyApp(t)
+	if _, cmd := app.Update(components.PaletteCommandMsg{Action: components.PaletteActionCancel}); cmd != nil {
+		t.Fatal("/cancel idle should return nil")
+	}
+	// /debug -> toggleDebug，stream 含 Debug:
+	app = newReadyApp(t)
+	app.Update(components.PaletteCommandMsg{Action: components.PaletteActionDebug})
+	if !lastContains(app, "Debug:") {
+		t.Fatalf("/debug hint missing: %v", streamContents(app))
+	}
+	// /info -> stream 含 Session:
+	app = newReadyApp(t)
+	app.Update(components.PaletteCommandMsg{Action: components.PaletteActionSessionInfo})
+	if !lastContains(app, "Session:") {
+		t.Fatalf("/info hint missing: %v", streamContents(app))
+	}
+	// /skills 未实现 -> 提示
+	app = newReadyApp(t)
+	app.Update(components.PaletteCommandMsg{Action: components.PaletteActionSkills, Name: "/skills"})
+	if !lastContains(app, "not yet implemented") {
+		t.Fatalf("/skills hint missing: %v", streamContents(app))
+	}
+	// /checkpoint 未实现 -> 提示
+	app = newReadyApp(t)
+	app.Update(components.PaletteCommandMsg{Action: components.PaletteActionCheckpoint, Name: "/checkpoint"})
+	if !lastContains(app, "not yet implemented") {
+		t.Fatalf("/checkpoint hint missing: %v", streamContents(app))
+	}
+}
+
+// TestPaletteCommandDeleteSession 覆盖 /delete 的空边界与正常路径。
+func TestPaletteCommandDeleteSession(t *testing.T) {
+	// 无活动会话 -> 提示
+	app := newReadyApp(t)
+	app.state.Gateway.ActiveSess = nil
+	if _, cmd := app.Update(components.PaletteCommandMsg{Action: components.PaletteActionDeleteSession}); cmd != nil {
+		t.Fatal("/delete no session should return nil")
+	}
+	if !lastContains(app, "No active session") {
+		t.Fatalf("/delete hint missing: %v", streamContents(app))
+	}
+	// 有活动会话 -> 打开 confirm overlay
+	app = newReadyApp(t)
+	app.Update(components.PaletteCommandMsg{Action: components.PaletteActionDeleteSession})
+	if app.state.Overlay.Active != state.OverlayConfirm {
+		t.Fatalf("/delete should open confirm overlay, got %q", app.state.Overlay.Active)
+	}
+}
