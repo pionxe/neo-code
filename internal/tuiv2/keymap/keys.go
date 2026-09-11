@@ -25,22 +25,21 @@ const (
 	ActionDeleteWord  // Ctrl+W 删除前一个词
 
 	// Normal Mode actions
-	ActionEnterInput     // i
-	ActionScrollDown     // j
-	ActionScrollUp       // k
-	ActionHalfPageDown   // Ctrl+D
-	ActionHalfPageUp     // Ctrl+U
-	ActionFullPageDown   // Ctrl+F 整页下翻
-	ActionFullPageUp     // Ctrl+B 整页上翻
-	ActionScrollTop      // g
-	ActionScrollBottom   // G
-	ActionSearchForward  // /
-	ActionSearchBackward // ?
-	ActionSearchNext     // n
-	ActionSearchPrev     // N
-	ActionExCommand      // :
-	ActionQuit           // q
-	ActionLeader         // Space (enters Leader mode)
+	ActionEnterInput    // i
+	ActionScrollDown    // j
+	ActionScrollUp      // k
+	ActionHalfPageDown  // Ctrl+D
+	ActionHalfPageUp    // Ctrl+U
+	ActionFullPageDown  // Ctrl+F 整页下翻
+	ActionFullPageUp    // Ctrl+B 整页上翻
+	ActionScrollTop     // g
+	ActionScrollBottom  // G
+	ActionSearchForward // /
+	ActionSearchNext    // n
+	ActionSearchPrev    // N
+	ActionExCommand     // :
+	ActionQuit          // q
+	ActionLeader        // Space (enters Leader mode)
 
 	// Leader actions
 	ActionLeaderPalette       // Space p

@@ -167,6 +167,55 @@ func containsStr(s, sub string) bool {
 	return len(s) >= len(sub) && (indexOf(s, sub) >= 0)
 }
 
+// TestCmdLineInit 覆盖 CmdLine.Init（返回 nil，无启动命令）。
+func TestCmdLineInit(t *testing.T) {
+	c := NewCmdLine(cmdlineViewState())
+	if cmd := c.Init(); cmd != nil {
+		t.Fatalf("CmdLine.Init should return nil, got %v", cmd)
+	}
+}
+
+// TestCmdLineSearchBackspace 覆盖 Search overlay 下的 Backspace（原 60% 盲区）。
+func TestCmdLineSearchBackspace(t *testing.T) {
+	vs := cmdlineViewState()
+	vs.Overlay.Active = state.OverlaySearch
+	vs.Search.Query = "hello"
+	c := NewCmdLine(vs)
+
+	c.Update(keyType(tea.KeyBackspace))
+	if vs.Search.Query != "hell" {
+		t.Fatalf("search backspace query=%q, want hell", vs.Search.Query)
+	}
+	// 连续 Backspace 到空，再按应 no-op 不崩溃
+	c.Update(keyType(tea.KeyBackspace))
+	c.Update(keyType(tea.KeyBackspace))
+	c.Update(keyType(tea.KeyBackspace))
+	c.Update(keyType(tea.KeyBackspace))
+	c.Update(keyType(tea.KeyBackspace))
+	if vs.Search.Query != "" {
+		t.Fatalf("search query after many backspace=%q, want empty", vs.Search.Query)
+	}
+
+	// 非 Ex/Search overlay 下 Backspace 不应改动任何输入
+	vs2 := cmdlineViewState()
+	vs2.Overlay.Active = state.OverlayPalette
+	c2 := NewCmdLine(vs2)
+	c2.Update(keyType(tea.KeyBackspace)) // no-op
+}
+
+// TestCmdLineNonPrintableKeysIgnored 覆盖导航键等被忽略的分支。
+func TestCmdLineNonPrintableKeysIgnored(t *testing.T) {
+	vs := cmdlineViewState()
+	vs.Overlay.Active = state.OverlayEx
+	c := NewCmdLine(vs)
+	// left/right/up/down 等功能键应被忽略，不修改输入
+	c.Update(keyType(tea.KeyLeft))
+	c.Update(keyType(tea.KeyUp))
+	if vs.Ex.Input != "" {
+		t.Fatalf("non-printable should be ignored, input=%q", vs.Ex.Input)
+	}
+}
+
 func indexOf(s, sub string) int {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

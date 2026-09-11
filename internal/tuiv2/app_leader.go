@@ -75,8 +75,6 @@ func (a *App) handleLeaderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // cancelCurrentRun 取消当前运行中的 Agent；无运行中任务时静默 no-op。
-
-// cancelCurrentRun 取消当前运行中的 Agent；无运行中任务时静默 no-op。
 func (a *App) cancelCurrentRun() tea.Cmd {
 	phase := a.state.Runtime.Phase
 	if phase != state.RuntimePhaseRunning &&
