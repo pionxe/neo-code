@@ -371,7 +371,8 @@ func TestLeaderKeyDispatch(t *testing.T) {
 			}
 		})
 	}
-	// m -> toggle mode, f -> full access, c -> compact, l -> log（均返回 nil）
+	// m -> model picker(openOverlay nil), f -> full access(nil),
+	// c -> cancel run(空闲 nil), l -> log(nil)（均返回 nil cmd）
 	for _, key := range []string{"m", "f", "c", "l"} {
 		app := newReadyApp(t)
 		app.state.Mode = state.LeaderMode
@@ -392,6 +393,70 @@ func TestLeaderKeyDispatch(t *testing.T) {
 	app = updated.(*App)
 	if app.state.Mode != state.NormalMode {
 		t.Fatalf("leader esc should reset to normal, mode=%v", app.state.Mode)
+	}
+}
+
+// TestLeaderNewActions 覆盖 Phase 10 新增的 Leader 动作：m/c/r/space 与边界。
+func TestLeaderNewActions(t *testing.T) {
+	// m -> model_picker overlay
+	app := newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.Update(keyRunes("m"))
+	if app.state.Overlay.Active != state.OverlayModelPicker {
+		t.Fatalf("leader m: overlay=%q, want model_picker", app.state.Overlay.Active)
+	}
+
+	// c 运行中 -> cancel cmd；空闲 -> nil
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.state.Runtime.Phase = state.RuntimePhaseRunning
+	if _, cmd := app.Update(keyRunes("c")); cmd == nil {
+		t.Fatal("leader c running should return cancel cmd")
+	}
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	if _, cmd := app.Update(keyRunes("c")); cmd != nil {
+		t.Fatal("leader c idle should return nil")
+	}
+
+	// r 无历史 -> 提示 nil；有历史 -> submit cmd
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	if _, cmd := app.Update(keyRunes("r")); cmd != nil {
+		t.Fatal("leader r with no history should return nil")
+	}
+	if !lastContains(app, "No previous run to retry") {
+		t.Fatalf("leader r hint missing: %v", streamContents(app))
+	}
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.lastUserText = "hello"
+	if _, cmd := app.Update(keyRunes("r")); cmd == nil {
+		t.Fatal("leader r with history should return submit cmd")
+	}
+
+	// space 无上一会话 -> 提示 nil；有上一会话 -> load cmd
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	if _, cmd := app.Update(keyRunes(" ")); cmd != nil {
+		t.Fatal("leader space with no prev session should return nil")
+	}
+	if !lastContains(app, "No previous session to switch") {
+		t.Fatalf("leader space hint missing: %v", streamContents(app))
+	}
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.prevSessionID = "sess-prev"
+	if _, cmd := app.Update(keyRunes(" ")); cmd == nil {
+		t.Fatal("leader space with prev session should return load cmd")
+	}
+
+	// 非后缀键 -> 静默回 Normal，不执行动作
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.Update(keyRunes("x"))
+	if app.state.Mode != state.NormalMode {
+		t.Fatalf("leader non-suffix should reset to normal, mode=%v", app.state.Mode)
 	}
 }
 

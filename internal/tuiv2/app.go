@@ -46,9 +46,14 @@ type App struct {
 	// Ctrl+C 双退保护
 	lastCtrlC time.Time
 
+	// Leader 重试与切换上一会话所需的私有运行时状态（不入 ViewState，非渲染状态）
+	lastUserText  string // 最近一次发送的用户消息文本，供 Space r 重试
+	prevSessionID string // 上一个会话 ID，供 Space Space 切换
+
 	ambientStatus  *components.AmbientStatus
 	agentStream    *components.AgentStream
 	commandPrompt  *components.CommandPrompt
+	cmdLine        *components.CmdLine
 	softInspector  *components.SoftInspector
 	palette        *components.Palette
 	helpOverlay    *components.HelpOverlay
@@ -71,6 +76,7 @@ func NewApp(cfg StartupConfig) tea.Model {
 		ambientStatus:  components.NewAmbientStatus(viewState),
 		agentStream:    components.NewAgentStream(viewState),
 		commandPrompt:  components.NewCommandPrompt(viewState),
+		cmdLine:        components.NewCmdLine(viewState),
 		softInspector:  components.NewSoftInspector(viewState),
 		palette:        components.NewPalette(viewState),
 		helpOverlay:    components.NewHelpOverlay(viewState),
@@ -379,6 +385,10 @@ func (a *App) handleNormalModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleLeaderKey 处理 Leader Key 后缀。
+//
+// 行为约定（plan-v4）：Leader 是独占捕获，非后缀键或超时(1s)时立即静默回到
+// Normal（不泄漏给 Normal handler）。后缀键执行动作后回到 Normal，除非打开了
+// 需要保持的面板（palette/session_picker/help/model_picker）。
 func (a *App) handleLeaderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
 	if keyStr == "esc" || keyStr == "ctrl+c" {
@@ -386,6 +396,11 @@ func (a *App) handleLeaderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	action := keymap.MatchLeaderKey(keyStr)
+	// 非后缀键：静默回到 Normal，不执行任何动作。
+	if action == keymap.ActionNone {
+		a.state.Mode = state.NormalMode
+		return a, nil
+	}
 	a.state.Mode = state.NormalMode // Leader 后总是回到 Normal
 	switch action {
 	case keymap.ActionLeaderQuit:
@@ -399,13 +414,14 @@ func (a *App) handleLeaderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keymap.ActionLeaderSwitchSession:
 		a.openOverlay(state.OverlaySessionPicker)
 		return a, nil
+	case keymap.ActionLeaderModelPicker:
+		a.openOverlay(state.OverlayModelPicker)
+		return a, nil
 	case keymap.ActionLeaderNewSession:
 		if a.client != nil {
 			return a, createSessionCmd(a.client)
 		}
 		return a, nil
-	case keymap.ActionLeaderToggleMode:
-		return a, a.toggleAgentMode()
 	case keymap.ActionLeaderFullAccess:
 		return a, a.toggleFullAccess()
 	case keymap.ActionLeaderLog:
@@ -417,11 +433,64 @@ func (a *App) handleLeaderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			Metadata:  map[string]any{"done": true},
 		})
 		return a, nil
-	case keymap.ActionLeaderCompact:
-		return a, a.triggerCompact()
+	case keymap.ActionLeaderCancelRun:
+		return a, a.cancelCurrentRun()
+	case keymap.ActionLeaderRetry:
+		return a, a.retryLastRun()
+	case keymap.ActionLeaderLastSession:
+		return a, a.switchToLastSession()
 	default:
 		return a, nil
 	}
+}
+
+// cancelCurrentRun 取消当前运行中的 Agent；无运行中任务时静默 no-op。
+func (a *App) cancelCurrentRun() tea.Cmd {
+	phase := a.state.Runtime.Phase
+	if phase != state.RuntimePhaseRunning &&
+		phase != state.RuntimePhaseWaitingPermission &&
+		phase != state.RuntimePhaseWaitingUser {
+		// 空闲态：静默 no-op，避免打扰用户。
+		return nil
+	}
+	if a.client != nil {
+		return cancelRunCmd(a.client, a.activeSessionID(), a.state.Runtime.RunID)
+	}
+	a.state.Runtime.Phase = state.RuntimePhaseCancelled
+	return nil
+}
+
+// retryLastRun 重试最近一次用户输入；无历史输入时提示。
+func (a *App) retryLastRun() tea.Cmd {
+	if strings.TrimSpace(a.lastUserText) == "" {
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("retry-hint-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   "No previous run to retry",
+			Metadata:  map[string]any{"done": true},
+		})
+		return nil
+	}
+	return a.handleSubmitMessage(components.SubmitMessageMsg{Text: a.lastUserText})
+}
+
+// switchToLastSession 切换到上一个会话；无上一会话时提示。
+func (a *App) switchToLastSession() tea.Cmd {
+	if a.prevSessionID == "" {
+		a.appendStream(state.StreamEntry{
+			ID:        fmt.Sprintf("last-sess-hint-%d", time.Now().UnixNano()),
+			Type:      "status",
+			Timestamp: time.Now(),
+			Content:   "No previous session to switch",
+			Metadata:  map[string]any{"done": true},
+		})
+		return nil
+	}
+	if a.client == nil {
+		return nil
+	}
+	return loadSessionCmd(a.client, a.prevSessionID)
 }
 
 // handleCtrlC 实现 Ctrl+C 双退保护：运行中取消、空闲双退。
@@ -466,6 +535,8 @@ func (a *App) handleSubmitMessage(msg components.SubmitMessageMsg) tea.Cmd {
 	if strings.TrimSpace(msg.Text) == "" {
 		return nil
 	}
+	// 记录最近一次用户输入，供 Leader Space r 重试使用。
+	a.lastUserText = msg.Text
 	// 立即将用户消息追加到 Stream 中以便渲染
 	a.appendStream(state.StreamEntry{
 		ID:        fmt.Sprintf("user-msg-%d", time.Now().UnixNano()),
@@ -608,9 +679,14 @@ func (a *App) handleSlashCommand(msg components.SlashCommandMsg) tea.Cmd {
 }
 
 // handleSessionSelect 处理会话切换操作。
+//
+// 切换前先把当前活动会话 ID 存入 prevSessionID，供 Leader Space Space 回切。
 func (a *App) handleSessionSelect(msg components.SessionSelectMsg) tea.Cmd {
 	if a.client == nil {
 		return nil
+	}
+	if current := a.activeSessionID(); current != "" && current != msg.Session.ID {
+		a.prevSessionID = current
 	}
 	a.state.Gateway.ActiveSess = &msg.Session
 	return loadSessionCmd(a.client, msg.Session.ID)
@@ -838,6 +914,7 @@ func (a *App) bindComponents() {
 	a.ambientStatus = components.NewAmbientStatus(a.state)
 	a.agentStream = components.NewAgentStream(a.state)
 	a.commandPrompt = components.NewCommandPrompt(a.state)
+	a.cmdLine = components.NewCmdLine(a.state)
 	a.softInspector = components.NewSoftInspector(a.state)
 	a.palette = components.NewPalette(a.state)
 	a.helpOverlay = components.NewHelpOverlay(a.state)
