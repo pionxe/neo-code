@@ -42,7 +42,7 @@ flowchart TB
     P --> S
     K --> S
     S4 -.-> F["fakegateway（现在）"]
-    S4 -.-> R["RealClient（第 4 步）"]
+    S4 -.-> R["RealClient（S5）"]
 ```
 
 - **电器不认识电器**：会话插件切换会话后，发一条"会话已加载"的广播，对话插件自己听到后重载消息流——谁也不调用谁。
@@ -177,7 +177,9 @@ func (t *Theme) Commands() []kernel.Command {
 | Mode / Layout / Notify / Confirm 结果 | 内核 |
 | Stream（消息流）/ Runtime（run 状态、token） | chat |
 | Input（输入框文字、历史） | prompt |
-| Gateway（会话列表 / 模型 / 连接健康） | sessions / models / health（将来） |
+| Gateway.Sessions（会话列表、活跃会话） | sessions |
+| Gateway.Models（模型列表、ActiveModel） | models |
+| Gateway.Connected（连接健康、重连状态） | health（将来） |
 | Search / Ex | cmdline |
 | Theme | theme（及各主题插件切换时） |
 | ~~Overlay 的 Query/Selected~~ | **删除**——浮层的输入焦点、选中项归各浮层对象自持 |
@@ -202,7 +204,7 @@ func (t *Theme) Commands() []kernel.Command {
 | components/stream.go → plugins/chat；prompt.go → plugins/prompt | 搬迁 |
 | status_bar / inspector / palette / help / cmdline / 三个 picker | 对应插件；picker 变成 Overlay 对象 |
 | keymap 包 | **包删除**，Binding/Command 类型并入内核契约 |
-| app_view.go 布局代码 | layout 包（最小起步，第 6 步响应式时扩展） |
+| app_view.go 布局代码 | layout 包（最小起步，S7 响应式时扩展） |
 | bindComponents | **删除**（指针不再更换，根因消失） |
 | theme/ 包 + 全局 TokyoNight | theme 词汇包 + plugins/theme 插件（第 5 节） |
 
@@ -233,7 +235,7 @@ Phase 0-11 的成果（契约、13 个 fake 场景、主题色板、键位语义
 
 | 决定 | 如果我错了，会看到什么信号 | 到时候怎么办 |
 |---|---|---|
-| 内核+插件架构 | 将来加功能被迫改内核（**S5 是验证点，也是 go/no-go 门，见第 10 节**） | 只修插件契约，不动已迁移插件；极端情况回退到 app 层结构（迁移按 PR 粒度可逐个回退） |
+| 内核+插件架构 | 将来加功能被迫改内核（**S6 是验证点，也是 go/no-go 门，见第 10 节**） | 只修插件契约，不动已迁移插件；极端情况回退到 app 层结构（迁移按 PR 粒度可逐个回退） |
 | 状态指针永不更换 | 又出现需要"重建组件/换指针"的场景 | 恢复 clone-on-write 是机械操作；当前无任何场景需要 |
 | 契约按真实网关收敛 + ErrUnsupported | 接真实网关时插件层被迫大改渲染 | 说明契约泄漏了后端细节——只动 gateway 包翻译层，插件层不动 |
 | RealClient 用 v1 客户端做薄翻译层 | 联调问题大量落在插件层而非翻译层 | 说明事件扁平化设计错了，回头改 real.go（它是唯一入口） |
@@ -293,7 +295,7 @@ internal/tuiv2/
 | R3 | 有没有过度设计 | 区域临时认领只有一个消费者；depth 参数无人用；各能力接口经清点均 ≥2 实现者（合法） | 砍认领与 depth；实现者表留档（第 3 节） |
 | R4 | 主题可定制（用户裁决 3） | 原"轻插件"方案不给用户明确的自定义路径 | 确立"主题=插件文件+命令"，零新机制，示例进文档（第 5 节） |
 | R5 | 表达与终检 | 前版文档术语密集、无"为什么"主线 | 全文按 做什么/为什么/怎么做 重写；门禁对账通过 |
-| **外部审计** | **issue #12 评论（用户，2026-09-11）**：五轮高阶风暴 | 插件思想成立；内核 6 件全数必要（命令注册表最强、事件循环存疑→并入 4.1 边界）；**最大缺口=按键路由与广播没分家**；**槽读权是最大的洞**；对 10 个插件本身缺必要性审计；S5 应为 go/no-go 门；合入应改多 PR | 裁定"思想批准"；全部采纳为 v3.1 补丁：P0 消息边界契约（4.1）×消息三规则；P1 槽读时机+写权白名单（第 6 节）、S5 go/no-go（第 10 节）；P2 触发源标注+inspector/chat 边界（3.1）、多 PR（第 10 节） |
+| **外部审计** | **issue #12 评论（用户，2026-09-11）**：五轮高阶风暴 | 插件思想成立；内核 6 件全数必要（命令注册表最强、事件循环存疑→并入 4.1 边界）；**最大缺口=按键路由与广播没分家**；**槽读权是最大的洞**；对 10 个插件本身缺必要性审计；S5 应为 go/no-go 门；合入应改多 PR | 裁定"思想批准"；全部采纳为 v3.1 补丁：P0 消息边界契约（4.1）×消息三规则；P1 槽读时机+写权白名单（第 6 节）、S6 go/no-go（第 10 节）；P2 触发源标注+inspector/chat 边界（3.1）、多 PR（第 10 节） |
 
 ---
 
