@@ -82,9 +82,9 @@ func TestCancelPromptResetsInputAndLogs(t *testing.T) {
 
 func TestSlashCommandDispatch(t *testing.T) {
 	cases := map[string]func(*App) bool{
-		"/session": func(a *App) bool { return a.state.Overlay.Active == "session_picker" },
-		"/model":   func(a *App) bool { return a.state.Overlay.Active == "model_picker" },
-		"/help":    func(a *App) bool { return a.state.Overlay.Active == "help" },
+		"/session": func(a *App) bool { return a.state.Overlay.Active == state.OverlaySessionPicker },
+		"/model":   func(a *App) bool { return a.state.Overlay.Active == state.OverlayModelPicker },
+		"/help":    func(a *App) bool { return a.state.Overlay.Active == state.OverlayHelp },
 		"/mode":    func(a *App) bool { return a.state.Runtime.AgentMode == "build" },
 		"/compact": func(a *App) bool { return lastContains(a, "Compact triggered") },
 		"/clear":   func(a *App) bool { return len(a.state.Stream) == 0 },
@@ -108,9 +108,9 @@ func TestSlashCommandDispatch(t *testing.T) {
 
 func TestPaletteCommandDispatch(t *testing.T) {
 	cases := map[string]func(*App) bool{
-		"/session":    func(a *App) bool { return a.state.Overlay.Active == "session_picker" },
-		"/model":      func(a *App) bool { return a.state.Overlay.Active == "model_picker" },
-		"/help":       func(a *App) bool { return a.state.Overlay.Active == "help" },
+		"/session":    func(a *App) bool { return a.state.Overlay.Active == state.OverlaySessionPicker },
+		"/model":      func(a *App) bool { return a.state.Overlay.Active == state.OverlayModelPicker },
+		"/help":       func(a *App) bool { return a.state.Overlay.Active == state.OverlayHelp },
 		"/mode":       func(a *App) bool { return a.state.Runtime.AgentMode == "build" },
 		"/compact":    func(a *App) bool { return lastContains(a, "Compact triggered") },
 		"/checkpoint": func(a *App) bool { return lastContains(a, "not yet implemented") },
@@ -352,10 +352,10 @@ func TestNormalModeKeyDispatch(t *testing.T) {
 }
 
 func TestLeaderKeyDispatch(t *testing.T) {
-	cases := map[string]string{
-		"p": "palette",
-		"s": "session_picker",
-		"h": "help",
+	cases := map[string]state.OverlayType{
+		"p": state.OverlayPalette,
+		"s": state.OverlaySessionPicker,
+		"h": state.OverlayHelp,
 	}
 	for key, wantOverlay := range cases {
 		t.Run(key, func(t *testing.T) {
@@ -440,7 +440,7 @@ func TestHandleMouseMsgMainViewAndOverlays(t *testing.T) {
 	app.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
 
 	// 浮层鼠标分发不 panic：组件按 Button 判定，故设置 Button
-	for _, active := range []string{"palette", "session_picker", "model_picker"} {
+	for _, active := range []state.OverlayType{state.OverlayPalette, state.OverlaySessionPicker, state.OverlayModelPicker} {
 		app := newReadyApp(t)
 		app.openOverlay(active)
 		app.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
@@ -451,9 +451,12 @@ func TestHandleMouseMsgMainViewAndOverlays(t *testing.T) {
 // ---- View 各路径 ----
 
 func TestViewOverlayAndMainPaths(t *testing.T) {
-	overlays := []string{"palette", "help", "session_picker", "model_picker", "confirm"}
+	overlays := []state.OverlayType{
+		state.OverlayPalette, state.OverlayHelp,
+		state.OverlaySessionPicker, state.OverlayModelPicker, state.OverlayConfirm,
+	}
 	for _, ov := range overlays {
-		t.Run(ov, func(t *testing.T) {
+		t.Run(string(ov), func(t *testing.T) {
 			app := newReadyApp(t)
 			app.openOverlay(ov)
 			if app.state.Overlay.Active != ov {

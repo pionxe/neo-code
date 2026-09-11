@@ -186,15 +186,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) View() string {
 	// 浮层模式下覆盖主视图
 	switch a.state.Overlay.Active {
-	case "palette":
+	case state.OverlayPalette:
 		return a.fitViewToTerminal(a.palette.View())
-	case "help":
+	case state.OverlayHelp:
 		return a.fitViewToTerminal(a.helpOverlay.View())
-	case "session_picker":
+	case state.OverlaySessionPicker:
 		return a.fitViewToTerminal(a.sessionPicker.View())
-	case "model_picker":
+	case state.OverlayModelPicker:
 		return a.fitViewToTerminal(a.modelPicker.View())
-	case "confirm":
+	case state.OverlayConfirm:
 		return a.fitViewToTerminal(a.confirmOverlay.View())
 	}
 	lines := []string{
@@ -252,13 +252,13 @@ func (a *App) routeStreamKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 func (a *App) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// 浮层激活时，鼠标交给浮层组件
 	switch a.state.Overlay.Active {
-	case "palette":
+	case state.OverlayPalette:
 		_, cmd := a.palette.Update(msg)
 		return a, cmd
-	case "session_picker":
+	case state.OverlaySessionPicker:
 		_, cmd := a.sessionPicker.Update(msg)
 		return a, cmd
-	case "model_picker":
+	case state.OverlayModelPicker:
 		_, cmd := a.modelPicker.Update(msg)
 		return a, cmd
 	}
@@ -279,9 +279,9 @@ func (a *App) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // handleKeyMsg 根据当前模式分发键盘消息。
 func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc always closes any active overlay first (global escape hatch)
-	if a.state.Overlay.Active != "" {
+	if a.state.Overlay.Active != state.OverlayNone {
 		if msg.String() == "esc" {
-			a.state.Overlay.Active = ""
+			a.state.Overlay.Active = state.OverlayNone
 			a.state.Overlay.Query = ""
 			a.state.Overlay.Selected = 0
 			return a, nil
@@ -289,19 +289,19 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	// 浮层激活时，键盘消息交给对应浮层组件处理
 	switch a.state.Overlay.Active {
-	case "palette":
+	case state.OverlayPalette:
 		_, cmd := a.palette.Update(msg)
 		return a, cmd
-	case "help":
+	case state.OverlayHelp:
 		_, cmd := a.helpOverlay.Update(msg)
 		return a, cmd
-	case "session_picker":
+	case state.OverlaySessionPicker:
 		_, cmd := a.sessionPicker.Update(msg)
 		return a, cmd
-	case "model_picker":
+	case state.OverlayModelPicker:
 		_, cmd := a.modelPicker.Update(msg)
 		return a, cmd
-	case "confirm":
+	case state.OverlayConfirm:
 		_, cmd := a.confirmOverlay.Update(msg)
 		return a, cmd
 	}
@@ -325,7 +325,7 @@ func (a *App) handleInputModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.state.Mode = state.NormalMode
 		return a, nil
 	case keymap.ActionOpenPalette:
-		a.openOverlay("palette")
+		a.openOverlay(state.OverlayPalette)
 		return a, nil
 	case keymap.ActionLogViewer:
 		a.appendStream(state.StreamEntry{
@@ -367,7 +367,7 @@ func (a *App) handleNormalModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// 搜索功能后续 Phase 实现，此处预留
 		return a, nil
 	case keymap.ActionSearchBackward:
-		a.openOverlay("help")
+		a.openOverlay(state.OverlayHelp)
 		return a, nil
 	case keymap.ActionExCommand:
 		// Ex 命令行后续 Phase 实现，此处预留
@@ -391,13 +391,13 @@ func (a *App) handleLeaderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keymap.ActionLeaderQuit:
 		return a, tea.Quit
 	case keymap.ActionLeaderPalette:
-		a.openOverlay("palette")
+		a.openOverlay(state.OverlayPalette)
 		return a, nil
 	case keymap.ActionLeaderHelp:
-		a.openOverlay("help")
+		a.openOverlay(state.OverlayHelp)
 		return a, nil
 	case keymap.ActionLeaderSwitchSession:
-		a.openOverlay("session_picker")
+		a.openOverlay(state.OverlaySessionPicker)
 		return a, nil
 	case keymap.ActionLeaderNewSession:
 		if a.client != nil {
@@ -526,7 +526,7 @@ func (a *App) cancelPrompt(mode string) {
 }
 
 // openOverlay 打开指定类型的浮层，重置搜索状态。
-func (a *App) openOverlay(overlayType string) {
+func (a *App) openOverlay(overlayType state.OverlayType) {
 	a.state.Overlay.Active = overlayType
 	a.state.Overlay.Query = ""
 	a.state.Overlay.Selected = 0
@@ -534,7 +534,7 @@ func (a *App) openOverlay(overlayType string) {
 
 // closeOverlay 关闭当前浮层，重置搜索与选中状态。
 func (a *App) closeOverlay() {
-	a.state.Overlay.Active = ""
+	a.state.Overlay.Active = state.OverlayNone
 	a.state.Overlay.Query = ""
 	a.state.Overlay.Selected = 0
 }
@@ -545,13 +545,13 @@ func (a *App) handlePaletteCommand(msg components.PaletteCommandMsg) tea.Cmd {
 	case "/exit":
 		return tea.Quit
 	case "/help":
-		a.openOverlay("help")
+		a.openOverlay(state.OverlayHelp)
 		return nil
 	case "/session":
-		a.openOverlay("session_picker")
+		a.openOverlay(state.OverlaySessionPicker)
 		return nil
 	case "/model":
-		a.openOverlay("model_picker")
+		a.openOverlay(state.OverlayModelPicker)
 		return nil
 	case "/mode":
 		return a.toggleAgentMode()
@@ -579,13 +579,13 @@ func (a *App) handleSlashCommand(msg components.SlashCommandMsg) tea.Cmd {
 	case "/exit", "/quit":
 		return tea.Quit
 	case "/help":
-		a.openOverlay("help")
+		a.openOverlay(state.OverlayHelp)
 		return nil
 	case "/session":
-		a.openOverlay("session_picker")
+		a.openOverlay(state.OverlaySessionPicker)
 		return nil
 	case "/model":
-		a.openOverlay("model_picker")
+		a.openOverlay(state.OverlayModelPicker)
 		return nil
 	case "/mode":
 		return a.toggleAgentMode()
@@ -710,7 +710,7 @@ func (a *App) openConfirm(title, message, action string, data map[string]any) {
 		Action:  action,
 		Data:    data,
 	}
-	a.state.Overlay.Active = "confirm"
+	a.state.Overlay.Active = state.OverlayConfirm
 	a.state.Overlay.Query = ""
 	a.state.Overlay.Selected = 0
 }
