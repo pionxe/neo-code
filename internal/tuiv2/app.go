@@ -128,7 +128,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case gateway.EventRunStarted:
 			a.clearSearchAndEx()
 		}
-		a.bindComponents()
+		// 状态指针全程稳定（ADR-001）：Reduce 就地变更，组件终身绑定，无需重建重绑。
 		if a.state.Runtime.Phase == state.RuntimePhaseError && len(a.state.Stream) > 0 {
 			a.lastErr = a.state.Stream[len(a.state.Stream)-1].Content
 		}
@@ -204,7 +204,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Content:   fmt.Sprintf("Switched to session: %s", a.activeSessionTitle()),
 			Metadata:  map[string]any{"done": true},
 		})
-		a.bindComponents()
+		// 切换提示在流重载后追加（见上），此处状态指针未变，组件无需重建。
 		if a.eventCh != nil {
 			return a, waitEventCmd(a.eventCh)
 		}
@@ -521,8 +521,8 @@ func (a *App) handlePaletteCommand(msg components.PaletteCommandMsg) tea.Cmd {
 	case components.PaletteActionCompact:
 		return a.triggerCompact()
 	case components.PaletteActionClear:
+		// 状态指针全程稳定（ADR-001）：清空流后组件仍持有同一指针，无需重建。
 		a.state.Stream = nil
-		a.bindComponents()
 		return nil
 	case components.PaletteActionNewSession:
 		if a.client != nil {
@@ -595,8 +595,8 @@ func (a *App) handleSlashCommand(msg components.SlashCommandMsg) tea.Cmd {
 	case "/compact":
 		return a.triggerCompact()
 	case "/clear":
+		// 状态指针全程稳定（ADR-001）：清空流后组件仍持有同一指针，无需重建。
 		a.state.Stream = nil
-		a.bindComponents()
 		return nil
 	default:
 		a.appendStream(state.StreamEntry{
@@ -744,24 +744,6 @@ func (a *App) activeSessionTitle() string {
 
 func (a *App) appendStream(entry state.StreamEntry) {
 	a.state.Stream = append(a.state.Stream, entry)
-}
-
-// bindComponents 将子组件重新绑定到当前 ViewState 指针。
-// 注意：state.Reduce 每次返回新的 *ViewState，a.state 会被替换，因此所有
-// 子组件（含浮层：palette / help / sessionPicker / modelPicker / confirmOverlay）
-// 都必须在这里重新绑定，否则会持有旧指针，导致浮层交互改到废弃状态上、
-// 出现"回车不关闭面板、跳回第一项"等问题。
-func (a *App) bindComponents() {
-	a.ambientStatus = components.NewAmbientStatus(a.state)
-	a.agentStream = components.NewAgentStream(a.state)
-	a.commandPrompt = components.NewCommandPrompt(a.state)
-	a.cmdLine = components.NewCmdLine(a.state)
-	a.softInspector = components.NewSoftInspector(a.state)
-	a.palette = components.NewPalette(a.state)
-	a.helpOverlay = components.NewHelpOverlay(a.state)
-	a.sessionPicker = components.NewSessionPicker(a.state)
-	a.modelPicker = components.NewModelPicker(a.state)
-	a.confirmOverlay = components.NewConfirmOverlay(a.state)
 }
 
 // toggleAgentMode 切换 Agent 模式 (build/plan) 并追加状态提示。
