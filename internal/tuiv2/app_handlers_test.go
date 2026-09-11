@@ -1,6 +1,7 @@
 package tuiv2
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -934,5 +935,29 @@ func TestExecuteExCommandEmpty(t *testing.T) {
 	app.executeExCommand("")
 	if !lastContains(app, "Unknown ex command") {
 		t.Fatalf("empty ex command should hint unknown, stream=%v", streamContents(app))
+	}
+}
+
+// TestSearchJumpTargetVisibleInAppView 端到端：搜索跳转后目标内容在 App.View 可见。
+// 这是 PR 审核反馈的核心修复点——旧代码跳转后匹配项落在视口外。
+func TestSearchJumpTargetVisibleInAppView(t *testing.T) {
+	app := newReadyApp(t)
+	// 注入足够多的 entry 使视口装不下
+	for i := 0; i < 30; i++ {
+		app.appendStream(state.StreamEntry{
+			ID:      fmt.Sprintf("e-%d", i),
+			Type:    "message",
+			Content: fmt.Sprintf("content-%d", i),
+		})
+	}
+	// 搜索靠后的唯一内容
+	app.Update(components.SearchSubmitMsg{Query: "content-28"})
+	if len(app.state.Search.Matches) == 0 {
+		t.Fatal("search should match content-28")
+	}
+	// n/N 跳转后 View 应含目标
+	view := app.View()
+	if !strings.Contains(view, "content-28") {
+		t.Fatalf("search jump: target content-28 not visible after jump, offset=%d", app.state.Layout.ScrollOffset)
 	}
 }
