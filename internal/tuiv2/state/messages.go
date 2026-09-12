@@ -22,3 +22,10 @@ type ConfirmResult struct {
 	Data   map[string]any
 	Yes    bool // true = 确认，false = 取消
 }
+
+// UserSubmitted 表示用户提交了一条消息（prompt 插件在 Input 模式 Enter 时
+// 广播）：chat 插件订阅它更新 /retry 的 lastText 并追加 role=user 的
+// Stream 条目（旧路径 app.go:429 行为等价）。
+type UserSubmitted struct {
+	Text string
+}

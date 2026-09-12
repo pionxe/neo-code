@@ -125,11 +125,10 @@ type StreamEntry struct {
 
 // InputState 描述输入区文本、光标和当前输入任务。
 //
-// 槽所有制：Input 槽归插件 prompt。**双轨期临时越权标注**（issue #23 修订
-// v2 / 审计 P0-1）：ReduceConversation 的 6 类对话事件（permission_requested/
-// resolved、ask_user 系、run_cancelled）经 Reduce 临时写本槽（Mode/Prompt/
-// Options/Text/Cursor）——这是 prompt 插件迁移前的已知过渡行为，
-// prompt 迁移 PR 时移交并移除本标注。
+// 槽所有制：Input 槽写权归插件 prompt（经 state.ApplyInputForEvent，
+// 由 prompt 插件 React 调用）；旧路径 Reduce 在内核接线 PR 删除前仍经
+// 同一函数写入本槽，接线 PR 后写权归一（issue #25 修订 v2 / 审计 P1-①
+// 交汇点方案，ReduceWithoutInput 路径不写本槽）。
 type InputState struct {
 	Text          string
 	Cursor        int

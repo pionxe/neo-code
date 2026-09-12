@@ -46,17 +46,43 @@ type KeyBinder interface {
 }
 
 // Binding 描述一条键位绑定：某键位模式下某键触发某动作。
+//
+// 两种形态（互斥，注册期校验）：
+//   - 精确绑定：Key 非空 + OnKey——匹配 String() 精确相等的按键；
+//   - 通配绑定：Key 为空 + OnKeyMsg——匹配该模式下所有未被精确绑定
+//     命中的按键（如 Input 模式的任意字符编辑），每 mode 仅限一条
+//     （注册期 fail-fast）。帮助派生时显示通配占位，Description 必填。
 type Binding struct {
 	// Mode 是绑定生效的键位模式（Input/Normal/Leader）。
 	Mode state.InputMode
 	// Key 是按键的 bubbletea 规范形态（tea.KeyMsg.String()），如 "a"、"enter"、"ctrl+p"、" "。
+	// 通配绑定留空。
 	Key string
 	// Description 是动作的中文一句话说明，供帮助面板自动生成。
 	Description string
 	// Command 是关联的命令注册表名（可选）：命令面板的快捷键列据此自动派生。
 	Command string
-	// OnKey 是按键动作：就地迁移自己的槽 / GoCmd / Send / SetMode。
+	// OnKey 是精确绑定的动作（与 OnKeyMsg 互斥）：就地迁移自己的槽 / GoCmd / Send / SetMode。
 	OnKey func(h Host)
+	// OnKeyMsg 是通配绑定的动作（与 OnKey 互斥）：收到原始 KeyMsg，
+	// 供输入类插件透传给组件状态机（如字符插入需要按键形状）。
+	OnKeyMsg func(h Host, msg tea.KeyMsg)
+}
+
+// isWildcard 报告该绑定是否为通配形态。
+func (b Binding) isWildcard() bool { return b.Key == "" && b.OnKeyMsg != nil }
+
+// invoke 按绑定形态分派动作。
+func (b Binding) invoke(h Host, msg tea.KeyMsg) {
+	if b.isWildcard() {
+		if b.OnKeyMsg != nil {
+			b.OnKeyMsg(h, msg)
+		}
+		return
+	}
+	if b.OnKey != nil {
+		b.OnKey(h)
+	}
 }
 
 // CommandProvider 是可选能力：向统一命令注册表贡献命令。

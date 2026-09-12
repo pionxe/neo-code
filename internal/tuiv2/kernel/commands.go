@@ -64,8 +64,8 @@ var modeShortcutPrefix = map[state.InputMode]string{
 }
 
 // deriveShortcut 从绑定注册表为命令派生快捷键展示列（ADR-010 自动派生，
-// 消灭 // keep in sync with keymap 类注释）。多个绑定时按注册序以 ", " 连接；
-// 无绑定时返回空串（面板不展示快捷键列）。
+// 消灭 // keep in sync with keymap 类注释）。多个绑定时按登记序以 ", " 连接；
+// 通配绑定（Key 空）展示为"<输入>"占位；无绑定时返回空串。
 func deriveShortcut(commandName string, bindings *bindingRegistry) string {
 	out := ""
 	for _, b := range bindings.all() {
@@ -74,6 +74,10 @@ func deriveShortcut(commandName string, bindings *bindingRegistry) string {
 		}
 		if out != "" {
 			out += ", "
+		}
+		if b.isWildcard() {
+			out += "<输入>"
+			continue
 		}
 		out += modeShortcutPrefix[b.Mode] + b.Key
 	}

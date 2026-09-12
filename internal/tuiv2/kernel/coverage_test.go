@@ -340,7 +340,7 @@ func TestFullPipelineSmoke(t *testing.T) {
 
 	// 2. 按键路由：Normal 模式按键 → 插件 Binding 动作 → 状态迁移。
 	k.setMode(state.NormalMode)
-	k.dispatchKey("s")
+	k.dispatchKey(keyRunes("s"))
 
 	// 3. 广播：Gateway 事件 → React 就地迁移自己的槽。
 	// 依次执行收集到的命令（事件泵等），产物经 Update 广播。
@@ -402,4 +402,73 @@ func (p *fullPipelinePlugin) Render(h Host, width int) string {
 		return "SMOKE-STATUS " + h.State().Runtime.RunID
 	}
 	return ""
+}
+
+// ---------- Binding 通配扩展（issue #25 / K1）----------
+
+func TestBindingOnKeyOnKeyMsgExclusive(t *testing.T) {
+	r := &bindingRegistry{}
+	err := r.add("a", Binding{Mode: state.NormalMode, Key: "x", OnKey: func(h Host) {}, OnKeyMsg: func(h Host, msg tea.KeyMsg) {}})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("err = %v, want exclusive error", err)
+	}
+	err = r.add("a", Binding{Mode: state.NormalMode, OnKeyMsg: func(h Host, msg tea.KeyMsg) {}})
+	if err == nil || !strings.Contains(err.Error(), "requires Description") {
+		t.Fatalf("wildcard without description = %v", err)
+	}
+}
+
+func TestWildcardSecondPerModeFailsFast(t *testing.T) {
+	r := &bindingRegistry{}
+	w1 := Binding{Mode: state.InputModeInput, Description: "第一通配", OnKeyMsg: func(h Host, msg tea.KeyMsg) {}}
+	w2 := Binding{Mode: state.InputModeInput, Description: "第二通配", OnKeyMsg: func(h Host, msg tea.KeyMsg) {}}
+	if err := r.add("a", w1); err != nil {
+		t.Fatalf("first wildcard: %v", err)
+	}
+	err := r.add("b", w2)
+	if err == nil || !strings.Contains(err.Error(), "wildcard binding conflict") {
+		t.Fatalf("err = %v, want wildcard conflict", err)
+	}
+}
+
+func TestLookupPrecisionOverWildcard(t *testing.T) {
+	r := &bindingRegistry{}
+	wildHit, preciseHit := "", ""
+	wild := Binding{Mode: state.InputModeInput, Description: "通配", OnKeyMsg: func(h Host, msg tea.KeyMsg) { wildHit = msg.String() }}
+	precise := Binding{Mode: state.InputModeInput, Key: "enter", Description: "精确", OnKey: func(h Host) { preciseHit = "enter" }}
+	mustOK(t, r.add("a", wild), "wild")
+	mustOK(t, r.add("a", precise), "precise")
+
+	// 精确键命中精确绑定（通配不拦截）。
+	if b, ok := r.lookup(state.InputModeInput, keyRunes("enter")); !ok || b.isWildcard() {
+		t.Fatal("enter should hit precise binding")
+	}
+	// 任意字符命中通配并收到原始 KeyMsg。
+	b, ok := r.lookup(state.InputModeInput, keyRunes("z"))
+	if !ok || !b.isWildcard() {
+		t.Fatal("runes should hit wildcard")
+	}
+	b.invoke(&testFakeHost{}, keyRunes("z"))
+	if wildHit != "z" {
+		t.Fatalf("OnKeyMsg payload = %q, want original key", wildHit)
+	}
+	_ = preciseHit
+}
+
+func TestWildcardBindingInvokeWithoutExact(t *testing.T) {
+	// 通配绑定的 invoke 需要 OnKeyMsg；纯 OnKey 通配形态（构造非法但防御）不 panic。
+	b := Binding{Key: "", OnKey: func(h Host) {}}
+	b.invoke(&testFakeHost{}, keyRunes("x")) // 无 OnKeyMsg → 静默
+}
+
+func TestDeriveShortcutWildcardPlaceholder(t *testing.T) {
+	// 通配绑定的快捷键列占位（审计 P2-4：kernel 99.3% 缺口在此）。
+	r := &bindingRegistry{}
+	wild := Binding{Mode: state.InputModeInput, Description: "输入编辑", Command: "/input", OnKeyMsg: func(h Host, msg tea.KeyMsg) {}}
+	if err := r.add("p", wild); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if got := deriveShortcut("/input", r); got != "<输入>" {
+		t.Fatalf("shortcut = %q, want <输入>", got)
+	}
 }
