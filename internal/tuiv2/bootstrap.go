@@ -4,10 +4,45 @@ import (
 	"context"
 
 	"neo-code/internal/tuiv2/gateway"
+	"neo-code/internal/tuiv2/kernel"
 	"neo-code/internal/tuiv2/state"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// bootstrapReactor 实现 kernel.Reactor：在主 goroutine 内消费
+// bootstrapDoneMsg 并落地全部状态写入（P0-1 并发契约修复的收口）。
+// 注册进 kernel 后，Kernel.Update → drain → React 在主 goroutine 调用，
+// 消除 tea.Cmd goroutine 直写共享状态的数据竞争。
+type bootstrapReactor struct {
+	client gateway.Client
+}
+
+func newBootstrapReactor(client gateway.Client) *bootstrapReactor {
+	return &bootstrapReactor{client: client}
+}
+
+// React 处理 bootstrapDoneMsg：调用 ApplyBootstrap 落状态、绑定事件流、
+// 经 Notify 呈现错误（不丢弃、不静默——审计第 3 轮 P1-3 收尾）。
+func (r *bootstrapReactor) ID() string { return "bootstrap" }
+
+// Init 经 GoCmd 发起初始加载（kernel.Init 链自动调用）。
+func (r *bootstrapReactor) Init(ctx context.Context, h kernel.Host) {
+	if r.client != nil {
+		h.GoCmd(Bootstrap(ctx, r.client))
+	}
+}
+func (r *bootstrapReactor) Close(ctx context.Context) {}
+func (r *bootstrapReactor) React(h kernel.Host, msg tea.Msg) {
+	bd, ok := msg.(bootstrapDoneMsg)
+	if !ok {
+		return
+	}
+	ApplyBootstrap(h.State(), bd, h.BindEventStream)
+	for _, e := range bd.errs {
+		h.Notify("初始加载警告：" + e)
+	}
+}
 
 // bootstrapDoneMsg 是初始加载的 RPC 产物（内核内部消息）：
 // 闭包只做 RPC 与通道建立并打包结果，状态写入 + BindEventStream
@@ -17,12 +52,14 @@ type bootstrapDoneMsg struct {
 	sessions []gateway.SessionSummary
 	active   *gateway.SessionSummary
 	detail   *gateway.SessionDetail
+	models   []gateway.ModelInfo
 	eventCh  <-chan gateway.GatewayEvent
 	errs     []string
 }
 
 // Bootstrap 发起初始加载：闭包只做 RPC 并打包结果为 Msg 返回，
-// 状态写入由内核 Update 在主 goroutine 完成（P0-1 并发契约修复）。
+// Host 副作用（状态写入 + BindEventStream）由 bootstrapReactor.React
+// 在主 goroutine 内完成（P0-1 并发契约）。
 func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 	if client == nil {
 		return nil
@@ -35,20 +72,18 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 		} else {
 			healthOK = true
 		}
-
-		sessions, err := client.ListSessions(ctx)
+		sessionList, err := client.ListSessions(ctx)
 		if err != nil {
 			errs = append(errs, "list: "+err.Error())
 		}
-
 		var active *gateway.SessionSummary
 		var detail *gateway.SessionDetail
 		var eventCh <-chan gateway.GatewayEvent
-		if len(sessions) > 0 {
-			active = &sessions[0]
-			detail, err = client.LoadSession(ctx, active.ID)
-			if err != nil {
-				errs = append(errs, "load: "+err.Error())
+		if len(sessionList) > 0 {
+			active = &sessionList[0]
+			detail, loadErr := client.LoadSession(ctx, active.ID)
+			if loadErr != nil {
+				errs = append(errs, "load: "+loadErr.Error())
 			}
 			ch, subErr := client.SubscribeEvents(ctx, active.ID)
 			if subErr != nil {
@@ -56,13 +91,19 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 			} else {
 				eventCh = ch
 			}
+			_ = detail
 		}
-
+		// 补充模型列表（审计第 3 轮 P1-2：kernel 路径唯一 ListModels 调用点）。
+		models, modelsErr := client.ListModels(ctx)
+		if modelsErr != nil {
+			errs = append(errs, "models: "+modelsErr.Error())
+		}
 		return bootstrapDoneMsg{
 			healthOK: healthOK,
-			sessions: sessions,
+			sessions: sessionList,
 			active:   active,
 			detail:   detail,
+			models:   models,
 			eventCh:  eventCh,
 			errs:     errs,
 		}
@@ -70,18 +111,15 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 }
 
 // ApplyBootstrap 在主 goroutine 内落地 bootstrapDoneMsg 的全部状态写入
-// （由内核 Update 的 bootstrapDoneMsg case 调用——P0-1 修复：Cmd goroutine
-// 不直接写共享状态）。
+// （由 bootstrapReactor.React 调用——kernel.Update drain 循环保证单线程）。
 func ApplyBootstrap(st *state.ViewState, msg bootstrapDoneMsg, bindEventStream func(<-chan gateway.GatewayEvent)) {
-	// 连接状态（Gateway 子槽）。
 	if msg.healthOK {
 		st.Gateway.Connected = true
 	}
-	// 会话列表（Gateway.Sessions 子槽）。
 	for _, sess := range msg.sessions {
 		found := false
-		for _, existing := range st.Gateway.Sessions {
-			if existing.ID == sess.ID {
+		for _, e := range st.Gateway.Sessions {
+			if e.ID == sess.ID {
 				found = true
 				break
 			}
@@ -90,11 +128,10 @@ func ApplyBootstrap(st *state.ViewState, msg bootstrapDoneMsg, bindEventStream f
 			st.Gateway.Sessions = append(st.Gateway.Sessions, sess)
 		}
 	}
-	// 活跃会话。
 	if msg.active != nil {
-		st.Gateway.ActiveSess = msg.active
+		active := *msg.active
+		st.Gateway.ActiveSess = &active
 	}
-	// 会话详情 → Stream 条目（含 Timestamp 修复，审计 P1-3）。
 	if msg.detail != nil {
 		for _, item := range msg.detail.Stream {
 			entry := state.StreamEntry{
@@ -111,12 +148,13 @@ func ApplyBootstrap(st *state.ViewState, msg bootstrapDoneMsg, bindEventStream f
 		st.Layout.AutoScroll = true
 		st.Layout.ScrollOffset = 0
 	}
+	// 模型列表落地（审计 P1-2 补位）。
+	st.Gateway.Models = append(st.Gateway.Models, msg.models...)
+	if len(msg.models) > 0 && st.Gateway.ActiveModel == "" {
+		st.Gateway.ActiveModel = msg.models[0].ID
+	}
 	// 事件流绑定。
 	if msg.eventCh != nil {
 		bindEventStream(msg.eventCh)
-	}
-	// 非致命错误以弱提示呈现。
-	for _, e := range msg.errs {
-		_ = e // 可扩展为 Notify
 	}
 }
