@@ -185,9 +185,4 @@ func ApplyBootstrap(st *state.ViewState, msg bootstrapDoneMsg, bindEventStream f
 	if msg.eventCh != nil {
 		bindEventStream(msg.eventCh)
 	}
-	// 非致命错误经 Host.Notify 呈现（审计第 3 轮 P1-3 收尾，删除 _ = e）。
-	for _, e := range msg.errs {
-		// 由调用方（React）通过 Host.Notify 转发；此处收集以确保不静默。
-		_ = e
-	}
 }
