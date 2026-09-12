@@ -54,34 +54,30 @@ func (p *Plugin) closeStream() {
 	}
 }
 
-// sessionStreamReadyMsg 是 LoadSession+重订阅的 RPC 产物（内部消息）：
-// 闭包只做 RPC 与通道建立，Host 副作用（closeStream/BindEventStream/
-// Notify/PopOverlay）全部回到 React 路径执行（P0-1 并发契约修复）。
-type sessionStreamReadyMsg struct {
-	session gateway.SessionSummary
-	detail  *gateway.SessionDetail // nil = Load 失败
-	ch      <-chan gateway.GatewayEvent
-	cancel  context.CancelFunc // 新流订阅的取消函数（React 收尾时登记）
-	loadErr error
-}
-
 // React 订阅广播：Gateway 域事件（ApplyGatewayForEvent）、picker 产出消息
 // （选择/删除）、确认结果（删除执行）。
 func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	switch m := msg.(type) {
 	case gateway.GatewayEvent:
-		// 精确化（审计 P2-①）：sessions 写 session_* 三类 + health_changed
-		// 临时承接（S6 移交）；model_changed 归 models。
-		switch m.Type {
-		case gateway.EventSessionCreated, gateway.EventSessionDeleted,
-			gateway.EventSessionUpdated, gateway.EventHealthChanged:
-			state.ApplyGatewayForEvent(p.st, m)
-			if m.Type == gateway.EventSessionDeleted {
-				h.Notify("会话已删除")
-			}
+		// Gateway 域写入单一出处；health_changed 临时承接（S6 移交）。
+		state.ApplyGatewayForEvent(p.st, m)
+		if m.Type == gateway.EventSessionDeleted {
+			h.Notify("会话已删除")
 		}
 	case components.SessionSelectMsg:
 		p.handleSelect(h, m)
+	case components.SessionDeleteMsg:
+		// 危险操作走内核确认服务（ADR-012），结果按 ID 回流。
+		title := m.SessionID
+		if sess := p.st.Gateway.ActiveSess; sess != nil && sess.ID == m.SessionID {
+			title = sess.Title
+		}
+		h.Confirm(state.ConfirmRequest{
+			Title:   "⚠ 删除会话",
+			Message: fmt.Sprintf("确定删除 %s？此操作不可撤销。", title),
+			Action:  "delete_session",
+			Data:    map[string]any{"id": m.SessionID},
+		})
 	case state.ConfirmResult:
 		if m.Action == "delete_session" && m.Yes {
 			if id, ok := m.Data["id"].(string); ok {
@@ -95,38 +91,11 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 			Payload: map[string]any{"id": m.ID},
 		})
 		h.Notify("会话已删除")
-	case sessionStreamReadyMsg:
-		// 换代收尾（Update 循环内执行 Host 副作用）：先关旧流再绑新流；
-		// Load 失败（Detail=nil）经 Notify 呈现，不绑定新流。
-		// （浮层已在 enter 时关闭——弹栈语义统一在 HandleKey。）
-		p.closeStream()
-		p.streamCtx = m.cancel
-		if m.ch != nil {
-			h.BindEventStream(m.ch)
-		}
-		if m.loadErr != nil {
-			h.Notify("切换会话失败：" + m.loadErr.Error())
-		}
-		h.Send(state.SessionLoaded{Session: m.session, Detail: m.detail})
-	case components.SessionDeleteMsg:
-		// 危险操作走内核确认服务（ADR-012），结果按 ID 回流。
-		title := m.SessionID
-		if sess := p.st.Gateway.ActiveSess; sess != nil && sess.ID == m.SessionID {
-			title = sess.Title
-		}
-		h.Confirm(state.ConfirmRequest{
-			Title:   "⚠ 删除会话",
-			Message: fmt.Sprintf("确定删除 %s？此操作不可撤销。", title),
-			Action:  "delete_session",
-			Data:    map[string]any{"id": m.SessionID},
-		})
-		h.PopOverlay() // 进入确认流程，选择器关闭（P0-2 弹栈语义）
 	}
 }
 
-// handleSelect 处理会话选择：更新活跃会话 → 闭包执行 LoadSession + 新流
-// 订阅（**只返回 Msg，无任何 Host 副作用**——P0-1 并发契约）→
-// React 的 sessionStreamReadyMsg 分支完成换代收尾与广播。
+// handleSelect 处理会话选择：更新活跃会话 → LoadSession → 重订阅事件流 →
+// 广播 SessionLoaded（chat 重载 Stream 槽）。
 func (p *Plugin) handleSelect(h kernel.Host, msg components.SessionSelectMsg) {
 	if p.client == nil {
 		return
@@ -138,18 +107,20 @@ func (p *Plugin) handleSelect(h kernel.Host, msg components.SessionSelectMsg) {
 	sessionID := msg.Session.ID
 	client := p.client
 	h.GoCmd(func() tea.Msg {
-		detail, loadErr := client.LoadSession(context.Background(), sessionID)
-		if loadErr != nil {
-			return sessionStreamReadyMsg{session: msg.Session, loadErr: loadErr}
+		detail, err := client.LoadSession(context.Background(), sessionID)
+		if err != nil {
+			return state.SessionLoaded{Session: msg.Session}
 		}
-		// 先建新流：订阅成功后才在 React 收尾关闭旧流（审计 P1-① 顺序）。
+		// 重订阅：关闭旧通道（旧泵陈旧产物被代际丢弃）并换代绑定。
+		p.closeStream()
 		subCtx, cancel := context.WithCancel(context.Background())
-		eventCh, subErr := client.SubscribeEvents(subCtx, sessionID)
-		if subErr != nil {
-			cancel()
-			return sessionStreamReadyMsg{session: msg.Session, loadErr: subErr}
+		p.streamCtx = cancel
+		eventCh, err := client.SubscribeEvents(subCtx, sessionID)
+		if err != nil {
+			return state.SessionLoaded{Session: msg.Session}
 		}
-		return sessionStreamReadyMsg{session: msg.Session, detail: detail, ch: eventCh, cancel: cancel}
+		h.BindEventStream(eventCh)
+		return state.SessionLoaded{Session: msg.Session, Detail: detail}
 	})
 }
 
