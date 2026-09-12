@@ -3,6 +3,7 @@ package state
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"neo-code/internal/tuiv2/gateway"
 )
@@ -60,10 +61,10 @@ func conversationForwarded(t gateway.EventType) bool {
 	return false
 }
 
-// TestReduceConversationExhaustive 穷举全部事件常量：
+// TestReduceWithoutInputExhaustive 穷举全部事件常量：
 // 对话类必须真正迁移状态（Stream 或 Runtime 或 Input 有变化），
 // 非对话类必须指针恒等且全槽快照零变化。
-func TestReduceConversationExhaustive(t *testing.T) {
+func TestReduceWithoutInputExhaustive(t *testing.T) {
 	for _, et := range allEventTypes() {
 		t.Run(string(et), func(t *testing.T) {
 			before := NewViewState()
@@ -71,7 +72,7 @@ func TestReduceConversationExhaustive(t *testing.T) {
 			before.Gateway.Models = []gateway.ModelInfo{{ID: "m1"}}
 			snapshot := *before
 
-			after := ReduceConversation(before, event(et, map[string]any{"text": "x", "phase": "running", "id": "s2", "connected": true, "total_tokens": 9}))
+			after := ReduceWithoutInput(before, event(et, map[string]any{"text": "x", "phase": "running", "id": "s2", "connected": true, "total_tokens": 9}))
 
 			if after != before {
 				t.Fatalf("pointer stability broken for %q", et)
@@ -94,7 +95,7 @@ func TestReduceConversationExhaustive(t *testing.T) {
 
 // TestReduceConversationInputTempWriteScope 锁定 6 类临时越权事件的变化范围：
 // 仅 Input/Stream/Runtime 变化，其余槽（Gateway/Overlay/Search/Ex/Layout/Notify/Confirm/Mode）零变化。
-func TestReduceConversationInputTempWriteScope(t *testing.T) {
+func TestReduceWithoutInputScope(t *testing.T) {
 	tempWrite := []gateway.EventType{
 		gateway.EventPermissionRequested,
 		gateway.EventPermissionResolved,
@@ -113,7 +114,7 @@ func TestReduceConversationInputTempWriteScope(t *testing.T) {
 			before.Confirm = ConfirmState{Title: "t"}
 			snapshot := *before
 
-			ReduceConversation(before, event(et, map[string]any{"text": "x", "prompt": "p", "question": "q", "decision": "allow", "answer": "a", "phase": "cancelled"}))
+			ReduceWithoutInput(before, event(et, map[string]any{"text": "x", "prompt": "p", "question": "q", "decision": "allow", "answer": "a", "phase": "cancelled"}))
 
 			// 允许变化：Input（临时越权）、Stream（状态条目）、Runtime（Phase）。
 			// Confirm 槽：本组事件不涉及确认框，必须零变化（补快照，审计 P2）。
@@ -149,7 +150,7 @@ func TestReduceConversationInputTempWriteScope(t *testing.T) {
 // TestReduceConversationDecisionAccounting 是白名单的机械守卫（审计 P2）：
 // 转发数 + 显式排除数 == 事件常量总数。gateway 新增第 28 个事件时
 // allEventTypes 变长而两表未更新，本测试即失败——强制补决定。
-func TestReduceConversationDecisionAccounting(t *testing.T) {
+func TestReduceWithoutInputDecisionAccounting(t *testing.T) {
 	excluded := map[gateway.EventType]bool{
 		gateway.EventSessionCreated: true,
 		gateway.EventSessionDeleted: true,
@@ -177,5 +178,92 @@ func TestReduceConversationDecisionAccounting(t *testing.T) {
 	}
 	if excludedCount != len(excluded) {
 		t.Fatalf("excluded = %d, want %d（gateway 新增事件需同步三张表）", excludedCount, len(excluded))
+	}
+}
+
+// TestApplyInputForEventNoopForNonInputEvents 锁定 ApplyInputForEvent 的
+// no-op 契约：非六类事件不写 Input（对账守卫并入，审计 P2-b）。
+func TestApplyInputForEventNoopForNonInputEvents(t *testing.T) {
+	for _, et := range allEventTypes() {
+		if isInputWritingEvent(et) {
+			continue
+		}
+		before := NewViewState()
+		before.Input.Text = "keep"
+		ApplyInputForEvent(before, event(et, map[string]any{"prompt": "p", "question": "q", "options": []any{"o"}}))
+		if before.Input.Text != "keep" || before.Input.Mode != InputStateModeMessage {
+			t.Fatalf("%q touched Input via ApplyInputForEvent", et)
+		}
+	}
+}
+
+// TestReduceWithoutInputMatchesReduce 是审计 P2-a 的一致性断言：
+// 对六类含 Input 写入的事件，Reduce 与 ReduceWithoutInput(+ApplyInputForEvent)
+// 在 Input 之外的槽（Stream/Runtime/…）必须逐槽一致；Input 部分由
+// ApplyInputForEvent 补齐后整体等价于 Reduce。
+func TestReduceWithoutInputMatchesReduce(t *testing.T) {
+	for _, et := range allEventTypes() {
+		if !isInputWritingEvent(et) {
+			continue
+		}
+		t.Run(string(et), func(t *testing.T) {
+			payload := map[string]any{
+				"text": "x", "prompt": "P", "question": "Q", "decision": "allow",
+				"answer": "a", "phase": "cancelled", "message": "m",
+				"options": []any{"o1", "o2"}, "total": 5,
+			}
+			// 两条路径使用同一固定 At（eventTime 零值回退 Now，两次调用
+			// 时间戳微秒差会污染 DeepEqual）。
+			fixedAt := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
+			evA := event(et, payload)
+			evA.At = fixedAt
+			evB := event(et, payload)
+			evB.At = fixedAt
+			// 路径 A：全量 Reduce。
+			a := NewViewState()
+			a = Reduce(a, evA)
+			// 路径 B：ReduceWithoutInput + prompt 侧 ApplyInputForEvent。
+			b := NewViewState()
+			b = ReduceWithoutInput(b, evB)
+			// b.Input 未变（Input 原值不变断言——chat 路径语义）。
+			wantInput := NewViewState().Input
+			if !reflect.DeepEqual(b.Input, wantInput) {
+				t.Fatalf("chat path Input mutated: %+v", b.Input)
+			}
+			// prompt 侧补 Input。
+			ApplyInputForEvent(b, evB)
+			// 逐槽一致性：Input 之外全部相等。
+			if !reflect.DeepEqual(a.Stream, b.Stream) {
+				t.Fatalf("Stream mismatch:\nA=%+v\nB=%+v", a.Stream, b.Stream)
+			}
+			if a.Runtime != b.Runtime {
+				t.Fatalf("Runtime mismatch: A=%+v B=%+v", a.Runtime, b.Runtime)
+			}
+			if !reflect.DeepEqual(a.Input, b.Input) {
+				t.Fatalf("Input mismatch after prompt apply:\nA=%+v\nB=%+v", a.Input, b.Input)
+			}
+			// P2-a 专项：permission/question 条目 content 从 payload 直取
+			//（chat 路径无 Input.Prompt 中间态，content 仍完整）。
+			if et == gateway.EventPermissionRequested || et == gateway.EventAskUserQuestion {
+				last := b.Stream[len(b.Stream)-1].Content
+				if last == "" {
+					t.Fatalf("%q content lost after split (P2-a read dependency)", et)
+				}
+			}
+		})
+	}
+}
+
+func TestReduceConversationDeprecatedAlias(t *testing.T) {
+	// Deprecated 别名行为等价性：转发 ReduceWithoutInput（chat 迁移完成前兼容）。
+	before := NewViewState()
+	after := ReduceConversation(before, event(gateway.EventAgentChunk, map[string]any{"text": "x"}))
+	if after != before || len(before.Stream) != 1 {
+		t.Fatal("alias should behave as ReduceWithoutInput")
+	}
+	// 非白名单：原样返回。
+	after = ReduceConversation(before, event(gateway.EventSessionCreated, map[string]any{"id": "s"}))
+	if after != before || len(before.Gateway.Sessions) != 0 {
+		t.Fatal("alias should ignore non-dialogue events")
 	}
 }

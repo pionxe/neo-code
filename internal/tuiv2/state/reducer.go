@@ -10,10 +10,19 @@ import (
 // Reduce 将 GatewayEvent 就地映射到 ViewState：直接修改传入的状态并返回同一指针
 // （状态指针全程稳定，见 docs/tui-v2/tui-v2-redesign-2026-09.md ADR-001）。
 // nil 输入返回新建的空状态。单线程契约：仅在 Bubble Tea Update 循环内调用。
+// 全量行为（含 Input 写入）仅供 app 层旧路径使用；kernel 插件路径走
+// ReduceWithoutInput（Input 写权归 prompt，经 ApplyInputForEvent）。
 func Reduce(current *ViewState, event gateway.GatewayEvent) *ViewState {
 	if current == nil {
 		current = NewViewState()
 	}
+	return reduceCore(current, event, true)
+}
+
+// reduceCore 是 Reduce 与 ReduceWithoutInput 的共享主体：
+// applyInput=false 时跳过 Input 槽写入（六类事件经 ApplyInputForEvent 的部分），
+// 其余槽迁移完全一致（审计 P2-a：逐槽一致性由表驱动测试钉死）。
+func reduceCore(current *ViewState, event gateway.GatewayEvent, applyInput bool) *ViewState {
 	switch event.Type {
 	case gateway.EventAgentChunk, gateway.EventAssistantDelta:
 		return reduceAgentChunk(current, event)
@@ -28,22 +37,20 @@ func Reduce(current *ViewState, event gateway.GatewayEvent) *ViewState {
 	case gateway.EventToolOutput:
 		return appendStream(current, streamEntry(event, "tool_output", payloadString(event.Payload, "text", "output", "content")))
 	case gateway.EventPermissionRequested:
-		return reducePermissionRequested(current, event)
+		return reducePermissionRequested(current, event, applyInput)
 	case gateway.EventPermissionResolved:
+		if applyInput {
+			ApplyInputForEvent(current, event)
+		}
 		current.Runtime.Phase = RuntimePhaseRunning
-		current.Input.Mode = InputStateModeMessage
-		current.Input.Prompt = ""
-		current.Input.Options = nil
 		return appendStream(current, streamEntry(event, "status", payloadString(event.Payload, "message", "decision", "status")))
 	case gateway.EventAskUserQuestion, gateway.EventUserQuestionRequested:
-		return reduceAskUserQuestion(current, event)
+		return reduceAskUserQuestion(current, event, applyInput)
 	case gateway.EventUserQuestionAnswered:
+		if applyInput {
+			ApplyInputForEvent(current, event)
+		}
 		current.Runtime.Phase = RuntimePhaseRunning
-		current.Input.Mode = InputStateModeMessage
-		current.Input.Text = ""
-		current.Input.Cursor = 0
-		current.Input.Prompt = ""
-		current.Input.Options = nil
 		return appendStream(current, streamEntry(event, "status", payloadString(event.Payload, "message", "answer", "text")))
 	case gateway.EventPhaseChanged:
 		current.Runtime.Phase = payloadString(event.Payload, "phase", "status")
@@ -59,10 +66,10 @@ func Reduce(current *ViewState, event gateway.GatewayEvent) *ViewState {
 		current.Runtime.Phase = RuntimePhaseError
 		return appendStream(current, streamEntry(event, "error", payloadString(event.Payload, "message", "error", "text")))
 	case gateway.EventRunCancelled:
+		if applyInput {
+			ApplyInputForEvent(current, event)
+		}
 		current.Runtime.Phase = RuntimePhaseCancelled
-		current.Input.Mode = InputStateModeMessage
-		current.Input.Prompt = ""
-		current.Input.Options = nil
 		return appendStream(current, streamEntry(event, "status", payloadString(event.Payload, "message", "phase", "status")))
 	case gateway.EventTokenUsage:
 		current.Runtime.Tokens = tokenUsageFromPayload(event.Payload, current.Runtime.Tokens)
@@ -140,20 +147,27 @@ func reduceToolEnd(current *ViewState, event gateway.GatewayEvent) *ViewState {
 }
 
 // reducePermissionRequested 进入权限等待态，并追加权限状态条目。
-func reducePermissionRequested(current *ViewState, event gateway.GatewayEvent) *ViewState {
+// applyInput=false（chat 路径）跳过 Input 写入；条目 content 从 payload
+// 直取（审计 P2-a：不得读 current.Input.Prompt——先写后读依赖在
+// ReduceWithoutInput 拆分后失效）。
+func reducePermissionRequested(current *ViewState, event gateway.GatewayEvent, applyInput bool) *ViewState {
 	current.Runtime.Phase = RuntimePhaseWaitingPermission
-	current.Input.Mode = InputStateModePermissionResponse
-	current.Input.Prompt = payloadString(event.Payload, "prompt", "message", "tool")
-	return appendStream(current, streamEntry(event, "permission", current.Input.Prompt))
+	prompt := payloadString(event.Payload, "prompt", "message", "tool")
+	if applyInput {
+		ApplyInputForEvent(current, event)
+	}
+	return appendStream(current, streamEntry(event, "permission", prompt))
 }
 
 // reduceAskUserQuestion 进入用户问答态，并更新输入区提示和选项。
-func reduceAskUserQuestion(current *ViewState, event gateway.GatewayEvent) *ViewState {
+// applyInput 语义同上；条目 content 从 payload 直取。
+func reduceAskUserQuestion(current *ViewState, event gateway.GatewayEvent, applyInput bool) *ViewState {
 	current.Runtime.Phase = RuntimePhaseWaitingUser
-	current.Input.Mode = InputStateModeQuestionAnswer
-	current.Input.Prompt = payloadString(event.Payload, "question", "prompt", "message")
-	current.Input.Options = payloadStringSlice(event.Payload, "options")
-	return appendStream(current, streamEntry(event, "question", current.Input.Prompt))
+	question := payloadString(event.Payload, "question", "prompt", "message")
+	if applyInput {
+		ApplyInputForEvent(current, event)
+	}
+	return appendStream(current, streamEntry(event, "question", question))
 }
 
 // appendStream 在流尾部追加条目：就地修改当前状态（指针语义见 Reduce）。
