@@ -36,9 +36,7 @@ func (p *Plugin) Init(ctx context.Context, h kernel.Host) {
 }
 
 // Close 释放资源（无外部资源，生命周期对称性）。
-func (p *Plugin) Close(ctx context.Context) {
-	_ = ctx
-}
+func (p *Plugin) Close(ctx context.Context) {}
 
 // React 订阅广播：model_changed 迁移 ActiveModel 子槽；模型选择产出
 // 消息（经选择器浮层）→ SetModel RPC → 成功后合成 model_changed 回流
@@ -46,11 +44,7 @@ func (p *Plugin) Close(ctx context.Context) {
 func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	switch m := msg.(type) {
 	case gateway.GatewayEvent:
-		// 精确化（审计 P2-①）：models 仅写 model_changed（其余 Gateway
-		// 域事件归 sessions，避免全量转发稀释"写者唯一"）。
-		if m.Type == gateway.EventModelChanged {
-			state.ApplyGatewayForEvent(p.st, m)
-		}
+		state.ApplyGatewayForEvent(p.st, m)
 	case components.ModelSelectMsg:
 		p.handleSelect(h, m)
 	}
@@ -93,19 +87,11 @@ type pickerOverlay struct {
 // ID 返回浮层标识。
 func (o *pickerOverlay) ID() string { return "models.picker" }
 
-// HandleKey 委托组件状态机（模态消费）；esc/enter 由浮层关闭自身
-// （P0-2 弹栈语义，与 sessions picker 一致）。
+// HandleKey 全权委托组件状态机（模态消费）。
 func (o *pickerOverlay) HandleKey(h kernel.Host, msg tea.KeyMsg) (consumed bool) {
-	switch msg.String() {
-	case "esc", "enter":
-		if _, cmd := o.p.picker.Update(msg); cmd != nil {
-			h.GoCmd(cmd)
-		}
-		h.PopOverlay()
-		return true
+	if _, cmd := o.p.picker.Update(msg); cmd != nil {
+		h.GoCmd(cmd)
 	}
-	// 其余键委托组件（组件对这些键不产出命令）。
-	_, _ = o.p.picker.Update(msg)
 	return true
 }
 
