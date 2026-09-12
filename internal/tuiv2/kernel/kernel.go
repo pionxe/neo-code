@@ -131,8 +131,6 @@ func (k *Kernel) Register(p Plugin) error {
 // 代际号递增使旧泵产物（信封/closed）全部失效；旧 channel 由调用方负责
 // 关闭（cancel 订阅 ctx），旧泵 goroutine 在关闭后返回陈旧 closed 被丢弃。
 // 新泵在下一轮 flushCmds 武装。
-// 防御性约定（审计 P2-③）：不得对当前已绑定通道重复调用——同通道双泵
-// 会使事件随机落入陈旧泵被代际丢弃；仅换代（新会话订阅）时调用。
 func (k *Kernel) BindEventStream(ch <-chan gateway.GatewayEvent) {
 	k.pumpGen++
 	k.eventCh = ch
@@ -172,10 +170,7 @@ func (k *Kernel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 内核私有消息：前置过滤，永不入广播。
 		// 超时回落后同步 Mode 槽（模式机是唯一事实源，P1 修复：此前槽与机分叉）。
 		k.modes.onLeaderTimeout(m)
-		if k.st.Mode != k.modes.mode {
-			k.st.Mode = k.modes.mode
-			k.broadcast(state.ModeChanged{From: state.LeaderMode, To: k.modes.mode})
-		}
+		k.st.Mode = k.modes.mode
 	case notifyExpiryMsg:
 		// 内核私有消息：按代际对号清除，旧定时器不覆盖新提示。
 		if m.gen == k.notifyGen {
@@ -243,7 +238,7 @@ func (k *Kernel) dispatchKey(msg tea.KeyMsg) {
 	}
 	// 3. 当前模式绑定：精确优先、通配兜底；均未命中丢弃
 	//（Leader 未命中额外静默回落 Normal）。
-	if b, ok := k.bindings.lookup(k.modes.mode, msg, k.st); ok {
+	if b, ok := k.bindings.lookup(k.modes.mode, msg); ok {
 		b.invoke(k.host, msg)
 		return
 	}
@@ -304,17 +299,12 @@ func (k *Kernel) drain() {
 }
 
 // setMode 切换模式：同步内核模式机与 Mode 槽（内核是该槽唯一写者），
-// 进入 Leader 时武装带代际号的超时命令；实际变化时广播 ModeChanged
-// （cmdline 据此清理 Search/Ex——issue #27 S3-3 契约）。
+// 进入 Leader 时武装带代际号的超时命令。
 func (k *Kernel) setMode(next state.InputMode) {
-	prev := k.modes.mode
 	if cmd := k.modes.setMode(next); cmd != nil {
 		k.pendingCmds = append(k.pendingCmds, cmd)
 	}
 	k.st.Mode = k.modes.mode
-	if prev != k.modes.mode {
-		k.broadcast(state.ModeChanged{From: prev, To: k.modes.mode})
-	}
 }
 
 // flushCmds 返回本轮累积命令（含事件泵重挂），空时返回 nil。
@@ -372,17 +362,6 @@ func (h kernelHost) Gateway() gateway.Client { return h.k.client }
 
 // BindEventStream 实现 Host：转发内核重绑定（换代协议见 Kernel.BindEventStream）。
 func (h kernelHost) BindEventStream(ch <-chan gateway.GatewayEvent) { h.k.BindEventStream(ch) }
-
-// Commands 返回命令注册表快照（Shortcut 预派生）。
-func (h kernelHost) Commands() []Command { return h.k.commands.snapshot(&h.k.bindings) }
-
-// RunCommand 按名或别名执行命令；未知命令返回错误。
-func (h kernelHost) RunCommand(nameOrAlias string, args []string) error {
-	return h.k.commands.runResolved(h, nameOrAlias, args)
-}
-
-// Bindings 返回键位绑定注册表快照。
-func (h kernelHost) Bindings() []Binding { return h.k.bindings.all() }
 
 // GoCmd 收集异步命令，经 Update 返回值交还 bubbletea 执行。
 func (h kernelHost) GoCmd(cmd tea.Cmd) {
