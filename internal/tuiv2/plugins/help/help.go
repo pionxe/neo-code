@@ -38,6 +38,21 @@ func (p *Plugin) open(h kernel.Host) {
 	h.PushOverlay(&overlay{h: h})
 }
 
+// Commands 声明 /help 命令（issue #41 内核接线补齐——旧 app 层
+// /help 与 :help 的唯一实现随旧路由删除，命令表必须先补位）。
+// Aliases 含无斜杠 "help"：Ex 行（:help）与 slash（/help）双入口可达。
+func (p *Plugin) Commands() []kernel.Command {
+	return []kernel.Command{
+		{
+			Name:        "/help",
+			Aliases:     []string{"help"},
+			Description: "打开帮助面板",
+			Category:    "help",
+			Run:         func(h kernel.Host, args []string) { p.open(h) },
+		},
+	}
+}
+
 // overlay 是帮助浮层（内容即注册表快照的渲染）。
 type overlay struct{ h kernel.Host }
 
@@ -85,6 +100,7 @@ func (p *Plugin) Bindings() []kernel.Binding {
 			Mode:        state.LeaderMode,
 			Key:         "h",
 			Description: "打开帮助面板",
+			Command:     "/help", // 命令面板快捷键列据此派生（ADR-010）
 			OnKey: func(h kernel.Host) {
 				p.open(h)
 			},
