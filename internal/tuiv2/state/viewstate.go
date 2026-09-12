@@ -8,6 +8,7 @@ import (
 )
 
 // ViewState 是 TUI v2 的单一界面状态源，所有子组件从这里读取渲染数据。
+// 写权约定（ADR-009）：每个槽的写权归唯一 owner（见各字段注释），读权开放。
 type ViewState struct {
 	Gateway GatewayState
 	Runtime RuntimeState
@@ -19,6 +20,15 @@ type ViewState struct {
 	Confirm ConfirmState
 	Search  SearchState
 	Ex      ExState
+	// Notify 是内核拥有的弱提示槽（ADR-012）：文本由内核经 Host.Notify 写入，
+	// 并由内核定时器到期清除；其他插件只读。
+	Notify NotifyState
+}
+
+// NotifyState 描述状态栏弱提示的当前内容与写入时间（内核拥有，见 ADR-012）。
+type NotifyState struct {
+	Text string
+	At   time.Time
 }
 
 // OverlayType 描述当前激活的浮层类型，所有引用必须使用常量，禁止散落字符串字面量。
