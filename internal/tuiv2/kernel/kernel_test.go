@@ -313,13 +313,23 @@ func TestEventPumpLifecycle(t *testing.T) {
 	}
 	ch <- gateway.GatewayEvent{Type: gateway.EventRunStarted}
 	msg := cmd()
-	if _, ok := msg.(gateway.GatewayEvent); !ok {
-		t.Fatalf("pump delivered %T, want GatewayEvent", msg)
+	env, ok := msg.(gatewayEventEnvelope)
+	if !ok {
+		t.Fatalf("pump delivered %T, want gatewayEventEnvelope", msg)
 	}
-	// 经 Update 广播给 Reactor，并重挂泵。
+	if env.event.Type != gateway.EventRunStarted {
+		t.Fatalf("envelope payload = %v", env.event)
+	}
+	// 经 Update 广播裸事件给 Reactor，并重挂泵。
 	k.Update(msg)
 	if len(r.record) != 1 {
 		t.Fatalf("event should broadcast, saw %d", len(r.record))
+	}
+	if ev, ok := r.record[0].(gateway.GatewayEvent); !ok || ev.Type != gateway.EventRunStarted {
+		t.Fatalf("broadcast payload = %v, want bare GatewayEvent", r.record[0])
+	}
+	if !k.pumpArmed {
+		t.Fatal("pump should rearm after envelope delivery")
 	}
 	// 关闭流：泵返回私有关闭消息，Update 后停止重挂。
 	close(ch)

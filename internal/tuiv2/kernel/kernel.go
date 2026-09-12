@@ -173,8 +173,14 @@ func (k *Kernel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		k.eventCh = nil
 		k.pumpArmed = false // 泵已停，允许 BindEventStream 后重新武装
 		k.debugf("event stream closed, pump stopped")
-	case gateway.GatewayEvent:
+	case gatewayEventEnvelope:
+		// 泵产物信封（内核私有）：armed 解除只认信封类型——插件经 GoCmd
+		// 返回 GatewayEvent 形状的消息不会误解除单泵不变量（审计附带项）。
 		k.pumpArmed = false // 事件即泵的产物：交付即消费，允许 flushCmds 重挂下一泵
+		k.broadcast(m.event)
+	case gateway.GatewayEvent:
+		// 非泵来源的 GatewayEvent（插件 GoCmd/State 显式回流）：照常广播，
+		// 但不解除 pumpArmed（单泵不变量）。
 		k.broadcast(msg)
 	default:
 		// 插件间消息：广播给全部 Reactor。口径：凡非键/鼠标/窗口/内核私有
@@ -299,6 +305,13 @@ func (k *Kernel) flushCmds() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// gatewayEventEnvelope 是事件泵产物的内核私有信封（永不入广播本体，
+// Update 内拆包后广播裸事件）：pumpArmed 的解除只认信封类型，
+// 与"插件经 GoCmd 返回 GatewayEvent 形状消息"严格区分（审计附带项）。
+type gatewayEventEnvelope struct {
+	event gateway.GatewayEvent
+}
+
 // waitEvent 在事件流已绑定且泵未武装时返回泵命令（占用即置 pumpArmed）；
 // 流关闭消息经 Update 重置 pumpArmed 后才允许再次武装。
 func (k *Kernel) waitEvent() tea.Cmd {
@@ -312,7 +325,7 @@ func (k *Kernel) waitEvent() tea.Cmd {
 		if !ok {
 			return eventStreamClosedMsg{}
 		}
-		return event
+		return gatewayEventEnvelope{event: event}
 	}
 }
 
