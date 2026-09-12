@@ -23,14 +23,6 @@ const (
 	inspectorWideMin     = 100
 )
 
-// StartupConfig 承载 TUI v2 独立入口解析出的启动参数和 Gateway 客户端。
-type StartupConfig struct {
-	Backend  string
-	Scenario string
-	Debug    bool
-	Client   gateway.Client
-}
-
 // App 是 TUI v2 的根组件，负责持有 Gateway 客户端、集中式 ViewState 和顶层消息路由。
 type App struct {
 	client gateway.Client

@@ -1,6 +1,7 @@
 // Package tuiv2 提供 TUI v2 的内核装配根。
-// 本文件是 S3-4 内核接线的产物（issue #31）：
-// 装配 kernel + 10 插件替代旧 app 层路由。
+// 本文件是 S3-4 内核接线的产物（issue #31 装配、issue #41 接线切换）：
+// 装配 kernel + 11 插件 + bootstrapReactor 替代旧 app 层路由，
+// 并承载入口启动参数类型 StartupConfig（自 app.go 迁入）。
 //
 // 职责边界：本文件仅做装配（创建 + 注册 + 接线），不承载业务规则。
 package tuiv2
@@ -8,6 +9,7 @@ package tuiv2
 import (
 	"context"
 
+	"neo-code/internal/tuiv2/gateway"
 	"neo-code/internal/tuiv2/kernel"
 	"neo-code/internal/tuiv2/plugins/chat"
 	"neo-code/internal/tuiv2/plugins/cmdline"
@@ -23,9 +25,18 @@ import (
 	"neo-code/internal/tuiv2/state"
 )
 
+// StartupConfig 承载 TUI v2 独立入口解析出的启动参数和 Gateway 客户端。
+// 自 app.go 迁入（issue #41 S3-4 删码前置步骤）：kernel 装配路径与
+// cmd 入口均引用本类型，旧 app 层删除后由本文件作为唯一声明处。
+type StartupConfig struct {
+	Backend  string
+	Scenario string
+	Debug    bool
+	Client   gateway.Client
+}
+
 // NewKernelApp 创建基于内核 + 插件的 TUI v2 应用。
 // 返回值满足 tea.Model 契约，可直接传给 tea.NewProgram。
-// 复用旧 StartupConfig 类型（由 app.go 声明）以保持参数兼容。
 func NewKernelApp(ctx context.Context, cfg StartupConfig) *kernel.Kernel {
 	_ = ctx // 预留：插件 Init 可能需要请求作用域取消
 	st := state.NewViewState()
