@@ -22,21 +22,18 @@ type testFakeHost struct {
 	quitted  bool
 }
 
-func (f *testFakeHost) State() *state.ViewState                        { return state.NewViewState() }
-func (f *testFakeHost) Gateway() gateway.Client                        { return nil }
+func (f *testFakeHost) State() *state.ViewState          { return state.NewViewState() }
+func (f *testFakeHost) Gateway() gateway.Client          { return nil }
 func (f *testFakeHost) BindEventStream(ch <-chan gateway.GatewayEvent) {}
-func (f *testFakeHost) Commands() []Command                            { return nil }
-func (f *testFakeHost) RunCommand(string, []string) error              { return nil }
-func (f *testFakeHost) Bindings() []Binding                            { return nil }
-func (f *testFakeHost) GoCmd(cmd tea.Cmd)                              {}
-func (f *testFakeHost) Send(msg tea.Msg)                               {}
-func (f *testFakeHost) Mode() state.InputMode                          { return state.NormalMode }
-func (f *testFakeHost) SetMode(m state.InputMode)                      {}
-func (f *testFakeHost) PushOverlay(o Overlay)                          {}
-func (f *testFakeHost) PopOverlay()                                    {}
-func (f *testFakeHost) Confirm(req state.ConfirmRequest)               { f.notifies = append(f.notifies, req.Title) }
-func (f *testFakeHost) Notify(text string)                             { f.notifies = append(f.notifies, text) }
-func (f *testFakeHost) Quit()                                          { f.quitted = true }
+func (f *testFakeHost) GoCmd(cmd tea.Cmd)                {}
+func (f *testFakeHost) Send(msg tea.Msg)                 {}
+func (f *testFakeHost) Mode() state.InputMode            { return state.NormalMode }
+func (f *testFakeHost) SetMode(m state.InputMode)        {}
+func (f *testFakeHost) PushOverlay(o Overlay)            {}
+func (f *testFakeHost) PopOverlay()                      {}
+func (f *testFakeHost) Confirm(req state.ConfirmRequest) { f.notifies = append(f.notifies, req.Title) }
+func (f *testFakeHost) Notify(text string)               { f.notifies = append(f.notifies, text) }
+func (f *testFakeHost) Quit()                            { f.quitted = true }
 
 // keyRunes 构造一个 runes 按键消息（如 "y"、"abc"）。
 func keyRunes(s string) tea.KeyMsg {
