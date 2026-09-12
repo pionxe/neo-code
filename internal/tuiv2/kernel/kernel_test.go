@@ -165,7 +165,7 @@ func TestKeyRoutingThreeLevels(t *testing.T) {
 
 	// Leader 未命中键 → 静默回落 Normal（不命中任何绑定、不广播）。
 	k.setMode(state.LeaderMode)
-	k.dispatchKey("x")
+	k.dispatchKey(keyRunes("x"))
 	if k.modes.mode != state.NormalMode {
 		t.Fatal("unmatched leader key should fall back to normal")
 	}
@@ -173,12 +173,12 @@ func TestKeyRoutingThreeLevels(t *testing.T) {
 		t.Fatalf("hits = %v, want none", hits)
 	}
 	// Normal 命中 j。
-	k.dispatchKey("j")
+	k.dispatchKey(keyRunes("j"))
 	if len(hits) != 1 || hits[0] != "j" {
 		t.Fatalf("hits = %v, want [j]", hits)
 	}
 	// 未命中键被丢弃。
-	k.dispatchKey("zz")
+	k.dispatchKey(keyRunes("zz"))
 	if len(hits) != 1 {
 		t.Fatalf("unmatched key should be dropped, hits = %v", hits)
 	}
@@ -195,23 +195,23 @@ func TestOverlayTopExclusiveAndEscSemantics(t *testing.T) {
 	// 消费型浮层：esc 被消费（不弹栈），其他键也到不了绑定。
 	consumer := &scriptedOverlay{consume: true}
 	k.stack.push(consumer)
-	k.dispatchKey("esc")
+	k.dispatchKey(tea.KeyMsg{Type: tea.KeyEsc})
 	if k.stack.depth() != 1 {
 		t.Fatal("consumed esc should not pop")
 	}
-	k.dispatchKey("j")
+	k.dispatchKey(keyRunes("j"))
 	if len(hits) != 0 {
 		t.Fatal("overlay top is exclusive, binding must not fire")
 	}
 	// 非消费型浮层：esc 未消费 → 弹栈。
 	k.stack.push(&scriptedOverlay{consume: false})
-	k.dispatchKey("esc")
+	k.dispatchKey(tea.KeyMsg{Type: tea.KeyEsc})
 	if k.stack.depth() != 1 { // 弹出的是第二层，第一层（消费型）仍在
 		t.Fatalf("depth = %d, want 1", k.stack.depth())
 	}
 	// 弹掉剩余浮层后绑定恢复可达。
 	k.stack.pop()
-	k.dispatchKey("j")
+	k.dispatchKey(keyRunes("j"))
 	if len(hits) != 1 {
 		t.Fatalf("binding should fire after overlays gone, hits = %v", hits)
 	}

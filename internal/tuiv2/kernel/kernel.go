@@ -152,7 +152,7 @@ func (k *Kernel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	k.pendingCmds = k.pendingCmds[:0]
 	switch m := msg.(type) {
 	case tea.KeyMsg:
-		k.dispatchKey(m.String())
+		k.dispatchKey(m)
 	case tea.MouseMsg:
 		// 鼠标消息同禁入广播（§4.1 同级契约），路由语义由 S7 鼠标插件钉死。
 	case tea.WindowSizeMsg:
@@ -200,7 +200,10 @@ func (k *Kernel) View() string {
 }
 
 // dispatchKey 实现三级按键路由（§4.1，详见 modeMachine 注释）。
-func (k *Kernel) dispatchKey(key string) {
+// 透传原始 KeyMsg：通配绑定（OnKeyMsg）需要按键形状（如字符插入），
+// 精确绑定仅消费 String() 语义。
+func (k *Kernel) dispatchKey(msg tea.KeyMsg) {
+	key := msg.String()
 	// 1. 内核保留键：ctrl+c 请求退出。
 	if key == "ctrl+c" {
 		k.debugf("reserved ctrl+c, quit requested")
@@ -216,9 +219,10 @@ func (k *Kernel) dispatchKey(key string) {
 		}
 		return
 	}
-	// 3. 当前模式绑定：未命中丢弃；Leader 未命中额外静默回落 Normal。
-	if b, ok := k.bindings.lookup(k.modes.mode, key); ok {
-		b.OnKey(k.host)
+	// 3. 当前模式绑定：精确优先、通配兜底；均未命中丢弃
+	//（Leader 未命中额外静默回落 Normal）。
+	if b, ok := k.bindings.lookup(k.modes.mode, msg); ok {
+		b.invoke(k.host, msg)
 		return
 	}
 	if k.modes.mode == state.LeaderMode {
