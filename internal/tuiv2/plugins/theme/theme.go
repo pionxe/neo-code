@@ -3,7 +3,7 @@
 // 自定义主题 = 新增一个插件文件（提供 /theme xxx 命令）+ 装配处注册。
 //
 // 纪律（审计裁定）：SetActive 仅限 Update/React 同步路径调用
-//（bubbletea View 与 Update 同 goroutine，tea.Cmd goroutine 内调用即竞态）；
+// （bubbletea View 与 Update 同 goroutine，tea.Cmd goroutine 内调用即竞态）；
 // 全组件参数化（state.Theme）登记 S11。
 package theme
 
