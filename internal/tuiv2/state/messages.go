@@ -1,5 +1,7 @@
 package state
 
+import "neo-code/internal/tuiv2/gateway"
+
 // 本文件定义内核服务的跨插件消息类型（规范 §6/ADR-012）：
 // 类型收敛在 state 包，插件之间互不 import 也能共享同一套消息词汇。
 
@@ -28,4 +30,18 @@ type ConfirmResult struct {
 // Stream 条目（旧路径 app.go:429 行为等价）。
 type UserSubmitted struct {
 	Text string
+}
+
+// SessionLoaded 表示一次会话切换完成（sessions 插件经 GoCmd 执行
+// LoadSession + 重订阅后广播）：chat 插件订阅它重载 Stream 槽。
+type SessionLoaded struct {
+	Session gateway.SessionSummary
+	Detail  *gateway.SessionDetail
+}
+
+// SessionDeleted 表示一次会话删除（本地合成事件：契约无 deleteSession RPC，
+// 复用 reducer 既有 EventSessionDeleted 分支迁移 Gateway.Sessions——
+// issue #27 S3-2 / 审计 P2-⑩；"重启复活"差距已文档化）。
+type SessionDeleted struct {
+	ID string
 }

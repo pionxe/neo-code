@@ -73,16 +73,10 @@ func reduceCore(current *ViewState, event gateway.GatewayEvent, applyInput bool)
 		return appendStream(current, streamEntry(event, "status", payloadString(event.Payload, "message", "phase", "status")))
 	case gateway.EventTokenUsage:
 		current.Runtime.Tokens = tokenUsageFromPayload(event.Payload, current.Runtime.Tokens)
-	case gateway.EventSessionCreated:
-		current.Gateway.Sessions = append(current.Gateway.Sessions, sessionFromPayload(event.Payload))
-	case gateway.EventSessionDeleted:
-		current.Gateway.Sessions = deleteSession(current.Gateway.Sessions, payloadString(event.Payload, "id", "session_id"))
-	case gateway.EventSessionUpdated:
-		current.Gateway.Sessions = upsertSession(current.Gateway.Sessions, sessionFromPayload(event.Payload))
-	case gateway.EventModelChanged:
-		current.Gateway.ActiveModel = payloadString(event.Payload, "model_id", "model", "id")
-	case gateway.EventHealthChanged:
-		current.Gateway.Connected = payloadBool(event.Payload, "connected", "ok")
+	case gateway.EventSessionCreated, gateway.EventSessionDeleted,
+		gateway.EventSessionUpdated, gateway.EventModelChanged, gateway.EventHealthChanged:
+		// Gateway 域写入单一出处（S3-2 抽取，插件路径由 sessions/models 调用）。
+		ApplyGatewayForEvent(current, event)
 	case gateway.EventGatewayOffline:
 		current.Gateway.Connected = false
 		current.Runtime.Phase = RuntimePhaseError
