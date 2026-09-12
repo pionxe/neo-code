@@ -255,6 +255,7 @@ func TestCommandsRegistry(t *testing.T) {
 func TestCommandCancelWithClient(t *testing.T) {
 	p, h := newTestPlugin(t)
 	// client 为 nil（fake Host 默认）+ 运行中：应提示取消失败而非 panic。
+	p.st.Runtime.Phase = state.RuntimePhaseRunning
 	p.st.Runtime.RunID = "run-1"
 	byName := map[string]kernel.Command{}
 	for _, c := range p.Commands() {
@@ -263,6 +264,14 @@ func TestCommandCancelWithClient(t *testing.T) {
 	byName["/cancel"].Run(h, nil)
 	if !strings.Contains(h.notifies[len(h.notifies)-1], "无可用后端") {
 		t.Fatalf("cancel without client = %v", h.notifies)
+	}
+	// stale RunID 场景（审计 P1-b）：run 已结束（Phase=idle）但 RunID 残留，
+	// 不得误发 CancelRun——静默 no-op。
+	p.st.Runtime.Phase = state.RuntimePhaseIdle
+	before := len(h.notifies)
+	byName["/cancel"].Run(h, nil)
+	if len(h.notifies) != before {
+		t.Fatal("idle phase with stale RunID must stay silent")
 	}
 }
 
@@ -283,7 +292,13 @@ func TestRecordSubmittedTextGuardsRetry(t *testing.T) {
 // fakeClient 是 gateway.Client 的最小 fake：仅记录 CancelRun 调用，
 // 其余方法返回 ErrUnsupported 语义的空实现。
 type fakeClient struct {
-	cancelRuns int
+	cancelCalls []cancelCall
+}
+
+// cancelCall 记录一次 CancelRun 的入参（审计 P2：仅计数不校验参数不充分）。
+type cancelCall struct {
+	sessionID string
+	runID     string
 }
 
 func (c *fakeClient) Health(ctx context.Context) (*gateway.HealthResult, error) {
@@ -302,7 +317,7 @@ func (c *fakeClient) SendMessage(ctx context.Context, sessionID, text string) (*
 	return nil, errFakeUnsupported
 }
 func (c *fakeClient) CancelRun(ctx context.Context, sessionID, runID string) error {
-	c.cancelRuns++
+	c.cancelCalls = append(c.cancelCalls, cancelCall{sessionID: sessionID, runID: runID})
 	return nil
 }
 func (c *fakeClient) SubscribeEvents(ctx context.Context, sessionID string) (<-chan gateway.GatewayEvent, error) {
@@ -337,6 +352,7 @@ func TestCommandCancelInvokesClient(t *testing.T) {
 	h := newRecordingHost()
 	h.client = client // 必须在 Init 前注入：插件在 Init 时记录 Gateway 透传
 	p.Init(context.Background(), h)
+	p.st.Runtime.Phase = state.RuntimePhaseRunning
 	p.st.Runtime.RunID = "run-9"
 	p.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "sess-1"}
 
@@ -345,9 +361,12 @@ func TestCommandCancelInvokesClient(t *testing.T) {
 		byName[c.Name] = c
 	}
 	byName["/cancel"].Run(h, nil)
-	// recordingHost 执行 GoCmd；确认 CancelRun 携带正确参数被调用。
-	if client.cancelRuns != 1 {
-		t.Fatalf("cancelRuns = %d, want 1", client.cancelRuns)
+	// recordingHost 执行 GoCmd；断言 CancelRun 携带正确参数（审计 P2）。
+	if len(client.cancelCalls) != 1 {
+		t.Fatalf("cancelCalls = %d, want 1", len(client.cancelCalls))
+	}
+	if got := client.cancelCalls[0]; got.sessionID != "sess-1" || got.runID != "run-9" {
+		t.Fatalf("cancel args = %+v, want sess-1/run-9", got)
 	}
 }
 

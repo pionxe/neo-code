@@ -109,25 +109,73 @@ func TestReduceConversationInputTempWriteScope(t *testing.T) {
 			before.Search = SearchState{Active: true, Query: "q"}
 			before.Ex = ExState{Active: true, Input: "w"}
 			before.Notify = NotifyState{Text: "n"}
+			before.Layout = LayoutState{Width: 100, ScrollOffset: 3, AutoScroll: false}
+			before.Confirm = ConfirmState{Title: "t"}
 			snapshot := *before
 
-			ReduceConversation(before, event(et, map[string]any{"text": "x", "prompt": "p", "question": "q"}))
+			ReduceConversation(before, event(et, map[string]any{"text": "x", "prompt": "p", "question": "q", "decision": "allow", "answer": "a", "phase": "cancelled"}))
 
-			if !reflect.DeepEqual(snapshot.Input, before.Input) {
-				// Input 变化属双轨期临时越权（已登记）。
-			} else if et != gateway.EventPermissionResolved && et != gateway.EventUserQuestionAnswered && et != gateway.EventRunCancelled {
-				t.Fatalf("%q should write Input slot (temp grant)", et)
+			// 允许变化：Input（临时越权）、Stream（状态条目）、Runtime（Phase）。
+			// Confirm 槽：本组事件不涉及确认框，必须零变化（补快照，审计 P2）。
+			if !reflect.DeepEqual(snapshot.Confirm, before.Confirm) {
+				t.Fatalf("%q touched Confirm slot", et)
 			}
-			// 其余槽零变化（除 Input/Stream/Runtime 的临时授权范围）。
-			if !reflect.DeepEqual(snapshot.Search, before.Search) || !reflect.DeepEqual(snapshot.Ex, before.Ex) || !reflect.DeepEqual(snapshot.Notify, before.Notify) {
-				t.Fatalf("%q touched Search/Ex/Notify slot", et)
+			// 禁止变化：Search/Ex/Notify/Overlay/Layout/Mode/Gateway。
+			if !reflect.DeepEqual(snapshot.Search, before.Search) {
+				t.Fatalf("%q touched Search slot", et)
 			}
-			if !reflect.DeepEqual(snapshot.Overlay, before.Overlay) || snapshot.Mode != before.Mode {
-				t.Fatalf("%q touched Overlay/Mode slot", et)
+			if !reflect.DeepEqual(snapshot.Ex, before.Ex) {
+				t.Fatalf("%q touched Ex slot", et)
+			}
+			if !reflect.DeepEqual(snapshot.Notify, before.Notify) {
+				t.Fatalf("%q touched Notify slot", et)
+			}
+			if !reflect.DeepEqual(snapshot.Overlay, before.Overlay) {
+				t.Fatalf("%q touched Overlay slot", et)
+			}
+			if !reflect.DeepEqual(snapshot.Layout, before.Layout) {
+				t.Fatalf("%q touched Layout slot", et)
+			}
+			if snapshot.Mode != before.Mode {
+				t.Fatalf("%q touched Mode slot", et)
 			}
 			if !reflect.DeepEqual(snapshot.Gateway, before.Gateway) {
 				t.Fatalf("%q touched Gateway slot", et)
 			}
 		})
+	}
+}
+
+// TestReduceConversationDecisionAccounting 是白名单的机械守卫（审计 P2）：
+// 转发数 + 显式排除数 == 事件常量总数。gateway 新增第 28 个事件时
+// allEventTypes 变长而两表未更新，本测试即失败——强制补决定。
+func TestReduceConversationDecisionAccounting(t *testing.T) {
+	excluded := map[gateway.EventType]bool{
+		gateway.EventSessionCreated: true,
+		gateway.EventSessionDeleted: true,
+		gateway.EventSessionUpdated: true,
+		gateway.EventModelChanged:   true,
+		gateway.EventHealthChanged:  true,
+		gateway.EventGatewayOffline: true, // chat bespoke 分支（见插件 React）
+	}
+	forwarded, excludedCount := 0, 0
+	for _, et := range allEventTypes() {
+		if conversationForwarded(et) {
+			forwarded++
+			if excluded[et] {
+				t.Fatalf("%q 同时出现在转发与排除集合", et)
+			}
+			continue
+		}
+		excludedCount++
+		if !excluded[et] {
+			t.Fatalf("%q 未登记决定（转发或排除二选一）", et)
+		}
+	}
+	if forwarded != 21 {
+		t.Fatalf("forwarded = %d, want 21", forwarded)
+	}
+	if excludedCount != len(excluded) {
+		t.Fatalf("excluded = %d, want %d（gateway 新增事件需同步三张表）", excludedCount, len(excluded))
 	}
 }
