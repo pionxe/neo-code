@@ -133,6 +133,46 @@ func TestReactStreamGrowthResetsScroll(t *testing.T) {
 	}
 }
 
+// TestReactSearchJumpedScrollsToEntry 验证搜索跳转意图消费（issue #41
+// 审计 P1-4 接线）：cmdline 广播 SearchJumped，chat 调 ScrollToEntry——
+// 行级定位落 ScrollOffset 并关闭 AutoScroll（含尾条目，语义随组件统一）；
+// 越界索引 no-op（ScrollToEntry 内建）。
+func TestReactSearchJumpedScrollsToEntry(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	// 多条消息 + 窄视口：保证 maxOffset 足够大，跳转产生正向 offset。
+	p.st.Stream = []state.StreamEntry{
+		{ID: "a", Type: "message", Content: "one", Metadata: map[string]any{"role": "user"}},
+		{ID: "b", Type: "message", Content: "two", Metadata: map[string]any{"role": "assistant"}},
+		{ID: "c", Type: "message", Content: "three", Metadata: map[string]any{"role": "user"}},
+		{ID: "d", Type: "message", Content: "four", Metadata: map[string]any{"role": "assistant"}},
+		{ID: "e", Type: "message", Content: "five", Metadata: map[string]any{"role": "user"}},
+		{ID: "f", Type: "message", Content: "six", Metadata: map[string]any{"role": "assistant"}},
+	}
+	p.st.Layout.Width = 40
+	p.st.Layout.Height = 10
+	p.st.Layout.AutoScroll = true
+	// 跳到首条目（index 0）：视口顶部定位，AutoScroll 关闭。
+	p.React(nil, state.SearchJumped{EntryIndex: 0})
+	if p.st.Layout.AutoScroll {
+		t.Fatal("jump should disable auto scroll")
+	}
+	if p.st.Layout.ScrollOffset <= 0 {
+		t.Fatalf("jump should set positive offset, got %d", p.st.Layout.ScrollOffset)
+	}
+	// 跳到尾条目（index 1）：同样关闭 AutoScroll（组件统一语义）。
+	p.st.Layout.AutoScroll = true
+	p.React(nil, state.SearchJumped{EntryIndex: 1})
+	if p.st.Layout.AutoScroll {
+		t.Fatal("tail jump should disable auto scroll (ScrollToEntry semantics)")
+	}
+	// 越界索引：no-op（不 panic、滚动状态不变）。
+	before := p.st.Layout.ScrollOffset
+	p.React(nil, state.SearchJumped{EntryIndex: 99})
+	if p.st.Layout.ScrollOffset != before {
+		t.Fatal("out-of-range jump should be no-op")
+	}
+}
+
 func TestReactNonDialogueEventsIgnored(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	// sessions/models/health 类事件：chat 不处理（槽纪律——由对应插件处理）。

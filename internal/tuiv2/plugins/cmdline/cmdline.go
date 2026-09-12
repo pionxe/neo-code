@@ -200,7 +200,7 @@ func (p *Plugin) executeSearch(h kernel.Host) {
 		h.Notify("无匹配结果")
 		return
 	}
-	p.jumpTo(matches[0])
+	p.jumpTo(h, matches[0])
 }
 
 // nextMatch 在匹配间循环跳转（n/N）。
@@ -210,12 +210,18 @@ func (p *Plugin) nextMatch(h kernel.Host, delta int) {
 		return
 	}
 	p.st.Search.MatchIndex = (p.st.Search.MatchIndex + delta + len(matches)) % len(matches)
-	p.jumpTo(matches[p.st.Search.MatchIndex])
+	p.jumpTo(h, matches[p.st.Search.MatchIndex])
 }
 
-// jumpTo 滚动到指定条目（offset = 总条目 - 索引 - 1，与流渲染坐标一致）。
-func (p *Plugin) jumpTo(index int) {
-	total := len(p.st.Stream)
-	p.st.Layout.ScrollOffset = total - index - 1
-	p.st.Layout.AutoScroll = index == total-1
+// jumpTo 广播搜索跳转意图（issue #41 审计 P1-4/P2-3 裁定的单一真源设计）：
+// 本插件只写自己拥有的 Search 槽（匹配集合/游标），滚动落地经
+// SearchJumped 广播移交 chat 插件调 AgentStream.ScrollToEntry——
+// Layout.ScrollOffset/AutoScroll 写权归 chat（槽纪律 ADR-009），
+// 且行级定位与视口 clamp 数学收敛在组件内一处，不再由本插件用
+// 条目数冒充渲染行数（多行条目的维度错配回归）。
+func (p *Plugin) jumpTo(h kernel.Host, index int) {
+	if index < 0 || index >= len(p.st.Stream) {
+		return
+	}
+	h.Send(state.SearchJumped{EntryIndex: index})
 }

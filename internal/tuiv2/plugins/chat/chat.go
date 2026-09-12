@@ -84,6 +84,13 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 		})
 		p.st.Layout.AutoScroll = true
 		p.st.Layout.ScrollOffset = 0
+	case state.SearchJumped:
+		// cmdline 插件的搜索跳转意图（issue #41 审计 P1-4 接线）：
+		// 经 ScrollToEntry 落滚动——行级定位 + 视口 clamp 的单一真源，
+		// 消除 cmdline 旧朴素公式以条目数冒充渲染行数的维度错配。
+		// 越界 no-op 由 ScrollToEntry 内建；AutoScroll 语义随组件统一
+		// （跳转即固定视口定位并关闭自动跟随，含尾条目）。
+		p.stream.ScrollToEntry(m.EntryIndex)
 	}
 }
 

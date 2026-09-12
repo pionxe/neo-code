@@ -141,9 +141,21 @@ func TestSearchScansStreamAndJumps(t *testing.T) {
 	if p.st.Search.MatchIndex != 0 {
 		t.Fatalf("matchIndex = %d", p.st.Search.MatchIndex)
 	}
-	// 跳转复位滚动。
-	if p.st.Layout.AutoScroll {
-		t.Fatal("jump to non-tail match should disable auto scroll")
+	// 跳转经 SearchJumped 广播移交 chat（issue #41 P1-4）：cmdline 不再直写
+	// Layout 槽——最后一次 n 跳转（匹配 0）应产生对应意图广播。
+	jumps := 0
+	var lastJump state.SearchJumped
+	for _, b := range h.broadcasts {
+		if j, ok := b.(state.SearchJumped); ok {
+			jumps++
+			lastJump = j
+		}
+	}
+	if jumps != 3 { // 初次跳转 matches[0]=1 + n→matches[1]=2 + N→matches[0]=1
+		t.Fatalf("search jumps broadcast = %d, want 3", jumps)
+	}
+	if lastJump.EntryIndex != 1 {
+		t.Fatalf("last jump index = %d, want 1", lastJump.EntryIndex)
 	}
 }
 
@@ -291,8 +303,10 @@ func TestEmptySearchSubmitIsNoop(t *testing.T) {
 	}
 }
 
-// TestJumpToTailKeepsAutoScroll：跳转到末条目保持 AutoScroll。
-func TestJumpToTailKeepsAutoScroll(t *testing.T) {
+// TestJumpToTailEmitsIntent：跳转到末条目同样只广播意图（AutoScroll 语义
+// 收敛在 chat 侧 ScrollToEntry 单一真源，issue #41 审计 P2-3 断言翻转——
+// 旧断言"尾跳保持 AutoScroll"随直写 Layout 移除而失效）。
+func TestJumpToTailEmitsIntent(t *testing.T) {
 	p, h := newTestPlugin(t)
 	p.st.Stream = []state.StreamEntry{
 		{ID: "a", Content: "one"},
@@ -303,8 +317,20 @@ func TestJumpToTailKeepsAutoScroll(t *testing.T) {
 	wild := normalWildcard(p.Bindings())
 	wild.OnKeyMsg(h, keys("two"))
 	byKey["enter"].OnKey(h)
-	if !p.st.Layout.AutoScroll {
-		t.Fatal("jump to tail match should keep auto scroll")
+	// cmdline 不直写 Layout（槽写权归 chat）：跳转前后 Layout 槽不变量。
+	if p.st.Layout.ScrollOffset != 0 || !p.st.Layout.AutoScroll {
+		t.Fatalf("cmdline must not write Layout slots: offset=%d auto=%v",
+			p.st.Layout.ScrollOffset, p.st.Layout.AutoScroll)
+	}
+	// 广播的意图指向末条目（index 1）。
+	var jumped bool
+	for _, b := range h.broadcasts {
+		if j, ok := b.(state.SearchJumped); ok && j.EntryIndex == 1 {
+			jumped = true
+		}
+	}
+	if !jumped {
+		t.Fatalf("tail jump should broadcast SearchJumped{1}, broadcasts = %v", h.broadcasts)
 	}
 }
 
