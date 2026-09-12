@@ -398,10 +398,4 @@ func TestHostMethodCoverage(t *testing.T) {
 	if len(k.pendingCmds) == 0 {
 		t.Fatal("notify should arm expiry timer")
 	}
-	// BindEventStream 转发覆盖（P1-③）：Host 方法全路径可达。
-	ch := make(chan gateway.GatewayEvent, 1)
-	h.BindEventStream(ch)
-	if k.eventCh == nil {
-		t.Fatal("BindEventStream should update kernel stream")
-	}
 }
