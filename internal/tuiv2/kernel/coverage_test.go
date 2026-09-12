@@ -460,3 +460,15 @@ func TestWildcardBindingInvokeWithoutExact(t *testing.T) {
 	b := Binding{Key: "", OnKey: func(h Host) {}}
 	b.invoke(&testFakeHost{}, keyRunes("x")) // 无 OnKeyMsg → 静默
 }
+
+func TestDeriveShortcutWildcardPlaceholder(t *testing.T) {
+	// 通配绑定的快捷键列占位（审计 P2-4：kernel 99.3% 缺口在此）。
+	r := &bindingRegistry{}
+	wild := Binding{Mode: state.InputModeInput, Description: "输入编辑", Command: "/input", OnKeyMsg: func(h Host, msg tea.KeyMsg) {}}
+	if err := r.add("p", wild); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if got := deriveShortcut("/input", r); got != "<输入>" {
+		t.Fatalf("shortcut = %q, want <输入>", got)
+	}
+}
