@@ -2,15 +2,11 @@ package tuiv2
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
 	"neo-code/internal/tuiv2/gateway"
-	"neo-code/internal/tuiv2/kernel"
 	"neo-code/internal/tuiv2/state"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // fakeBootstrapClient 可注入行为的 Gateway 测试桩。
