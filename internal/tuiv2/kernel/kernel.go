@@ -75,6 +75,24 @@ func NewKernel(cfg Config) *Kernel {
 	k.opts.Debug = k.opts.Debug || cfg.Debug
 	k.modes = modeMachine{mode: cfg.State.Mode, timeout: k.opts.LeaderTimeout, debugf: k.debugf}
 	k.host = kernelHost{k: k}
+
+	// 内核保留绑定：Normal 模式空格进入 Leader 模式（mode.go §4.1 设计意图的
+	// 落地点，issue #41 内核接线补齐——此前 Leader 无入口，面板/会话/模型/帮助
+	// 四个 Leader 绑定全部不可达）。When 守卫避开搜索/Ex 激活期：此时空格是
+	// cmdline 通配绑定的输入字符，不得被模式切换抢占。
+	if err := k.bindings.add("kernel", Binding{
+		Mode:        state.NormalMode,
+		Key:         " ",
+		Description: "进入 Leader 模式",
+		OnKey:       func(h Host) { h.SetMode(state.LeaderMode) },
+		When: func(s *state.ViewState) bool {
+			return !s.Search.Active && !s.Ex.Active
+		},
+	}); err != nil {
+		// 结构性不可达：注册表此刻仅此一条记录，无冲突源；fail-fast 防御
+		// 未来有人在构造路径误加同键绑定（非法装配尽早失败原则）。
+		panic(fmt.Sprintf("kernel: seed space binding: %v", err))
+	}
 	return k
 }
 

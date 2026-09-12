@@ -87,9 +87,14 @@ func TestRegisterRejectsBindingWithoutAction(t *testing.T) {
 
 func TestCapabilityDiscovery(t *testing.T) {
 	k := NewKernel(Config{})
+	// 内核自身种子 1 条保留绑定（Normal 空格→Leader，issue #41）。
+	seeded := k.bindings.count
+	if seeded != 1 {
+		t.Fatalf("seeded bindings = %d, want 1", seeded)
+	}
 	// barePlugin 只实现 Plugin 最小面：不得进入任何可选能力集合。
 	mustOK(t, k.Register(barePlugin{id: "bare"}), "register bare")
-	if len(k.reactors) != 0 || k.bindings.count != 0 || len(k.commands.list) != 0 || len(k.renderers) != 0 {
+	if len(k.reactors) != 0 || k.bindings.count != seeded || len(k.commands.list) != 0 || len(k.renderers) != 0 {
 		t.Fatalf("bare plugin should not join any capability set")
 	}
 	// 实现了 Reactor 的插件进入广播集合。

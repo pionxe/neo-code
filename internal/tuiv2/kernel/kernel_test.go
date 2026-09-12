@@ -184,6 +184,50 @@ func TestKeyRoutingThreeLevels(t *testing.T) {
 	}
 }
 
+// TestSpaceEntersLeaderMode 验证内核种子绑定：Normal 模式空格进入 Leader
+// 且武装超时命令（issue #41 内核接线补齐——此前 Leader 无入口）。
+func TestSpaceEntersLeaderMode(t *testing.T) {
+	k, _ := newTestKernel(t)
+	k.setMode(state.NormalMode) // 种子绑定注册在 Normal 模式（内核初始为 Input 模式）
+	_, cmd := k.Update(keyRunes(" "))
+	if k.modes.mode != state.LeaderMode {
+		t.Fatalf("space should enter leader, got %v", k.modes.mode)
+	}
+	if cmd == nil {
+		t.Fatal("entering leader should arm the timeout cmd")
+	}
+}
+
+// TestSpaceDuringSearchOrExStaysNormal 验证 When 守卫：搜索/Ex 激活期空格
+// 是 cmdline 通配绑定的输入字符，不得被模式切换抢占。
+func TestSpaceDuringSearchOrExStaysNormal(t *testing.T) {
+	k, _ := newTestKernel(t)
+	k.setMode(state.NormalMode)
+	k.st.Search = state.SearchState{Active: true}
+	k.dispatchKey(keyRunes(" "))
+	if k.modes.mode != state.NormalMode {
+		t.Fatal("space during active search must not enter leader")
+	}
+	k.st.Search = state.SearchState{}
+	k.st.Ex = state.ExState{Active: true}
+	k.dispatchKey(keyRunes(" "))
+	if k.modes.mode != state.NormalMode {
+		t.Fatal("space during active ex must not enter leader")
+	}
+}
+
+// TestSeededSpaceBindingConflictFailsFast 验证内核种子绑定参与冲突检测：
+// 插件再注册 Normal 空格即 fail-fast（非法装配尽早失败）。
+func TestSeededSpaceBindingConflictFailsFast(t *testing.T) {
+	k, _ := newTestKernel(t)
+	err := k.Register(keyPlugin{id: "dup-space", bindings: []Binding{
+		{Mode: state.NormalMode, Key: " ", Description: "冲突绑定", OnKey: func(h Host) {}},
+	}})
+	if err == nil {
+		t.Fatal("duplicate space binding must fail-fast")
+	}
+}
+
 func TestOverlayTopExclusiveAndEscSemantics(t *testing.T) {
 	k := NewKernel(Config{})
 	k.setMode(state.NormalMode) // 绑定注册在 Normal 模式（内核初始为 Input 模式）
@@ -405,7 +449,8 @@ func TestHostMethodCoverage(t *testing.T) {
 		t.Fatal("BindEventStream should update kernel stream")
 	}
 	// Bindings 快照转发覆盖（S3-3 Host 三快照方法之一，另两个已有用例）。
-	if b := h.Bindings(); len(b) != 0 {
-		t.Fatalf("empty kernel bindings = %d, want 0", len(b))
+	// 内核种子 1 条保留绑定（Normal 空格→Leader，issue #41）。
+	if b := h.Bindings(); len(b) != 1 {
+		t.Fatalf("kernel bindings = %d, want 1 (seeded space)", len(b))
 	}
 }
