@@ -98,7 +98,9 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	case sessionStreamReadyMsg:
 		// 换代收尾（Update 循环内执行 Host 副作用）：先关旧流再绑新流；
 		// Load 失败（Detail=nil）经 Notify 呈现，不绑定新流。
+		// （浮层已在 enter 时关闭——弹栈语义统一在 HandleKey。）
 		p.closeStream()
+		p.streamCtx = m.cancel
 		if m.ch != nil {
 			h.BindEventStream(m.ch)
 		}
@@ -106,9 +108,6 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 			h.Notify("切换会话失败：" + m.loadErr.Error())
 		}
 		h.Send(state.SessionLoaded{Session: m.session, Detail: m.detail})
-		if m.detail != nil {
-			h.PopOverlay() // 选择完成，浮层自关（P0-2 弹栈语义）
-		}
 	case components.SessionDeleteMsg:
 		// 危险操作走内核确认服务（ADR-012），结果按 ID 回流。
 		title := m.SessionID
@@ -125,8 +124,9 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	}
 }
 
-// handleSelect 处理会话选择：更新活跃会话 → LoadSession → 重订阅事件流 →
-// 广播 SessionLoaded（chat 重载 Stream 槽）。
+// handleSelect 处理会话选择：更新活跃会话 → 闭包执行 LoadSession + 新流
+// 订阅（**只返回 Msg，无任何 Host 副作用**——P0-1 并发契约）→
+// React 的 sessionStreamReadyMsg 分支完成换代收尾与广播。
 func (p *Plugin) handleSelect(h kernel.Host, msg components.SessionSelectMsg) {
 	if p.client == nil {
 		return
@@ -138,20 +138,18 @@ func (p *Plugin) handleSelect(h kernel.Host, msg components.SessionSelectMsg) {
 	sessionID := msg.Session.ID
 	client := p.client
 	h.GoCmd(func() tea.Msg {
-		detail, err := client.LoadSession(context.Background(), sessionID)
-		if err != nil {
-			return state.SessionLoaded{Session: msg.Session}
+		detail, loadErr := client.LoadSession(context.Background(), sessionID)
+		if loadErr != nil {
+			return sessionStreamReadyMsg{session: msg.Session, loadErr: loadErr}
 		}
-		// 重订阅：关闭旧通道（旧泵陈旧产物被代际丢弃）并换代绑定。
-		p.closeStream()
+		// 先建新流：订阅成功后才在 React 收尾关闭旧流（审计 P1-① 顺序）。
 		subCtx, cancel := context.WithCancel(context.Background())
-		p.streamCtx = cancel
-		eventCh, err := client.SubscribeEvents(subCtx, sessionID)
-		if err != nil {
-			return state.SessionLoaded{Session: msg.Session}
+		eventCh, subErr := client.SubscribeEvents(subCtx, sessionID)
+		if subErr != nil {
+			cancel()
+			return sessionStreamReadyMsg{session: msg.Session, loadErr: subErr}
 		}
-		h.BindEventStream(eventCh)
-		return state.SessionLoaded{Session: msg.Session, Detail: detail}
+		return sessionStreamReadyMsg{session: msg.Session, detail: detail, ch: eventCh, cancel: cancel}
 	})
 }
 
