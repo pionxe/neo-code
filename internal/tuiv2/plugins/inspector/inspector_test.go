@@ -21,21 +21,17 @@ type fakeHost struct {
 
 func newFakeHost() *fakeHost { return &fakeHost{st: state.NewViewState()} }
 
-func (h *fakeHost) State() *state.ViewState                        { return h.st }
-func (h *fakeHost) Gateway() gateway.Client                        { return nil }
-func (h *fakeHost) Commands() []kernel.Command                     { return nil }
-func (h *fakeHost) RunCommand(string, []string) error              { return nil }
-func (h *fakeHost) Bindings() []kernel.Binding                     { return nil }
-func (h *fakeHost) BindEventStream(ch <-chan gateway.GatewayEvent) {}
-func (h *fakeHost) GoCmd(cmd tea.Cmd)                              {}
-func (h *fakeHost) Send(msg tea.Msg)                               {}
-func (h *fakeHost) Mode() state.InputMode                          { return h.st.Mode }
-func (h *fakeHost) SetMode(m state.InputMode)                      {}
-func (h *fakeHost) PushOverlay(o kernel.Overlay)                   {}
-func (h *fakeHost) PopOverlay()                                    {}
-func (h *fakeHost) Confirm(req state.ConfirmRequest)               {}
-func (h *fakeHost) Notify(text string)                             {}
-func (h *fakeHost) Quit()                                          {}
+func (h *fakeHost) State() *state.ViewState          { return h.st }
+func (h *fakeHost) Gateway() gateway.Client          { return nil }
+func (h *fakeHost) GoCmd(cmd tea.Cmd)                {}
+func (h *fakeHost) Send(msg tea.Msg)                 {}
+func (h *fakeHost) Mode() state.InputMode            { return h.st.Mode }
+func (h *fakeHost) SetMode(m state.InputMode)        {}
+func (h *fakeHost) PushOverlay(o kernel.Overlay)     {}
+func (h *fakeHost) PopOverlay()                      {}
+func (h *fakeHost) Confirm(req state.ConfirmRequest) {}
+func (h *fakeHost) Notify(text string)               {}
+func (h *fakeHost) Quit()                            {}
 
 func TestPluginIdentity(t *testing.T) {
 	p := New()
