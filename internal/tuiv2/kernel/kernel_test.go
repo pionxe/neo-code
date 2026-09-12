@@ -244,7 +244,7 @@ func TestNotifyGenerationalExpiry(t *testing.T) {
 func TestConfirmFlowYesAndNo(t *testing.T) {
 	k, r := newTestKernel(t)
 	k.host.Confirm(state.ConfirmRequest{Title: "⚠ 删除", Message: "不可撤销", Action: "act_x", Data: map[string]any{"id": "s1"}})
-	if k.stack.depth() != 1 || k.confirmPending == nil {
+	if k.stack.depth() != 1 {
 		t.Fatal("confirm should push kernel confirm overlay")
 	}
 	if !strings.Contains(k.View(), "删除") {
@@ -255,7 +255,7 @@ func TestConfirmFlowYesAndNo(t *testing.T) {
 	if len(r.record) != 0 {
 		t.Fatalf("unknown key in confirm should not answer, saw %d", len(r.record))
 	}
-	// y → 确认结果广播 + 弹栈。
+	// y → 确认结果广播 + 按对象身份自删。
 	k.Update(keys("y"))
 	if len(r.record) != 1 {
 		t.Fatalf("expected one ConfirmResult, saw %d", len(r.record))
@@ -264,8 +264,8 @@ func TestConfirmFlowYesAndNo(t *testing.T) {
 	if !res.Yes || res.Action != "act_x" || res.Data["id"] != "s1" || res.ID == "" {
 		t.Fatalf("result = %+v", res)
 	}
-	if k.stack.depth() != 0 || k.confirmPending != nil {
-		t.Fatalf("stack depth = %d, pending = %+v", k.stack.depth(), k.confirmPending)
+	if k.stack.depth() != 0 {
+		t.Fatalf("stack depth = %d, want empty after answer", k.stack.depth())
 	}
 	// n → 取消路径（重新发起后按 n）。
 	k.host.Confirm(state.ConfirmRequest{Title: "⚠ 再次确认", Action: "a2"})
@@ -276,6 +276,29 @@ func TestConfirmFlowYesAndNo(t *testing.T) {
 	}
 	if k.stack.depth() != 0 {
 		t.Fatal("overlay should be popped after answer")
+	}
+}
+
+// TestConfirmAnswerDoesNotPopForeignOverlay 是 P2 回归守卫：
+// 应答广播期间 Reactor 压入的新浮层，不得被确认框的自关误弹。
+func TestConfirmAnswerDoesNotPopForeignOverlay(t *testing.T) {
+	k, _ := newTestKernel(t)
+	k.host.Confirm(state.ConfirmRequest{Title: "T", Action: "a1"})
+	k.host.Confirm(state.ConfirmRequest{Title: "T2", Action: "a2"})
+	// 栈序：[confirm1, confirm2]；处理 confirm2 的应答时广播结果，
+	// Reactor 收到结果后压入新浮层——该浮层必须存活。
+	pushOnResult := &captureReactor{id: "pusher", onMsg: func(h Host, msg tea.Msg) {
+		if res, ok := msg.(state.ConfirmResult); ok && res.Action == "a2" {
+			h.PushOverlay(namedOverlay{id: "reactor-overlay"})
+		}
+	}}
+	mustOK(t, k.Register(pushOnResult), "pusher")
+	k.Update(keys("y")) // 顶层 confirm2 应答：广播 + 仅移除 confirm2
+	if k.stack.depth() != 2 {
+		t.Fatalf("stack depth = %d, want 2 (confirm1 + reactor overlay)", k.stack.depth())
+	}
+	if k.stack.top().ID() != "reactor-overlay" {
+		t.Fatalf("top = %s, want reactor-overlay", k.stack.top().ID())
 	}
 }
 

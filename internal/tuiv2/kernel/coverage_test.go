@@ -208,6 +208,30 @@ func TestLeaderTimeoutDebugfBranch(t *testing.T) {
 	}
 }
 
+func TestFlushCmdsBatchesMultipleCommands(t *testing.T) {
+	// 同一轮 Update 内既有定时器（Notify Tick）又有插件 GoCmd：
+	// flushCmds 应返回 Batch 包装（≥2 命令分支）。
+	k := NewKernel(Config{Opts: Options{NotifyExpiry: 1}})
+	mustOK(t, k.Register(keyPlugin{id: "g", bindings: []Binding{
+		{Mode: state.NormalMode, Key: "g", OnKey: func(h Host) {
+			h.GoCmd(func() tea.Msg { return nil })
+		}},
+	}}), "g")
+	k.host.Notify("tick") // 命令 1：到期定时器
+	k.setMode(state.NormalMode)
+	k.Update(keys("g")) // 命令 2：插件 GoCmd（Update 内 flush）
+	if k.pendingCmds == nil {
+		// Update 已 flush；无法直接观察 Batch 形态，改用白盒：再收两条后直调 flushCmds。
+		k.host.Notify("tick2")
+		k.host.GoCmd(func() tea.Msg { return nil })
+		cmd := k.flushCmds()
+		if cmd == nil {
+			t.Fatal("two pending cmds should produce non-nil batch")
+		}
+		_ = cmd()
+	}
+}
+
 // TestFullPipelineSmoke 是 fake 插件全链路冒烟（issue #20 验收第 9 条）：
 // 一个插件实现全部可选能力，走通 Init→按键路由→React→compose→Close 全程，
 // 证明 6 个机制可组合工作（应对"契约先行 = 死代码"风险的组合性证据）。

@@ -100,8 +100,9 @@ func TestDeriveShortcut(t *testing.T) {
 	if err := bindings.add("t", Binding{Mode: state.NormalMode, Key: "N", Command: "/new", OnKey: nop}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if got := deriveShortcut("/new", bindings); got != "N, Space n" {
-		t.Fatalf("shortcut = %q, want %q", got, "N, Space n")
+	// 登记序确定性（P2 修复后 all() 按登记序返回）：Leader n 先登记 → 列首。
+	if got := deriveShortcut("/new", bindings); got != "Space n, N" {
+		t.Fatalf("shortcut = %q, want %q", got, "Space n, N")
 	}
 	if got := deriveShortcut("/none", bindings); got != "" {
 		t.Fatalf("shortcut for unbound = %q, want empty", got)
