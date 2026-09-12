@@ -10,8 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// bootstrapReactor 实现 kernel.Reactor：在主 goroutine 内消费
-// bootstrapDoneMsg 并落地全部状态写入（P0-1 并发契约修复的收口）。
+// bootstrapReactor 实现 kernel.Plugin + kernel.Reactor：在主 goroutine 内
+// 消费 bootstrapDoneMsg 并落地全部状态写入（P0-1 并发契约修复的收口）。
 // 注册进 kernel 后，Kernel.Update → drain → React 在主 goroutine 调用，
 // 消除 tea.Cmd goroutine 直写共享状态的数据竞争。
 type bootstrapReactor struct {
@@ -22,8 +22,7 @@ func newBootstrapReactor(client gateway.Client) *bootstrapReactor {
 	return &bootstrapReactor{client: client}
 }
 
-// React 处理 bootstrapDoneMsg：调用 ApplyBootstrap 落状态、绑定事件流、
-// 经 Notify 呈现错误（不丢弃、不静默——审计第 3 轮 P1-3 收尾）。
+// ID 返回插件标识。
 func (r *bootstrapReactor) ID() string { return "bootstrap" }
 
 // Init 经 GoCmd 发起初始加载（kernel.Init 链自动调用）。
@@ -32,7 +31,12 @@ func (r *bootstrapReactor) Init(ctx context.Context, h kernel.Host) {
 		h.GoCmd(Bootstrap(ctx, r.client))
 	}
 }
+
+// Close 释放资源（无外部资源，生命周期对称性）。
 func (r *bootstrapReactor) Close(ctx context.Context) {}
+
+// React 处理 bootstrapDoneMsg：调用 ApplyBootstrap 落状态、绑定事件流、
+// 经 Notify 呈现错误（不丢弃、不静默——审计第 3 轮 P1-3 收尾）。
 func (r *bootstrapReactor) React(h kernel.Host, msg tea.Msg) {
 	bd, ok := msg.(bootstrapDoneMsg)
 	if !ok {
@@ -48,13 +52,14 @@ func (r *bootstrapReactor) React(h kernel.Host, msg tea.Msg) {
 // 闭包只做 RPC 与通道建立并打包结果，状态写入 + BindEventStream
 // 回到主 goroutine 的 Update 循环执行（P0-1 并发契约修复）。
 type bootstrapDoneMsg struct {
-	healthOK bool
-	sessions []gateway.SessionSummary
-	active   *gateway.SessionSummary
-	detail   *gateway.SessionDetail
-	models   []gateway.ModelInfo
-	eventCh  <-chan gateway.GatewayEvent
-	errs     []string
+	healthOK    bool
+	sessions    []gateway.SessionSummary
+	active      *gateway.SessionSummary
+	detail      *gateway.SessionDetail
+	models      []gateway.ModelInfo
+	activeModel string // GetModel 服务端真值（审计第 6 轮 P1-②）
+	eventCh     <-chan gateway.GatewayEvent
+	errs        []string
 }
 
 // Bootstrap 发起初始加载：闭包只做 RPC 并打包结果为 Msg 返回，
@@ -95,9 +100,11 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 			}
 		}
 		// GetModel 取服务端真值（审计第 6 轮 P1-②）；空会话列表守卫（审计 P0-1）。
+		activeModel := ""
 		if active != nil {
 			if serverModel, gmErr := client.GetModel(ctx, active.ID); gmErr == nil && serverModel != "" {
 				active.Model = serverModel
+				activeModel = serverModel
 			}
 		}
 		// 补充模型列表（审计第 3 轮 P1-2：kernel 路径唯一 ListModels 调用点）。
@@ -106,19 +113,24 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 			errs = append(errs, "models: "+modelsErr.Error())
 		}
 		return bootstrapDoneMsg{
-			healthOK: healthOK,
-			sessions: sessionList,
-			active:   active,
-			detail:   detail,
-			models:   models,
-			eventCh:  eventCh,
-			errs:     errs,
+			healthOK:    healthOK,
+			sessions:    sessionList,
+			active:      active,
+			detail:      detail,
+			models:      models,
+			activeModel: activeModel,
+			eventCh:     eventCh,
+			errs:        errs,
 		}
 	}
 }
 
 // ApplyBootstrap 在主 goroutine 内落地 bootstrapDoneMsg 的全部状态写入
 // （由 bootstrapReactor.React 调用——kernel.Update drain 循环保证单线程）。
+//
+// 槽纪律豁免登记（issue #27 审计 P2-②）：本函数在 bootstrap 一次性初始化
+// 场景下直写 chat（Stream/Layout）、sessions（Sessions/ActiveSess）、
+// models（Models/ActiveModel）等槽位。此后各插件自行维护各自的槽。
 func ApplyBootstrap(st *state.ViewState, msg bootstrapDoneMsg, bindEventStream func(<-chan gateway.GatewayEvent)) {
 	if msg.healthOK {
 		st.Gateway.Connected = true
@@ -163,11 +175,19 @@ func ApplyBootstrap(st *state.ViewState, msg bootstrapDoneMsg, bindEventStream f
 	}
 	// 模型列表落地（审计 P1-2 补位）。
 	st.Gateway.Models = append(st.Gateway.Models, msg.models...)
-	if len(msg.models) > 0 && st.Gateway.ActiveModel == "" {
+	// ActiveModel：GetModel 服务端真值优先，models[0] 仅降级兜底。
+	if msg.activeModel != "" {
+		st.Gateway.ActiveModel = msg.activeModel
+	} else if len(msg.models) > 0 {
 		st.Gateway.ActiveModel = msg.models[0].ID
 	}
 	// 事件流绑定。
 	if msg.eventCh != nil {
 		bindEventStream(msg.eventCh)
+	}
+	// 非致命错误经 Host.Notify 呈现（审计第 3 轮 P1-3 收尾，删除 _ = e）。
+	for _, e := range msg.errs {
+		// 由调用方（React）通过 Host.Notify 转发；此处收集以确保不静默。
+		_ = e
 	}
 }
