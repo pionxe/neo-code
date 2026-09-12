@@ -404,4 +404,8 @@ func TestHostMethodCoverage(t *testing.T) {
 	if k.eventCh == nil {
 		t.Fatal("BindEventStream should update kernel stream")
 	}
+	// Bindings 快照转发覆盖（S3-3 Host 三快照方法之一，另两个已有用例）。
+	if b := h.Bindings(); len(b) != 0 {
+		t.Fatalf("empty kernel bindings = %d, want 0", len(b))
+	}
 }
