@@ -47,21 +47,37 @@ func (p *Plugin) Init(ctx context.Context, h kernel.Host) {
 func (p *Plugin) Close(ctx context.Context) {}
 
 // React 订阅广播：仅处理 Gateway 事件（对话白名单 + gateway_offline bespoke），
-// 并承接流增长的滚动复位衍生行为。非事件消息一律忽略（prompt 提交等
-// 消息类型随对应插件迁移后在此扩展）。
+// 并承接流增长的滚动复位衍生行为与用户提交记录（UserSubmitted → lastText
+// + role=user 流条目，打通 /retry——issue #25 修订 v2 审计 P1-2）。
 func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
-	ev, ok := msg.(gateway.GatewayEvent)
-	if !ok {
-		return
+	switch m := msg.(type) {
+	case gateway.GatewayEvent:
+		p.handleGatewayEvent(m)
+	case state.UserSubmitted:
+		// prompt 插件的提交广播：更新重试文本并追加用户流条目
+		//（旧路径 app.go:429 行为等价）。
+		p.lastText = m.Text
+		p.st.Stream = append(p.st.Stream, state.StreamEntry{
+			ID:        "user-" + time.Now().Format("150405.000000000"),
+			Type:      "message",
+			Timestamp: time.Now(),
+			Content:   m.Text,
+			Metadata:  map[string]any{"done": true, "role": "user"},
+		})
 	}
+}
+
+// handleGatewayEvent 处理对话类事件：gateway_offline bespoke +
+// ReduceWithoutInput 白名单（跳过 Input 槽——Input 写权归 prompt 插件）。
+func (p *Plugin) handleGatewayEvent(ev gateway.GatewayEvent) {
 	before := len(p.st.Stream)
 	if ev.Type == gateway.EventGatewayOffline {
-		// bespoke 分支（不进 ReduceConversation 白名单）：Runtime/Stream 归 chat，
+		// bespoke 分支（不进白名单）：Runtime/Stream 归 chat，
 		// Gateway.Connected 归将来 health 插件，此处不碰。
 		p.st.Runtime.Phase = state.RuntimePhaseError
 		p.appendError(ev)
 	} else {
-		state.ReduceConversation(p.st, ev)
+		state.ReduceWithoutInput(p.st, ev)
 	}
 	if len(p.st.Stream) > before {
 		// 流增长衍生行为（自有字段）：自动跟尾。
