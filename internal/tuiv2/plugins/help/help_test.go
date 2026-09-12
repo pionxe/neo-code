@@ -24,6 +24,7 @@ func newFakeHost() *fakeHost {
 	return &fakeHost{bindings: []kernel.Binding{
 		{Mode: state.NormalMode, Key: "j", Description: "下滚"},
 		{Mode: state.LeaderMode, Key: "p", Description: "面板", Group: "面板"},
+		{Mode: state.LeaderMode, Key: "x", Description: "无分组动作"},
 	}}
 }
 
@@ -88,4 +89,70 @@ func TestLifecycle(t *testing.T) {
 	p := New()
 	p.Init(context.Background(), nil)
 	p.Close(context.Background())
+}
+
+// TestHelpLifecycleAndModeName 补齐身份/生命周期/modeName 分支。
+func TestHelpLifecycleAndModeName(t *testing.T) {
+	p := New()
+	if p.ID() != "help" {
+		t.Fatalf("id = %q", p.ID())
+	}
+	p.Init(context.Background(), newFakeHost())
+	p.Close(context.Background())
+	// modeName 分支：Leader 名称（经 View 断言——预置 Leader 绑定已在 fakeHost）。
+	h := newFakeHost()
+	p.open(h)
+	out := h.overlays[0].View(h, 80)
+	if !strings.Contains(out, "Leader 模式") || !strings.Contains(out, "面板  p  面板") {
+		t.Fatalf("view should contain leader group and grouped entry, got %q", out)
+	}
+}
+
+// TestOverlayEscCloses：esc 关闭帮助浮层。
+func TestOverlayEscCloses(t *testing.T) {
+	p := New()
+	h := newFakeHost()
+	p.open(h)
+	consumed := h.overlays[0].HandleKey(h, tea.KeyMsg{Type: tea.KeyEsc})
+	if !consumed {
+		t.Fatal("esc should close help overlay")
+	}
+}
+
+// TestSortedKeysHelper：排序 helper（未导出覆盖）。
+func TestSortedKeysHelper(t *testing.T) {
+	got := sortedKeys([]kernel.Binding{
+		{Key: "b", Mode: state.NormalMode},
+		{Key: "a", Mode: state.LeaderMode},
+	})
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("sortedKeys = %v", got)
+	}
+}
+
+// TestHelpInputModeNameBranch 补齐 modeName 的输入模式分支。
+func TestHelpInputModeNameBranch(t *testing.T) {
+	h := newFakeHost()
+	h.bindings = append(h.bindings, kernel.Binding{
+		Mode: state.InputModeInput, Key: "any", Description: "输入编辑", OnKeyMsg: func(h kernel.Host, msg tea.KeyMsg) {},
+	})
+	p := New()
+	p.open(h)
+	out := h.overlays[0].View(h, 80)
+	if !strings.Contains(out, "输入模式") {
+		t.Fatalf("view should contain input mode group, got %q", out)
+	}
+}
+
+// TestOverlayAndPluginID 补齐两个 ID 方法的覆盖。
+func TestOverlayAndPluginID(t *testing.T) {
+	p := New()
+	h := newFakeHost()
+	if got := p.ID(); got != "help" {
+		t.Fatalf("plugin id = %q", got)
+	}
+	p.open(h)
+	if got := h.overlays[0].ID(); got != "help" {
+		t.Fatalf("overlay id = %q", got)
+	}
 }
