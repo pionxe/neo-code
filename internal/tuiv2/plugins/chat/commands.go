@@ -54,12 +54,17 @@ func (p *Plugin) runClear(h kernel.Host, args []string) {
 	h.Notify("已清空当前会话消息")
 }
 
-// runCancel 取消当前运行：空闲态静默 no-op（对齐旧路径 app_leader 语义），
+// runCancel 取消当前运行：空闲判定对齐旧路径 app_leader 语义——以
+// Phase ∈ {running, waiting_permission, waiting_user} 为准而非 RunID
+// （EventRunFinished 不清 RunID，stale RunID 会被误发 CancelRun，审计 P1-b）；
 // 运行中经 GoCmd 异步调用 Gateway.CancelRun（RunID 读 Runtime 槽，
 // sessionID 读 Gateway 槽活跃会话——均为合法读路径）。
 func (p *Plugin) runCancel(h kernel.Host, args []string) {
-	if p.st.Runtime.RunID == "" {
-		return
+	switch p.st.Runtime.Phase {
+	case state.RuntimePhaseRunning, state.RuntimePhaseWaitingPermission, state.RuntimePhaseWaitingUser:
+		// 可取消态，继续。
+	default:
+		return // 空闲/错误/已取消态静默 no-op
 	}
 	if p.client == nil {
 		h.Notify("无可用后端，取消失败")
@@ -98,6 +103,3 @@ func (p *Plugin) runRetry(h kernel.Host, args []string) {
 func (p *Plugin) recordSubmittedText(text string) {
 	p.lastText = text
 }
-
-// 引用占位：state 包在槽注释之外的编译期确认（避免空导入告警）。
-var _ = state.RuntimePhaseRunning
