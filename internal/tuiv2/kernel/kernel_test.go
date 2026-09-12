@@ -221,7 +221,7 @@ func TestOverlayTopExclusiveAndEscSemantics(t *testing.T) {
 type scriptedOverlay struct{ consume bool }
 
 func (o *scriptedOverlay) ID() string                        { return "scripted" }
-func (o *scriptedOverlay) HandleKey(h Host, key string) bool { return o.consume }
+func (o *scriptedOverlay) HandleKey(h Host, msg tea.KeyMsg) bool { return o.consume }
 func (o *scriptedOverlay) View(h Host, width int) string     { return "scripted" }
 
 func TestNotifyGenerationalExpiry(t *testing.T) {

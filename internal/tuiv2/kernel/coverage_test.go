@@ -472,3 +472,89 @@ func TestDeriveShortcutWildcardPlaceholder(t *testing.T) {
 		t.Fatalf("shortcut = %q, want <输入>", got)
 	}
 }
+
+// ---------- 泵重绑定协议（issue #27 S3-2 / 审计 P0-①）----------
+
+// TestBindEventStreamStaleEnvelopeIgnored：换代后陈旧信封不广播、不解除 armed。
+func TestBindEventStreamStaleEnvelopeIgnored(t *testing.T) {
+	k, r := newTestKernel(t)
+	oldCh := make(chan gateway.GatewayEvent, 1)
+	k.BindEventStream(oldCh)
+	pump := k.Init() // 武装旧代际泵
+	if pump == nil {
+		t.Fatal("Init should arm pump")
+	}
+	// 换代：绑定新通道（模拟会话切换后的重订阅）。
+	newCh := make(chan gateway.GatewayEvent, 1)
+	k.BindEventStream(newCh)
+	// 旧通道后续事件 → 旧泵产出陈旧信封 → 必须丢弃。
+	oldCh <- gateway.GatewayEvent{Type: gateway.EventRunStarted, RunID: "stale"}
+	stale := pump()
+	env, ok := stale.(gatewayEventEnvelope)
+	if !ok || env.gen == k.pumpGen {
+		t.Fatalf("stale envelope = %+v", stale)
+	}
+	k.Update(stale)
+	if len(r.record) != 0 {
+		t.Fatalf("stale envelope must not broadcast, saw %d", len(r.record))
+	}
+	if !k.pumpArmed {
+		t.Fatal("stale envelope must not disarm current pump")
+	}
+}
+
+// TestBindEventStreamNewChannelDelivers：换代后新通道事件正常广播。
+// 换代后旧泵仍在飞（阻塞旧通道）——新泵经 flushCmds 武装，旧通道不再投递。
+func TestBindEventStreamNewChannelDelivers(t *testing.T) {
+	k, r := newTestKernel(t)
+	oldCh := make(chan gateway.GatewayEvent, 1)
+	k.BindEventStream(oldCh)
+	_ = k.Init() // 旧代际泵武装（将被换代作废）
+	newCh := make(chan gateway.GatewayEvent, 1)
+	k.BindEventStream(newCh)
+	newPump := k.flushCmds() // 换代后武装新代际泵
+	if newPump == nil {
+		t.Fatal("rebind should allow new pump")
+	}
+	newCh <- gateway.GatewayEvent{Type: gateway.EventRunStarted, RunID: "fresh"}
+	msg := newPump()
+	k.Update(msg)
+	if len(r.record) != 1 {
+		t.Fatalf("new channel event should broadcast, saw %d", len(r.record))
+	}
+}
+
+// TestStaleClosedDoesNotKillNewPump：陈旧 closed 在新通道泵武装后到达，
+// 不得清空 eventCh、不得停新泵（审计非阻塞备注①的钉死用例）。
+func TestStaleClosedDoesNotKillNewPump(t *testing.T) {
+	k, _ := newTestKernel(t)
+	oldCh := make(chan gateway.GatewayEvent, 1)
+	k.BindEventStream(oldCh)
+	pump := k.Init()
+	newCh := make(chan gateway.GatewayEvent, 1)
+	k.BindEventStream(newCh) // 换代：pumpArmed=false，新泵待武装
+	// 旧通道关闭 → 旧泵返回陈旧 closed → 必须被忽略。
+	close(oldCh)
+	staleClosed := pump()
+	if _, ok := staleClosed.(eventStreamClosedMsg); !ok {
+		t.Fatalf("old pump should deliver closed, got %T", staleClosed)
+	}
+	// Update 返回值即换代后武装的新泵命令（丢弃会导致新通道无人监听）。
+	_, cmd := k.Update(staleClosed)
+	if k.eventCh == nil {
+		t.Fatal("stale closed must not clear the NEW event stream")
+	}
+	if cmd == nil {
+		t.Fatal("new pump should be armed and returned by Update")
+	}
+	newCh <- gateway.GatewayEvent{Type: gateway.EventRunStarted}
+	msg := cmd()
+	env, ok := msg.(gatewayEventEnvelope)
+	if !ok || env.gen != k.pumpGen {
+		t.Fatalf("new pump delivery = %+v", msg)
+	}
+	k.Update(msg)
+	if k.eventCh == nil {
+		t.Fatal("new stream should remain active after delivering event")
+	}
+}

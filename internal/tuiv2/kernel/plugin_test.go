@@ -24,6 +24,7 @@ type testFakeHost struct {
 
 func (f *testFakeHost) State() *state.ViewState          { return state.NewViewState() }
 func (f *testFakeHost) Gateway() gateway.Client          { return nil }
+func (f *testFakeHost) BindEventStream(ch <-chan gateway.GatewayEvent) {}
 func (f *testFakeHost) GoCmd(cmd tea.Cmd)                {}
 func (f *testFakeHost) Send(msg tea.Msg)                 {}
 func (f *testFakeHost) Mode() state.InputMode            { return state.NormalMode }

@@ -13,8 +13,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// eventStreamClosedMsg 表示事件流关闭的内核私有消息：此后不再重挂事件泵。
-type eventStreamClosedMsg struct{}
+// eventStreamClosedMsg 表示事件流关闭的内核私有消息：携带代际号，
+// 陈旧代际的 closed 不清空当前事件流（issue #27 S3-2 重绑定协议）。
+type eventStreamClosedMsg struct{ gen int }
 
 // Kernel 是 TUI v2 的唯一 tea.Model：装配插件并驱动全部机制。
 // 状态纪律（ADR-001/009）：持有全局唯一的 *state.ViewState，指针全程稳定；
@@ -39,6 +40,7 @@ type Kernel struct {
 	queue       []tea.Msg // 广播队列：派发中入队尾，循环排空
 	dispatching bool      // 正在排空队列（禁嵌套标记）
 	pumpArmed   bool      // 事件泵单实例守卫：仅一个泵命令在飞（P1 修复）
+	pumpGen     int       // 泵代际号：BindEventStream 递增，陈旧信封/closed 按代际丢弃（issue #27 S3-2）
 	pendingCmds []tea.Cmd // 本轮 Update 累积的命令（定时器、插件 GoCmd、退出）
 	eventCh     <-chan gateway.GatewayEvent
 	width       int
@@ -125,9 +127,14 @@ func (k *Kernel) Register(p Plugin) error {
 	return nil
 }
 
-// BindEventStream 绑定 Gateway 事件流：内核此后自动重挂事件泵（Init/Update 均会）。
+// BindEventStream 绑定（或重绑）Gateway 事件流（issue #27 S3-2 重绑定协议）：
+// 代际号递增使旧泵产物（信封/closed）全部失效；旧 channel 由调用方负责
+// 关闭（cancel 订阅 ctx），旧泵 goroutine 在关闭后返回陈旧 closed 被丢弃。
+// 新泵在下一轮 flushCmds 武装。
 func (k *Kernel) BindEventStream(ch <-chan gateway.GatewayEvent) {
+	k.pumpGen++
 	k.eventCh = ch
+	k.pumpArmed = false // 新代际允许立即武装新泵
 }
 
 // Init 实现 tea.Model：顺序调用各插件 Init，并返回全部累积命令
@@ -170,12 +177,22 @@ func (k *Kernel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			k.st.Notify = state.NotifyState{}
 		}
 	case eventStreamClosedMsg:
+		// 重绑定协议：陈旧代际的 closed 不清空当前事件流（防误杀新泵）。
+		if m.gen != k.pumpGen {
+			k.debugf("stale closed (gen %d) ignored, current gen %d", m.gen, k.pumpGen)
+			return k, k.flushCmds()
+		}
 		k.eventCh = nil
 		k.pumpArmed = false // 泵已停，允许 BindEventStream 后重新武装
 		k.debugf("event stream closed, pump stopped")
 	case gatewayEventEnvelope:
 		// 泵产物信封（内核私有）：armed 解除只认信封类型——插件经 GoCmd
 		// 返回 GatewayEvent 形状的消息不会误解除单泵不变量（审计附带项）。
+		// 重绑定协议：陈旧代际信封丢弃（不广播、不解除 armed）。
+		if m.gen != k.pumpGen {
+			k.debugf("stale envelope (gen %d) ignored, current gen %d", m.gen, k.pumpGen)
+			return k, k.flushCmds()
+		}
 		k.pumpArmed = false // 事件即泵的产物：交付即消费，允许 flushCmds 重挂下一泵
 		k.broadcast(m.event)
 	case gateway.GatewayEvent:
@@ -213,7 +230,7 @@ func (k *Kernel) dispatchKey(msg tea.KeyMsg) {
 	// 2. 浮层栈顶独占：esc 未被栈顶消费时弹栈；其余键未消费即丢弃。
 	if k.stack.depth() > 0 {
 		top := k.stack.top()
-		consumed := top.HandleKey(k.host, key)
+		consumed := top.HandleKey(k.host, msg)
 		if key == "esc" && !consumed {
 			k.stack.pop()
 		}
@@ -313,6 +330,7 @@ func (k *Kernel) flushCmds() tea.Cmd {
 // Update 内拆包后广播裸事件）：pumpArmed 的解除只认信封类型，
 // 与"插件经 GoCmd 返回 GatewayEvent 形状消息"严格区分（审计附带项）。
 type gatewayEventEnvelope struct {
+	gen   int // 产出该事件的泵代际
 	event gateway.GatewayEvent
 }
 
@@ -323,13 +341,14 @@ func (k *Kernel) waitEvent() tea.Cmd {
 		return nil
 	}
 	k.pumpArmed = true
+	gen := k.pumpGen // 武装时快照当前代际（换代仅在 BindEventStream 递增）
 	ch := k.eventCh
 	return func() tea.Msg {
 		event, ok := <-ch
 		if !ok {
-			return eventStreamClosedMsg{}
+			return eventStreamClosedMsg{gen: gen}
 		}
-		return gatewayEventEnvelope{event: event}
+		return gatewayEventEnvelope{gen: gen, event: event}
 	}
 }
 
@@ -340,6 +359,9 @@ func (h kernelHost) State() *state.ViewState { return h.k.st }
 
 // Gateway 返回 Gateway 客户端契约。
 func (h kernelHost) Gateway() gateway.Client { return h.k.client }
+
+// BindEventStream 实现 Host：转发内核重绑定（换代协议见 Kernel.BindEventStream）。
+func (h kernelHost) BindEventStream(ch <-chan gateway.GatewayEvent) { h.k.BindEventStream(ch) }
 
 // GoCmd 收集异步命令，经 Update 返回值交还 bubbletea 执行。
 func (h kernelHost) GoCmd(cmd tea.Cmd) {
@@ -401,9 +423,9 @@ func (c *confirmOverlay) ID() string { return "kernel.confirm" }
 
 // HandleKey 处理应答键：y/enter 确认，n/esc 取消；应答即按对象身份自删并广播结果。
 // 返回 consumed=true 表示已应答（含取消）；其余键一律消费（模态确认防误操作）。
-func (c *confirmOverlay) HandleKey(h Host, key string) (consumed bool) {
+func (c *confirmOverlay) HandleKey(h Host, msg tea.KeyMsg) (consumed bool) {
 	var yes bool
-	switch key {
+	switch msg.String() {
 	case "y", "enter":
 		yes = true
 	case "n", "esc":
