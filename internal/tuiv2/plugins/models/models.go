@@ -36,7 +36,9 @@ func (p *Plugin) Init(ctx context.Context, h kernel.Host) {
 }
 
 // Close 释放资源（无外部资源，生命周期对称性）。
-func (p *Plugin) Close(ctx context.Context) {}
+func (p *Plugin) Close(ctx context.Context) {
+	_ = ctx
+}
 
 // React 订阅广播：model_changed 迁移 ActiveModel 子槽；模型选择产出
 // 消息（经选择器浮层）→ SetModel RPC → 成功后合成 model_changed 回流
@@ -102,9 +104,8 @@ func (o *pickerOverlay) HandleKey(h kernel.Host, msg tea.KeyMsg) (consumed bool)
 		h.PopOverlay()
 		return true
 	}
-	if _, cmd := o.p.picker.Update(msg); cmd != nil {
-		h.GoCmd(cmd)
-	}
+	// 其余键委托组件（组件对这些键不产出命令）。
+	_, _ = o.p.picker.Update(msg)
 	return true
 }
 
