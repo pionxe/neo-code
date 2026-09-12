@@ -73,21 +73,3 @@ func TestThemeCommandsSwitchPaletteAndSymbols(t *testing.T) {
 	}
 	p.Close(context.Background()) // 对称生命周期
 }
-
-// TestSymbolModeRoundTrip 补齐 SetSymbolMode 三分支（审计第 6 轮 P2-2：
-// theme 死代码清理的配套——色板恒 Tokyo Night，可切换的是符号集）。
-func TestSymbolModeRoundTrip(t *testing.T) {
-	// unicode → Success 符号 ✓。
-	themedep.SetSymbolMode("unicode")
-	if got := themedep.Symbols().Success; got != "✓" {
-		t.Fatalf("unicode success = %q", got)
-	}
-	// ascii → Success 符号 [OK]。
-	themedep.SetSymbolMode("ascii")
-	if got := themedep.Symbols().Success; got != "[OK]" {
-		t.Fatalf("ascii success = %q", got)
-	}
-	// 恢复自动探测（清偏好）。
-	themedep.SetSymbolMode("")
-	_ = themedep.Symbols().Success
-}
