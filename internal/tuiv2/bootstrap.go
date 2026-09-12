@@ -94,9 +94,11 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 				eventCh = ch
 			}
 		}
-		// GetModel 取服务端真值（审计第 6 轮 P1-②）。
-		if serverModel, gmErr := client.GetModel(ctx, active.ID); gmErr == nil && serverModel != "" {
-			active.Model = serverModel
+		// GetModel 取服务端真值（审计第 6 轮 P1-②）；空会话列表守卫（审计 P0-1）。
+		if active != nil {
+			if serverModel, gmErr := client.GetModel(ctx, active.ID); gmErr == nil && serverModel != "" {
+				active.Model = serverModel
+			}
 		}
 		// 补充模型列表（审计第 3 轮 P1-2：kernel 路径唯一 ListModels 调用点）。
 		models, modelsErr := client.ListModels(ctx)
