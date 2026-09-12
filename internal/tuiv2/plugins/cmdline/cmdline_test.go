@@ -306,6 +306,19 @@ func TestEmptySearchSubmitIsNoop(t *testing.T) {
 // TestJumpToTailEmitsIntent：跳转到末条目同样只广播意图（AutoScroll 语义
 // 收敛在 chat 侧 ScrollToEntry 单一真源，issue #41 审计 P2-3 断言翻转——
 // 旧断言"尾跳保持 AutoScroll"随直写 Layout 移除而失效）。
+// TestJumpToOutOfRangeIsNoop 验证 jumpTo 越界防御：无效索引不广播跳转意图
+//（binding 层已被 When 守卫约束到有效匹配集，此为直接调用的防御分支——
+// issue #41 PR 审计 P1-2 补测凑齐包覆盖 100%）。
+func TestJumpToOutOfRangeIsNoop(t *testing.T) {
+	p, h := newTestPlugin(t)
+	p.st.Stream = []state.StreamEntry{{ID: "a", Content: "x"}}
+	p.jumpTo(h, -1)
+	p.jumpTo(h, 5)
+	if len(h.broadcasts) != 0 {
+		t.Fatalf("out-of-range jumps must not broadcast, got %v", h.broadcasts)
+	}
+}
+
 func TestJumpToTailEmitsIntent(t *testing.T) {
 	p, h := newTestPlugin(t)
 	p.st.Stream = []state.StreamEntry{
