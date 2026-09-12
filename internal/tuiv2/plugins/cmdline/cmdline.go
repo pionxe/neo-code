@@ -33,8 +33,10 @@ func (p *Plugin) Init(ctx context.Context, h kernel.Host) {
 	p.cmdline = components.NewCmdLine(p.st)
 }
 
-// Close 释放资源。
-func (p *Plugin) Close(ctx context.Context) {}
+// Close 释放资源（无外部资源，生命周期对称性）。
+func (p *Plugin) Close(ctx context.Context) {
+	_ = ctx
+}
 
 // React 订阅广播：
 //   - ModeChanged：切出 Normal 时清理 Search/Ex（承接旧路径
@@ -179,6 +181,8 @@ func (p *Plugin) Bindings() []kernel.Binding {
 func (p *Plugin) executeSearch(h kernel.Host) {
 	query := strings.TrimSpace(p.st.Search.Query)
 	if query == "" {
+		// 空查询提交：关闭搜索（对齐旧路径"空 query 为 no-op 关闭"语义）。
+		p.st.Search = state.SearchState{}
 		return
 	}
 	lq := strings.ToLower(query)
