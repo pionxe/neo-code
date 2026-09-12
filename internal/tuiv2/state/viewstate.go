@@ -93,9 +93,17 @@ type RuntimeState struct {
 	Phase      string
 	RunID      string
 	Tokens     TokenUsage
-	AgentMode  string // "build" 或 "plan"
+	AgentMode  string // 取值 AgentModeBuild / AgentModePlan（空值视作未设置）
 	FullAccess bool
 }
+
+// Agent 模式的取值词汇（单一出处；旧 app 层字面量随其删除收敛至此，issue #41）。
+const (
+	// AgentModeBuild 是执行模式。
+	AgentModeBuild = "build"
+	// AgentModePlan 是规划模式。
+	AgentModePlan = "plan"
+)
 
 // ConfirmState 描述确认弹窗的上下文信息。
 type ConfirmState struct {

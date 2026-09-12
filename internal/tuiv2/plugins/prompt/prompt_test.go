@@ -199,6 +199,46 @@ func TestExitCommandQuits(t *testing.T) {
 	}
 }
 
+// TestModeCommandTogglesAgentMode 验证 /mode 命令（issue #41 接线补齐）：
+// 空值或 plan → build、build → plan（对齐旧 toggleAgentMode 语义），
+// 并经弱提示反馈 "Agent mode: <mode>"；别名含无斜杠 "mode"（:mode 可达）。
+func TestModeCommandTogglesAgentMode(t *testing.T) {
+	p, h := newTestPlugin(t)
+	byName := map[string]kernel.Command{}
+	for _, c := range p.Commands() {
+		byName[c.Name] = c
+	}
+	mode, ok := byName["/mode"]
+	if !ok {
+		t.Fatal("/mode should be registered")
+	}
+	if len(mode.Aliases) != 1 || mode.Aliases[0] != "mode" {
+		t.Fatalf("aliases = %v, want [mode]", mode.Aliases)
+	}
+	// 空值 → build。
+	mode.Run(h, nil)
+	if h.st.Runtime.AgentMode != state.AgentModeBuild {
+		t.Fatalf("from empty: mode = %q, want build", h.st.Runtime.AgentMode)
+	}
+	// build → plan。
+	mode.Run(h, nil)
+	if h.st.Runtime.AgentMode != state.AgentModePlan {
+		t.Fatalf("from build: mode = %q, want plan", h.st.Runtime.AgentMode)
+	}
+	// plan → build。
+	mode.Run(h, nil)
+	if h.st.Runtime.AgentMode != state.AgentModeBuild {
+		t.Fatalf("from plan: mode = %q, want build", h.st.Runtime.AgentMode)
+	}
+	// 弱提示反馈逐次断言。
+	if len(h.notifies) != 3 ||
+		h.notifies[0] != "Agent mode: build" ||
+		h.notifies[1] != "Agent mode: plan" ||
+		h.notifies[2] != "Agent mode: build" {
+		t.Fatalf("notifies = %v", h.notifies)
+	}
+}
+
 func TestBindingsShape(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	bindings := p.Bindings()

@@ -3,7 +3,8 @@
 // 对话命令。它是第一个消费 kernel 契约的生产级插件。
 //
 // 槽纪律（ADR-009 / issue #23 修订 v2）：
-//   - 写：Stream、Runtime、Layout.ScrollOffset/AutoScroll；
+//   - 写：Stream、Runtime（除 AgentMode 子槽）、Layout.ScrollOffset/AutoScroll；
+//   - Runtime.AgentMode 子槽写权归 prompt 插件（/mode 命令，issue #41 接线登记）；
 //   - 不写 Input 槽（写权归 prompt 插件，经 ApplyInputForEvent）：六类
 //     含 Input 部分的事件走 ReduceWithoutInput 跳过（issue #25 移交完成）；
 //   - 读：Gateway（会话/模型）、Mode（不做写入）。

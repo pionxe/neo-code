@@ -3,7 +3,8 @@
 // 问答链路。它是 kernel 契约键位通配扩展（OnKeyMsg）的第一个消费者。
 //
 // 槽纪律（ADR-009 / issue #25 修订 v2）：写 Input 槽（经 state.ApplyInputForEvent
-// 的六类事件分支与提交清理）；读 Stream/Runtime/Gateway。
+// 的六类事件分支与提交清理）与 Runtime.AgentMode 子槽（/mode 命令，
+// issue #41 接线登记；chat 包头纪律同步）；读 Stream/Runtime/Gateway。
 package prompt
 
 import (
