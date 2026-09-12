@@ -199,6 +199,14 @@ func (t *Theme) Commands() []kernel.Command {
 
 ## 7. 现有代码去哪里（迁移 = 重新切分，不是重写）
 
+> **落地状态（issue #41，S3-4 内核接线，2026-09）**：app 层旧路由五文件
+> （app.go / app_commands.go / app_leader.go / app_normal.go / app_view.go）
+> 已删除，cmd/neocode-tuiv2 入口已切换 `NewKernelApp`。下表为迁移终态记录：
+> 模式路由 → kernel mode.go + 插件 Bindings；RPC 命令 → 各插件 GoCmd；
+> 布局拼装 → kernel compose + debug 插件（RegionDebug）；StartupConfig →
+> app_kernel.go。keymap 包与 components 旧独用组件（palette/help/confirm/
+> commands）成为死代码，扫尾清单见后续清理 issue。
+
 | 现在 | 去向 |
 |---|---|
 | app.go 的模式路由、按键 switch | 内核 mode.go + 各插件的 Bindings 数据 |
