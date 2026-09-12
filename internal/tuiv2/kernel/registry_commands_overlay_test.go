@@ -30,10 +30,10 @@ func TestBindingRegistryLookupAndAll(t *testing.T) {
 			t.Fatalf("add: %v", err)
 		}
 	}
-	if _, ok := r.lookup(state.NormalMode, keyRunes("j")); !ok {
+	if _, ok := r.lookup(state.NormalMode, keyRunes("j"), state.NewViewState()); !ok {
 		t.Fatal("normal j should be found")
 	}
-	if _, ok := r.lookup(state.NormalMode, keyRunes("k")); ok {
+	if _, ok := r.lookup(state.NormalMode, keyRunes("k"), state.NewViewState()); ok {
 		t.Fatal("normal k should not be found")
 	}
 	if got := len(r.all()); got != 3 {
