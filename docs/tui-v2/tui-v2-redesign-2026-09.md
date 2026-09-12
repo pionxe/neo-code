@@ -176,9 +176,10 @@ func (t *Theme) Commands() []kernel.Command {
 
 | 槽 | 谁能写 |
 |---|---|
-| Mode / Layout / Notify / Confirm 结果 | 内核 |
+| Mode / Layout.Width·Height / Notify / Confirm 结果 | 内核 |
+| Layout.ScrollOffset·AutoScroll（行为流视图状态，字段级拆分） | chat |
 | Stream（消息流）/ Runtime（run 状态、token） | chat |
-| Input（输入框文字、历史） | prompt |
+| Input（输入框文字、历史）→ **双轨期临时越权**：permission_*、ask_user 系、run_cancelled 六类对话事件经 ReduceConversation 临时写入（viewstate.go 已标注），prompt 插件迁移 PR 时移交 | prompt |
 | Gateway.Sessions（会话列表、活跃会话） | sessions |
 | Gateway.Models（模型列表、ActiveModel） | models |
 | Gateway.Connected（连接健康、重连状态） | health（将来） |

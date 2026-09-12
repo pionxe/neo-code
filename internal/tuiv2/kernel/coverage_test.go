@@ -175,6 +175,99 @@ func TestGatewayPassthrough(t *testing.T) {
 	}
 }
 
+// TestInitGoCmdPreserved 是 P1-② 的直接回归守卫（PR #22 审计附带项）：
+// 插件在 Init 期经 GoCmd 发起的任务必须出现在 Init() 的返回命令中。
+func TestInitGoCmdPreserved(t *testing.T) {
+	k := NewKernel(Config{})
+	fired := false
+	initCmdPlugin := &goCmdPlugin{id: "initcmd", cmd: func() tea.Msg { fired = true; return nil }}
+	mustOK(t, k.Register(initCmdPlugin), "register")
+
+	cmd := k.Init()
+	if cmd == nil {
+		t.Fatal("Init should return accumulated commands (plugin GoCmd must not be dropped)")
+	}
+	cmd()
+	if !fired {
+		t.Fatal("plugin Init-time GoCmd should be executable via Init return")
+	}
+}
+
+// goCmdPlugin 在 Init 期发起一条 GoCmd。
+type goCmdPlugin struct {
+	id  string
+	cmd func() tea.Msg
+}
+
+func (p *goCmdPlugin) ID() string { return p.id }
+func (p *goCmdPlugin) Init(ctx context.Context, h Host) {
+	h.GoCmd(p.cmd)
+}
+func (p *goCmdPlugin) Close(ctx context.Context) {}
+
+// TestGoCmdGatewayEventDoesNotDisarmPump 钉死信封语义（issue #23 修订 v2）：
+// 插件经 GoCmd 返回 GatewayEvent 形状消息 → 照常广播但不解除 pumpArmed；
+// Send(gateway.GatewayEvent) 同样广播但不解除——两条路径分开钉。
+func TestGoCmdGatewayEventDoesNotDisarmPump(t *testing.T) {
+	k, r := newTestKernel(t)
+	ch := make(chan gateway.GatewayEvent, 2)
+	k.BindEventStream(ch)
+	pump := k.Init() // armed
+
+	// 路径 A：插件 GoCmd 返回裸 GatewayEvent → 广播，不解除 armed。
+	// （GoCmd 经白盒 flushCmds 取出：GoCmd 只在 Update 处理期间发生，
+	// Update 开头的 pendingCmds 重置不会截走它。）
+	ev := gateway.GatewayEvent{Type: gateway.EventPhaseChanged}
+	k.host.GoCmd(func() tea.Msg { return ev })
+	cmd := k.flushCmds()
+	if cmd == nil {
+		t.Fatal("GoCmd should be collected")
+	}
+	msgA := cmd()
+	if _, ok := msgA.(gateway.GatewayEvent); !ok {
+		t.Fatalf("GoCmd result = %T, want GatewayEvent", msgA)
+	}
+	k.Update(msgA)
+	if len(r.record) != 1 {
+		t.Fatalf("bare GatewayEvent via GoCmd should broadcast, saw %d", len(r.record))
+	}
+	if !k.pumpArmed {
+		t.Fatal("GoCmd GatewayEvent must not disarm the pump")
+	}
+
+	// 路径 B：React 内 Send(GatewayEvent) → 广播，不解除 armed。
+	// witness 累计：[ev_A, ConfirmResult(触发), ev_B]。
+	echoer := &captureReactor{id: "echo", onMsg: func(h Host, msg tea.Msg) {
+		if _, ok := msg.(state.ConfirmResult); ok {
+			h.Send(ev)
+		}
+	}}
+	mustOK(t, k.Register(echoer), "echoer")
+	k.Update(state.ConfirmResult{ID: "t"})
+	if len(r.record) != 3 {
+		t.Fatalf("after Send(GatewayEvent) witness should hold 3, saw %d", len(r.record))
+	}
+	if _, ok := r.record[2].(gateway.GatewayEvent); !ok {
+		t.Fatalf("third = %T, want GatewayEvent from Send path", r.record[2])
+	}
+	if !k.pumpArmed {
+		t.Fatal("Send GatewayEvent must not disarm the pump")
+	}
+
+	// 路径 C：真实泵产物（信封）→ 解除 armed 并广播。witness 累计至 4。
+	ch <- ev
+	msg := pump()
+	k.Update(msg)
+	// Update 内：解除 armed → 广播 → flushCmds 重挂泵，故终态 armed=true
+	// 且本轮 flush 非空（新泵命令在返回值中）。
+	if !k.pumpArmed {
+		t.Fatal("pump should have rearmed within the same Update")
+	}
+	if len(r.record) != 4 {
+		t.Fatalf("envelope event should broadcast, witness holds %d", len(r.record))
+	}
+}
+
 func TestEnqueueDepthCapDropsWhenFull(t *testing.T) {
 	// 白盒：队列已满（非派发期）时 enqueue 走深度上限丢弃分支。
 	k := NewKernel(Config{Opts: Options{MaxQueueDepth: 2}})
