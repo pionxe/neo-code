@@ -45,3 +45,10 @@ type SessionLoaded struct {
 type SessionDeleted struct {
 	ID string
 }
+
+// ModeChanged 表示键位模式发生实际变化（内核广播）：cmdline 订阅它
+// 清理 Search/Ex 子状态（承接旧路径"切出 Normal 清理"行为）。
+type ModeChanged struct {
+	From InputMode
+	To   InputMode
+}
