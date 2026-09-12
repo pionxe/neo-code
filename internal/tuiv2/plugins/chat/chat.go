@@ -54,7 +54,8 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 		p.handleGatewayEvent(m)
 	case state.UserSubmitted:
 		// prompt 插件的提交广播：更新重试文本并追加用户流条目
-		//（旧路径 app.go:429 行为等价）。
+		//（旧路径 app.go:429 行为等价）。流增长 → 滚动复位
+		//（与 gateway 事件流增长同一不变量，审计 P2-①）。
 		p.lastText = m.Text
 		p.st.Stream = append(p.st.Stream, state.StreamEntry{
 			ID:        "user-" + time.Now().Format("150405.000000000"),
@@ -63,6 +64,8 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 			Content:   m.Text,
 			Metadata:  map[string]any{"done": true, "role": "user"},
 		})
+		p.st.Layout.AutoScroll = true
+		p.st.Layout.ScrollOffset = 0
 	}
 }
 

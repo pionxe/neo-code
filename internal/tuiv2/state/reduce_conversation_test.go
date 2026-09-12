@@ -61,7 +61,7 @@ func conversationForwarded(t gateway.EventType) bool {
 	return false
 }
 
-// TestReduceWithoutInputExhaustive 穷举全部事件常量（reduce_without_input.go）：
+// TestReduceWithoutInputExhaustive 穷举全部事件常量：
 // 对话类必须真正迁移状态（Stream 或 Runtime 或 Input 有变化），
 // 非对话类必须指针恒等且全槽快照零变化。
 func TestReduceWithoutInputExhaustive(t *testing.T) {
@@ -93,7 +93,8 @@ func TestReduceWithoutInputExhaustive(t *testing.T) {
 	}
 }
 
-// TestReduceConversationInputTempWriteScope 锁定 6 类临时越权事件的变化范围：
+// TestReduceWithoutInputScope 锁定六类含 Input 写入事件的变化范围
+// （该范围现在由 ApplyInputForEvent 承接，chat 路径跳过——见 96 行下函数名对应）：
 // 仅 Input/Stream/Runtime 变化，其余槽（Gateway/Overlay/Search/Ex/Layout/Notify/Confirm/Mode）零变化。
 func TestReduceWithoutInputScope(t *testing.T) {
 	tempWrite := []gateway.EventType{
@@ -116,7 +117,7 @@ func TestReduceWithoutInputScope(t *testing.T) {
 
 			ReduceWithoutInput(before, event(et, map[string]any{"text": "x", "prompt": "p", "question": "q", "decision": "allow", "answer": "a", "phase": "cancelled"}))
 
-			// 允许变化：Input（临时越权）、Stream（状态条目）、Runtime（Phase）。
+			// 允许变化：Input（prompt 经 ApplyInputForEvent）、Stream（状态条目）、Runtime（Phase）。
 			// Confirm 槽：本组事件不涉及确认框，必须零变化（补快照，审计 P2）。
 			if !reflect.DeepEqual(snapshot.Confirm, before.Confirm) {
 				t.Fatalf("%q touched Confirm slot", et)

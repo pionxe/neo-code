@@ -291,11 +291,15 @@ func keyRunes(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-// fakeClient 记录 RPC 入参（断言参数正确性）。
+// fakeClient 记录 RPC 入参并支持注入成功/失败行为（断言 ACK/Error 映射）。
 type fakeClient struct {
 	sendCalls     []string
 	permDecisions []gateway.PermissionDecision
 	answers       []gateway.UserQuestionAnswer
+	// 可注入行为：nil = 失败（ErrUnsupported）；非 nil = 成功返回该 ACK。
+	sendAck   *gateway.RunAck
+	permErr   error // 非 nil = ResolvePermission 返回该错误
+	answerErr error // 非 nil = AnswerUserQuestion 返回该错误
 }
 
 func (c *fakeClient) Health(ctx context.Context) (*gateway.HealthResult, error) {
@@ -312,6 +316,9 @@ func (c *fakeClient) CreateSession(ctx context.Context) (*gateway.SessionSummary
 }
 func (c *fakeClient) SendMessage(ctx context.Context, sessionID, text string) (*gateway.RunAck, error) {
 	c.sendCalls = append(c.sendCalls, sessionID+"|"+text)
+	if c.sendAck != nil {
+		return c.sendAck, nil
+	}
 	return nil, errFakeUnsupported
 }
 func (c *fakeClient) CancelRun(ctx context.Context, sessionID, runID string) error {
@@ -322,11 +329,11 @@ func (c *fakeClient) SubscribeEvents(ctx context.Context, sessionID string) (<-c
 }
 func (c *fakeClient) ResolvePermission(ctx context.Context, decision gateway.PermissionDecision) error {
 	c.permDecisions = append(c.permDecisions, decision)
-	return nil
+	return c.permErr
 }
 func (c *fakeClient) AnswerUserQuestion(ctx context.Context, answer gateway.UserQuestionAnswer) error {
 	c.answers = append(c.answers, answer)
-	return nil
+	return c.answerErr
 }
 func (c *fakeClient) ListModels(ctx context.Context) ([]gateway.ModelInfo, error) {
 	return nil, errFakeUnsupported
@@ -395,15 +402,92 @@ func TestDelegateUpdateProducesCmdInPermissionMode(t *testing.T) {
 	p.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "sess-1"}
 	p.st.Runtime.RunID = "run-1"
 	p.st.Input.Mode = state.InputStateModePermissionResponse
-	t.Logf("DEBUG mode before delegate=%v client=%v", p.st.Input.Mode, p.client != nil)
-	_, directCmd := p.prompt.Update(keyRunes("y"))
-	t.Logf("DEBUG direct cmd nil=%v", directCmd == nil)
 	p.delegateUpdate(h, keyRunes("y"))
-	t.Logf("DEBUG broadcasts=%d notifies=%v", len(h.broadcasts), h.notifies)
-	for i, b := range h.broadcasts {
-		t.Logf("DEBUG broadcast[%d]=%T %+v", i, b, b)
-	}
 	if len(client.permDecisions) != 1 || !client.permDecisions[0].Allow {
 		t.Fatalf("permDecisions = %+v", client.permDecisions)
+	}
+}
+
+// TestSubmitAckMapsToRunStartedEvent 断言 ACK → EventRunStarted 映射输出
+// （审计第 3 轮 P1：映射三分支此前零覆盖）。
+func TestSubmitAckMapsToRunStartedEvent(t *testing.T) {
+	p, h := newTestPlugin(t)
+	client := &fakeClient{}
+	h.client = client
+	p.Init(context.Background(), h)
+	client.sendAck = &gateway.RunAck{SessionID: "sess-1", RunID: "run-7", Message: "accepted", Accepted: true}
+	p.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "sess-1"}
+	p.st.Input.Text = "do it"
+
+	p.React(h, components.SubmitMessageMsg{Text: "do it"})
+	// 回流广播链：GoCmd 产物 EventRunStarted + Send 的 UserSubmitted。
+	var started *gateway.GatewayEvent
+	var submitted state.UserSubmitted
+	for _, b := range h.broadcasts {
+		switch m := b.(type) {
+		case gateway.GatewayEvent:
+			if m.Type == gateway.EventRunStarted {
+				started = &m
+			}
+		case state.UserSubmitted:
+			submitted = m
+		}
+	}
+	if started == nil {
+		t.Fatal("ACK should map to EventRunStarted broadcast")
+	}
+	if started.SessionID != "sess-1" || started.RunID != "run-7" || started.Payload["accepted"] != true {
+		t.Fatalf("EventRunStarted = %+v", started)
+	}
+	if submitted.Text != "do it" {
+		t.Fatalf("UserSubmitted = %+v", submitted)
+	}
+}
+
+// TestPermissionErrorMapsToErrorEvent 断言 ResolvePermission 失败 → EventError。
+func TestPermissionErrorMapsToErrorEvent(t *testing.T) {
+	p, h := newTestPlugin(t)
+	client := &fakeClient{}
+	h.client = client
+	p.Init(context.Background(), h)
+	client.permErr = errFake("perm boom")
+	p.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "s"}
+	p.st.Runtime.RunID = "r"
+	p.st.Input.Mode = state.InputStateModePermissionResponse
+
+	p.React(h, components.PermissionActionMsg{Decision: "n"})
+	found := false
+	for _, b := range h.broadcasts {
+		if m, ok := b.(gateway.GatewayEvent); ok && m.Type == gateway.EventError {
+			found = true
+			if m.Payload["message"] != "perm boom" {
+				t.Fatalf("error payload = %v", m.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("perm error should map to EventError broadcast")
+	}
+}
+
+// TestQuestionErrorMapsToErrorEvent 断言 AnswerUserQuestion 失败 → EventError。
+func TestQuestionErrorMapsToErrorEvent(t *testing.T) {
+	p, h := newTestPlugin(t)
+	client := &fakeClient{}
+	h.client = client
+	p.Init(context.Background(), h)
+	client.answerErr = errFake("answer boom")
+	p.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "s"}
+	p.st.Input.Mode = state.InputStateModeQuestionAnswer
+
+	p.React(h, components.QuestionAnswerMsg{Text: "1"})
+	found := false
+	for _, b := range h.broadcasts {
+		if m, ok := b.(gateway.GatewayEvent); ok && m.Type == gateway.EventError {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("answer error should map to EventError broadcast")
 	}
 }
