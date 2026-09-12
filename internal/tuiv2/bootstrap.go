@@ -81,7 +81,9 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 		var eventCh <-chan gateway.GatewayEvent
 		if len(sessionList) > 0 {
 			active = &sessionList[0]
-			detail, loadErr := client.LoadSession(ctx, active.ID)
+			// 先声明外层 detail，避免 := 遮蔽导致 LoadSession 结果丢弃（审计 P0-1）。
+			var loadErr error
+			detail, loadErr = client.LoadSession(ctx, active.ID)
 			if loadErr != nil {
 				errs = append(errs, "load: "+loadErr.Error())
 			}
@@ -91,7 +93,6 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 			} else {
 				eventCh = ch
 			}
-			_ = detail
 		}
 		// 补充模型列表（审计第 3 轮 P1-2：kernel 路径唯一 ListModels 调用点）。
 		models, modelsErr := client.ListModels(ctx)
