@@ -42,11 +42,3 @@ func ReduceWithoutInput(current *ViewState, event gateway.GatewayEvent) *ViewSta
 	}
 	return reduceCore(current, event, false)
 }
-
-// ReduceConversation 已由 ReduceWithoutInput 吸收替换（issue #25 修订 v2：
-// 不并存两套外壳）；保留别名以兼容 chat 插件引用直至其迁移 commit。
-//
-// Deprecated: 使用 ReduceWithoutInput。
-func ReduceConversation(current *ViewState, event gateway.GatewayEvent) *ViewState {
-	return ReduceWithoutInput(current, event)
-}

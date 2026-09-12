@@ -275,14 +275,14 @@ func TestCommandCancelWithClient(t *testing.T) {
 	}
 }
 
-func TestRecordSubmittedTextGuardsRetry(t *testing.T) {
+func TestRetryArmedAfterSubmission(t *testing.T) {
 	p, h := newTestPlugin(t)
 	byName := map[string]kernel.Command{}
 	for _, c := range p.Commands() {
 		byName[c.Name] = c
 	}
-	p.recordSubmittedText("fix the bug")
-	// lastText 非空后 /retry 进入"待 prompt 接入"分支（不降级为无历史）。
+	// lastText 现由 UserSubmitted 广播更新（recordSubmittedText 已删）。
+	p.React(h, state.UserSubmitted{Text: "fix the bug"})
 	byName["/retry"].Run(h, nil)
 	if strings.Contains(h.notifies[len(h.notifies)-1], "没有可重试") {
 		t.Fatal("retry with history should not degrade to no-history hint")
@@ -384,5 +384,36 @@ func TestStringOfFallbacks(t *testing.T) {
 	}
 	if got := stringOf(nil, "message"); got != "" {
 		t.Fatalf("nil payload = %q", got)
+	}
+}
+
+// TestReactUserSubmittedHandover 是审计 P1-1 的闭环断言（issue #25 验收）：
+// prompt 插件的 UserSubmitted 广播 → chat 更新 lastText + 追加 role=user
+// 流条目 → /retry 激活。
+func TestReactUserSubmittedHandover(t *testing.T) {
+	p, h := newTestPlugin(t)
+	p.React(h, state.UserSubmitted{Text: "fix the login bug"})
+
+	if p.lastText != "fix the login bug" {
+		t.Fatalf("lastText = %q", p.lastText)
+	}
+	last := p.st.Stream[len(p.st.Stream)-1]
+	if last.Type != "message" || last.Content != "fix the login bug" {
+		t.Fatalf("user entry = %+v", last)
+	}
+	if last.Metadata["role"] != "user" || last.Metadata["done"] != true {
+		t.Fatalf("metadata = %v, want role=user done=true", last.Metadata)
+	}
+	if p.st.Layout.AutoScroll != true || p.st.Layout.ScrollOffset != 0 {
+		t.Fatal("user entry should reset scroll (stream growth)")
+	}
+	// /retry 激活：不再降级为无历史提示。
+	byName := map[string]kernel.Command{}
+	for _, c := range p.Commands() {
+		byName[c.Name] = c
+	}
+	byName["/retry"].Run(h, nil)
+	if strings.Contains(h.notifies[len(h.notifies)-1], "没有可重试") {
+		t.Fatal("retry should be armed after UserSubmitted")
 	}
 }

@@ -97,9 +97,3 @@ func (p *Plugin) runRetry(h kernel.Host, args []string) {
 	}
 	h.Notify("重试需要输入区接入（prompt 插件迁移后可用）")
 }
-
-// recordSubmittedText 供后续 prompt 插件的提交广播更新 lastText
-// （本 PR 不接广播源，方法保留以钉住数据流向：仅 chat 私有，不暴露给其他插件）。
-func (p *Plugin) recordSubmittedText(text string) {
-	p.lastText = text
-}

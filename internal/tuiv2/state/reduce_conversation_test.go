@@ -61,7 +61,7 @@ func conversationForwarded(t gateway.EventType) bool {
 	return false
 }
 
-// TestReduceWithoutInputExhaustive 穷举全部事件常量：
+// TestReduceWithoutInputExhaustive 穷举全部事件常量（reduce_without_input.go）：
 // 对话类必须真正迁移状态（Stream 或 Runtime 或 Input 有变化），
 // 非对话类必须指针恒等且全槽快照零变化。
 func TestReduceWithoutInputExhaustive(t *testing.T) {
@@ -251,19 +251,5 @@ func TestReduceWithoutInputMatchesReduce(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestReduceConversationDeprecatedAlias(t *testing.T) {
-	// Deprecated 别名行为等价性：转发 ReduceWithoutInput（chat 迁移完成前兼容）。
-	before := NewViewState()
-	after := ReduceConversation(before, event(gateway.EventAgentChunk, map[string]any{"text": "x"}))
-	if after != before || len(before.Stream) != 1 {
-		t.Fatal("alias should behave as ReduceWithoutInput")
-	}
-	// 非白名单：原样返回。
-	after = ReduceConversation(before, event(gateway.EventSessionCreated, map[string]any{"id": "s"}))
-	if after != before || len(before.Gateway.Sessions) != 0 {
-		t.Fatal("alias should ignore non-dialogue events")
 	}
 }
