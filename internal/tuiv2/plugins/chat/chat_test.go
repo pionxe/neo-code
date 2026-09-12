@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/tuiv2/gateway"
 	"neo-code/internal/tuiv2/kernel"
@@ -417,4 +418,51 @@ func TestReactUserSubmittedHandover(t *testing.T) {
 	if strings.Contains(h.notifies[len(h.notifies)-1], "没有可重试") {
 		t.Fatal("retry should be armed after UserSubmitted")
 	}
+}
+
+// TestReactSessionLoadedWithDetail 补齐 SessionLoaded 消费的双分支
+// （审计第 4 轮 P1：chat.go SessionLoaded 17 行此前零测试）。
+func TestReactSessionLoadedWithDetail(t *testing.T) {
+	p, h := newTestPlugin(t)
+	// 预置旧流与上滚态：切换后应清空重载并复位滚动。
+	p.st.Stream = []state.StreamEntry{{ID: "old", Type: "message", Content: "old"}}
+	p.st.Layout.AutoScroll = false
+	p.st.Layout.ScrollOffset = 5
+
+	p.React(h, state.SessionLoaded{
+		Session: gateway.SessionSummary{ID: "s2", Title: "target"},
+		Detail: &gateway.SessionDetail{
+			Stream: []gateway.StreamItem{
+				{ID: "h1", Kind: "message", Role: "user", Text: "历史一", CreatedAt: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)},
+				{ID: "h2", Kind: "message", Role: "assistant", Text: "历史二", CreatedAt: time.Date(2026, 9, 12, 0, 1, 0, 0, time.UTC)},
+			},
+		},
+	})
+	if len(p.st.Stream) != 2 {
+		t.Fatalf("stream = %d entries, want 2", len(p.st.Stream))
+	}
+	if p.st.Stream[0].Content != "历史一" || p.st.Stream[1].Content != "历史二" {
+		t.Fatalf("entries = %+v", p.st.Stream)
+	}
+	if p.st.Stream[0].Metadata["role"] != "user" {
+		t.Fatalf("role = %v", p.st.Stream[0].Metadata["role"])
+	}
+	if !p.st.Layout.AutoScroll || p.st.Layout.ScrollOffset != 0 {
+		t.Fatal("switch should reset scroll")
+	}
+}
+
+func TestReactSessionLoadedWithoutDetailClears(t *testing.T) {
+	p, h := newTestPlugin(t)
+	p.st.Stream = []state.StreamEntry{{ID: "old", Type: "message", Content: "old"}}
+	p.React(h, state.SessionLoaded{Session: gateway.SessionSummary{ID: "s2"}})
+	// 无 Detail（Load 失败）：流清空（chat 呈现由 Notify/后续 EventError 承接）。
+	if len(p.st.Stream) != 0 {
+		t.Fatalf("stream = %d, want empty", len(p.st.Stream))
+	}
+}
+
+func TestChatCloseIsSafe(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	p.Close(context.Background()) // 无外部资源，对称生命周期
 }
