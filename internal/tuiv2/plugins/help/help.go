@@ -24,14 +24,10 @@ func New() *Plugin { return &Plugin{} }
 func (p *Plugin) ID() string { return "help" }
 
 // Init 生命周期占位。
-func (p *Plugin) Init(ctx context.Context, h kernel.Host) {
-	_ = ctx
-}
+func (p *Plugin) Init(ctx context.Context, h kernel.Host) {}
 
-// Close 释放资源（无外部资源，生命周期对称性）。
-func (p *Plugin) Close(ctx context.Context) {
-	_ = ctx
-}
+// Close 释放资源。
+func (p *Plugin) Close(ctx context.Context) {}
 
 // open 构造并压入帮助浮层：内容 = 内核保留键 + 全部注册绑定（按 Group/Mode 分组）。
 func (p *Plugin) open(h kernel.Host) {
