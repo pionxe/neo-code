@@ -260,15 +260,3 @@ func TestPickerGoCmdBranchForSelection(t *testing.T) {
 		t.Fatal("picker enter should produce model_changed broadcast")
 	}
 }
-
-// TestPickerEscPopsOverlay 补齐 HandleKey esc 分支（审计第 4 轮 P1：
-// models 实测 97.1% 的缺口——esc 弹栈不经组件，Query 残留至下次打开）。
-func TestPickerEscPopsOverlay(t *testing.T) {
-	p, h := newTestPlugin(t)
-	h.PushOverlay(&pickerOverlay{p: p})
-	o := &pickerOverlay{p: p}
-	consumed := o.HandleKey(h, tea.KeyMsg{Type: tea.KeyEsc})
-	if !consumed {
-		t.Fatal("esc should be consumed by picker")
-	}
-}

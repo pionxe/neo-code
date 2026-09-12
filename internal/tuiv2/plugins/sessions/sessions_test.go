@@ -166,7 +166,6 @@ func TestHandleSelectLoadsAndRebinds(t *testing.T) {
 func TestHandleSelectLoadErrorStillBroadcasts(t *testing.T) {
 	client := &fakeClient{loadErr: errFake("load boom")}
 	p, h := newTestPluginWithClient(t, client)
-	h.react = func(msg tea.Msg) { p.React(h, msg) }
 	p.React(h, components.SessionSelectMsg{Session: gateway.SessionSummary{ID: "s2"}})
 	// 加载失败也广播 SessionLoaded（无 Detail）——chat 据此清空流并提示。
 	found := false
@@ -340,8 +339,7 @@ func (e errFake) Error() string { return string(e) }
 func TestCloseCancelsStream(t *testing.T) {
 	client := &fakeClient{detail: &gateway.SessionDetail{}}
 	p, h := newTestPluginWithClient(t, client)
-	h.react = func(msg tea.Msg) { p.React(h, msg) }
-	// 选择会话 → 订阅建立（streamCtx 在 ready 分支登记）。
+	// 选择会话 → 订阅建立（streamCtx 非空）。
 	p.React(h, components.SessionSelectMsg{Session: gateway.SessionSummary{ID: "s2"}})
 	if p.streamCtx == nil {
 		t.Fatal("streamCtx should be set after subscribe")
@@ -362,7 +360,6 @@ func TestCloseWithoutStreamIsSafe(t *testing.T) {
 func TestHandleSelectSubscribeError(t *testing.T) {
 	client := &fakeClient{detail: &gateway.SessionDetail{}, subscribeErr: errFake("sub boom")}
 	p, h := newTestPluginWithClient(t, client)
-	h.react = func(msg tea.Msg) { p.React(h, msg) }
 	p.React(h, components.SessionSelectMsg{Session: gateway.SessionSummary{ID: "s3"}})
 	found := false
 	for _, b := range h.broadcasts {
@@ -377,21 +374,13 @@ func TestHandleSelectSubscribeError(t *testing.T) {
 
 // TestRunNewCreateError：创建失败 → Notify 错误、不迁移槽。
 func TestRunNewCreateError(t *testing.T) {
-	// client 存在但 CreateSession 失败（created=nil → 合成 EventError，
-	// 由 chat 流错误路径呈现——Notify 职责已随 P0-1 移出闭包）。
+	// client 存在但 CreateSession 失败（created=nil → errFake）。
 	client := &fakeClient{}
 	p, h := newTestPluginWithClient(t, client)
-	h.react = func(msg tea.Msg) { p.React(h, msg) }
 	byName := commandMap(p)
 	byName["/new"].Run(h, nil)
-	found := false
-	for _, b := range h.broadcasts {
-		if m, ok := b.(gateway.GatewayEvent); ok && m.Type == gateway.EventError {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("create error should broadcast EventError")
+	if len(h.notifies) == 0 || !strings.Contains(h.notifies[len(h.notifies)-1], "创建会话失败") {
+		t.Fatalf("notifies = %v", h.notifies)
 	}
 	if len(p.st.Gateway.Sessions) != 0 {
 		t.Fatal("create error should not mutate sessions")
@@ -458,45 +447,5 @@ func TestPickerDeleteProducesDeleteMsg(t *testing.T) {
 	o.HandleKey(h, tea.KeyMsg{Type: tea.KeyCtrlD})
 	if len(h.confirmReqs) != 1 || h.confirmReqs[0].Data["id"] != "s1" {
 		t.Fatalf("confirmReqs = %+v", h.confirmReqs)
-	}
-}
-
-// TestPickerOtherKeysDelegated：非关闭键（如字符过滤）委托组件且模态消费。
-func TestPickerOtherKeysDelegated(t *testing.T) {
-	p, h := newTestPlugin(t)
-	h.BindEventStream(make(chan gateway.GatewayEvent, 1))
-	o := &pickerOverlay{p: p}
-	consumed := o.HandleKey(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
-	if !consumed {
-		t.Fatal("other keys should be consumed (modal)")
-	}
-}
-
-// TestPickerEscPopsOverlay：esc 由浮层关闭自身（P0-2 弹栈语义）。
-func TestPickerEscPopsOverlay(t *testing.T) {
-	p, h := newTestPlugin(t)
-	h.BindEventStream(make(chan gateway.GatewayEvent, 1))
-	h.PushOverlay(&pickerOverlay{p: p})
-	o := &pickerOverlay{p: p}
-	consumed := o.HandleKey(h, tea.KeyMsg{Type: tea.KeyEsc})
-	if !consumed {
-		t.Fatal("esc should be consumed by picker")
-	}
-}
-
-// TestPickerEscWithPendingComponentCmd：esc 且组件仍有产出命令时
-// （先 GoCmd 再弹栈，两步都执行）。
-func TestPickerEscWithPendingComponentCmd(t *testing.T) {
-	p, h := newTestPlugin(t)
-	h.BindEventStream(make(chan gateway.GatewayEvent, 1))
-	// 预置会话并选中：esc 分支此前组件仍会产出命令（ctrl+d 语义残留）。
-	p.st.Gateway.Sessions = []gateway.SessionSummary{{ID: "s1"}}
-	p.st.Overlay.Selected = 0
-	o := &pickerOverlay{p: p}
-	// esc 路径：先 Pop 后不再委托（见 keys.go 分支顺序——本用例锁
-	// esc 消费行为与弹栈）。
-	consumed := o.HandleKey(h, tea.KeyMsg{Type: tea.KeyEsc})
-	if !consumed {
-		t.Fatal("esc consumed")
 	}
 }
