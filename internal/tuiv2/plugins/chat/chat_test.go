@@ -71,6 +71,36 @@ func ev(t gateway.EventType, payload map[string]any) gateway.GatewayEvent {
 	return gateway.GatewayEvent{Type: t, Payload: payload}
 }
 
+// TestScrollBindingsWhenGuard 验证滚动键 When 守卫（PR #43 审计 P1-1
+// 修复的守护断言）：全部滚动绑定必须声明守卫；Normal 导航期生效，
+// 搜索/Ex 激活期一律退位（字符归 cmdline 输入）。顺带覆盖 Close 空体。
+func TestScrollBindingsWhenGuard(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	defer p.Close(context.Background())
+	if len(p.Bindings()) == 0 {
+		t.Fatal("scroll bindings should exist")
+	}
+	for _, b := range p.Bindings() {
+		if b.When == nil {
+			t.Fatalf("binding %q missing When guard", b.Key)
+		}
+		clean := state.NewViewState()
+		if !b.When(clean) {
+			t.Fatalf("binding %q should be active in normal navigation", b.Key)
+		}
+		searching := state.NewViewState()
+		searching.Search.Active = true
+		if b.When(searching) {
+			t.Fatalf("binding %q must yield during search", b.Key)
+		}
+		ex := state.NewViewState()
+		ex.Ex.Active = true
+		if b.When(ex) {
+			t.Fatalf("binding %q must yield during ex", b.Key)
+		}
+	}
+}
+
 func TestPluginIdentity(t *testing.T) {
 	p := New()
 	if p.ID() != "chat" {
@@ -130,6 +160,46 @@ func TestReactStreamGrowthResetsScroll(t *testing.T) {
 	p.React(nil, ev(gateway.EventTokenUsage, map[string]any{"total": 3}))
 	if p.st.Layout.AutoScroll || p.st.Layout.ScrollOffset != 5 {
 		t.Fatal("token usage must not reset scroll")
+	}
+}
+
+// TestReactSearchJumpedScrollsToEntry 验证搜索跳转意图消费（issue #41
+// 审计 P1-4 接线）：cmdline 广播 SearchJumped，chat 调 ScrollToEntry——
+// 行级定位落 ScrollOffset 并关闭 AutoScroll（含尾条目，语义随组件统一）；
+// 越界索引 no-op（ScrollToEntry 内建）。
+func TestReactSearchJumpedScrollsToEntry(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	// 多条消息 + 窄视口：保证 maxOffset 足够大，跳转产生正向 offset。
+	p.st.Stream = []state.StreamEntry{
+		{ID: "a", Type: "message", Content: "one", Metadata: map[string]any{"role": "user"}},
+		{ID: "b", Type: "message", Content: "two", Metadata: map[string]any{"role": "assistant"}},
+		{ID: "c", Type: "message", Content: "three", Metadata: map[string]any{"role": "user"}},
+		{ID: "d", Type: "message", Content: "four", Metadata: map[string]any{"role": "assistant"}},
+		{ID: "e", Type: "message", Content: "five", Metadata: map[string]any{"role": "user"}},
+		{ID: "f", Type: "message", Content: "six", Metadata: map[string]any{"role": "assistant"}},
+	}
+	p.st.Layout.Width = 40
+	p.st.Layout.Height = 10
+	p.st.Layout.AutoScroll = true
+	// 跳到首条目（index 0）：视口顶部定位，AutoScroll 关闭。
+	p.React(nil, state.SearchJumped{EntryIndex: 0})
+	if p.st.Layout.AutoScroll {
+		t.Fatal("jump should disable auto scroll")
+	}
+	if p.st.Layout.ScrollOffset <= 0 {
+		t.Fatalf("jump should set positive offset, got %d", p.st.Layout.ScrollOffset)
+	}
+	// 跳到尾条目（index 1）：同样关闭 AutoScroll（组件统一语义）。
+	p.st.Layout.AutoScroll = true
+	p.React(nil, state.SearchJumped{EntryIndex: 1})
+	if p.st.Layout.AutoScroll {
+		t.Fatal("tail jump should disable auto scroll (ScrollToEntry semantics)")
+	}
+	// 越界索引：no-op（不 panic、滚动状态不变）。
+	before := p.st.Layout.ScrollOffset
+	p.React(nil, state.SearchJumped{EntryIndex: 99})
+	if p.st.Layout.ScrollOffset != before {
+		t.Fatal("out-of-range jump should be no-op")
 	}
 }
 

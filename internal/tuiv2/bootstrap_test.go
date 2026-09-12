@@ -186,20 +186,17 @@ func TestBootstrapGetModelTruthPriority(t *testing.T) {
 	client := newFakeBootstrapClient()
 	client.listSessions = []gateway.SessionSummary{{ID: "s1", Title: "demo"}}
 	client.models = []gateway.ModelInfo{{ID: "m-catalog", Name: "目录首模型"}}
+	client.getModelID = "server-truth-model"
 	client.subscribeCh = make(chan gateway.GatewayEvent, 2)
 
 	cmd := Bootstrap(context.Background(), client)
 	bd := cmd().(bootstrapDoneMsg)
-	// GetModel 未注入（gmErr == nil 且 serverModel == ""）→ 降级 models[0]。
-	if bd.activeModel != "" {
-		t.Fatalf("no GetModel success → activeModel should be empty, got %q", bd.activeModel)
+	// GetModel 成功注入 → activeModel 应取服务端真值（非 models[0] 降级）。
+	if bd.activeModel != "server-truth-model" {
+		t.Fatalf("activeModel = %q, want server-truth-model", bd.activeModel)
 	}
-
-	// 注入 GetModel 成功 → activeModel 应取服务端真值。
-	// Bootstrap 闭包内部调 GetModel 后赋 active.Model/activeModel。
-	// 此处通过 fakeClient 的 subscribeCh 验证 eventCh 传递。
-	if bd.eventCh == nil {
-		t.Fatal("eventCh should be set on successful subscribe")
+	if bd.active == nil || bd.active.Model != "server-truth-model" {
+		t.Fatalf("active.Model = %v", bd.active)
 	}
 }
 

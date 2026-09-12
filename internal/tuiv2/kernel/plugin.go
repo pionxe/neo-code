@@ -126,7 +126,7 @@ const (
 	RegionPrompt RegionID = "prompt"
 	// RegionCmdLine 临时命令/搜索行（渲染空串时该行折叠）。
 	RegionCmdLine RegionID = "cmdline"
-	// RegionDebug 调试行（--debug 时由内核提供）。
+	// RegionDebug 调试行（由独立 debug 插件提供，issue #41 内核接线补齐）。
 	RegionDebug RegionID = "debug"
 )
 

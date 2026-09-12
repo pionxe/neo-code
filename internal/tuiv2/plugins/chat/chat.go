@@ -3,7 +3,8 @@
 // 对话命令。它是第一个消费 kernel 契约的生产级插件。
 //
 // 槽纪律（ADR-009 / issue #23 修订 v2）：
-//   - 写：Stream、Runtime、Layout.ScrollOffset/AutoScroll；
+//   - 写：Stream、Runtime（除 AgentMode 子槽）、Layout.ScrollOffset/AutoScroll；
+//   - Runtime.AgentMode 子槽写权归 prompt 插件（/mode 命令，issue #41 接线登记）；
 //   - 不写 Input 槽（写权归 prompt 插件，经 ApplyInputForEvent）：六类
 //     含 Input 部分的事件走 ReduceWithoutInput 跳过（issue #25 移交完成）；
 //   - 读：Gateway（会话/模型）、Mode（不做写入）。
@@ -83,6 +84,13 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 		})
 		p.st.Layout.AutoScroll = true
 		p.st.Layout.ScrollOffset = 0
+	case state.SearchJumped:
+		// cmdline 插件的搜索跳转意图（issue #41 审计 P1-4 接线）：
+		// 经 ScrollToEntry 落滚动——行级定位 + 视口 clamp 的单一真源，
+		// 消除 cmdline 旧朴素公式以条目数冒充渲染行数的维度错配。
+		// 越界 no-op 由 ScrollToEntry 内建；AutoScroll 语义随组件统一
+		// （跳转即固定视口定位并关闭自动跟随，含尾条目）。
+		p.stream.ScrollToEntry(m.EntryIndex)
 	}
 }
 

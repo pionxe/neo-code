@@ -3,7 +3,8 @@
 // 问答链路。它是 kernel 契约键位通配扩展（OnKeyMsg）的第一个消费者。
 //
 // 槽纪律（ADR-009 / issue #25 修订 v2）：写 Input 槽（经 state.ApplyInputForEvent
-// 的六类事件分支与提交清理）；读 Stream/Runtime/Gateway。
+// 的六类事件分支与提交清理）与 Runtime.AgentMode 子槽（/mode 命令，
+// issue #41 接线登记；chat 包头纪律同步）；读 Stream/Runtime/Gateway。
 package prompt
 
 import (
@@ -59,6 +60,8 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 		state.ApplyInputForEvent(p.st, m)
 	case components.SubmitMessageMsg:
 		p.handleSubmit(h, m)
+	case components.SlashCommandMsg:
+		p.handleSlashCommand(h, m)
 	case components.PermissionActionMsg:
 		p.handlePermission(h, m)
 	case components.QuestionAnswerMsg:
@@ -72,6 +75,26 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 		if _, cmd := p.prompt.Update(m); cmd != nil {
 			h.GoCmd(cmd)
 		}
+	}
+}
+
+// handleSlashCommand 路由 slash 命令到统一命令注册表（RunCommand 是 Ex/slash
+// 两入口的解析单一出处，ADR-010）。语义对齐旧 app 层 handleSlashCommand：
+// 已知命令执行（含 /quit——/exit 别名表承接）、未知命令弱提示呈现。
+// 空命令为 no-op（组件对非 "/" 输入产出 SubmitMessageMsg，此为脏数据防御）。
+// React 分支自 issue #41 接线起补齐——此前 kernel 路径对 SlashCommandMsg
+// 无任何消费者（审计 P1-2 实测静默丢弃）。
+func (p *Plugin) handleSlashCommand(h kernel.Host, msg components.SlashCommandMsg) {
+	cmd := strings.TrimSpace(msg.Command)
+	if cmd == "" {
+		return
+	}
+	args := []string(nil)
+	if fields := strings.Fields(msg.Args); len(fields) > 0 {
+		args = fields
+	}
+	if err := h.RunCommand(cmd, args); err != nil {
+		h.Notify("unknown command: " + cmd)
 	}
 }
 

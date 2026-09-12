@@ -39,6 +39,10 @@ func (p *Plugin) Bindings() []kernel.Binding {
 			Mode:        state.NormalMode,
 			Key:         "i",
 			Description: "进入输入模式",
+			// When 守卫：搜索/Ex 激活期 "i" 是 cmdline 通配绑定的查询字符
+			//（issue #41 PR 审计 P1-1——无守卫时输入 "i" 经 SetMode 直接
+			// 切走模式、杀掉搜索）。
+			When: func(s *state.ViewState) bool { return !s.Search.Active && !s.Ex.Active },
 			OnKey: func(h kernel.Host) {
 				h.SetMode(state.InputModeInput)
 			},

@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -18,12 +19,14 @@ import (
 var _ kernel.Host = (*recordingHost)(nil)
 
 type recordingHost struct {
-	st         *state.ViewState
-	notifies   []string
-	broadcasts []tea.Msg
-	client     gateway.Client
-	quitted    bool
-	react      func(tea.Msg) // 广播回插件 React（模拟 kernel 分发；nil 则只记录）
+	st           *state.ViewState
+	notifies     []string
+	broadcasts   []tea.Msg
+	client       gateway.Client
+	quitted      bool
+	react        func(tea.Msg) // 广播回插件 React（模拟 kernel 分发；nil 则只记录）
+	runCmds      []string      // RunCommand 调用记录（名称）
+	runCommandFn func(string, []string) error // 可注入的 RunCommand 行为（nil 返回 nil）
 }
 
 func newRecordingHost() *recordingHost {
@@ -33,7 +36,13 @@ func newRecordingHost() *recordingHost {
 func (h *recordingHost) State() *state.ViewState                        { return h.st }
 func (h *recordingHost) Gateway() gateway.Client                        { return h.client }
 func (h *recordingHost) Commands() []kernel.Command                     { return nil }
-func (h *recordingHost) RunCommand(string, []string) error              { return nil }
+func (h *recordingHost) RunCommand(name string, args []string) error {
+	h.runCmds = append(h.runCmds, name)
+	if h.runCommandFn != nil {
+		return h.runCommandFn(name, args)
+	}
+	return nil
+}
 func (h *recordingHost) Bindings() []kernel.Binding                     { return nil }
 func (h *recordingHost) BindEventStream(ch <-chan gateway.GatewayEvent) {}
 func (h *recordingHost) GoCmd(cmd tea.Cmd) {
@@ -197,6 +206,130 @@ func TestExitCommandQuits(t *testing.T) {
 	if !h.quitted {
 		t.Fatal("/exit should quit")
 	}
+}
+
+// TestModeCommandTogglesAgentMode 验证 /mode 命令（issue #41 接线补齐）：
+// 空值或 plan → build、build → plan（对齐旧 toggleAgentMode 语义），
+// 并经弱提示反馈 "Agent mode: <mode>"；别名含无斜杠 "mode"（:mode 可达）。
+func TestModeCommandTogglesAgentMode(t *testing.T) {
+	p, h := newTestPlugin(t)
+	byName := map[string]kernel.Command{}
+	for _, c := range p.Commands() {
+		byName[c.Name] = c
+	}
+	mode, ok := byName["/mode"]
+	if !ok {
+		t.Fatal("/mode should be registered")
+	}
+	if len(mode.Aliases) != 1 || mode.Aliases[0] != "mode" {
+		t.Fatalf("aliases = %v, want [mode]", mode.Aliases)
+	}
+	// 空值 → build。
+	mode.Run(h, nil)
+	if h.st.Runtime.AgentMode != state.AgentModeBuild {
+		t.Fatalf("from empty: mode = %q, want build", h.st.Runtime.AgentMode)
+	}
+	// build → plan。
+	mode.Run(h, nil)
+	if h.st.Runtime.AgentMode != state.AgentModePlan {
+		t.Fatalf("from build: mode = %q, want plan", h.st.Runtime.AgentMode)
+	}
+	// plan → build。
+	mode.Run(h, nil)
+	if h.st.Runtime.AgentMode != state.AgentModeBuild {
+		t.Fatalf("from plan: mode = %q, want build", h.st.Runtime.AgentMode)
+	}
+	// 弱提示反馈逐次断言。
+	if len(h.notifies) != 3 ||
+		h.notifies[0] != "Agent mode: build" ||
+		h.notifies[1] != "Agent mode: plan" ||
+		h.notifies[2] != "Agent mode: build" {
+		t.Fatalf("notifies = %v", h.notifies)
+	}
+}
+
+// TestExitQuitAliasesComplete 验证 /exit 别名表完整性（issue #41 审计
+// r3 别名完备性 F3）：无斜杠 "exit"/"q"/"quit" 通 Ex 行（:q/:quit/:exit），
+// 带斜杠 "/quit" 通 slash 路径（带斜杠按名查表）。
+func TestExitQuitAliasesComplete(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	for _, c := range p.Commands() {
+		if c.Name != "/exit" {
+			continue
+		}
+		want := map[string]bool{"exit": true, "q": true, "quit": true, "/quit": true}
+		if len(c.Aliases) != len(want) {
+			t.Fatalf("aliases = %v, want %v", c.Aliases, want)
+		}
+		for _, a := range c.Aliases {
+			if !want[a] {
+				t.Fatalf("unexpected alias %q in %v", a, c.Aliases)
+			}
+		}
+		return
+	}
+	t.Fatal("/exit should be registered")
+}
+
+// TestSlashCommandRoutesToRegistry 验证 SlashCommandMsg 路由（issue #41
+// 审计 P1-2——此前 kernel 路径对该消息零消费者）：已知命令转 RunCommand
+// （名称与参数透传）、未知命令弱提示、空命令 no-op。
+func TestSlashCommandRoutesToRegistry(t *testing.T) {
+	p, h := newTestPlugin(t)
+	// 已知命令：名称透传 RunCommand。
+	p.React(h, components.SlashCommandMsg{Command: "/mode"})
+	if len(h.runCmds) != 1 || h.runCmds[0] != "/mode" {
+		t.Fatalf("runCmds = %v, want [/mode]", h.runCmds)
+	}
+	// 带参数：参数按空白拆分透传（对齐 CommandPrompt.Cut 的 args 语义）。
+	h.runCmds = nil
+	p.React(h, components.SlashCommandMsg{Command: "/theme", Args: " tokyo-night extra "})
+	if len(h.runCmds) != 1 || h.runCmds[0] != "/theme" {
+		t.Fatalf("runCmds = %v, want [/theme]", h.runCmds)
+	}
+	// 未知命令：弱提示呈现（文案对齐旧路径 "unknown command: %s"）。
+	h.runCmds, h.notifies = nil, nil
+	h.runCommandFn = func(string, []string) error { return fmt.Errorf("unknown") }
+	p.React(h, components.SlashCommandMsg{Command: "/nope"})
+	if len(h.notifies) != 1 || h.notifies[0] != "unknown command: /nope" {
+		t.Fatalf("notifies = %v", h.notifies)
+	}
+	// 空命令：no-op（不路由、不提示）。
+	h.runCmds, h.notifies = nil, nil
+	p.React(h, components.SlashCommandMsg{})
+	if len(h.runCmds) != 0 || len(h.notifies) != 0 {
+		t.Fatalf("empty command should be no-op, runCmds=%v notifies=%v", h.runCmds, h.notifies)
+	}
+}
+
+// TestInputBindingWhenGuard 验证 i 键 When 守卫（PR #43 审计 P1-1）：
+// 搜索/Ex 激活期 "i" 属 cmdline 输入字符，不得切入输入模式。
+func TestInputBindingWhenGuard(t *testing.T) {
+	p := New()
+	for _, b := range p.Bindings() {
+		if b.Key != "i" {
+			continue
+		}
+		if b.When == nil {
+			t.Fatal("i binding should carry When guard")
+		}
+		clean := state.NewViewState()
+		if !b.When(clean) {
+			t.Fatal("i should enter input in normal navigation")
+		}
+		searching := state.NewViewState()
+		searching.Search.Active = true
+		if b.When(searching) {
+			t.Fatal("i must yield during search")
+		}
+		ex := state.NewViewState()
+		ex.Ex.Active = true
+		if b.When(ex) {
+			t.Fatal("i must yield during ex")
+		}
+		return
+	}
+	t.Fatal("i binding should exist")
 }
 
 func TestBindingsShape(t *testing.T) {

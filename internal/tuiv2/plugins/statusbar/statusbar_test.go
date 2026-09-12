@@ -73,6 +73,24 @@ func TestRenderReflectsState(t *testing.T) {
 	}
 }
 
+// TestRenderReflectsNotify 验证弱提示经状态栏可见（issue #41 A5——
+// 此前 Notify 槽全仓只写不读，弱提示用户不可见；审计 P1-1）。
+func TestRenderReflectsNotify(t *testing.T) {
+	p, h := New(), newFakeHost()
+	p.Init(context.Background(), h)
+	// 内核 Notify 写入等价：直接落 Notify 槽（写者唯一归内核）。
+	h.st.Notify = state.NotifyState{Text: "会话已删除"}
+	out := p.Render(h, 100)
+	if !strings.Contains(out, "会话已删除") {
+		t.Fatalf("render should reflect notify, got %q", out)
+	}
+	// 内核到期清除（Text 置空）后消失。
+	h.st.Notify = state.NotifyState{}
+	if out := p.Render(h, 100); strings.Contains(out, "会话已删除") {
+		t.Fatalf("cleared notify should disappear, got %q", out)
+	}
+}
+
 func TestRenderBeforeInitIsSafe(t *testing.T) {
 	p := New()
 	if out := p.Render(nil, 100); out != "" {

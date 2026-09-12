@@ -46,6 +46,15 @@ type SessionDeleted struct {
 	ID string
 }
 
+// SearchJumped 表示一次搜索跳转意图（cmdline 发出，chat 消费）：
+// cmdline 拥有 Search 槽（匹配集合与游标），Layout.ScrollOffset/AutoScroll
+// 写权归 chat——跳转经广播移交 chat 调 AgentStream.ScrollToEntry（行级
+// 定位 + maxOffset clamp 的单一真源）。issue #41 审计 P1-4：此前 cmdline
+// 朴素 total-index-1 公式以条目数冒充渲染行数，多行条目必定位漂移。
+type SearchJumped struct {
+	EntryIndex int
+}
+
 // ModeChanged 表示键位模式发生实际变化（内核广播）：cmdline 订阅它
 // 清理 Search/Ex 子状态（承接旧路径"切出 Normal 清理"行为）。
 type ModeChanged struct {
