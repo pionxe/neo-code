@@ -124,6 +124,12 @@ type StreamEntry struct {
 }
 
 // InputState 描述输入区文本、光标和当前输入任务。
+//
+// 槽所有制：Input 槽归插件 prompt。**双轨期临时越权标注**（issue #23 修订
+// v2 / 审计 P0-1）：ReduceConversation 的 6 类对话事件（permission_requested/
+// resolved、ask_user 系、run_cancelled）经 Reduce 临时写本槽（Mode/Prompt/
+// Options/Text/Cursor）——这是 prompt 插件迁移前的已知过渡行为，
+// prompt 迁移 PR 时移交并移除本标注。
 type InputState struct {
 	Text          string
 	Cursor        int
@@ -136,6 +142,11 @@ type InputState struct {
 }
 
 // LayoutState 描述终端布局尺寸和 Soft Inspector 显示状态。
+//
+// 槽所有制（issue #23 修订 v2，字段级拆分）：Width/Height 归内核
+// （WindowSizeMsg 分支唯一写者）；ScrollOffset/AutoScroll 归插件 chat
+// （行为流视图状态）；ShowInspector/InspectorWidth 的断点逻辑待 S7
+// 布局包接管后归属 kernel。
 type LayoutState struct {
 	Width          int
 	Height         int
