@@ -104,7 +104,10 @@ func Bootstrap(ctx context.Context, client gateway.Client) tea.Cmd {
 		// GetModel 取服务端真值（审计第 6 轮 P1-②）；空会话列表守卫（审计 P0-1）。
 		activeModel := ""
 		if active != nil {
-			if serverModel, gmErr := client.GetModel(ctx, active.ID); gmErr == nil && serverModel != "" {
+			serverModel, gmErr := client.GetModel(ctx, active.ID)
+			if gmErr != nil {
+				errs = append(errs, "get_model: "+gmErr.Error())
+			} else if serverModel != "" {
 				active.Model = serverModel
 				activeModel = serverModel
 			}
