@@ -17,7 +17,7 @@ func (p *Plugin) Commands() []kernel.Command {
 	return []kernel.Command{
 		{
 			Name:        "/exit",
-			Aliases:     []string{"exit", "q"},
+			Aliases:     []string{"exit", "q", "quit", "/quit"},
 			Description: "退出 TUI v2",
 			Category:    "prompt",
 			Run: func(h kernel.Host, args []string) {
