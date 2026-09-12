@@ -440,11 +440,11 @@ func TestLookupPrecisionOverWildcard(t *testing.T) {
 	mustOK(t, r.add("a", precise), "precise")
 
 	// 精确键命中精确绑定（通配不拦截）。
-	if b, ok := r.lookup(state.InputModeInput, keyRunes("enter")); !ok || b.isWildcard() {
+	if b, ok := r.lookup(state.InputModeInput, keyRunes("enter"), state.NewViewState()); !ok || b.isWildcard() {
 		t.Fatal("enter should hit precise binding")
 	}
 	// 任意字符命中通配并收到原始 KeyMsg。
-	b, ok := r.lookup(state.InputModeInput, keyRunes("z"))
+	b, ok := r.lookup(state.InputModeInput, keyRunes("z"), state.NewViewState())
 	if !ok || !b.isWildcard() {
 		t.Fatal("runes should hit wildcard")
 	}

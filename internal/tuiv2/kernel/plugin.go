@@ -62,6 +62,11 @@ type Binding struct {
 	Description string
 	// Command 是关联的命令注册表名（可选）：命令面板的快捷键列据此自动派生。
 	Command string
+	// Group 是帮助面板的分组标题（可选；空 = 按 Mode 平铺）。
+	Group string
+	// When 是可选守卫：返回 false 时本绑定被跳过（如搜索激活时才捕获按键）。
+	// 守卫只读状态，不得写。
+	When func(s *state.ViewState) bool
 	// OnKey 是精确绑定的动作（与 OnKeyMsg 互斥）：就地迁移自己的槽 / GoCmd / Send / SetMode。
 	OnKey func(h Host)
 	// OnKeyMsg 是通配绑定的动作（与 OnKey 互斥）：收到原始 KeyMsg，
@@ -101,6 +106,8 @@ type Command struct {
 	Description string
 	// Category 是面板排序分组名（按 Category 稳定排序后按 Name）。
 	Category string
+	// Shortcut 是快捷键展示列（内核在快照时从绑定注册表预派生，插件留空）。
+	Shortcut string
 	// Run 是命令体：args 为命令行入口传入的参数（面板入口恒为空）。
 	Run func(h Host, args []string)
 }
@@ -186,6 +193,14 @@ type Host interface {
 	Notify(text string)
 	// Quit 请求退出程序。
 	Quit()
+	// Commands 返回统一命令注册表快照（Shortcut 已由内核预派生；
+	// 列表渲染与别名解析均以此为唯一数据源，ADR-010）。
+	Commands() []Command
+	// RunCommand 按规范名或别名执行命令（Ex/slash 入口的单一出处）；
+	// 未知命令返回错误。
+	RunCommand(nameOrAlias string, args []string) error
+	// Bindings 返回键位绑定注册表快照（help 自动生成的数据源）。
+	Bindings() []Binding
 }
 
 // ErrDuplicatePlugin 表示注册了重复的插件 ID。
