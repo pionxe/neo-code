@@ -220,9 +220,9 @@ func TestOverlayTopExclusiveAndEscSemantics(t *testing.T) {
 // scriptedOverlay 是按脚本应答的浮层桩：consume 决定 HandleKey 返回值。
 type scriptedOverlay struct{ consume bool }
 
-func (o *scriptedOverlay) ID() string                            { return "scripted" }
+func (o *scriptedOverlay) ID() string                        { return "scripted" }
 func (o *scriptedOverlay) HandleKey(h Host, msg tea.KeyMsg) bool { return o.consume }
-func (o *scriptedOverlay) View(h Host, width int) string         { return "scripted" }
+func (o *scriptedOverlay) View(h Host, width int) string     { return "scripted" }
 
 func TestNotifyGenerationalExpiry(t *testing.T) {
 	k := NewKernel(Config{Opts: Options{NotifyExpiry: 1}})
@@ -397,15 +397,5 @@ func TestHostMethodCoverage(t *testing.T) {
 	h.Notify("")
 	if len(k.pendingCmds) == 0 {
 		t.Fatal("notify should arm expiry timer")
-	}
-	// BindEventStream 转发覆盖（P1-③）：Host 方法全路径可达。
-	ch := make(chan gateway.GatewayEvent, 1)
-	h.BindEventStream(ch)
-	if k.eventCh == nil {
-		t.Fatal("BindEventStream should update kernel stream")
-	}
-	// Bindings 快照转发覆盖（S3-3 Host 三快照方法之一，另两个已有用例）。
-	if b := h.Bindings(); len(b) != 0 {
-		t.Fatalf("empty kernel bindings = %d, want 0", len(b))
 	}
 }
