@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -34,7 +35,9 @@ func main() {
 	cfg.Client = client
 
 	if _, err := tea.NewProgram(
-		tuiv2.NewApp(cfg),
+		// 内核接线切换（issue #41，S3-4）：kernel + 插件装配路径取代旧
+		// app 层路由。旧路由文件在后续删除 commit 前保持并存（绞杀者模式）。
+		tuiv2.NewKernelApp(context.Background(), cfg),
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(os.Stdout),
 		tea.WithAltScreen(),
