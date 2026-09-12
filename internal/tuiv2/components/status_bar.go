@@ -47,6 +47,12 @@ func (c *AmbientStatus) View() string {
 	if c.state.Gateway.ActiveSess != nil {
 		parts = append(parts, theme.MutedStyle().Render(c.state.Gateway.ActiveSess.Title))
 	}
+	// 弱提示（ADR-012）：内核经 Host.Notify 写入 Notify 槽，Text 非空即渲染。
+	// 组件不自算过期——到期清除责在内核 notifyExpiryMsg（issue #41 审计 P2-1
+	// 裁定：过期判断收在内核单一出处，组件保持纯读）。
+	if c.state.Notify.Text != "" {
+		parts = append(parts, theme.AccentStyle().Render(c.state.Notify.Text))
+	}
 	line := strings.Join(parts, "   ")
 	if c.state.Layout.Width > 0 {
 		return fitBlock(line, c.state.Layout.Width, true)
