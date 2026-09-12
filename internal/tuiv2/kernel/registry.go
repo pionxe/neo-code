@@ -19,7 +19,7 @@ func (r *bindingRegistry) add(pluginID string, b Binding) error {
 		r.byModeKey = make(map[state.InputMode]map[string]Binding)
 	}
 	if b.OnKey == nil {
-		return fmt.Errorf("kernel: binding %q (%s) from %s has no OnKey", b.Key, b.Mode, pluginID)
+		return fmt.Errorf("kernel: binding %q (%v) from %s has no OnKey", b.Key, b.Mode, pluginID)
 	}
 	keys, ok := r.byModeKey[b.Mode]
 	if !ok {
@@ -27,7 +27,7 @@ func (r *bindingRegistry) add(pluginID string, b Binding) error {
 		r.byModeKey[b.Mode] = keys
 	}
 	if prev, dup := keys[b.Key]; dup {
-		return fmt.Errorf("kernel: binding conflict on (%s, %q): %s conflicts with %s", b.Mode, b.Key, pluginID, prev.Description)
+		return fmt.Errorf("kernel: binding conflict on (%v, %q): %s conflicts with %s", b.Mode, b.Key, pluginID, prev.Description)
 	}
 	keys[b.Key] = b
 	r.count++
