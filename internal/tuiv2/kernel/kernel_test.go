@@ -221,7 +221,7 @@ func TestOverlayTopExclusiveAndEscSemantics(t *testing.T) {
 type scriptedOverlay struct{ consume bool }
 
 func (o *scriptedOverlay) ID() string                        { return "scripted" }
-func (o *scriptedOverlay) HandleKey(h Host, key string) bool { return o.consume }
+func (o *scriptedOverlay) HandleKey(h Host, msg tea.KeyMsg) bool { return o.consume }
 func (o *scriptedOverlay) View(h Host, width int) string     { return "scripted" }
 
 func TestNotifyGenerationalExpiry(t *testing.T) {
@@ -397,5 +397,11 @@ func TestHostMethodCoverage(t *testing.T) {
 	h.Notify("")
 	if len(k.pendingCmds) == 0 {
 		t.Fatal("notify should arm expiry timer")
+	}
+	// BindEventStream 转发覆盖（P1-③）：Host 方法全路径可达。
+	ch := make(chan gateway.GatewayEvent, 1)
+	h.BindEventStream(ch)
+	if k.eventCh == nil {
+		t.Fatal("BindEventStream should update kernel stream")
 	}
 }

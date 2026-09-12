@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"neo-code/internal/tuiv2/state"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestBindingRegistryRejectsDuplicate(t *testing.T) {
@@ -130,8 +132,8 @@ func TestOverlayStackPushPopTop(t *testing.T) {
 type namedOverlay struct{ id string }
 
 func (o namedOverlay) ID() string { return o.id }
-func (o namedOverlay) HandleKey(h Host, key string) bool {
-	return key != "esc"
+func (o namedOverlay) HandleKey(h Host, msg tea.KeyMsg) bool {
+	return msg.String() != "esc"
 }
 func (o namedOverlay) View(h Host, width int) string { return "overlay:" + o.id }
 

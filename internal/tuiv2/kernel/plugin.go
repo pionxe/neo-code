@@ -148,9 +148,10 @@ type RegionRenderer interface {
 type Overlay interface {
 	// ID 返回浮层标识（日志与归属）。
 	ID() string
-	// HandleKey 处理一个按键；返回 consumed=true 表示已消费（内核停止派发该键）。
+	// HandleKey 处理一个按键（透传原始 KeyMsg，浮层可读按键形状）；
+	// 返回 consumed=true 表示已消费（内核停止派发该键）。
 	// 约定：栈顶对 "esc" 返回 consumed=false 时，内核弹栈（浮层主动放弃）。
-	HandleKey(h Host, key string) (consumed bool)
+	HandleKey(h Host, msg tea.KeyMsg) (consumed bool)
 	// View 以给定宽度渲染浮层（覆盖式，由内核负责居中等外观）。
 	View(h Host, width int) string
 }
@@ -164,6 +165,9 @@ type Host interface {
 	Gateway() gateway.Client
 	// GoCmd 发起异步任务（RPC、定时器）：返回值经内核 Update 回流为广播或内核私有消息。
 	GoCmd(cmd tea.Cmd)
+	// BindEventStream 重绑 Gateway 事件流（S3-2 重绑定协议）：代际号递增使
+	// 旧泵产物失效；旧通道由调用方关闭。仅会话切换等换代场景使用。
+	BindEventStream(ch <-chan gateway.GatewayEvent)
 	// Send 广播一条消息给所有 Reactor：同步、按注册顺序、保序（ADR-009）。
 	// 派发期间调用会入队尾延后派发（禁嵌套，见 4.1 契约修订）。
 	Send(msg tea.Msg)

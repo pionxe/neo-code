@@ -52,6 +52,23 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	switch m := msg.(type) {
 	case gateway.GatewayEvent:
 		p.handleGatewayEvent(m)
+	case state.SessionLoaded:
+		// sessions 插件的切换广播：重载 Stream 槽（Detail 历史转条目；
+		// 无 Detail = Load 失败，清空并以错误条目提示）。
+		p.st.Stream = nil
+		if m.Detail != nil {
+			for _, item := range m.Detail.Stream {
+				p.st.Stream = append(p.st.Stream, state.StreamEntry{
+					ID:        item.ID,
+					Type:      string(item.Kind),
+					Timestamp: item.CreatedAt,
+					Content:   item.Text,
+					Metadata:  map[string]any{"done": true, "role": item.Role},
+				})
+			}
+		}
+		p.st.Layout.AutoScroll = true
+		p.st.Layout.ScrollOffset = 0
 	case state.UserSubmitted:
 		// prompt 插件的提交广播：更新重试文本并追加用户流条目
 		//（旧路径 app.go:429 行为等价）。流增长 → 滚动复位
