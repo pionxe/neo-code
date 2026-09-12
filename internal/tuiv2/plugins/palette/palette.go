@@ -24,14 +24,10 @@ func New() *Plugin { return &Plugin{} }
 func (p *Plugin) ID() string { return "palette" }
 
 // Init 生命周期占位（打开动作在键位 OnKey 内完成）。
-func (p *Plugin) Init(ctx context.Context, h kernel.Host) {
-	_ = ctx
-}
+func (p *Plugin) Init(ctx context.Context, h kernel.Host) {}
 
-// Close 释放资源（无外部资源，生命周期对称性）。
-func (p *Plugin) Close(ctx context.Context) {
-	_ = ctx
-}
+// Close 释放资源。
+func (p *Plugin) Close(ctx context.Context) {}
 
 // open 构造并压入面板浮层：快照命令表（Category→Name 排序 + 快捷键列
 // 内核预派生），重置过滤与选中。
@@ -93,9 +89,7 @@ func (o *overlay) HandleKey(h kernel.Host, msg tea.KeyMsg) (consumed bool) {
 		if o.selected < len(matched) {
 			c := matched[o.selected]
 			h.PopOverlay()
-			if c.Run != nil { // 脏数据防御：无动作命令不 panic
-				c.Run(h, nil)
-			}
+			c.Run(h, nil)
 		}
 		return true
 	case "backspace":

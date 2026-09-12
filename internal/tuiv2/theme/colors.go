@@ -92,3 +92,16 @@ func tokyoNightTrueColor() ThemeColors {
 		DiffDel:   lipgloss.Color("#f7768e"),
 	}
 }
+
+// SetTokyoNight 将活动色板整体替换为 Tokyo Night 预设
+// （主题插件 /theme tokyo-night 入口；仅限 Update/React 同步路径调用，
+// bubbletea View 与 Update 同 goroutine，无并发竞态）。
+func SetTokyoNight() {
+	TokyoNight = tokyoNightPreset()
+}
+
+// tokyoNightPreset 返回按当前终端色彩能力重建的 Tokyo Night 预设
+// （256 色终端自动降级到 256 色板）。
+func tokyoNightPreset() ThemeColors {
+	return TokyoNightForProfile(DetectColorProfile())
+}
