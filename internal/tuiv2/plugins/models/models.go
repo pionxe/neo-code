@@ -91,8 +91,17 @@ type pickerOverlay struct {
 // ID 返回浮层标识。
 func (o *pickerOverlay) ID() string { return "models.picker" }
 
-// HandleKey 全权委托组件状态机（模态消费）。
+// HandleKey 委托组件状态机（模态消费）；esc/enter 由浮层关闭自身
+// （P0-2 弹栈语义，与 sessions picker 一致）。
 func (o *pickerOverlay) HandleKey(h kernel.Host, msg tea.KeyMsg) (consumed bool) {
+	switch msg.String() {
+	case "esc", "enter":
+		if _, cmd := o.p.picker.Update(msg); cmd != nil {
+			h.GoCmd(cmd)
+		}
+		h.PopOverlay()
+		return true
+	}
 	if _, cmd := o.p.picker.Update(msg); cmd != nil {
 		h.GoCmd(cmd)
 	}
