@@ -44,7 +44,11 @@ func (p *Plugin) Close(ctx context.Context) {}
 func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	switch m := msg.(type) {
 	case gateway.GatewayEvent:
-		state.ApplyGatewayForEvent(p.st, m)
+		// 精确化（审计 P2-①）：models 仅写 model_changed（其余 Gateway
+		// 域事件归 sessions，避免全量转发稀释"写者唯一"）。
+		if m.Type == gateway.EventModelChanged {
+			state.ApplyGatewayForEvent(p.st, m)
+		}
 	case components.ModelSelectMsg:
 		p.handleSelect(h, m)
 	}
