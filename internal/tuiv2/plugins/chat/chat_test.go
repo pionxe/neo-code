@@ -27,8 +27,9 @@ func newRecordingHost() *recordingHost {
 	return &recordingHost{st: state.NewViewState()}
 }
 
-func (h *recordingHost) State() *state.ViewState { return h.st }
-func (h *recordingHost) Gateway() gateway.Client { return h.client }
+func (h *recordingHost) State() *state.ViewState                        { return h.st }
+func (h *recordingHost) Gateway() gateway.Client                        { return h.client }
+func (h *recordingHost) BindEventStream(ch <-chan gateway.GatewayEvent) {}
 
 // GoCmd 同步执行以观察副作用（生产路径由 bubbletea 异步执行）。
 func (h *recordingHost) GoCmd(cmd tea.Cmd) {

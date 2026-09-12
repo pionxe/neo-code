@@ -30,8 +30,9 @@ func newRecordingHost() *recordingHost {
 	return &recordingHost{st: state.NewViewState()}
 }
 
-func (h *recordingHost) State() *state.ViewState { return h.st }
-func (h *recordingHost) Gateway() gateway.Client { return h.client }
+func (h *recordingHost) State() *state.ViewState                        { return h.st }
+func (h *recordingHost) Gateway() gateway.Client                        { return h.client }
+func (h *recordingHost) BindEventStream(ch <-chan gateway.GatewayEvent) {}
 func (h *recordingHost) GoCmd(cmd tea.Cmd) {
 	if cmd != nil {
 		// 同步执行并把产物回流广播——模拟 bubbletea 的
