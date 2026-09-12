@@ -23,6 +23,9 @@ func newFakeHost() *fakeHost { return &fakeHost{st: state.NewViewState()} }
 
 func (h *fakeHost) State() *state.ViewState                        { return h.st }
 func (h *fakeHost) Gateway() gateway.Client                        { return nil }
+func (h *fakeHost) Commands() []kernel.Command                     { return nil }
+func (h *fakeHost) RunCommand(string, []string) error              { return nil }
+func (h *fakeHost) Bindings() []kernel.Binding                     { return nil }
 func (h *fakeHost) BindEventStream(ch <-chan gateway.GatewayEvent) {}
 func (h *fakeHost) GoCmd(cmd tea.Cmd)                              {}
 func (h *fakeHost) Send(msg tea.Msg)                               {}
