@@ -148,6 +148,12 @@ func ApplyBootstrap(st *state.ViewState, msg bootstrapDoneMsg, bindEventStream f
 		}
 		st.Layout.AutoScroll = true
 		st.Layout.ScrollOffset = 0
+		// Token 用量落地（对齐旧路径 app_view.go:111）。
+		st.Runtime.Tokens = state.TokenUsage{
+			Input:  msg.detail.Usage.Input,
+			Output: msg.detail.Usage.Output,
+			Total:  msg.detail.Usage.Total,
+		}
 	}
 	// 模型列表落地（审计 P1-2 补位）。
 	st.Gateway.Models = append(st.Gateway.Models, msg.models...)
