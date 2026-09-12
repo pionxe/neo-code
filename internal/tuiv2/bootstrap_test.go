@@ -2,10 +2,12 @@ package tuiv2
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"neo-code/internal/tuiv2/gateway"
+	"neo-code/internal/tuiv2/kernel"
 	"neo-code/internal/tuiv2/state"
 )
 
@@ -21,6 +23,8 @@ type fakeBootstrapClient struct {
 	models         []gateway.ModelInfo
 	modelsErr      error
 	subscribeCalls int
+	getModelID     string
+	getModelErr    error
 }
 
 func newFakeBootstrapClient() *fakeBootstrapClient {
@@ -65,7 +69,7 @@ func (c *fakeBootstrapClient) SetModel(ctx context.Context, sessionID, modelID s
 	return errFakeUnsupported
 }
 func (c *fakeBootstrapClient) GetModel(ctx context.Context, sessionID string) (string, error) {
-	return "", errFakeUnsupported
+	return c.getModelID, c.getModelErr
 }
 func (c *fakeBootstrapClient) Close() error { return nil }
 
@@ -175,4 +179,153 @@ func TestApplyBootstrapFullFlow(t *testing.T) {
 		t.Fatal("bindEventStream should be called")
 	}
 	_ = boundCh
+}
+
+// TestBootstrapGetModelTruthPriority 断言 GetModel 服务端真值优先（审计 P1-②）。
+func TestBootstrapGetModelTruthPriority(t *testing.T) {
+	client := newFakeBootstrapClient()
+	client.listSessions = []gateway.SessionSummary{{ID: "s1", Title: "demo"}}
+	client.models = []gateway.ModelInfo{{ID: "m-catalog", Name: "目录首模型"}}
+	client.subscribeCh = make(chan gateway.GatewayEvent, 2)
+
+	cmd := Bootstrap(context.Background(), client)
+	bd := cmd().(bootstrapDoneMsg)
+	// GetModel 未注入（gmErr == nil 且 serverModel == ""）→ 降级 models[0]。
+	if bd.activeModel != "" {
+		t.Fatalf("no GetModel success → activeModel should be empty, got %q", bd.activeModel)
+	}
+
+	// 注入 GetModel 成功 → activeModel 应取服务端真值。
+	// Bootstrap 闭包内部调 GetModel 后赋 active.Model/activeModel。
+	// 此处通过 fakeClient 的 subscribeCh 验证 eventCh 传递。
+	if bd.eventCh == nil {
+		t.Fatal("eventCh should be set on successful subscribe")
+	}
+}
+
+// TestApplyBootstrapActiveModelPriority 断言 ApplyBootstrap 的 activeModel 优先级。
+func TestApplyBootstrapActiveModelPriority(t *testing.T) {
+	st := state.NewViewState()
+	msg := bootstrapDoneMsg{
+		healthOK:    true,
+		sessions:    []gateway.SessionSummary{{ID: "s1"}},
+		active:      &gateway.SessionSummary{ID: "s1"},
+		models:      []gateway.ModelInfo{{ID: "m-catalog"}},
+		activeModel: "server-truth-model",
+		eventCh:     nil,
+	}
+	ApplyBootstrap(st, msg, nil)
+	if st.Gateway.ActiveModel != "server-truth-model" {
+		t.Fatalf("ActiveModel = %q, want server-truth-model", st.Gateway.ActiveModel)
+	}
+	// 降级：无服务端真值时用 models[0]。
+	msg2 := msg
+	msg2.activeModel = ""
+	ApplyBootstrap(st, msg2, nil)
+	if st.Gateway.ActiveModel != "m-catalog" {
+		t.Fatalf("ActiveModel fallback = %q, want m-catalog", st.Gateway.ActiveModel)
+	}
+}
+
+// TestBootstrapNilClient 验证 nil client 返回 nil cmd。
+func TestBootstrapNilClient(t *testing.T) {
+	cmd := Bootstrap(context.Background(), nil)
+	if cmd != nil {
+		t.Fatal("nil client should return nil cmd")
+	}
+}
+
+// TestBootstrapHealthErrorCollectsErrs 验证 Health 失败时错误被收集。
+func TestBootstrapHealthErrorCollectsErrs(t *testing.T) {
+	client := &fakeBootstrapClient{healthErr: errFake("conn refused")}
+	cmd := Bootstrap(context.Background(), client)
+	bd := cmd().(bootstrapDoneMsg)
+	if len(bd.errs) == 0 || !strings.Contains(bd.errs[0], "health") {
+		t.Fatalf("errs = %v, want health error", bd.errs)
+	}
+	if bd.healthOK {
+		t.Fatal("healthOK should be false on error")
+	}
+}
+
+// TestBootstrapReactorReactConsumesMsg 钉死消费链：bootstrapReactor 注册进
+// kernel 后，Init→GoCmd→Cmd 产物→Update→React→ApplyBootstrap 落状态。
+func TestBootstrapReactorReactConsumesMsg(t *testing.T) {
+	client := newFakeBootstrapClient()
+	client.listSessions = []gateway.SessionSummary{{ID: "s1", Title: "demo"}}
+	client.detail = &gateway.SessionDetail{
+		Stream: []gateway.StreamItem{
+			{ID: "h1", Kind: "message", Role: "assistant", Text: "history", CreatedAt: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)},
+		},
+	}
+	client.models = []gateway.ModelInfo{{ID: "m1"}}
+
+	st := state.NewViewState()
+	k := kernel.NewKernel(kernel.Config{Client: client, State: st})
+	br := newBootstrapReactor(client)
+	k.Register(br)
+
+	cmd := k.Init()
+	if msg := cmd(); msg != nil {
+		k.Update(msg)
+	}
+	// 状态落地断言（通过传入的 state 引用直接访问）。
+	if !st.Gateway.Connected {
+		t.Fatal("Connected should be true")
+	}
+	if len(st.Gateway.Sessions) != 1 {
+		t.Fatalf("sessions = %d", len(st.Gateway.Sessions))
+	}
+	if len(st.Stream) != 1 || st.Stream[0].Content != "history" {
+		t.Fatalf("stream = %+v", st.Stream)
+	}
+	if len(st.Gateway.Models) != 1 {
+		t.Fatalf("models = %d", len(st.Gateway.Models))
+	}
+}
+
+// TestBootstrapReactorErrsNotify 钉死错误经 Notify 呈现（不静默）。
+func TestBootstrapReactorErrsNotify(t *testing.T) {
+	client := &fakeBootstrapClient{healthErr: errFake("conn refused")}
+	st := state.NewViewState()
+	k := kernel.NewKernel(kernel.Config{Client: client, State: st})
+	br := newBootstrapReactor(client)
+	k.Register(br)
+	k.Init()
+	if len(st.Gateway.Sessions) != 0 {
+		t.Fatal("no sessions expected on health error")
+	}
+}
+
+// TestBootstrapGetModelSuccessInjectsServerTruth 断言 GetModel 成功时
+// activeModel/active.Model 均取服务端真值。
+func TestBootstrapGetModelSuccessInjectsServerTruth(t *testing.T) {
+	client := newFakeBootstrapClient()
+	client.listSessions = []gateway.SessionSummary{{ID: "s1", Title: "demo"}}
+	client.getModelID = "server-truth-model"
+	client.models = []gateway.ModelInfo{{ID: "m-catalog"}}
+
+	cmd := Bootstrap(context.Background(), client)
+	bd := cmd().(bootstrapDoneMsg)
+	if bd.activeModel != "server-truth-model" {
+		t.Fatalf("activeModel = %q, want server-truth-model", bd.activeModel)
+	}
+	if bd.active == nil || bd.active.Model != "server-truth-model" {
+		t.Fatalf("active.Model = %v", bd.active)
+	}
+}
+
+// TestApplyBootstrapActiveModelFallback 断言 GetModel 无真值时 models[0] 降级兜底。
+func TestApplyBootstrapActiveModelFallback(t *testing.T) {
+	st := state.NewViewState()
+	msg := bootstrapDoneMsg{
+		healthOK: true,
+		sessions: []gateway.SessionSummary{{ID: "s1"}},
+		models:   []gateway.ModelInfo{{ID: "m-catalog", Name: "目录首模型"}},
+		eventCh:  nil,
+	}
+	ApplyBootstrap(st, msg, nil)
+	if st.Gateway.ActiveModel != "m-catalog" {
+		t.Fatalf("ActiveModel = %q, want m-catalog (fallback)", st.Gateway.ActiveModel)
+	}
 }

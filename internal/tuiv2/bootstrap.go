@@ -3,6 +3,8 @@ package tuiv2
 import (
 	"context"
 
+	"strings"
+
 	"neo-code/internal/tuiv2/gateway"
 	"neo-code/internal/tuiv2/kernel"
 	"neo-code/internal/tuiv2/state"
@@ -43,8 +45,8 @@ func (r *bootstrapReactor) React(h kernel.Host, msg tea.Msg) {
 		return
 	}
 	ApplyBootstrap(h.State(), bd, h.BindEventStream)
-	for _, e := range bd.errs {
-		h.Notify("初始加载警告：" + e)
+	if len(bd.errs) > 0 {
+		h.Notify("初始加载完成（" + strings.Join(bd.errs, "；") + "）")
 	}
 }
 
