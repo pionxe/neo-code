@@ -10,6 +10,7 @@ import (
 // 零值即可用；add 在注册期做重复 (mode, key) 检测（fail-fast，ADR-009 仲裁规则）。
 type bindingRegistry struct {
 	byModeKey map[state.InputMode]map[string]Binding
+	order     []Binding // 登记序快照：all() 的确定性来源（map 遍历序随机）
 	count     int
 }
 
@@ -30,6 +31,7 @@ func (r *bindingRegistry) add(pluginID string, b Binding) error {
 		return fmt.Errorf("kernel: binding conflict on (%v, %q): %s conflicts with %s", b.Mode, b.Key, pluginID, prev.Description)
 	}
 	keys[b.Key] = b
+	r.order = append(r.order, b)
 	r.count++
 	return nil
 }
@@ -40,13 +42,8 @@ func (r *bindingRegistry) lookup(mode state.InputMode, key string) (Binding, boo
 	return b, ok
 }
 
-// all 返回全部绑定（注册序），供帮助面板自动生成与快捷键派生。
+// all 返回全部绑定（登记序，确定性；P2 修复：此前 map 遍历序随机，
+// "注册序"注释名不副实），供帮助面板自动生成与快捷键派生。
 func (r *bindingRegistry) all() []Binding {
-	out := make([]Binding, 0, r.count)
-	for _, mode := range []state.InputMode{state.InputModeInput, state.NormalMode, state.LeaderMode} {
-		for _, b := range r.byModeKey[mode] {
-			out = append(out, b)
-		}
-	}
-	return out
+	return append([]Binding(nil), r.order...)
 }

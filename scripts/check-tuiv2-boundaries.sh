@@ -38,9 +38,11 @@ if grep -rn 'neo-code/internal/tuiv2/plugins' internal/tuiv2/kernel --include='*
     fail=1
 fi
 
-# 禁 4：后端模块与 TUI v1 冻结边界（引号锚定，避免误伤 internal/tuiv2/gateway）。
-if grep -rnE 'neo-code/internal/(gateway|runtime|session|repository|tui|config|context|provider|tools)"' \
-    internal/tuiv2 cmd/neocode-tuiv2 --include='*.go'; then
+# 禁 4：后端模块与 TUI v1 冻结边界。
+# 锚定形式含 "/" 后继或行尾引号，防子包绕过（如 internal/gateway/client）。
+if grep -rnE 'neo-code/internal/(gateway|runtime|session|repository|tui|config|context|provider|tools)("|[[:space:]]*$|/)' \
+    internal/tuiv2 cmd/neocode-tuiv2 --include='*.go' \
+    | grep -v 'neo-code/internal/tuiv2/gateway' ; then
     echo "[边界-4] tuiv2 import 了后端模块或 TUI v1（见上方命中行）" >&2
     fail=1
 fi

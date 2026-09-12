@@ -34,16 +34,16 @@ type Kernel struct {
 	commands  commandRegistry
 	renderers map[RegionID]RegionRenderer
 
-	modes          modeMachine
-	stack          overlayStack
-	queue          []tea.Msg // 广播队列：派发中入队尾，循环排空
-	dispatching    bool      // 正在排空队列（禁嵌套标记）
-	pendingCmds    []tea.Cmd // 本轮 Update 累积的命令（定时器、插件 GoCmd、退出）
-	eventCh        <-chan gateway.GatewayEvent
-	width          int
-	confirmSeq     int
-	confirmPending *state.ConfirmRequest
-	notifyGen      int
+	modes       modeMachine
+	stack       overlayStack
+	queue       []tea.Msg // 广播队列：派发中入队尾，循环排空
+	dispatching bool      // 正在排空队列（禁嵌套标记）
+	pumpArmed   bool      // 事件泵单实例守卫：仅一个泵命令在飞（P1 修复）
+	pendingCmds []tea.Cmd // 本轮 Update 累积的命令（定时器、插件 GoCmd、退出）
+	eventCh     <-chan gateway.GatewayEvent
+	width       int
+	confirmSeq  int
+	notifyGen   int
 }
 
 // kernelHost 将 Kernel 暴露为插件可见的 Host 接口（编译期断言见测试文件）。
@@ -130,12 +130,14 @@ func (k *Kernel) BindEventStream(ch <-chan gateway.GatewayEvent) {
 	k.eventCh = ch
 }
 
-// Init 实现 tea.Model：顺序调用各插件 Init，并武装事件泵。
+// Init 实现 tea.Model：顺序调用各插件 Init，并返回全部累积命令
+// （含插件 Init 期经 GoCmd 发起的任务与事件泵——P1 修复：此前仅返回泵，
+// 插件 Init 期的异步命令会被丢弃）。
 func (k *Kernel) Init() tea.Cmd {
 	for _, p := range k.plugins {
 		p.Init(k.ctx, k.host)
 	}
-	return k.waitEvent()
+	return k.flushCmds()
 }
 
 // Close 逆序关闭各插件（后注册先关闭）。
@@ -159,7 +161,9 @@ func (k *Kernel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		k.st.Layout.Height = m.Height
 	case leaderTimeoutMsg:
 		// 内核私有消息：前置过滤，永不入广播。
+		// 超时回落后同步 Mode 槽（模式机是唯一事实源，P1 修复：此前槽与机分叉）。
 		k.modes.onLeaderTimeout(m)
+		k.st.Mode = k.modes.mode
 	case notifyExpiryMsg:
 		// 内核私有消息：按代际对号清除，旧定时器不覆盖新提示。
 		if m.gen == k.notifyGen {
@@ -167,11 +171,15 @@ func (k *Kernel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case eventStreamClosedMsg:
 		k.eventCh = nil
+		k.pumpArmed = false // 泵已停，允许 BindEventStream 后重新武装
 		k.debugf("event stream closed, pump stopped")
 	case gateway.GatewayEvent:
+		k.pumpArmed = false // 事件即泵的产物：交付即消费，允许 flushCmds 重挂下一泵
 		k.broadcast(msg)
 	default:
-		// 插件间消息：广播给全部 Reactor。
+		// 插件间消息：广播给全部 Reactor。口径：凡非键/鼠标/窗口/内核私有
+		// 的消息（含 Paste/Focus 等 bubbletea 内建消息）均视为插件间消息广播——
+		// 键类消息永远只走路由，除此之外不做白名单（契约见 §4.1）。
 		k.broadcast(msg)
 	}
 	return k, k.flushCmds()
@@ -218,8 +226,15 @@ func (k *Kernel) broadcast(msg tea.Msg) {
 	k.drain()
 }
 
-// enqueue 入队；超过深度上限（自激回声）即丢弃并记 debug 日志。
+// enqueue 入队；键与鼠标形状的消息在入口即拒绝（§4.1 规则 1：
+// KeyMsg 永不广播，即使从插件侧发出）；超过深度上限（自激回声）同样
+// 丢弃并记 debug 日志。
 func (k *Kernel) enqueue(msg tea.Msg) {
+	switch msg.(type) {
+	case tea.KeyMsg, tea.MouseMsg:
+		k.debugf("rejected %T entering broadcast queue (rule 1)", msg)
+		return
+	}
 	if len(k.queue) >= k.opts.MaxQueueDepth {
 		k.debugf("queue depth cap %d reached, dropping message %T", k.opts.MaxQueueDepth, msg)
 		return
@@ -228,16 +243,28 @@ func (k *Kernel) enqueue(msg tea.Msg) {
 }
 
 // drain 按注册顺序把队列中的每条消息派发给全部 Reactor；
-// dispatching 标记保证嵌套 Send 只入队、由外层循环排空（保序、无重入）。
+// 派发期间入队的新消息由本循环继续处理（禁嵌套、保序）。
+// **派发预算**：每轮 drain 处理的消息总量受 MaxQueueDepth 硬上限约束，
+// 超限即清空余量并记 debug 日志。这是自激回声的最终守卫——仅靠队列
+// 深度上限无法阻止"清空再填一"式的自我回声无限循环（每轮排空时
+// 队列恒短于上限），必须以派发总量封顶（issue #20 修订 v2 P0）。
 func (k *Kernel) drain() {
 	if k.dispatching {
 		return
 	}
 	k.dispatching = true
 	defer func() { k.dispatching = false }()
+	processed := 0
 	for len(k.queue) > 0 {
+		if processed >= k.opts.MaxQueueDepth {
+			dropped := len(k.queue)
+			k.queue = k.queue[:0]
+			k.debugf("dispatch budget %d exhausted, dropped %d queued messages", k.opts.MaxQueueDepth, dropped)
+			return
+		}
 		msg := k.queue[0]
 		k.queue = k.queue[1:]
+		processed++
 		for _, r := range k.reactors {
 			r.React(k.host, msg)
 		}
@@ -254,6 +281,9 @@ func (k *Kernel) setMode(next state.InputMode) {
 }
 
 // flushCmds 返回本轮累积命令（含事件泵重挂），空时返回 nil。
+// P1 修复：事件泵单实例——pumpArmed 守卫下仅武装一次；上一泵命令被
+// bubbletea 执行并回流消息前，本方法不会重复挂泵，消除"每次 Update
+// 泄漏一个阻塞在通道上的 goroutine"（旧实现每次 Update 无条件重挂）。
 func (k *Kernel) flushCmds() tea.Cmd {
 	cmds := k.pendingCmds
 	k.pendingCmds = nil
@@ -263,14 +293,19 @@ func (k *Kernel) flushCmds() tea.Cmd {
 	if len(cmds) == 0 {
 		return nil
 	}
+	if len(cmds) == 1 {
+		return cmds[0] // 单命令直返：避免 Batch 包装改变 cmd() 的返回形态
+	}
 	return tea.Batch(cmds...)
 }
 
-// waitEvent 武装事件泵：阻塞等待下一条 Gateway 事件；流关闭时返回私有关闭消息。
+// waitEvent 在事件流已绑定且泵未武装时返回泵命令（占用即置 pumpArmed）；
+// 流关闭消息经 Update 重置 pumpArmed 后才允许再次武装。
 func (k *Kernel) waitEvent() tea.Cmd {
-	if k.eventCh == nil {
+	if k.eventCh == nil || k.pumpArmed {
 		return nil
 	}
+	k.pumpArmed = true
 	ch := k.eventCh
 	return func() tea.Msg {
 		event, ok := <-ch
@@ -313,10 +348,11 @@ func (h kernelHost) PopOverlay() { h.k.stack.pop() }
 
 // Confirm 发起确认：生成请求 ID，压入内核自带确认浮层；
 // 用户应答后经 Send 广播 state.ConfirmResult（请求方在 React 中按 ID 消费）。
+// 浮层自关按对象身份精确移除（而非 LIFO 弹栈）：应答广播期间 Reactor 若压入
+// 新浮层（P2 场景），弹栈会误弹他层。
 func (h kernelHost) Confirm(req state.ConfirmRequest) {
 	h.k.confirmSeq++
 	req.ID = fmt.Sprintf("confirm-%d", h.k.confirmSeq)
-	h.k.confirmPending = &req
 	h.k.stack.push(&confirmOverlay{k: h.k, req: req})
 }
 
@@ -346,7 +382,7 @@ type confirmOverlay struct {
 // ID 返回确认浮层标识。
 func (c *confirmOverlay) ID() string { return "kernel.confirm" }
 
-// HandleKey 处理应答键：y/enter 确认，n 取消，esc 取消并经广播+弹栈自关。
+// HandleKey 处理应答键：y/enter 确认，n/esc 取消；应答即按对象身份自删并广播结果。
 // 返回 consumed=true 表示已应答（含取消）；其余键一律消费（模态确认防误操作）。
 func (c *confirmOverlay) HandleKey(h Host, key string) (consumed bool) {
 	var yes bool
@@ -358,8 +394,8 @@ func (c *confirmOverlay) HandleKey(h Host, key string) (consumed bool) {
 	default:
 		return true
 	}
+	c.k.stack.remove(c) // 按对象身份精确自删，防应答期 Reactor 压栈导致 LIFO 误弹
 	h.Send(state.ConfirmResult{ID: c.req.ID, Action: c.req.Action, Data: c.req.Data, Yes: yes})
-	h.PopOverlay()
 	return true
 }
 

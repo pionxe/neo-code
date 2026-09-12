@@ -14,8 +14,9 @@ type Options struct {
 	LeaderTimeout time.Duration
 	// NotifyExpiry 是弱提示在状态栏的停留时长，到期由内核清除 Notify 槽。
 	NotifyExpiry time.Duration
-	// MaxQueueDepth 是广播队列深度上限：自激广播（插件回声）超过上限即
-	// 丢弃 + debug 日志，与 §4.1 规则 1 的"拒绝语义"同风格。
+	// MaxQueueDepth 兼任两职：广播队列深度上限 + 每轮 drain 的派发预算。
+	// 自激回声（插件处理时再 Send）超过预算即清空余量 + debug 日志，
+	// 与 §4.1 规则 1 的"拒绝语义"同风格。
 	MaxQueueDepth int
 	// Debug 开启调试行与内核 debug 日志。
 	Debug bool

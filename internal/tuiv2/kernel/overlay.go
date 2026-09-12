@@ -23,6 +23,18 @@ func (s *overlayStack) pop() {
 	s.items = s.items[:len(s.items)-1]
 }
 
+// remove 按对象身份从栈中精确移除指定浮层（用于应答型浮层自关：
+// 广播期间 Reactor 可能压入新浮层，LIFO 弹栈会误弹他层）。
+// 目标不在栈中时为空操作。
+func (s *overlayStack) remove(target Overlay) {
+	for i, item := range s.items {
+		if item == target {
+			s.items = append(s.items[:i], s.items[i+1:]...)
+			return
+		}
+	}
+}
+
 // top 返回栈顶浮层；栈空返回 nil。
 func (s *overlayStack) top() Overlay {
 	if len(s.items) == 0 {
