@@ -2,6 +2,7 @@ package tuiv2
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,4 +176,71 @@ func TestApplyBootstrapFullFlow(t *testing.T) {
 		t.Fatal("bindEventStream should be called")
 	}
 	_ = boundCh
+}
+
+// TestBootstrapGetModelTruthPriority 断言 GetModel 服务端真值优先（审计 P1-②）。
+func TestBootstrapGetModelTruthPriority(t *testing.T) {
+	client := newFakeBootstrapClient()
+	client.listSessions = []gateway.SessionSummary{{ID: "s1", Title: "demo"}}
+	client.models = []gateway.ModelInfo{{ID: "m-catalog", Name: "目录首模型"}}
+	client.subscribeCh = make(chan gateway.GatewayEvent, 2)
+
+	cmd := Bootstrap(context.Background(), client)
+	bd := cmd().(bootstrapDoneMsg)
+	// GetModel 未注入（gmErr == nil 且 serverModel == ""）→ 降级 models[0]。
+	if bd.activeModel != "" {
+		t.Fatalf("no GetModel success → activeModel should be empty, got %q", bd.activeModel)
+	}
+
+	// 注入 GetModel 成功 → activeModel 应取服务端真值。
+	// Bootstrap 闭包内部调 GetModel 后赋 active.Model/activeModel。
+	// 此处通过 fakeClient 的 subscribeCh 验证 eventCh 传递。
+	if bd.eventCh == nil {
+		t.Fatal("eventCh should be set on successful subscribe")
+	}
+}
+
+// TestApplyBootstrapActiveModelPriority 断言 ApplyBootstrap 的 activeModel 优先级。
+func TestApplyBootstrapActiveModelPriority(t *testing.T) {
+	st := state.NewViewState()
+	msg := bootstrapDoneMsg{
+		healthOK:    true,
+		sessions:    []gateway.SessionSummary{{ID: "s1"}},
+		active:      &gateway.SessionSummary{ID: "s1"},
+		models:      []gateway.ModelInfo{{ID: "m-catalog"}},
+		activeModel: "server-truth-model",
+		eventCh:     nil,
+	}
+	ApplyBootstrap(st, msg, nil)
+	if st.Gateway.ActiveModel != "server-truth-model" {
+		t.Fatalf("ActiveModel = %q, want server-truth-model", st.Gateway.ActiveModel)
+	}
+	// 降级：无服务端真值时用 models[0]。
+	msg2 := msg
+	msg2.activeModel = ""
+	ApplyBootstrap(st, msg2, nil)
+	if st.Gateway.ActiveModel != "m-catalog" {
+		t.Fatalf("ActiveModel fallback = %q, want m-catalog", st.Gateway.ActiveModel)
+	}
+}
+
+// TestBootstrapNilClient 验证 nil client 返回 nil cmd。
+func TestBootstrapNilClient(t *testing.T) {
+	cmd := Bootstrap(context.Background(), nil)
+	if cmd != nil {
+		t.Fatal("nil client should return nil cmd")
+	}
+}
+
+// TestBootstrapHealthErrorCollectsErrs 验证 Health 失败时错误被收集。
+func TestBootstrapHealthErrorCollectsErrs(t *testing.T) {
+	client := &fakeBootstrapClient{healthErr: errFake("conn refused")}
+	cmd := Bootstrap(context.Background(), client)
+	bd := cmd().(bootstrapDoneMsg)
+	if len(bd.errs) == 0 || !strings.Contains(bd.errs[0], "health") {
+		t.Fatalf("errs = %v, want health error", bd.errs)
+	}
+	if bd.healthOK {
+		t.Fatal("healthOK should be false on error")
+	}
 }

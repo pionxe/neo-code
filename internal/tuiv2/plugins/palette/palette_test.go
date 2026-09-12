@@ -88,7 +88,6 @@ func TestOpenSnapshotsCommandsAndFilter(t *testing.T) {
 
 func TestOverlayExecuteRunsCommand(t *testing.T) {
 	p := New()
-	_ = p
 	h := newRecordingHost()
 	ran := false
 	h.cmds = []kernel.Command{{Name: "/do", Description: "d", Run: func(h kernel.Host, args []string) { ran = true }}}
