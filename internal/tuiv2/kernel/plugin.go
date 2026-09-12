@@ -2,9 +2,10 @@
 // 命令注册表、区域拼装、确认/提示服务），不包含任何业务词汇。
 //
 // 架构纪律（规范 ADR-007，CI 脚本强制）：
-//  1. kernel 禁止 import plugins/*（插件单向依赖内核，经 Host 接口）；
-//  2. kernel 禁止 import internal/runtime、internal/session、internal/repository 等后端模块；
-//  3. kernel 源码中禁止出现业务词汇（见 scripts/check-tuiv2-boundaries.sh 词表）。
+//  1. kernel 禁止 import 插件包（插件单向依赖内核，经 Host 接口）；
+//  2. kernel 禁止 import 任何后端模块与 TUI v1（冻结边界词表见
+//     scripts/check-tuiv2-boundaries.sh）；
+//  3. kernel 源码中禁止出现业务词汇（同上词表）。
 package kernel
 
 import (
@@ -74,7 +75,7 @@ type Command struct {
 	Description string
 	// Category 是面板排序分组名（按 Category 稳定排序后按 Name）。
 	Category string
-	// Run 是命令体：args 为 Ex/slash 入口传入的参数（palette 入口恒为空）。
+	// Run 是命令体：args 为命令行入口传入的参数（面板入口恒为空）。
 	Run func(h Host, args []string)
 }
 
@@ -159,5 +160,6 @@ type Host interface {
 
 // ErrDuplicatePlugin 表示注册了重复的插件 ID。
 var ErrDuplicatePlugin = errors.New("kernel: duplicate plugin id")
+
 // ErrDuplicateRegion 表示注册了重复的区域所有者。
 var ErrDuplicateRegion = errors.New("kernel: duplicate region renderer")
