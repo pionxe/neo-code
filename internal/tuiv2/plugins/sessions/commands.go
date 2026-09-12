@@ -40,7 +40,9 @@ func (p *Plugin) Commands() []kernel.Command {
 	}
 }
 
-// runNew 新建会话：RPC 成功后经广播（合成 session_created 事件）迁移槽。
+// runNew 新建会话：闭包只执行 RPC 并返回合成事件（P0-1 并发契约——
+// 无 Host 副作用）；槽迁移与通知由 React 完成（session_created 迁移 +
+// EventError 由 chat 呈现）。冗余 session_updated 已去除（审计 P2-②）。
 func (p *Plugin) runNew(h kernel.Host, args []string) {
 	if p.client == nil {
 		h.Notify("无可用后端，创建失败")
@@ -50,21 +52,16 @@ func (p *Plugin) runNew(h kernel.Host, args []string) {
 	h.GoCmd(func() tea.Msg {
 		summary, err := client.CreateSession(context.Background())
 		if err != nil {
-			h.Notify("创建会话失败：" + err.Error())
-			return nil
+			return gateway.GatewayEvent{
+				Type:    gateway.EventError,
+				Payload: map[string]any{"message": "创建会话失败：" + err.Error()},
+			}
 		}
-		// 合成 session_created 事件回流广播（本插件 React 迁移槽）。
-		h.Send(gateway.GatewayEvent{
+		return gateway.GatewayEvent{
 			Type:      gateway.EventSessionCreated,
 			SessionID: summary.ID,
 			Payload:   map[string]any{"id": summary.ID, "title": summary.Title, "model": summary.Model},
-		})
-		h.Send(gateway.GatewayEvent{
-			Type:      gateway.EventSessionUpdated,
-			SessionID: summary.ID,
-			Payload:   map[string]any{"id": summary.ID, "title": summary.Title, "model": summary.Model},
-		})
-		return nil
+		}
 	})
 }
 
