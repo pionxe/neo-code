@@ -11,6 +11,7 @@ import (
 	"neo-code/internal/tuiv2/kernel"
 	"neo-code/internal/tuiv2/plugins/chat"
 	"neo-code/internal/tuiv2/plugins/cmdline"
+	"neo-code/internal/tuiv2/plugins/debug"
 	"neo-code/internal/tuiv2/plugins/help"
 	"neo-code/internal/tuiv2/plugins/inspector"
 	"neo-code/internal/tuiv2/plugins/models"
@@ -47,6 +48,9 @@ func NewKernelApp(ctx context.Context, cfg StartupConfig) *kernel.Kernel {
 		palette.New(),
 		help.New(),
 		theme.New(),
+		// 调试行独立插件（单区域契约：不能并入 statusbar）；
+		// 初值显隐与场景名对齐旧 app 层（debug: cfg.Debug，debugLine.scenario）。
+		debug.New(cfg.Debug, cfg.Scenario),
 	}
 	for _, p := range plugins {
 		if err := k.Register(p); err != nil {
