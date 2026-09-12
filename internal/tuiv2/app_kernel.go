@@ -6,6 +6,8 @@
 package tuiv2
 
 import (
+	"context"
+
 	"neo-code/internal/tuiv2/kernel"
 	"neo-code/internal/tuiv2/plugins/chat"
 	"neo-code/internal/tuiv2/plugins/cmdline"
@@ -23,7 +25,7 @@ import (
 // NewKernelApp 创建基于内核 + 插件的 TUI v2 应用。
 // 返回值满足 tea.Model 契约，可直接传给 tea.NewProgram。
 // 复用旧 StartupConfig 类型（由 app.go 声明）以保持参数兼容。
-func NewKernelApp(cfg StartupConfig) *kernel.Kernel {
+func NewKernelApp(ctx context.Context, cfg StartupConfig) *kernel.Kernel {
 	st := state.NewViewState()
 	k := kernel.NewKernel(kernel.Config{
 		Client: cfg.Client,
@@ -31,9 +33,8 @@ func NewKernelApp(cfg StartupConfig) *kernel.Kernel {
 		Debug:  cfg.Debug,
 	})
 
-	// 注册顺序 = 区域拼装顺序（statusbar 顶 → inspector 侧 → chat 流 →
-	// prompt 底 → cmdline 临时行）+ 交互插件（sessions/models/palette/help/theme）。
-	// kernel.Register 对 ID/区域/绑定/命令冲突 fail-fast。
+	// 注册顺序决定插件 Init 的调用序（kernel 区域拼装由 kernel.regionOrder
+	// 决定，与注册顺序无关）；Register 对 ID/区域/绑定/命令冲突 fail-fast。
 	plugins := []kernel.Plugin{
 		statusbar.New(),
 		inspector.New(),
@@ -52,5 +53,9 @@ func NewKernelApp(cfg StartupConfig) *kernel.Kernel {
 			panic(err)
 		}
 	}
+
+	// bootstrapReactor 消费 bootstrapDoneMsg 并在主 goroutine 落地状态。
+	k.Register(newBootstrapReactor(cfg.Client))
+
 	return k
 }
