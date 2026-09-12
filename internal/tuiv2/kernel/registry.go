@@ -62,13 +62,18 @@ func (r *bindingRegistry) add(pluginID string, b Binding) error {
 }
 
 // lookup 查询某模式下的绑定：先精确匹配，未命中再查通配；
-// 两者均未命中返回 false（调用方按独占语义丢弃）。
-func (r *bindingRegistry) lookup(mode state.InputMode, msg tea.KeyMsg) (Binding, bool) {
+// 守卫（When）不通过视为未命中；两者均未命中返回 false
+// （调用方按独占语义丢弃）。
+func (r *bindingRegistry) lookup(mode state.InputMode, msg tea.KeyMsg, st *state.ViewState) (Binding, bool) {
 	if b, ok := r.byModeKey[mode][msg.String()]; ok {
-		return b, true
+		if b.When == nil || b.When(st) {
+			return b, true
+		}
 	}
 	if w, ok := r.wildcards[mode]; ok {
-		return w, true
+		if w.When == nil || w.When(st) {
+			return w, true
+		}
 	}
 	return Binding{}, false
 }

@@ -30,6 +30,9 @@ func newRecordingHost() *recordingHost {
 
 func (h *recordingHost) State() *state.ViewState                        { return h.st }
 func (h *recordingHost) Gateway() gateway.Client                        { return h.client }
+func (h *recordingHost) Commands() []kernel.Command                     { return nil }
+func (h *recordingHost) RunCommand(string, []string) error              { return nil }
+func (h *recordingHost) Bindings() []kernel.Binding                     { return nil }
 func (h *recordingHost) BindEventStream(ch <-chan gateway.GatewayEvent) {}
 
 // GoCmd 同步执行以观察副作用（生产路径由 bubbletea 异步执行）。

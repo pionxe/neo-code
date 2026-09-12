@@ -56,6 +56,25 @@ func (r *commandRegistry) sorted() []Command {
 	return out
 }
 
+// runResolved 按名或别名执行命令；未知命令返回错误（调用方决定呈现方式）。
+func (r *commandRegistry) runResolved(h Host, nameOrAlias string, args []string) error {
+	c, ok := r.byName[nameOrAlias]
+	if !ok {
+		return fmt.Errorf("kernel: unknown command %q", nameOrAlias)
+	}
+	c.Run(h, args)
+	return nil
+}
+
+// snapshot 返回带预派生快捷键列的命令快照（Host.Commands 数据源）。
+func (r *commandRegistry) snapshot(bindings *bindingRegistry) []Command {
+	out := r.sorted()
+	for i := range out {
+		out[i].Shortcut = deriveShortcut(out[i].Name, bindings)
+	}
+	return out
+}
+
 // 模式前缀是快捷键派生的展示词汇：帮助与命令面板右侧列共用。
 var modeShortcutPrefix = map[state.InputMode]string{
 	state.InputModeInput: "i ",

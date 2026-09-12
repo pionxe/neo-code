@@ -220,9 +220,9 @@ func TestOverlayTopExclusiveAndEscSemantics(t *testing.T) {
 // scriptedOverlay 是按脚本应答的浮层桩：consume 决定 HandleKey 返回值。
 type scriptedOverlay struct{ consume bool }
 
-func (o *scriptedOverlay) ID() string                        { return "scripted" }
+func (o *scriptedOverlay) ID() string                            { return "scripted" }
 func (o *scriptedOverlay) HandleKey(h Host, msg tea.KeyMsg) bool { return o.consume }
-func (o *scriptedOverlay) View(h Host, width int) string     { return "scripted" }
+func (o *scriptedOverlay) View(h Host, width int) string         { return "scripted" }
 
 func TestNotifyGenerationalExpiry(t *testing.T) {
 	k := NewKernel(Config{Opts: Options{NotifyExpiry: 1}})

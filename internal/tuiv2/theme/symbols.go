@@ -50,6 +50,12 @@ var ASCIISymbols = SymbolSet{
 
 // Symbols 返回当前环境下应使用的符号集合。
 func Symbols() SymbolSet {
+	if symbolPreference == "ascii" {
+		return ASCIISymbols
+	}
+	if symbolPreference == "unicode" {
+		return UnicodeSymbols
+	}
 	if DetectASCIISymbols() {
 		return ASCIISymbols
 	}
@@ -112,4 +118,14 @@ func StreamPrefix(entryType string) string {
 // Separator 返回行内弱分隔符。
 func Separator() string {
 	return Symbols().Separator
+}
+
+// symbolPreference 是符号集显式偏好（"" = 自动探测）。
+var symbolPreference string
+
+// SetSymbolMode 覆盖符号集偏好（主题插件切换入口，issue #25 ADR-013）：
+// "ascii" 强制 ASCII 符号，"unicode" 强制 Unicode 符号，其他值恢复自动探测。
+// 仅限 Update/React 同步路径调用（bubbletea View 与 Update 同 goroutine）。
+func SetSymbolMode(mode string) {
+	symbolPreference = mode
 }
