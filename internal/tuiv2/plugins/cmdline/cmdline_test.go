@@ -7,6 +7,8 @@ import (
 
 	"neo-code/internal/tuiv2/gateway"
 	"neo-code/internal/tuiv2/kernel"
+	"neo-code/internal/tuiv2/plugins/chat"
+	"neo-code/internal/tuiv2/plugins/prompt"
 	"neo-code/internal/tuiv2/state"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -436,4 +438,74 @@ func TestNextMatchNoMatchesNoop(t *testing.T) {
 	p.nextMatch(h, 1)
 	p.nextMatch(h, -1)
 	// 无 panic 且状态不变即为通过。
+}
+
+// commandRecorder 是注册进真内核的命令记录桩：供端到端回归验证
+// RunCommand 是否收到完整命令名。
+type commandRecorder struct {
+	called []string
+}
+
+func (p *commandRecorder) ID() string                       { return "recorder" }
+func (p *commandRecorder) Init(ctx context.Context, h kernel.Host) {}
+func (p *commandRecorder) Close(ctx context.Context)               {}
+func (p *commandRecorder) Commands() []kernel.Command {
+	return []kernel.Command{{
+		Name:     "/debug",
+		Aliases:  []string{"debug"}, // 对齐真实 debug 插件别名（Ex 无斜杠入口）
+		Category: "test",
+		Run:      func(h kernel.Host, args []string) { p.called = append(p.called, "debug") },
+	}}
+}
+
+// TestSearchExInputNotHijackedByExactBindings 端到端回归（issue #41 PR
+// 审计 P1-1）：搜索/Ex 激活期，无守卫的精确绑定（chat 滚动键 g/j 等、
+// prompt 的 i）不得劫持 cmdline 通配绑定的查询输入。
+// 真内核 + 真插件（chat/prompt/cmdline）驱动：
+//   - 搜索期输入 "gij" → 查询串完整为 "gij"、模式保持 Normal
+//     （修复前：g 被滚动键劫持、i 被 SetMode 切走模式杀掉搜索）
+//   - Ex 期输入 "debug" 提交 → RunCommand 收到完整 "debug"
+//     （修复前："g" 被劫持得 "debu"）
+func TestSearchExInputNotHijackedByExactBindings(t *testing.T) {
+	st := state.NewViewState()
+	k := kernel.NewKernel(kernel.Config{State: st})
+	rec := &commandRecorder{}
+	for _, p := range []kernel.Plugin{chat.New(), prompt.New(), New(), rec} {
+		if err := k.Register(p); err != nil {
+			t.Fatalf("register %T: %v", p, err)
+		}
+	}
+	k.Init() // 触发各插件 Init（固定状态指针）；nil cmd 被丢弃无需处理
+	// esc：Input → Normal（kernel 初始为 Input 模式）。
+	k.Update(keys("esc"))
+	// 打开搜索并输入含劫持字符的查询。
+	k.Update(keys("/"))
+	if !st.Search.Active {
+		t.Fatal("search should open")
+	}
+	for _, ch := range []string{"g", "i", "j"} {
+		k.Update(keys(ch))
+	}
+	if st.Search.Query != "gij" {
+		t.Fatalf("query = %q, want %q (hijack regression)", st.Search.Query, "gij")
+	}
+	if st.Mode != state.NormalMode {
+		t.Fatalf("mode = %v, want NormalMode ('i' must not switch mode during search)", st.Mode)
+	}
+	// esc 关闭搜索 → : 打开 Ex → 输入 debug → enter 提交。
+	k.Update(keys("esc"))
+	if st.Search.Active {
+		t.Fatal("esc should close search")
+	}
+	k.Update(keys(":"))
+	for _, ch := range []string{"d", "e", "b", "u", "g"} {
+		k.Update(keys(ch))
+	}
+	if st.Ex.Input != "debug" {
+		t.Fatalf("ex input = %q, want %q (hijack regression)", st.Ex.Input, "debug")
+	}
+	k.Update(keys("enter"))
+	if len(rec.called) != 1 || rec.called[0] != "debug" {
+		t.Fatalf("RunCommand calls = %v, want [debug]", rec.called)
+	}
 }
