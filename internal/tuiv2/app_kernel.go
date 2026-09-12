@@ -26,6 +26,7 @@ import (
 // 返回值满足 tea.Model 契约，可直接传给 tea.NewProgram。
 // 复用旧 StartupConfig 类型（由 app.go 声明）以保持参数兼容。
 func NewKernelApp(ctx context.Context, cfg StartupConfig) *kernel.Kernel {
+	_ = ctx // 预留：插件 Init 可能需要请求作用域取消
 	st := state.NewViewState()
 	k := kernel.NewKernel(kernel.Config{
 		Client: cfg.Client,
@@ -55,7 +56,9 @@ func NewKernelApp(ctx context.Context, cfg StartupConfig) *kernel.Kernel {
 	}
 
 	// bootstrapReactor 消费 bootstrapDoneMsg 并在主 goroutine 落地状态。
-	k.Register(newBootstrapReactor(cfg.Client))
+	if err := k.Register(newBootstrapReactor(cfg.Client)); err != nil {
+		panic(err) // bootstrapReactor ID 冲突 fail-fast
+	}
 
 	return k
 }
