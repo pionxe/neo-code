@@ -9,6 +9,7 @@ package prompt
 import (
 	"context"
 	"strings"
+	"time"
 
 	"neo-code/internal/tuiv2/components"
 	"neo-code/internal/tuiv2/gateway"
@@ -43,7 +44,9 @@ func (p *Plugin) Init(ctx context.Context, h kernel.Host) {
 }
 
 // Close 释放资源（当前无外部资源，保留生命周期对称性）。
-func (p *Plugin) Close(ctx context.Context) {}
+func (p *Plugin) Close(ctx context.Context) {
+	_ = ctx // 无外部资源：显式忽略参数使生命周期可覆盖
+}
 
 // React 订阅广播，承担三类职责：
 //  1. 六类对话事件的 Input 槽写入（ApplyInputForEvent——移交自 chat 路径）；
@@ -91,8 +94,19 @@ func (p *Plugin) handleSubmit(h kernel.Host, msg components.SubmitMessageMsg) {
 	sessionID := p.st.Gateway.ActiveSess.ID
 	client := p.client
 	h.GoCmd(func() tea.Msg {
-		_, _ = client.SendMessage(context.Background(), sessionID, text)
-		return nil
+		// ACK/错误映射对齐旧路径 submitMessageCmd（审计 P1-2）：
+		// ACK → EventRunStarted（chat 迁移 run 状态），错误 → EventError。
+		ack, err := client.SendMessage(context.Background(), sessionID, text)
+		if err != nil {
+			return errorEvent(err)
+		}
+		return gateway.GatewayEvent{
+			Type:      gateway.EventRunStarted,
+			SessionID: ack.SessionID,
+			RunID:     ack.RunID,
+			Payload:   map[string]any{"message": ack.Message, "accepted": ack.Accepted},
+			At:        time.Now(),
+		}
 	})
 	h.Send(state.UserSubmitted{Text: text})
 }
@@ -115,8 +129,21 @@ func (p *Plugin) handlePermission(h kernel.Host, msg components.PermissionAction
 	}
 	client := p.client
 	h.GoCmd(func() tea.Msg {
-		_ = client.ResolvePermission(context.Background(), decision)
-		return nil
+		// 完成映射对齐旧路径 resolvePermissionCmd（审计 P1-2）。
+		if err := client.ResolvePermission(context.Background(), decision); err != nil {
+			return errorEvent(err)
+		}
+		text := "permission denied"
+		if decision.Allow {
+			text = "permission allowed"
+		}
+		return gateway.GatewayEvent{
+			Type:      gateway.EventPermissionResolved,
+			SessionID: decision.SessionID,
+			RunID:     decision.RunID,
+			Payload:   map[string]any{"decision": decision.Reason, "message": text},
+			At:        time.Now(),
+		}
 	})
 }
 
@@ -137,9 +164,28 @@ func (p *Plugin) handleQuestion(h kernel.Host, msg components.QuestionAnswerMsg)
 	}
 	client := p.client
 	h.GoCmd(func() tea.Msg {
-		_ = client.AnswerUserQuestion(context.Background(), answer)
-		return nil
+		// 完成映射对齐旧路径 answerQuestionCmd（审计 P1-2）。
+		if err := client.AnswerUserQuestion(context.Background(), answer); err != nil {
+			return errorEvent(err)
+		}
+		return gateway.GatewayEvent{
+			Type:      gateway.EventUserQuestionAnswered,
+			SessionID: answer.SessionID,
+			RunID:     answer.RunID,
+			Payload:   map[string]any{"answer": answer.Text, "message": "answer submitted"},
+			At:        time.Now(),
+		}
 	})
+}
+
+// errorEvent 将 RPC 错误包装成统一错误事件（对齐旧路径 errorEvent），
+// 经 kernel 广播回流 chat → Phase=error + 流条目（端到端失败呈现）。
+func errorEvent(err error) gateway.GatewayEvent {
+	return gateway.GatewayEvent{
+		Type:    gateway.EventError,
+		Payload: map[string]any{"message": err.Error()},
+		At:      time.Now(),
+	}
 }
 
 // Region 返回底部输入区。
