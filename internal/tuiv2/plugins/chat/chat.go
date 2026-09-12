@@ -4,9 +4,8 @@
 //
 // 槽纪律（ADR-009 / issue #23 修订 v2）：
 //   - 写：Stream、Runtime、Layout.ScrollOffset/AutoScroll；
-//   - 双轨期临时越权（显式登记，prompt 迁移 PR 时移交）：permission_*、
-//     ask_user 系、run_cancelled 六类事件经 state.ReduceConversation 临时写
-//     Input 槽；
+//   - 不写 Input 槽（写权归 prompt 插件，经 ApplyInputForEvent）：六类
+//     含 Input 部分的事件走 ReduceWithoutInput 跳过（issue #25 移交完成）；
 //   - 读：Gateway（会话/模型）、Mode（不做写入）。
 package chat
 
