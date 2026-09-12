@@ -302,6 +302,36 @@ func TestSlashCommandRoutesToRegistry(t *testing.T) {
 	}
 }
 
+// TestInputBindingWhenGuard 验证 i 键 When 守卫（PR #43 审计 P1-1）：
+// 搜索/Ex 激活期 "i" 属 cmdline 输入字符，不得切入输入模式。
+func TestInputBindingWhenGuard(t *testing.T) {
+	p := New()
+	for _, b := range p.Bindings() {
+		if b.Key != "i" {
+			continue
+		}
+		if b.When == nil {
+			t.Fatal("i binding should carry When guard")
+		}
+		clean := state.NewViewState()
+		if !b.When(clean) {
+			t.Fatal("i should enter input in normal navigation")
+		}
+		searching := state.NewViewState()
+		searching.Search.Active = true
+		if b.When(searching) {
+			t.Fatal("i must yield during search")
+		}
+		ex := state.NewViewState()
+		ex.Ex.Active = true
+		if b.When(ex) {
+			t.Fatal("i must yield during ex")
+		}
+		return
+	}
+	t.Fatal("i binding should exist")
+}
+
 func TestBindingsShape(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	bindings := p.Bindings()

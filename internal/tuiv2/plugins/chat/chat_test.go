@@ -71,6 +71,36 @@ func ev(t gateway.EventType, payload map[string]any) gateway.GatewayEvent {
 	return gateway.GatewayEvent{Type: t, Payload: payload}
 }
 
+// TestScrollBindingsWhenGuard 验证滚动键 When 守卫（PR #43 审计 P1-1
+// 修复的守护断言）：全部滚动绑定必须声明守卫；Normal 导航期生效，
+// 搜索/Ex 激活期一律退位（字符归 cmdline 输入）。顺带覆盖 Close 空体。
+func TestScrollBindingsWhenGuard(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	defer p.Close(context.Background())
+	if len(p.Bindings()) == 0 {
+		t.Fatal("scroll bindings should exist")
+	}
+	for _, b := range p.Bindings() {
+		if b.When == nil {
+			t.Fatalf("binding %q missing When guard", b.Key)
+		}
+		clean := state.NewViewState()
+		if !b.When(clean) {
+			t.Fatalf("binding %q should be active in normal navigation", b.Key)
+		}
+		searching := state.NewViewState()
+		searching.Search.Active = true
+		if b.When(searching) {
+			t.Fatalf("binding %q must yield during search", b.Key)
+		}
+		ex := state.NewViewState()
+		ex.Ex.Active = true
+		if b.When(ex) {
+			t.Fatalf("binding %q must yield during ex", b.Key)
+		}
+	}
+}
+
 func TestPluginIdentity(t *testing.T) {
 	p := New()
 	if p.ID() != "chat" {
