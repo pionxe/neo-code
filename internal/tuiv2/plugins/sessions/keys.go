@@ -12,6 +12,9 @@ import (
 // 过滤与选中——该全局态的 ADR-011 修订已显式登记，S11 参数化）。
 // 组件产出的 SessionSelectMsg/SessionDeleteMsg 经 GoCmd 回流广播，
 // 由插件 React 消费（与 prompt 插件的委托同模式）。
+//
+// 弹栈语义（P0-2 修复）：esc/enter/ctrl+d 三键由本浮层关闭自身
+// （h.PopOverlay）；其余键委托组件且模态消费。
 type pickerOverlay struct {
 	p *Plugin
 }
@@ -22,9 +25,19 @@ func (o *pickerOverlay) ID() string { return "sessions.picker" }
 // HandleKey 全权委托组件状态机（模态：全部按键消费）；
 // 组件产出的业务消息经组件 Update 返回命令回流广播。
 func (o *pickerOverlay) HandleKey(h kernel.Host, msg tea.KeyMsg) (consumed bool) {
-	if _, cmd := o.p.picker.Update(msg); cmd != nil {
-		h.GoCmd(cmd)
+	switch msg.String() {
+	case "esc":
+		h.PopOverlay()
+		return true
+	case "enter", "ctrl+d":
+		if _, cmd := o.p.picker.Update(msg); cmd != nil {
+			h.GoCmd(cmd) // 选择/删除消息回流广播；浮层随选择关闭
+		}
+		h.PopOverlay()
+		return true
 	}
+	// 其余键委托组件（过滤/导航——组件对这些键不产出命令）。
+	_, _ = o.p.picker.Update(msg)
 	return true
 }
 
