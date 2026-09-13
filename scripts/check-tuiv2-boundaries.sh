@@ -20,13 +20,19 @@ if grep -riE '(session|permission|palette|assistant|checkpoint|skill|agent_chunk
 fi
 
 # 禁 2：插件互不 import。plugins 目录尚不存在时视为通过（守卫未来）。
+# S6 修正（issue #48 审计实例2 P1-2）：旧实现按行过滤被文件路径前缀
+# 自掩蔽（命中行恒含本插件目录路径，-v 恒滤空）；且豁免 *_test.go——
+# 跨插件集成测试（如 sessions_test 的恢复全链路）属测试期编排，
+# 非运行时依赖，显式登记于此。
 if [ -d internal/tuiv2/plugins ]; then
     for plugin_dir in internal/tuiv2/plugins/*/; do
         [ -d "$plugin_dir" ] || continue
         plugin_name=$(basename "$plugin_dir")
-        if grep -rE "neo-code/internal/tuiv2/plugins/" "$plugin_dir" --include='*.go' \
-            | grep -v "plugins/${plugin_name}/" >/dev/null 2>&1; then
+        imported=$(grep -rhoE '"neo-code/internal/tuiv2/plugins/[a-z]+"' "$plugin_dir" --include='*.go' --exclude='*_test.go' \
+            | sort -u | grep -v "plugins/${plugin_name}\"")
+        if [ -n "$imported" ]; then
             echo "[边界-2] 插件 ${plugin_name} import 了其他插件（见上方命中行）" >&2
+            echo "$imported" >&2
             fail=1
         fi
     done

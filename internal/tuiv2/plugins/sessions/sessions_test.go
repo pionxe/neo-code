@@ -547,9 +547,6 @@ func TestGatewayRecoveredTriggersRebind(t *testing.T) {
 	if client.subscribeCalls != before+1 {
 		t.Fatalf("subscribeCalls = %d, want +%d", client.subscribeCalls, 1)
 	}
-	if client.subscribeCalls != before+1 {
-		t.Fatalf("subscribeCalls = %d, want +%d", client.subscribeCalls, 1)
-	}
 	if h.bindCount != 1 {
 		t.Fatalf("bindCount = %d, want 1", h.bindCount)
 	}
@@ -560,24 +557,82 @@ func TestGatewayRecoveredTriggersRebind(t *testing.T) {
 		}
 	}
 
-	// 守卫②：无活跃会话 → 重绑跳过。
+	// 守卫②：无活跃会话 → 重绑跳过。先注入失败边沿（healthErr），再
+	// 成功边沿——GatewayRecovered 广播后守卫②拦截重绑（subscribeCalls
+	// 不增长），同时覆盖 recoveryRebindFailedMsg 之外的全部路径。
+	client.healthErr = errFakeUnsupported
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
 	h.st.Gateway.ActiveSess = nil
 	h.broadcasts = nil
 	client.subscribeCalls = 0
+	client.healthErr = nil
 	_, healthErr = client.Health(context.Background())
 	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr}) // 失败→成功再次边沿
 	if client.subscribeCalls != 0 {
 		t.Fatal("nil ActiveSess must skip rebind")
 	}
 
-	// 守卫③：运行态跳过。
+	// 守卫③：运行态跳过（同法：失败边沿→成功边沿，广播被守卫拦截）。
+	client.healthErr = errFakeUnsupported
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
 	h.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "s1"}
 	h.st.Runtime.Phase = state.RuntimePhaseRunning
 	h.broadcasts = nil
 	client.subscribeCalls = 0
+	client.healthErr = nil
 	_, healthErr = client.Health(context.Background())
 	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
 	if client.subscribeCalls != 0 {
 		t.Fatal("running phase must skip rebind")
+	}
+
+	// 守卫补充：client==nil → 恢复重绑直接跳过（133；不发订阅）。
+	// 失败边沿（healthErr 注入）→ 解除运行态 → 置 sessions client=nil →
+	// 成功边沿广播：守卫链 ②③通过、④未触发，命中 133 的 client==nil。
+	client.healthErr = errFakeUnsupported
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	sessionsPlugin.client = nil
+	h.st.Runtime.Phase = state.RuntimePhaseIdle
+	h.broadcasts = nil
+	h.notifies = nil
+	client.subscribeCalls = 0
+	client.healthErr = nil
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	if client.subscribeCalls != 0 {
+		t.Fatal("nil client must skip rebind")
+	}
+	sessionsPlugin.client = client // 还原
+
+	// 重绑失败路径：subscribeErr 注入 → recoveryRebindFailedMsg → Notify
+	//（覆盖 sessions.go 失败分支；Phase 解除运行态、恢复活跃会话）。
+	client.healthErr = errFakeUnsupported
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	h.st.Runtime.Phase = state.RuntimePhaseIdle
+	h.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "s1"}
+	h.broadcasts = nil
+	h.notifies = nil
+	client.healthErr = nil
+	client.subscribeErr = errFakeUnsupported
+	client.subscribeCalls = 0
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	if h.notifies[len(h.notifies)-1] != "事件流重绑失败："+errFakeUnsupported.Error() {
+		t.Fatalf("rebind failure notify = %v", h.notifies)
+	}
+
+	// 守卫补充：client==nil → 恢复重绑直接跳过（不发订阅）。
+	sessionsPlugin.client = nil
+	h.broadcasts = nil
+	h.notifies = nil
+	client.subscribeCalls = 0
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	if client.subscribeCalls != 0 {
+		t.Fatal("nil client must skip rebind")
 	}
 }
