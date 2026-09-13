@@ -113,15 +113,13 @@ func TestReactGatewayEventsMigrateSlots(t *testing.T) {
 	}
 }
 
-func TestReactHealthChangedTempOwnership(t *testing.T) {
+// TestReactHealthChangedHandedOver 验证移交完成（S6，issue #48）：
+// sessions 不再消费 health_changed——Connected 槽写权归 health 插件。
+func TestReactHealthChangedHandedOver(t *testing.T) {
 	p, h := newTestPlugin(t)
 	p.React(h, ev(gateway.EventHealthChanged, map[string]any{"connected": true}))
-	if !p.st.Gateway.Connected {
-		t.Fatal("Connected should be true (temp ownership until S6)")
-	}
-	p.React(h, ev(gateway.EventHealthChanged, map[string]any{"connected": false}))
 	if p.st.Gateway.Connected {
-		t.Fatal("Connected should be false")
+		t.Fatal("sessions must not write Connected (handed over to health plugin)")
 	}
 }
 

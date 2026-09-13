@@ -8,7 +8,8 @@ import "neo-code/internal/tuiv2/gateway"
 //   - 单一出处：旧路径 Reduce 内部调用本函数（行为零变化），
 //     kernel 插件路径由 sessions/models 插件直接调用；
 //   - 对非 Gateway 域事件是 no-op（对账守卫并入 27 事件测试）；
-//   - Gateway.Connected：S6 前由 sessions 临时承接 health_changed（显式登记）。
+//   - Gateway.Connected：S6 起由 health 插件直写（sessions 临时承接已移交，
+//     issue #48）；本文件 health_changed 分支保留供 legacy Reduce 路径。
 func ApplyGatewayForEvent(s *ViewState, event gateway.GatewayEvent) {
 	switch event.Type {
 	case gateway.EventSessionCreated:

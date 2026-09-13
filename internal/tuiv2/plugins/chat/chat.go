@@ -100,7 +100,7 @@ func (p *Plugin) handleGatewayEvent(ev gateway.GatewayEvent) {
 	before := len(p.st.Stream)
 	if ev.Type == gateway.EventGatewayOffline {
 		// bespoke 分支（不进白名单）：Runtime/Stream 归 chat，
-		// Gateway.Connected 归将来 health 插件，此处不碰。
+		// Gateway.Connected 归 health 插件（S6 移交完成，issue #48），此处不碰。
 		p.st.Runtime.Phase = state.RuntimePhaseError
 		p.appendError(ev)
 	} else {

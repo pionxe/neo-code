@@ -1,7 +1,7 @@
 // Package sessions 是 TUI v2 的会话管理插件（issue #27 S3-2）：
 // 拥有 Gateway.Sessions/ActiveSess 子槽，提供会话切换/新建/删除、
-// 会话选择器浮层，并临时承接 health_changed 的 Connected 写入
-// （S6 health 插件移交，显式登记）。
+// 会话选择器浮层，并订阅 GatewayRecovered 做断连恢复重绑
+// （S6 起 health_changed 的 Connected 写入已移交 health 插件）。
 //
 // 事件流重绑定：LoadSession 后经 Host.BindEventStream 换代订阅
 // （重绑定协议：代际号使旧泵产物失效，旧通道由本插件 cancel 关闭）。
@@ -65,16 +65,25 @@ type sessionStreamReadyMsg struct {
 	loadErr error
 }
 
+// recoveryStreamReadyMsg 是恢复重绑的订阅产物（无 Load/无广播——守卫④）。
+type recoveryStreamReadyMsg struct {
+	ch     <-chan gateway.GatewayEvent
+	cancel context.CancelFunc
+}
+
+// recoveryRebindFailedMsg 是恢复重绑订阅失败（经 Notify 呈现）。
+type recoveryRebindFailedMsg struct{ err error }
+
 // React 订阅广播：Gateway 域事件（ApplyGatewayForEvent）、picker 产出消息
 // （选择/删除）、确认结果（删除执行）。
 func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	switch m := msg.(type) {
 	case gateway.GatewayEvent:
-		// 精确化（审计 P2-①）：sessions 写 session_* 三类 + health_changed
-		// 临时承接（S6 移交）；model_changed 归 models。
+		// 精确化（审计 P2-①）：sessions 写 session_* 三类；model_changed
+		// 归 models；health_changed 归 health 插件（S6 移交，issue #48）。
 		switch m.Type {
 		case gateway.EventSessionCreated, gateway.EventSessionDeleted,
-			gateway.EventSessionUpdated, gateway.EventHealthChanged:
+			gateway.EventSessionUpdated:
 			state.ApplyGatewayForEvent(p.st, m)
 			if m.Type == gateway.EventSessionDeleted {
 				h.Notify("会话已删除")
@@ -108,6 +117,40 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 			h.Notify("切换会话失败：" + m.loadErr.Error())
 		}
 		h.Send(state.SessionLoaded{Session: m.session, Detail: m.detail})
+	case state.GatewayRecovered:
+		// health 插件恢复广播（fail→success 边沿）：断连期间事件流死亡，
+		// 重绑当前活跃会话的订阅。四守卫（S6 审计裁定，issue #48）：
+		// ①边沿由 health 保证；②无活跃会话跳过；③运行态跳过（重绑换窗
+		// 期在途事件丢失）；④重绑不广播 SessionLoaded（恢复不得清空
+		// 对话流——与换会话语义分离，故不复用 sessionStreamReadyMsg）。
+		if p.st.Gateway.ActiveSess == nil {
+			return
+		}
+		if p.st.Runtime.Phase == state.RuntimePhaseRunning {
+			return
+		}
+		if p.client == nil {
+			return
+		}
+		sessionID := p.st.Gateway.ActiveSess.ID
+		client := p.client
+		h.GoCmd(func() tea.Msg {
+			subCtx, cancel := context.WithCancel(context.Background())
+			eventCh, subErr := client.SubscribeEvents(subCtx, sessionID)
+			if subErr != nil {
+				cancel()
+				return recoveryRebindFailedMsg{err: subErr}
+			}
+			return recoveryStreamReadyMsg{ch: eventCh, cancel: cancel}
+		})
+	case recoveryStreamReadyMsg:
+		// 恢复重绑收尾：换流但不广播 SessionLoaded（守卫④）。
+		p.closeStream()
+		p.streamCtx = m.cancel
+		h.BindEventStream(m.ch)
+	case recoveryRebindFailedMsg:
+		// 恢复重绑失败经 Notify 呈现（对齐 sessionStreamReady 失败路径）。
+		h.Notify("事件流重绑失败：" + m.err.Error())
 	case components.SessionDeleteMsg:
 		// 危险操作走内核确认服务（ADR-012），结果按 ID 回流。
 		title := m.SessionID
