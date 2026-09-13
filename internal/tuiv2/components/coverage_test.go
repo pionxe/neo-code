@@ -201,30 +201,30 @@ func TestAgentStreamScrollAndHelpers(t *testing.T) {
 		t.Fatal("Init should be nil")
 	}
 	// k/up 向上滚（offset 增加）
-	_, _ = s.Update(keyMsg("k"))
+	_ = s.Update(keyMsg("k"))
 	if vs.Layout.ScrollOffset == 0 {
 		t.Fatal("k should increase scroll offset")
 	}
 	// ctrl+u 半页向上
 	before := vs.Layout.ScrollOffset
-	_, _ = s.Update(keyType(tea.KeyCtrlU))
+	_ = s.Update(keyType(tea.KeyCtrlU))
 	if vs.Layout.ScrollOffset <= before {
 		t.Fatal("ctrl+u should scroll further up")
 	}
 	// g 顶（max offset）
-	_, _ = s.Update(keyMsg("g"))
+	_ = s.Update(keyMsg("g"))
 	if vs.Layout.ScrollOffset == 0 {
 		t.Fatal("g should jump to top")
 	}
 	// G 底（offset 0，AutoScroll true）
-	_, _ = s.Update(keyMsg("G"))
+	_ = s.Update(keyMsg("G"))
 	if vs.Layout.ScrollOffset != 0 || !vs.Layout.AutoScroll {
 		t.Fatal("G should jump to bottom")
 	}
 	// j/down 与 ctrl+d 向下方向（先上移再下移）
-	_, _ = s.Update(keyMsg("k"))
-	_, _ = s.Update(keyMsg("j"))
-	_, _ = s.Update(keyType(tea.KeyCtrlD))
+	_ = s.Update(keyMsg("k"))
+	_ = s.Update(keyMsg("j"))
+	_ = s.Update(keyType(tea.KeyCtrlD))
 
 	// halfPageSize >= 1
 	if s.halfPageSize() < 1 {
