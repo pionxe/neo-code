@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"neo-code/internal/tuiv2/layout"
 	"neo-code/internal/tuiv2/state"
 	"neo-code/internal/tuiv2/theme"
 )
@@ -47,6 +48,12 @@ func (c *AmbientStatus) View(width int) string {
 	// 裁定：过期判断收在内核单一出处，组件保持纯读）。
 	if c.state.Notify.Text != "" {
 		parts = append(parts, theme.AccentStyle().Render(c.state.Notify.Text))
+	}
+	// 最小尺寸保护（ADR-003/S7，issue #50）：正尺寸低于阈值时提示段
+	// （0/负=未知不报——Compute 哨兵语义）；禁 clamp-up、禁拒渲染。
+	// 注意判定基准是终端真值 Layout.Width/Height，而非本行渲染宽度参数。
+	if layout.Compute(c.state.Layout.Width, c.state.Layout.Height).MinSizeBreached {
+		parts = append(parts, theme.ErrorStyle().Render("⚠ 终端尺寸过小"))
 	}
 	line := strings.Join(parts, "   ")
 	if width > 0 {
