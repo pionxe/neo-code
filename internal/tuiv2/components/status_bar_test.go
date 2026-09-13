@@ -77,3 +77,22 @@ func TestAmbientStatusWidthIsSafe(t *testing.T) {
 		}
 	}
 }
+
+// TestAmbientStatusOfflineIndicator 验证断连持久视觉（S6/ADR-005，
+// issue #48）：Connected=false 渲染 offline 段；true 时消失。
+// （零值语义：未连接即离线——status_bar.go:16"渲染连接状态"注释的
+// 兑现，S6 审计实例1 s2 证实该承诺此前未兑现。）
+func TestAmbientStatusOfflineIndicator(t *testing.T) {
+	viewState := state.NewViewState()
+	viewState.Layout.Width = 120
+	viewState.Gateway.Connected = false
+	view := NewAmbientStatus(viewState).View()
+	if !strings.Contains(view, "offline") {
+		t.Fatalf("disconnected should render offline indicator, got:\n%s", view)
+	}
+	viewState.Gateway.Connected = true
+	view = NewAmbientStatus(viewState).View()
+	if strings.Contains(view, "offline") {
+		t.Fatalf("connected should not render offline, got:\n%s", view)
+	}
+}

@@ -47,6 +47,11 @@ func (c *AmbientStatus) View() string {
 	if c.state.Gateway.ActiveSess != nil {
 		parts = append(parts, theme.MutedStyle().Render(c.state.Gateway.ActiveSess.Title))
 	}
+	// 断连持久指示（ADR-005 断连视觉：Connected 槽写权归 health 插件）：
+	// 离线时以错误样式显示 offline 段，恢复后自然消失。
+	if !c.state.Gateway.Connected {
+		parts = append(parts, theme.ErrorStyle().Render("offline"))
+	}
 	// 弱提示（ADR-012）：内核经 Host.Notify 写入 Notify 槽，Text 非空即渲染。
 	// 组件不自算过期——到期清除责在内核 notifyExpiryMsg（issue #41 审计 P2-1
 	// 裁定：过期判断收在内核单一出处，组件保持纯读）。
