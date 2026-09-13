@@ -344,7 +344,7 @@ internal/tuiv2/
 ### ADR-004 RealClient = 薄翻译层
 
 - 决策：RealClient 只读复用 v1 `internal/gateway/client.GatewayRPCClient`（认证/心跳/重试/通知内建），仅做方法映射与事件扁平化。
-- 状态：📋 规划（S5）。
+- 状态：✅ 落地（S5，issue #46）。13 方法全部实装（单通知泵+订阅扇出、最小键归一化映射表、phase 值翻译、无 envelope 外层错误帧、request_id 双槽追踪回填）；构造期单泵裁定源自通知通道单接收者事实（per-subscription 泵会在换代窗口竞争偷事件）。边界禁 4 同步演进：放行 internal/gateway/client（仅客户端包，依赖闭包审计干净）。插件层零 diff（证伪信号未触发）。
 - 证伪信号：联调问题大量落在插件层而非翻译层 → 事件扁平化设计返工，只动 real.go。
 
 ### ADR-005 重连 = health 插件

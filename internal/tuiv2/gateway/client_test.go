@@ -41,10 +41,9 @@ func TestEventTypeValues(t *testing.T) {
 }
 
 func TestRealClientSatisfiesClient(t *testing.T) {
-	var client Client = NewRealClient()
-	if client == nil {
-		t.Fatal("NewRealClient() = nil")
-	}
+	// S4 时代的占位构造已由 S5 的 mock 注入构造取代（见 real_test.go），
+	// 此处保留接口满足性断言（契约面）。
+	var _ Client = (*RealClient)(nil)
 }
 
 // TestClientShapeFreeze 是 Client 接口形状冻结测试（S4 完备性，issue #44）：

@@ -39,10 +39,16 @@ if grep -rn 'neo-code/internal/tuiv2/plugins' internal/tuiv2/kernel --include='*
 fi
 
 # 禁 4：后端模块与 TUI v1 冻结边界。
-# 锚定形式含 "/" 后继或行尾引号，防子包绕过（如 internal/gateway/client）。
+# 锚定形式含 "/" 后继或行尾引号，防子包绕过（如 internal/gateway/client 之外
+# 的 internal/gateway 子包）。
+# S5 演进（issue #46，ADR-004）：放行 neo-code/internal/gateway/client——
+# RealClient 只读复用 v1 RPC 客户端（认证/心跳/重试/通知分发内建），
+# 依赖闭包已经审计核实干净（.s5-realclient-audit/plan-r1-claude2.md）；
+# 服务端（internal/gateway 自身）与其余后端模块仍冻结。
 if grep -rnE 'neo-code/internal/(gateway|runtime|session|repository|tui|config|context|provider|tools)("|[[:space:]]*$|/)' \
     internal/tuiv2 cmd/neocode-tuiv2 --include='*.go' \
-    | grep -v 'neo-code/internal/tuiv2/gateway' ; then
+    | grep -v 'neo-code/internal/tuiv2/gateway' \
+    | grep -v 'neo-code/internal/gateway/client' ; then
     echo "[边界-4] tuiv2 import 了后端模块或 TUI v1（见上方命中行）" >&2
     fail=1
 fi

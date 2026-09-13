@@ -309,7 +309,7 @@ func TestEmptySearchSubmitIsNoop(t *testing.T) {
 // 收敛在 chat 侧 ScrollToEntry 单一真源，issue #41 审计 P2-3 断言翻转——
 // 旧断言"尾跳保持 AutoScroll"随直写 Layout 移除而失效）。
 // TestJumpToOutOfRangeIsNoop 验证 jumpTo 越界防御：无效索引不广播跳转意图
-//（binding 层已被 When 守卫约束到有效匹配集，此为直接调用的防御分支——
+// （binding 层已被 When 守卫约束到有效匹配集，此为直接调用的防御分支——
 // issue #41 PR 审计 P1-2 补测凑齐包覆盖 100%）。
 func TestJumpToOutOfRangeIsNoop(t *testing.T) {
 	p, h := newTestPlugin(t)
@@ -446,7 +446,7 @@ type commandRecorder struct {
 	called []string
 }
 
-func (p *commandRecorder) ID() string                       { return "recorder" }
+func (p *commandRecorder) ID() string                              { return "recorder" }
 func (p *commandRecorder) Init(ctx context.Context, h kernel.Host) {}
 func (p *commandRecorder) Close(ctx context.Context)               {}
 func (p *commandRecorder) Commands() []kernel.Command {
