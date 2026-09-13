@@ -351,7 +351,7 @@ internal/tuiv2/
 
 - 决策：断连视觉 + 指数退避重连实现为独立 health 插件；退避常量可注入。
 - 状态：✅ 落地（S6，issue #48，**架构 go/no-go 门通过**：`git diff fc71eac5 -- internal/tuiv2/kernel/` 输出 0 行——kernel/ 零改动，"新功能=新插件"预言自证成立）。
-- 落地形态：两相探针循环（探针 cmd 只做 Health[5s 独立超时]、React 经注入退避纯函数计算间隔并由续订 cmd 睡眠后回流）+ 全分支无条件重武装 + Close 停止位；恢复边沿（unhealthy→healthy）Notify + Send(GatewayRecovered{}) 广播 → sessions 四守卫重绑（边沿/空会话跳过/运行态跳过/不广播 SessionLoaded——恢复不得清空对话流）；Connected 槽写权自 sessions 临时承接移交 health；断连持久视觉=AmbientStatus offline 段；权限外 B 组事件直写槽（不经 ApplyGatewayForEvent 新分支）。
+- 落地形态：两相探针循环（探针 cmd 只做 Health[5s 独立超时]、React 经注入退避纯函数调度 tea.Tick）+ 全分支无条件重武装 + Close 停止位；恢复边沿（unhealthy→healthy）Notify + Send(GatewayRecovered{}) 广播 → sessions 四守卫重绑（边沿/空会话跳过/运行态跳过/不广播 SessionLoaded——恢复不得清空对话流）；Connected 槽写权自 sessions 临时承接移交 health；断连持久视觉=AmbientStatus offline 段；权限外 B 组事件直写槽（不经 ApplyGatewayForEvent 新分支）。
 - 已知限制（S6 审计实例2 P0-1）：**僵尸流盲区**——v1 通知通道断连不关、订阅通道三关闭路径不含断连、B 组事件真实链路无 producer：传输透明重连（心跳自愈）场景下订阅流已死而探针恒报健康，恢复重绑永不触发。覆盖范围=网关宕机→重启恢复。演进展望：RealClient 暴露传输复位信号（不触 kernel）。
 - 已知行为（S6 审计 P2-c）：恢复重绑不复位 Phase=Error（Phase 槽归 chat），登记为接受差异。
 - 证伪信号：新增插件仍需改内核 = 架构预言证伪 → 按第 9 节回退，不恋战。
