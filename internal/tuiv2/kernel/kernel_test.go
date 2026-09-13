@@ -454,3 +454,88 @@ func TestHostMethodCoverage(t *testing.T) {
 		t.Fatalf("kernel bindings = %d, want 1 (seeded space)", len(b))
 	}
 }
+
+// mousePlugin 是实现 MouseHandler 的测试插件。
+type mousePlugin struct {
+	id       string
+	consumed []tea.MouseMsg
+	result   bool
+}
+
+func (p *mousePlugin) ID() string                       { return p.id }
+func (p *mousePlugin) Init(ctx context.Context, h Host) {}
+func (p *mousePlugin) Close(ctx context.Context)        {}
+func (p *mousePlugin) HandleMouse(h Host, msg tea.MouseMsg) (consumed bool) {
+	p.consumed = append(p.consumed, msg)
+	return p.result
+}
+
+// TestMouseMsgRoutedToMouseHandler 验证 MouseMsg 路由到 MouseHandler 插件。
+func TestMouseMsgRoutedToMouseHandler(t *testing.T) {
+	k, _ := newTestKernel(t)
+	mp := &mousePlugin{id: "mouse", result: true}
+	mustOK(t, k.Register(mp), "register mouse plugin")
+
+	msg := tea.MouseMsg{Type: tea.MouseWheelUp}
+	k.dispatchMouse(msg)
+	if len(mp.consumed) != 1 {
+		t.Fatal("MouseMsg should reach MouseHandler plugin")
+	}
+}
+
+// TestMouseMsgNoHandlerDropped 验证无 MouseHandler 时消息安全丢弃。
+func TestMouseMsgNoHandlerDropped(t *testing.T) {
+	k, _ := newTestKernel(t)
+	k.dispatchMouse(tea.MouseMsg{Type: tea.MouseWheelUp}) // 不 panic 即可
+}
+
+// TestOverlayMouseHandlerPriority 验证栈顶 OverlayMouseHandler 优先于插件。
+func TestOverlayMouseHandlerPriority(t *testing.T) {
+	k, _ := newTestKernel(t)
+	mp := &mousePlugin{id: "mouse", result: true}
+	mustOK(t, k.Register(mp), "register mouse plugin")
+
+	// 压入实现 OverlayMouseHandler 的浮层。
+	mo := &mouseTestOverlay{}
+	k.stack.push(mo)
+
+	msg := tea.MouseMsg{Type: tea.MouseWheelUp}
+	k.dispatchMouse(msg)
+	if mo.got {
+		// overlay 收到即可
+	} else {
+		t.Fatal("overlay should receive mouse msg")
+	}
+	if len(mp.consumed) != 0 {
+		t.Fatal("overlay consumes first, plugin should not receive")
+	}
+}
+
+// mouseTestOverlay 实现 Overlay + OverlayMouseHandler。
+type mouseTestOverlay struct {
+	scriptedOverlay
+	got bool
+}
+
+func (o *mouseTestOverlay) ID() string { return "mouse-test-overlay" }
+func (o *mouseTestOverlay) HandleMouse(h Host, msg tea.MouseMsg) (consumed bool) {
+	o.got = true
+	return true
+}
+
+// TestConfirmModalBlocksMouse 验证模态语义：confirm 开启时滚轮不穿透滚动 stream。
+func TestConfirmModalBlocksMouse(t *testing.T) {
+	k, _ := newTestKernel(t)
+	mp := &mousePlugin{id: "mouse", result: true}
+	mustOK(t, k.Register(mp), "register mouse plugin")
+
+	// 压入一个未实现鼠标接口的浮层（模态）。
+	k.stack.push(&scriptedOverlay{consume: true})
+
+	msg := tea.MouseMsg{Type: tea.MouseWheelUp}
+	k.dispatchMouse(msg)
+	// 不 panic 即可（模态吞掉，MouseHandler 插件不收到）。
+	if len(mp.consumed) != 0 {
+		t.Fatal("modal overlay should block mouse from reaching plugins")
+	}
+}
