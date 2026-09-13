@@ -124,7 +124,7 @@ func TestReactConversationEventsMigrateSlots(t *testing.T) {
 	if p.st.Stream[1].Type != "tool_start" || p.st.Stream[1].ToolName != "bash" {
 		t.Fatalf("tool entry = %+v", p.st.Stream[1])
 	}
-	p.React(nil, ev(gateway.EventToolEnd, map[string]any{"tool": "bash", "output": "ok"}))
+	p.React(nil, ev(gateway.EventToolResult, map[string]any{"tool": "bash", "output": "ok"}))
 	if p.st.Stream[2].Type != "tool_end" {
 		t.Fatal("tool_end missing")
 	}

@@ -24,8 +24,8 @@ type recordingHost struct {
 	broadcasts   []tea.Msg
 	client       gateway.Client
 	quitted      bool
-	react        func(tea.Msg) // 广播回插件 React（模拟 kernel 分发；nil 则只记录）
-	runCmds      []string      // RunCommand 调用记录（名称）
+	react        func(tea.Msg)                // 广播回插件 React（模拟 kernel 分发；nil 则只记录）
+	runCmds      []string                     // RunCommand 调用记录（名称）
 	runCommandFn func(string, []string) error // 可注入的 RunCommand 行为（nil 返回 nil）
 }
 
@@ -33,9 +33,9 @@ func newRecordingHost() *recordingHost {
 	return &recordingHost{st: state.NewViewState()}
 }
 
-func (h *recordingHost) State() *state.ViewState                        { return h.st }
-func (h *recordingHost) Gateway() gateway.Client                        { return h.client }
-func (h *recordingHost) Commands() []kernel.Command                     { return nil }
+func (h *recordingHost) State() *state.ViewState    { return h.st }
+func (h *recordingHost) Gateway() gateway.Client    { return h.client }
+func (h *recordingHost) Commands() []kernel.Command { return nil }
 func (h *recordingHost) RunCommand(name string, args []string) error {
 	h.runCmds = append(h.runCmds, name)
 	if h.runCommandFn != nil {
@@ -99,7 +99,7 @@ func TestReactInputWritingEvents(t *testing.T) {
 	if p.st.Input.Mode != state.InputStateModeMessage || p.st.Input.Prompt != "" {
 		t.Fatalf("input after resolve = %+v", p.st.Input)
 	}
-	p.React(h, ev(gateway.EventAskUserQuestion, map[string]any{"question": "Q", "options": []any{"a", "b"}}))
+	p.React(h, ev(gateway.EventUserQuestionRequested, map[string]any{"question": "Q", "options": []any{"a", "b"}}))
 	if p.st.Input.Mode != state.InputStateModeQuestionAnswer || len(p.st.Input.Options) != 2 {
 		t.Fatalf("input = %+v", p.st.Input)
 	}

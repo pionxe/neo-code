@@ -7,17 +7,13 @@ import "neo-code/internal/tuiv2/gateway"
 // gateway_offline 由 chat bespoke 处理（Gateway.Connected 归 health）。
 var conversationEvents = map[gateway.EventType]struct{}{
 	gateway.EventAgentChunk:            {},
-	gateway.EventAssistantDelta:        {},
 	gateway.EventAgentMessageStart:     {},
 	gateway.EventAgentMessageEnd:       {},
 	gateway.EventToolStart:             {},
-	gateway.EventToolStarted:           {},
-	gateway.EventToolEnd:               {},
-	gateway.EventToolFinished:          {},
+	gateway.EventToolResult:            {},
 	gateway.EventToolOutput:            {},
 	gateway.EventPermissionRequested:   {},
 	gateway.EventPermissionResolved:    {},
-	gateway.EventAskUserQuestion:       {},
 	gateway.EventUserQuestionRequested: {},
 	gateway.EventUserQuestionAnswered:  {},
 	gateway.EventPhaseChanged:          {},
@@ -25,7 +21,7 @@ var conversationEvents = map[gateway.EventType]struct{}{
 	gateway.EventRunFinished:           {},
 	gateway.EventRunError:              {},
 	gateway.EventError:                 {},
-	gateway.EventRunCancelled:          {},
+	gateway.EventRunCanceled:           {},
 	gateway.EventTokenUsage:            {},
 }
 

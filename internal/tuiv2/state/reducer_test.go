@@ -66,17 +66,12 @@ func TestReduceMutatesStateInPlace(t *testing.T) {
 func TestReduceReturnsSamePointerForAllEvents(t *testing.T) {
 	allEvents := []gateway.EventType{
 		gateway.EventAgentChunk,
-		gateway.EventAssistantDelta,
 		gateway.EventAgentMessageStart,
 		gateway.EventAgentMessageEnd,
 		gateway.EventToolStart,
-		gateway.EventToolStarted,
-		gateway.EventToolEnd,
-		gateway.EventToolFinished,
 		gateway.EventToolOutput,
 		gateway.EventPermissionRequested,
 		gateway.EventPermissionResolved,
-		gateway.EventAskUserQuestion,
 		gateway.EventUserQuestionRequested,
 		gateway.EventUserQuestionAnswered,
 		gateway.EventPhaseChanged,
@@ -84,7 +79,7 @@ func TestReduceReturnsSamePointerForAllEvents(t *testing.T) {
 		gateway.EventRunFinished,
 		gateway.EventRunError,
 		gateway.EventError,
-		gateway.EventRunCancelled,
+		gateway.EventRunCanceled,
 		gateway.EventTokenUsage,
 		gateway.EventSessionCreated,
 		gateway.EventSessionDeleted,
@@ -138,7 +133,7 @@ func TestReduceCoversEventStateTransitions(t *testing.T) {
 		},
 		{
 			name:  "tool_end",
-			event: event(gateway.EventToolEnd, map[string]any{"tool": "bash", "output": "ok"}),
+			event: event(gateway.EventToolResult, map[string]any{"tool": "bash", "output": "ok"}),
 			assert: func(t *testing.T, next *ViewState) {
 				assertLastEntry(t, next, "tool_end", "ok")
 			},
@@ -175,7 +170,7 @@ func TestReduceCoversEventStateTransitions(t *testing.T) {
 		},
 		{
 			name:  "ask_user_question",
-			event: event(gateway.EventAskUserQuestion, map[string]any{"question": "branch?", "options": []any{"main", "dev"}}),
+			event: event(gateway.EventUserQuestionRequested, map[string]any{"question": "branch?", "options": []any{"main", "dev"}}),
 			assert: func(t *testing.T, next *ViewState) {
 				if next.Runtime.Phase != RuntimePhaseWaitingUser || next.Input.Mode != InputStateModeQuestionAnswer {
 					t.Fatalf("ask state = phase %q input %q", next.Runtime.Phase, next.Input.Mode)
@@ -228,7 +223,7 @@ func TestReduceCoversEventStateTransitions(t *testing.T) {
 		},
 		{
 			name:  "run_cancelled",
-			event: event(gateway.EventRunCancelled, map[string]any{"phase": "cancelled"}),
+			event: event(gateway.EventRunCanceled, map[string]any{"phase": "cancelled"}),
 			assert: func(t *testing.T, next *ViewState) {
 				if next.Runtime.Phase != RuntimePhaseCancelled {
 					t.Fatalf("phase = %q", next.Runtime.Phase)
@@ -335,7 +330,7 @@ func TestReducePermissionResolvedRestoresMessageInput(t *testing.T) {
 }
 
 func TestReduceAskUserQuestionAppendsStreamEntry(t *testing.T) {
-	next := Reduce(NewViewState(), event(gateway.EventAskUserQuestion, map[string]any{
+	next := Reduce(NewViewState(), event(gateway.EventUserQuestionRequested, map[string]any{
 		"question": "which branch?",
 		"options":  []any{"main", "dev"},
 	}))
@@ -359,11 +354,11 @@ func TestReduceAskUserQuestionAppendsStreamEntry(t *testing.T) {
 }
 
 func TestReduceRunCancelledRestoresMessageInput(t *testing.T) {
-	current := Reduce(NewViewState(), event(gateway.EventAskUserQuestion, map[string]any{
+	current := Reduce(NewViewState(), event(gateway.EventUserQuestionRequested, map[string]any{
 		"question": "continue?",
 		"options":  []any{"yes", "no"},
 	}))
-	next := Reduce(current, event(gateway.EventRunCancelled, map[string]any{"phase": "cancelled"}))
+	next := Reduce(current, event(gateway.EventRunCanceled, map[string]any{"phase": "cancelled"}))
 
 	if next.Runtime.Phase != RuntimePhaseCancelled {
 		t.Fatalf("phase = %q, want cancelled", next.Runtime.Phase)
@@ -397,7 +392,7 @@ func TestReduceRunFinishedPreservesTerminalErrorOrCancelled(t *testing.T) {
 		},
 		{
 			name:       "cancelled stays cancelled",
-			current:    Reduce(NewViewState(), event(gateway.EventRunCancelled, map[string]any{"phase": "cancelled"})),
+			current:    Reduce(NewViewState(), event(gateway.EventRunCanceled, map[string]any{"phase": "cancelled"})),
 			wantPhase:  RuntimePhaseCancelled,
 			wantTokens: TokenUsage{Total: 11},
 		},

@@ -13,17 +13,13 @@ import (
 func allEventTypes() []gateway.EventType {
 	return []gateway.EventType{
 		gateway.EventAgentChunk,
-		gateway.EventAssistantDelta,
 		gateway.EventAgentMessageStart,
 		gateway.EventAgentMessageEnd,
 		gateway.EventToolStart,
-		gateway.EventToolStarted,
-		gateway.EventToolEnd,
-		gateway.EventToolFinished,
+		gateway.EventToolResult,
 		gateway.EventToolOutput,
 		gateway.EventPermissionRequested,
 		gateway.EventPermissionResolved,
-		gateway.EventAskUserQuestion,
 		gateway.EventUserQuestionRequested,
 		gateway.EventUserQuestionAnswered,
 		gateway.EventPhaseChanged,
@@ -31,7 +27,7 @@ func allEventTypes() []gateway.EventType {
 		gateway.EventRunFinished,
 		gateway.EventRunError,
 		gateway.EventError,
-		gateway.EventRunCancelled,
+		gateway.EventRunCanceled,
 		gateway.EventTokenUsage,
 		gateway.EventSessionCreated,
 		gateway.EventSessionDeleted,
@@ -46,16 +42,15 @@ func allEventTypes() []gateway.EventType {
 // 的决定表同步维护；穷举测试断言两者一致）。
 func conversationForwarded(t gateway.EventType) bool {
 	switch t {
-	case gateway.EventAgentChunk, gateway.EventAssistantDelta,
+	case gateway.EventAgentChunk,
 		gateway.EventAgentMessageStart, gateway.EventAgentMessageEnd,
-		gateway.EventToolStart, gateway.EventToolStarted,
-		gateway.EventToolEnd, gateway.EventToolFinished, gateway.EventToolOutput,
+		gateway.EventToolStart, gateway.EventToolResult, gateway.EventToolOutput,
 		gateway.EventPermissionRequested, gateway.EventPermissionResolved,
-		gateway.EventAskUserQuestion, gateway.EventUserQuestionRequested,
+		gateway.EventUserQuestionRequested,
 		gateway.EventUserQuestionAnswered, gateway.EventPhaseChanged,
 		gateway.EventRunStarted, gateway.EventRunFinished,
 		gateway.EventRunError, gateway.EventError,
-		gateway.EventRunCancelled, gateway.EventTokenUsage:
+		gateway.EventRunCanceled, gateway.EventTokenUsage:
 		return true
 	}
 	return false
@@ -100,10 +95,8 @@ func TestReduceWithoutInputScope(t *testing.T) {
 	tempWrite := []gateway.EventType{
 		gateway.EventPermissionRequested,
 		gateway.EventPermissionResolved,
-		gateway.EventAskUserQuestion,
 		gateway.EventUserQuestionRequested,
 		gateway.EventUserQuestionAnswered,
-		gateway.EventRunCancelled,
 	}
 	for _, et := range tempWrite {
 		t.Run(string(et), func(t *testing.T) {
@@ -174,8 +167,8 @@ func TestReduceWithoutInputDecisionAccounting(t *testing.T) {
 			t.Fatalf("%q 未登记决定（转发或排除二选一）", et)
 		}
 	}
-	if forwarded != 21 {
-		t.Fatalf("forwarded = %d, want 21", forwarded)
+	if forwarded != 17 {
+		t.Fatalf("forwarded = %d, want 17", forwarded)
 	}
 	if excludedCount != len(excluded) {
 		t.Fatalf("excluded = %d, want %d（gateway 新增事件需同步三张表）", excludedCount, len(excluded))
@@ -245,7 +238,7 @@ func TestReduceWithoutInputMatchesReduce(t *testing.T) {
 			}
 			// P2-a 专项：permission/question 条目 content 从 payload 直取
 			//（chat 路径无 Input.Prompt 中间态，content 仍完整）。
-			if et == gateway.EventPermissionRequested || et == gateway.EventAskUserQuestion {
+			if et == gateway.EventPermissionRequested || et == gateway.EventUserQuestionRequested {
 				last := b.Stream[len(b.Stream)-1].Content
 				if last == "" {
 					t.Fatalf("%q content lost after split (P2-a read dependency)", et)

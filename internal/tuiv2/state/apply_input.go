@@ -21,7 +21,7 @@ func ApplyInputForEvent(s *ViewState, event gateway.GatewayEvent) {
 		s.Input.Mode = InputStateModeMessage
 		s.Input.Prompt = ""
 		s.Input.Options = nil
-	case gateway.EventAskUserQuestion, gateway.EventUserQuestionRequested:
+	case gateway.EventUserQuestionRequested:
 		s.Input.Mode = InputStateModeQuestionAnswer
 		s.Input.Prompt = payloadString(event.Payload, "question", "prompt", "message")
 		s.Input.Options = payloadStringSlice(event.Payload, "options")
@@ -31,7 +31,7 @@ func ApplyInputForEvent(s *ViewState, event gateway.GatewayEvent) {
 		s.Input.Cursor = 0
 		s.Input.Prompt = ""
 		s.Input.Options = nil
-	case gateway.EventRunCancelled:
+	case gateway.EventRunCanceled:
 		s.Input.Mode = InputStateModeMessage
 		s.Input.Prompt = ""
 		s.Input.Options = nil
@@ -43,10 +43,9 @@ func isInputWritingEvent(t gateway.EventType) bool {
 	switch t {
 	case gateway.EventPermissionRequested,
 		gateway.EventPermissionResolved,
-		gateway.EventAskUserQuestion,
 		gateway.EventUserQuestionRequested,
 		gateway.EventUserQuestionAnswered,
-		gateway.EventRunCancelled:
+		gateway.EventRunCanceled:
 		return true
 	}
 	return false
