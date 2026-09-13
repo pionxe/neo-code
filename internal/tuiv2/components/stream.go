@@ -22,6 +22,8 @@ type AgentStream struct {
 	state *state.ViewState
 }
 
+var _ tea.Model = (*AgentStream)(nil)
+
 // NewAgentStream 创建 Agent Stream 组件。
 func NewAgentStream(viewState *state.ViewState) *AgentStream {
 	return &AgentStream{state: viewState}
@@ -33,10 +35,10 @@ func (c *AgentStream) Init() tea.Cmd {
 }
 
 // Update 处理 Agent Stream 的滚动按键，不维护冗余业务状态。
-func (c *AgentStream) Update(msg tea.Msg) tea.Cmd {
+func (c *AgentStream) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
-		return nil
+		return c, nil
 	}
 	maxOffset := c.maxScrollOffset()
 	switch key.String() {
@@ -71,7 +73,7 @@ func (c *AgentStream) Update(msg tea.Msg) tea.Cmd {
 		c.state.Layout.ScrollOffset = clampScroll(c.state.Layout.ScrollOffset-fullPage, maxOffset)
 		c.state.Layout.AutoScroll = c.state.Layout.ScrollOffset == 0
 	}
-	return nil
+	return c, nil
 }
 
 // View 渲染 Agent Stream，按滚动窗口选择可见条目并进行宽度安全截断。
@@ -82,7 +84,8 @@ func (c *AgentStream) Update(msg tea.Msg) tea.Cmd {
 //  3. visibleLines 用局部偏移裁剪窗口行为可见行
 //
 // 该转换消除"同一 ScrollOffset 在全流与窗口两个坐标系混用"导致的跳转错位与帧间振荡。
-func (c *AgentStream) View(width int) string {
+func (c *AgentStream) View() string {
+	width := c.streamWidth()
 	lines := []string{theme.MutedStyle().Render(c.headerText())}
 	rendered, winEndLine, totalLines := c.renderAllEntriesWithWindow()
 	if len(rendered) == 0 {
@@ -128,8 +131,8 @@ func (c *AgentStream) headerText() string {
 // 断点逻辑唯一出处=layout.Compute（ADR-003，S7 收编）：
 // 旧 width>=100 && ShowInspector 收窄分支不激活（ShowInspector 全仓
 // 零写者=恒 false，分支为死代码）——宽屏侧栏与横向拼接登记 S7b。
-func (c *AgentStream) streamWidth(width int) int {
-	return layout.Compute(width, c.state.Layout.Height).StreamWidth
+func (c *AgentStream) streamWidth() int {
+	return layout.Compute(c.state.Layout.Width, c.state.Layout.Height).StreamWidth
 }
 
 // visibleLineCount 根据终端高度估算可展示的流行数。
