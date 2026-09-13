@@ -136,17 +136,11 @@ func TestRealClientUnwiredMethodsStayExplicit(t *testing.T) {
 		t.Fatalf("construct: %v", err)
 	}
 	ctx := context.Background()
-	if err := c.CancelRun(ctx, "s1", "r1"); !errors.Is(err, errRealNotImplemented) {
-		t.Fatalf("CancelRun err = %v", err)
-	}
 	if _, err := c.SubscribeEvents(ctx, "s1"); !errors.Is(err, errRealNotImplemented) {
 		t.Fatalf("SubscribeEvents err = %v", err)
 	}
 	if _, err := c.GetModel(ctx, "s1"); !errors.Is(err, errRealNotImplemented) {
 		t.Fatalf("GetModel err = %v", err)
-	}
-	if err := c.AnswerUserQuestion(ctx, UserQuestionAnswer{QuestionID: "q1"}); !errors.Is(err, errRealNotImplemented) {
-		t.Fatalf("AnswerUserQuestion err = %v", err)
 	}
 }
 
@@ -304,5 +298,147 @@ func TestCreateSessionExtractsFrameSessionID(t *testing.T) {
 	mock.mu.Unlock()
 	if _, err := c.CreateSession(context.Background()); err == nil {
 		t.Fatal("empty session id should fail")
+	}
+}
+
+// TestSendMessageRunAckWithFallbacks 验证 SendMessage：params 捕获
+// （session_id/input_text）+ ack 省略时回退请求值。
+func TestSendMessageRunAckWithFallbacks(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	mock.mu.Lock()
+	mock.results["gateway.run"] = func() {
+		last := mock.calls[len(mock.calls)-1]
+		params := last.params.(struct {
+			SessionID string `json:"session_id,omitempty"`
+			InputText string `json:"input_text,omitempty"`
+		})
+		if params.SessionID != "s1" || params.InputText != "hi" {
+			t.Errorf("run params = %+v", params)
+		}
+		// ack 只回 run_id（session_id 省略 → 回退请求值）。
+		last.result.(*struct {
+			SessionID string `json:"session_id"`
+			RunID     string `json:"run_id"`
+		}).RunID = "run-9"
+	}
+	mock.mu.Unlock()
+
+	ack, err := c.SendMessage(context.Background(), "s1", "hi")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if ack.SessionID != "s1" || ack.RunID != "run-9" || !ack.Accepted {
+		t.Fatalf("ack = %+v", ack)
+	}
+}
+
+// TestCancelRunForwardsParams 验证 CancelRun 参数透传。
+func TestCancelRunForwardsParams(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	if err := c.CancelRun(context.Background(), "s1", "run-1"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.calls) != 1 || mock.calls[0].method != "gateway.cancel" {
+		t.Fatalf("calls = %+v", mock.calls)
+	}
+}
+
+// TestResolvePermissionExplicitAndBackfill 验证权限决策：显式 RequestID
+// 优先、空值回填追踪槽、双槽独立、无可用 ID 本地报错、Allow→allow。
+func TestResolvePermissionExplicitAndBackfill(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+
+	// 显式 RequestID：直通，allow 映射。
+	if err := c.ResolvePermission(context.Background(), PermissionDecision{
+		RequestID: "perm-explicit", SessionID: "s1", Allow: true,
+	}); err != nil {
+		t.Fatalf("explicit: %v", err)
+	}
+	mock.mu.Lock()
+	call := mock.calls[len(mock.calls)-1]
+	params := call.params.(struct {
+		RequestID string `json:"request_id"`
+		Decision  string `json:"decision"`
+	})
+	mock.mu.Unlock()
+	if params.RequestID != "perm-explicit" || params.Decision != "allow" {
+		t.Fatalf("params = %+v", params)
+	}
+
+	// 空值 + 追踪槽有登记 → 回填；deny 映射。
+	c.mu.Lock()
+	c.permReqID["s1"] = "perm-pending"
+	c.mu.Unlock()
+	if err := c.ResolvePermission(context.Background(), PermissionDecision{SessionID: "s1"}); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	mock.mu.Lock()
+	params = mock.calls[len(mock.calls)-1].params.(struct {
+		RequestID string `json:"request_id"`
+		Decision  string `json:"decision"`
+	})
+	mock.mu.Unlock()
+	if params.RequestID != "perm-pending" || params.Decision != "deny" {
+		t.Fatalf("params = %+v", params)
+	}
+
+	// 空值 + 槽空 → 本地报错（不发 RPC；先清槽再调用，无锁跨越）。
+	c.mu.Lock()
+	delete(c.permReqID, "s1")
+	c.mu.Unlock()
+	mock.mu.Lock()
+	callsBefore := len(mock.calls)
+	mock.mu.Unlock()
+	if err := c.ResolvePermission(context.Background(), PermissionDecision{SessionID: "s1"}); err == nil {
+		t.Fatal("unavailable request id should fail locally")
+	}
+	mock.mu.Lock()
+	if len(mock.calls) != callsBefore {
+		t.Fatal("unavailable id must not trigger RPC")
+	}
+	mock.mu.Unlock()
+}
+
+// TestAnswerUserQuestionBackfillAndMapping 验证问答回答：Status=answered
+// + Message=Text + QuestionID 回填（与权限槽独立）。
+func TestAnswerUserQuestionBackfillAndMapping(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	c.mu.Lock()
+	c.questReqID["s1"] = "quest-pending"
+	c.mu.Unlock()
+
+	if err := c.AnswerUserQuestion(context.Background(), UserQuestionAnswer{
+		SessionID: "s1", Text: "my answer",
+	}); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	params := mock.calls[len(mock.calls)-1].params.(struct {
+		RequestID string   `json:"request_id"`
+		Status    string   `json:"status,omitempty"`
+		Values    []string `json:"values,omitempty"`
+		Message   string   `json:"message,omitempty"`
+	})
+	if params.RequestID != "quest-pending" || params.Status != "answered" || params.Message != "my answer" {
+		t.Fatalf("params = %+v", params)
 	}
 }

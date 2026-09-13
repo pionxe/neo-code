@@ -50,6 +50,14 @@ type RealClient struct {
 	mu   sync.Mutex
 	subs map[string]*realSubscription
 
+	// request_id 双槽追踪（S5 审计协调者裁定）：服务端强校验
+	// resolvePermission/userQuestionAnswer 的 request_id 非空，而事件流
+	// 权限/问答请求携带该 ID——泵在扇出前登记（见 flattenGatewayEvent），
+	// 提交决策时若调用方未填则回填（显式值优先）。语义="最近 pending"，
+	// 对齐 runtime 单会话串行挂起模型；*_resolved 事件清槽防陈旧回填。
+	permReqID  map[string]string // sessionID → 最近 pending 权限请求 ID
+	questReqID map[string]string // sessionID → 最近 pending 问答请求 ID
+
 	closeOnce sync.Once
 	closed    chan struct{}
 }
@@ -87,9 +95,11 @@ func NewRealClient(options RealClientOptions) (*RealClient, error) {
 	}
 
 	c := &RealClient{
-		rpc:    rpc,
-		subs:   make(map[string]*realSubscription),
-		closed: make(chan struct{}),
+		rpc:        rpc,
+		subs:       make(map[string]*realSubscription),
+		permReqID:  make(map[string]string),
+		questReqID: make(map[string]string),
+		closed:     make(chan struct{}),
 	}
 
 	authCtx, cancel := context.WithTimeout(context.Background(), defaultRealAuthTimeout)
@@ -245,14 +255,46 @@ func (c *RealClient) CreateSession(ctx context.Context) (*SessionSummary, error)
 	return &SessionSummary{ID: sessionID, Title: "New Session"}, nil
 }
 
-// SendMessage 对应 gateway.run（S5 分阶段实装）。
+// SendMessage 对应 gateway.run：异步受理用户消息（返回 run 确认）。
+// ack 的 session_id/run_id 在 frame 级；服务端省略时回退为请求值
+// （v1 Submit 先例）。
 func (c *RealClient) SendMessage(ctx context.Context, sessionID string, text string) (*RunAck, error) {
-	return nil, errRealNotImplemented
+	params := struct {
+		SessionID string `json:"session_id,omitempty"`
+		InputText string `json:"input_text,omitempty"`
+	}{
+		SessionID: strings.TrimSpace(sessionID),
+		InputText: text,
+	}
+	var frame struct {
+		SessionID string `json:"session_id"`
+		RunID     string `json:"run_id"`
+	}
+	if err := c.rpc.Call(ctx, "gateway.run", params, &frame); err != nil {
+		return nil, err
+	}
+	ack := &RunAck{
+		SessionID: strings.TrimSpace(frame.SessionID),
+		RunID:     strings.TrimSpace(frame.RunID),
+		Accepted:  true,
+	}
+	if ack.SessionID == "" {
+		ack.SessionID = params.SessionID
+	}
+	return ack, nil
 }
 
-// CancelRun 对应 gateway.cancel（S5 分阶段实装）。
+// CancelRun 对应 gateway.cancel：按 run/session 绑定取消运行。
 func (c *RealClient) CancelRun(ctx context.Context, sessionID string, runID string) error {
-	return errRealNotImplemented
+	params := struct {
+		SessionID string `json:"session_id,omitempty"`
+		RunID     string `json:"run_id,omitempty"`
+	}{
+		SessionID: strings.TrimSpace(sessionID),
+		RunID:     strings.TrimSpace(runID),
+	}
+	var frame struct{}
+	return c.rpc.Call(ctx, "gateway.cancel", params, &frame)
 }
 
 // SubscribeEvents 对应 gateway.bindStream + gateway.event（S5 分阶段实装）。
@@ -260,14 +302,78 @@ func (c *RealClient) SubscribeEvents(ctx context.Context, sessionID string) (<-c
 	return nil, errRealNotImplemented
 }
 
-// ResolvePermission 对应 gateway.resolvePermission（S5 分阶段实装）。
-func (c *RealClient) ResolvePermission(ctx context.Context, decision PermissionDecision) error {
-	return errRealNotImplemented
+// resolvePermRequestID 解析权限请求 ID：显式值优先，空则回填
+// 追踪槽登记的最近 pending ID；两者皆空返回错误（服务端强校验
+// request_id 非空，本地先行失败给出可读原因）。
+func (c *RealClient) resolvePermRequestID(sessionID, explicit string) (string, error) {
+	if id := strings.TrimSpace(explicit); id != "" {
+		return id, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if id := c.permReqID[sessionID]; id != "" {
+		return id, nil
+	}
+	return "", errors.New("gateway: permission request id unavailable（未捕获到 permission_requested 事件）")
 }
 
-// AnswerUserQuestion 对应 gateway.userQuestionAnswer（S5 分阶段实装）。
+// ResolvePermission 对应 gateway.resolvePermission：提交工具权限决策。
+// Decision 映射 Allow→"allow"、否则 "deny"（服务端按小写枚举消费，
+// v1 先例）；RequestID 为空时回填追踪槽（S5 审计协调者裁定）。
+func (c *RealClient) ResolvePermission(ctx context.Context, decision PermissionDecision) error {
+	requestID, err := c.resolvePermRequestID(decision.SessionID, decision.RequestID)
+	if err != nil {
+		return err
+	}
+	decisionValue := "deny"
+	if decision.Allow {
+		decisionValue = "allow"
+	}
+	params := struct {
+		RequestID string `json:"request_id"`
+		Decision  string `json:"decision"`
+	}{
+		RequestID: requestID,
+		Decision:  decisionValue,
+	}
+	var frame struct{}
+	return c.rpc.Call(ctx, "gateway.resolvePermission", params, &frame)
+}
+
+// resolveQuestRequestID 解析问答请求 ID（语义同 resolvePermRequestID，
+// 双槽独立——权限/问答事件交错时共用一桶会错填，S5 审计钉死项）。
+func (c *RealClient) resolveQuestRequestID(sessionID, explicit string) (string, error) {
+	if id := strings.TrimSpace(explicit); id != "" {
+		return id, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if id := c.questReqID[sessionID]; id != "" {
+		return id, nil
+	}
+	return "", errors.New("gateway: question request id unavailable（未捕获到 user_question_requested 事件）")
+}
+
+// AnswerUserQuestion 对应 gateway.userQuestionAnswer：提交 ask_user 回答。
+// 自由文本回答映射 Status="answered" + Message=Text（服务端 Status 可选，
+// 语义标注 answered）；QuestionID 为空时回填追踪槽（协调者裁定）。
 func (c *RealClient) AnswerUserQuestion(ctx context.Context, answer UserQuestionAnswer) error {
-	return errRealNotImplemented
+	requestID, err := c.resolveQuestRequestID(answer.SessionID, answer.QuestionID)
+	if err != nil {
+		return err
+	}
+	params := struct {
+		RequestID string   `json:"request_id"`
+		Status    string   `json:"status,omitempty"`
+		Values    []string `json:"values,omitempty"`
+		Message   string   `json:"message,omitempty"`
+	}{
+		RequestID: requestID,
+		Status:    "answered",
+		Message:   answer.Text,
+	}
+	var frame struct{}
+	return c.rpc.Call(ctx, "gateway.userQuestionAnswer", params, &frame)
 }
 
 // ListModels 对应 gateway.listModels（S5 分阶段实装）。
