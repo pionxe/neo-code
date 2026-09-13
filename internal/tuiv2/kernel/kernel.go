@@ -181,7 +181,10 @@ func (k *Kernel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		k.dispatchKey(m)
 	case tea.MouseMsg:
-		// 鼠标消息同禁入广播（§4.1 同级契约），路由语义由 S7 鼠标插件钉死。
+		// 鼠标消息同禁入广播（§4.1 规则 1），路由：栈顶 Overlay.HandleMouse
+		// 优先（模态独占——栈非空即不遍历插件）；栈空时遍历 MouseHandler
+		// 插件（S8，issue #52）。
+		k.dispatchMouse(m)
 	case tea.WindowSizeMsg:
 		// 尺寸是内核拥有槽（Layout），内部消化不广播；渲染器经 Render 参数获得宽度。
 		k.width, k.st.Layout.Width = m.Width, m.Width
@@ -267,6 +270,26 @@ func (k *Kernel) dispatchKey(msg tea.KeyMsg) {
 	}
 	if k.modes.mode == state.LeaderMode {
 		k.setMode(state.NormalMode)
+	}
+}
+
+// dispatchMouse 路由鼠标消息：栈非空仅栈顶（模态独占，镜像 dispatchKey）；
+// 栈空时遍历 MouseHandler 插件（注册序），首个 consumed=true 即止；
+// 全不消费即丢弃（不广播、不入队）。
+func (k *Kernel) dispatchMouse(msg tea.MouseMsg) {
+	if k.stack.depth() > 0 {
+		top := k.stack.top()
+		if mh, ok := top.(OverlayMouseHandler); ok {
+			mh.HandleMouse(k.host, msg)
+		}
+		return // 栈顶独占：未实现鼠标接口也吞掉（模态语义）
+	}
+	for _, p := range k.plugins {
+		if mh, ok := p.(MouseHandler); ok {
+			if mh.HandleMouse(k.host, msg) {
+				return
+			}
+		}
 	}
 }
 

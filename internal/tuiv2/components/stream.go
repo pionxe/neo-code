@@ -139,6 +139,15 @@ func (c *AgentStream) visibleLineCount() int {
 	return layout.Compute(c.state.Layout.Width, c.state.Layout.Height).VisibleLines
 }
 
+// ScrollBy 按 delta 行滚动（正值向上、负值向下）：复制 j/k 分支不变量
+// （clamp 走 maxScrollOffset；AutoScroll 翻转——offset>0→false、回 0→true）。
+// S8 鼠标滚轮专用（对齐 v1 MouseWheelStepLines=3 步长）。
+func (c *AgentStream) ScrollBy(delta int) {
+	maxOffset := c.maxScrollOffset()
+	c.state.Layout.ScrollOffset = clampScroll(c.state.Layout.ScrollOffset+delta, maxOffset)
+	c.state.Layout.AutoScroll = c.state.Layout.ScrollOffset == 0
+}
+
 // halfPageSize 返回半页滚动所需的行数，至少为 1。
 func (c *AgentStream) halfPageSize() int {
 	h := c.visibleLineCount() / 2

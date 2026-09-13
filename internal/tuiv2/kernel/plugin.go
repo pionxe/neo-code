@@ -45,6 +45,17 @@ type KeyBinder interface {
 	Bindings() []Binding
 }
 
+// MouseHandler 是可选能力：消费鼠标消息（S8，issue #52）。
+// kernel 对 tea.MouseMsg 做两级路由（栈顶 Overlay.HandleMouse 优先，
+// 栈空时遍历 MouseHandler 插件）——MouseMsg 永不广播（ADR-009 规则 1），
+// HandleMouse 直派不经队列，motion 洪水由实现者自行过滤。
+// 滚轮语义：ScrollBy ±3 行/tick（对齐 v1 MouseWheelStepLines）。
+type MouseHandler interface {
+	// HandleMouse 消费一条鼠标消息；返回 consumed=true 表示已消费
+	//（kernel 停止向后续 MouseHandler 插件派发）。
+	HandleMouse(h Host, msg tea.MouseMsg) (consumed bool)
+}
+
 // Binding 描述一条键位绑定：某键位模式下某键触发某动作。
 //
 // 两种形态（互斥，注册期校验）：
@@ -208,3 +219,12 @@ var ErrDuplicatePlugin = errors.New("kernel: duplicate plugin id")
 
 // ErrDuplicateRegion 表示注册了重复的区域所有者。
 var ErrDuplicateRegion = errors.New("kernel: duplicate region renderer")
+
+// OverlayMouseHandler 是 Overlay 的可选能力：消费鼠标消息（S8，issue #52）。
+// 栈顶独占语义：栈非空时 kernel 仅派发给栈顶（镜像 HandleKey）；
+// 未实现本接口的浮层会吞掉鼠标消息（模态语义，与键盘一致）。
+type OverlayMouseHandler interface {
+	// HandleMouse 处理一条鼠标消息；返回 consumed=true 表示已消费
+	//（kernel 停止派发）。
+	HandleMouse(h Host, msg tea.MouseMsg) (consumed bool)
+}

@@ -363,6 +363,10 @@ internal/tuiv2/
 - 状态：📋 规划（S9）。
 - 证伪信号：无（流程决策）。
 
+### ADR-008 扩展（S8）：MouseHandler 能力接口 + 鼠标路由
+
+- 决策（S8，issue #52）：MouseHandler 可选能力接口 + OverlayMouseHandler 可选浮层接口——MouseMsg 两级路由（栈顶 Overlay.HandleMouse 优先→栈空遍历 MouseHandler 插件），不进广播（ADR-009 规则 1 不变）。MouseHandler 实现者：chat（stream 滚轮 ScrollBy ±3）；OverlayMouseHandler 实现者：palette overlay（滚轮选项滚动 + 左键选择 + Y-2 锚定行 0）。§4.5 缺口登记：Stream 条目点击（无可点击 affordance）、输入框定位光标（需 Y→光标偏移映射）、picker 左键（Align(Center) Y 映射在 kernel 路径必错）——登记后续。
+
 ### ADR-007 内核 + 插件架构
 
 - 决策：功能即插件、机制归内核；lint 三禁（插件互不 import / kernel 不 import 插件 / kernel 无业务词）进 CI。

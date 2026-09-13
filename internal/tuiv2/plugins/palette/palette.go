@@ -112,6 +112,41 @@ func (o *overlay) HandleKey(h kernel.Host, msg tea.KeyMsg) (consumed bool) {
 	return true
 }
 
+// HandleMouse 消费面板区域鼠标事件（S8，issue #52；实现
+// kernel.OverlayMouseHandler——kernel 栈顶独占语义自动路由）：
+//   - 滚轮上/下 → selected 滚动（与 up/down 键一致，不含 backspace）
+//   - 左键点击 → 选择并执行（Y-2 锚定：面板从屏第 0 行渲染，
+//     header 行占 2 行——Y-2 即列表首行索引）
+//   - Motion/右键等丢弃
+func (o *overlay) HandleMouse(h kernel.Host, msg tea.MouseMsg) (consumed bool) {
+	matched := o.filtered()
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp:
+		if o.selected > 0 {
+			o.selected--
+		}
+		return true
+	case msg.Button == tea.MouseButtonWheelDown:
+		if o.selected < len(matched)-1 {
+			o.selected++
+		}
+		return true
+	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
+		// Y-2 = 列表首行（屏第 0 行起渲染：header 占 2 行）。
+		idx := msg.Y - 2
+		if idx >= 0 && idx < len(matched) {
+			o.selected = idx
+			h.PopOverlay()
+			if c := matched[idx]; c.Run != nil {
+				c.Run(h, nil)
+			}
+		}
+		return true
+	default:
+		return true // 模态消费：面板开启期间所有鼠标事件不穿透
+	}
+}
+
 // View 渲染面板（┌ 边框为命令面板允许的少数场景之一）。
 func (o *overlay) View(h kernel.Host, width int) string {
 	matched := o.filtered()

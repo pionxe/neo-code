@@ -46,6 +46,22 @@ func (p *Plugin) Init(ctx context.Context, h kernel.Host) {
 // Close 释放资源（当前无外部资源，保留生命周期对称性）。
 func (p *Plugin) Close(ctx context.Context) {}
 
+// HandleMouse 消费鼠标滚轮事件：滚轮上/下滚动行为流（S8，issue #52；
+// 对齐 v1 MouseWheelStepLines=3 步长）。仅消费滚轮，Motion/左键等丢弃
+// （左键点击 Stream 条目登记后续——S8 审计实例1 Q4 裁定）。
+func (p *Plugin) HandleMouse(h kernel.Host, msg tea.MouseMsg) (consumed bool) {
+	switch {
+	case msg.Type == tea.MouseWheelUp:
+		p.stream.ScrollBy(3)
+		return true
+	case msg.Type == tea.MouseWheelDown:
+		p.stream.ScrollBy(-3)
+		return true
+	default:
+		return false
+	}
+}
+
 // React 订阅广播：仅处理 Gateway 事件（对话白名单 + gateway_offline bespoke），
 // 并承接流增长的滚动复位衍生行为与用户提交记录（UserSubmitted → lastText
 // + role=user 流条目，打通 /retry——issue #25 修订 v2 审计 P1-2）。
