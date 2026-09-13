@@ -61,3 +61,10 @@ type ModeChanged struct {
 	From InputMode
 	To   InputMode
 }
+
+// GatewayRecovered 表示网关健康探针从失败恢复（health 插件边沿触发广播）：
+// sessions 插件订阅它重绑事件流（四守卫：边沿由 health 保证、空会话跳过、
+// 运行态跳过、恢复重绑跳过 SessionLoaded 广播——恢复不得清空对话流）。
+// 会话 ID 由 sessions 自读 Gateway.ActiveSess 槽，消息不携带。
+// 先例：SessionLoaded/SearchJumped（跨插件协作走具名消息，ADR-009）。
+type GatewayRecovered struct{}

@@ -3,8 +3,9 @@ package state
 import "neo-code/internal/tuiv2/gateway"
 
 // 对话类事件白名单（issue #23/#25）：只有这些事件允许经 Reduce 写
-// Stream/Runtime 槽。session_*/model_changed/health_changed 归后续插件；
-// gateway_offline 由 chat bespoke 处理（Gateway.Connected 归 health）。
+// Stream/Runtime 槽。session_*/model_changed 归对应插件、health_changed
+// 归 health 插件（S6 移交，issue #48）；
+// gateway_offline 由 chat bespoke 处理（Phase/流条目；Connected 归 health）。
 var conversationEvents = map[gateway.EventType]struct{}{
 	gateway.EventAgentChunk:            {},
 	gateway.EventAgentMessageStart:     {},
