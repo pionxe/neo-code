@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -538,4 +539,40 @@ func TestReactSessionLoadedWithoutDetailClears(t *testing.T) {
 func TestChatCloseIsSafe(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	p.Close(context.Background()) // 无外部资源，对称生命周期
+}
+
+// TestMouseHandlerWheelScroll 验证滚轮滚动（S8，issue #52）：
+// WheelUp → ScrollBy(+3) 向上滚；WheelDown → ScrollBy(-3) 向下滚。
+func TestMouseHandlerWheelScroll(t *testing.T) {
+	p, h := newTestPlugin(t)
+	// 预置：多条流条目 + AutoScroll 关 + ScrollOffset 设为 5
+	p.st.Stream = make([]state.StreamEntry, 30)
+	for i := range p.st.Stream {
+		p.st.Stream[i] = state.StreamEntry{ID: fmt.Sprintf("e%d", i), Type: "message", Content: fmt.Sprintf("line %d", i)}
+	}
+	p.st.Layout.AutoScroll = false
+	p.st.Layout.ScrollOffset = 5
+
+	// 滚轮上 → ScrollBy(+3) → offset 增加
+	msg := tea.MouseMsg{Type: tea.MouseWheelUp}
+	p.HandleMouse(h, msg)
+	if p.st.Layout.ScrollOffset != 8 {
+		t.Fatalf("wheel up offset = %d, want 8", p.st.Layout.ScrollOffset)
+	}
+	// 滚轮下 → ScrollBy(-3) → offset 回 5
+	msg = tea.MouseMsg{Type: tea.MouseWheelDown}
+	p.HandleMouse(h, msg)
+	if p.st.Layout.ScrollOffset != 5 {
+		t.Fatalf("wheel down offset = %d, want 5", p.st.Layout.ScrollOffset)
+	}
+}
+
+// TestMouseHandlerNonWheelIgnored 验证非滚轮鼠标消息不消费。
+func TestMouseHandlerNonWheelIgnored(t *testing.T) {
+	p, h := newTestPlugin(t)
+	before := p.st.Layout.ScrollOffset
+	p.HandleMouse(h, tea.MouseMsg{Type: tea.MouseMotion})
+	if p.st.Layout.ScrollOffset != before {
+		t.Fatal("motion should be ignored")
+	}
 }
