@@ -206,8 +206,11 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	case gateway.GatewayEvent:
 		switch m.Type {
 		case gateway.EventHealthChanged:
-			p.st.Gateway.Connected = m.Payload["connected"] == true
+			// 收敛到 ApplyGatewayForEvent（S6 审计实例1 P2-a：键集对齐
+			// payloadBool 的 connected/ok，避免直取分叉）。
+			state.ApplyGatewayForEvent(p.st, m)
 		case gateway.EventGatewayOffline:
+			// 直接槽写（ApplyGatewayForEvent 不加分支——S6 审计实例2 注记）。
 			p.st.Gateway.Connected = false
 		}
 	}
