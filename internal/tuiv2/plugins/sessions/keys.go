@@ -46,6 +46,19 @@ func (o *pickerOverlay) View(h kernel.Host, width int) string {
 	return o.p.picker.View()
 }
 
+// HandleMouse 委托 picker.Update 处理滚轮滚动（仅 WheelUp/WheelDown；
+// Left/Motion 吞掉——picker Align(Center) 垂直居中 Y 映射在 kernel
+// 路径必错，S8 审计实例2 实测确认）。
+func (o *pickerOverlay) HandleMouse(h kernel.Host, msg tea.MouseMsg) (consumed bool) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		o.p.picker.Update(msg)
+		return true
+	default:
+		return true // 模态消费：面板开启期间所有鼠标事件不穿透
+	}
+}
+
 // openPicker 压入会话选择器浮层（Space s / /session 入口）。
 func (p *Plugin) openPicker(h kernel.Host) {
 	h.PushOverlay(&pickerOverlay{p: p})
