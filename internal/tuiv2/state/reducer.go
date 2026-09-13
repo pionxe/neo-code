@@ -24,15 +24,15 @@ func Reduce(current *ViewState, event gateway.GatewayEvent) *ViewState {
 // 其余槽迁移完全一致（审计 P2-a：逐槽一致性由表驱动测试钉死）。
 func reduceCore(current *ViewState, event gateway.GatewayEvent, applyInput bool) *ViewState {
 	switch event.Type {
-	case gateway.EventAgentChunk, gateway.EventAssistantDelta:
+	case gateway.EventAgentChunk:
 		return reduceAgentChunk(current, event)
 	case gateway.EventAgentMessageStart:
 		return appendStream(current, streamEntry(event, "message", payloadString(event.Payload, "text", "content", "message")))
 	case gateway.EventAgentMessageEnd:
 		return reduceAgentMessageEnd(current, event)
-	case gateway.EventToolStart, gateway.EventToolStarted:
+	case gateway.EventToolStart:
 		return reduceToolStart(current, event)
-	case gateway.EventToolEnd, gateway.EventToolFinished:
+	case gateway.EventToolResult:
 		return reduceToolEnd(current, event)
 	case gateway.EventToolOutput:
 		return appendStream(current, streamEntry(event, "tool_output", payloadString(event.Payload, "text", "output", "content")))
@@ -44,7 +44,7 @@ func reduceCore(current *ViewState, event gateway.GatewayEvent, applyInput bool)
 		}
 		current.Runtime.Phase = RuntimePhaseRunning
 		return appendStream(current, streamEntry(event, "status", payloadString(event.Payload, "message", "decision", "status")))
-	case gateway.EventAskUserQuestion, gateway.EventUserQuestionRequested:
+	case gateway.EventUserQuestionRequested:
 		return reduceAskUserQuestion(current, event, applyInput)
 	case gateway.EventUserQuestionAnswered:
 		if applyInput {
@@ -65,7 +65,7 @@ func reduceCore(current *ViewState, event gateway.GatewayEvent, applyInput bool)
 	case gateway.EventRunError, gateway.EventError:
 		current.Runtime.Phase = RuntimePhaseError
 		return appendStream(current, streamEntry(event, "error", payloadString(event.Payload, "message", "error", "text")))
-	case gateway.EventRunCancelled:
+	case gateway.EventRunCanceled:
 		if applyInput {
 			ApplyInputForEvent(current, event)
 		}
