@@ -22,6 +22,11 @@ It is intentionally single-version and fail-fast by design.
 | `gateway.cancel` | `protocol.CancelParams` | frame ack | Cancels run by run/session binding |
 | `gateway.listSessions` | none | `[]gateway.SessionSummary` | Session list |
 | `gateway.loadSession` | `protocol.LoadSessionParams` | `gateway.Session` | Full session snapshot |
+| `gateway.createSession` | `protocol.CreateSessionParams` (optional) | frame ack with created session id | Session creation (handler registered, see `internal/gateway/registry.go`) |
+| `gateway.userQuestionAnswer` | `protocol.UserQuestionAnswerParams` | frame ack | ask_user answer submit |
+| `gateway.listModels` | `protocol.ListModelsParams` (optional) | frame result with model catalog | Model catalog for pickers |
+| `gateway.setSessionModel` | `protocol.SetSessionModelParams` | frame ack | Switch session model |
+| `gateway.getSessionModel` | session id params | frame result with current model | Current model truth |
 | `gateway.activateSessionSkill` | `protocol.ActivateSessionSkillParams` | frame ack | Activate skill in session |
 | `gateway.deactivateSessionSkill` | `protocol.DeactivateSessionSkillParams` | frame ack | Deactivate skill in session |
 | `gateway.listSessionSkills` | `protocol.ListSessionSkillsParams` | `[]gateway.SessionSkillState` | Active skill states |
