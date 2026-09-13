@@ -68,7 +68,7 @@ func parseStartupConfig(args []string, stderr io.Writer) (tuiv2.StartupConfig, e
 	flags.StringVar(&cfg.Backend, "backend", cfg.Backend, "gateway backend: fake or gateway")
 	flags.StringVar(&cfg.Scenario, "scenario", cfg.Scenario, "fake gateway scenario")
 	flags.BoolVar(&cfg.Debug, "debug", false, "show TUI v2 debug information")
-	flags.StringVar(&gatewayAddress, "gateway-address", "", "gateway listen address (empty = auto resolve + requires running gateway)")
+	flags.StringVar(&gatewayAddress, "gateway-address", "", "gateway IPC socket path (empty = default ~/.neocode/run/gateway.sock; v1 RPC 客户端为 IPC-only 传输)")
 	flags.StringVar(&gatewayTokenFile, "gateway-token-file", "", "gateway auth token file (empty = default location)")
 
 	if err := flags.Parse(args); err != nil {
