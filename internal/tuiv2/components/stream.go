@@ -7,13 +7,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"neo-code/internal/tuiv2/layout"
 	"neo-code/internal/tuiv2/state"
 	"neo-code/internal/tuiv2/theme"
 )
 
 const (
-	streamHeaderRows      = 1
-	streamReservedRows    = 7
 	streamTimeGap         = 5 * time.Minute
 	streamVirtualOverscan = 20
 )
@@ -129,25 +128,18 @@ func (c *AgentStream) headerText() string {
 }
 
 // streamWidth 根据布局断点计算 Agent Stream 可用宽度。
+// 断点逻辑唯一出处=layout.Compute（ADR-003，S7 收编）：
+// 旧 width>=100 && ShowInspector 收窄分支不激活（ShowInspector 全仓
+// 零写者=恒 false，分支为死代码）——宽屏侧栏与横向拼接登记 S7b。
 func (c *AgentStream) streamWidth() int {
-	width := c.state.Layout.Width
-	if width >= 100 && c.state.Layout.ShowInspector {
-		return width - c.state.Layout.InspectorWidth - 3
-	}
-	return width
+	return layout.Compute(c.state.Layout.Width, c.state.Layout.Height).StreamWidth
 }
 
 // visibleLineCount 根据终端高度估算可展示的流行数。
+// 断点逻辑唯一出处=layout.Compute（S7 收编）：Height<=0→8 哨兵、
+// 下限 4 语义逐字保留；保留行数/标题行数常量随迁 layout 包。
 func (c *AgentStream) visibleLineCount() int {
-	height := c.state.Layout.Height
-	if height <= 0 {
-		return 8
-	}
-	limit := height - streamReservedRows - streamHeaderRows
-	if limit < 4 {
-		return 4
-	}
-	return limit
+	return layout.Compute(c.state.Layout.Width, c.state.Layout.Height).VisibleLines
 }
 
 // halfPageSize 返回半页滚动所需的行数，至少为 1。
