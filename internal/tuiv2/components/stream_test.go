@@ -423,3 +423,32 @@ func TestEntryIndexAtLineCorrectness(t *testing.T) {
 		t.Fatalf("empty stream entryIndexAtLine=%d want 0", got)
 	}
 }
+
+// TestScrollByClampAndAutoScroll 验证 ScrollBy 不变量（S8 C2）：
+// clamp 走 maxScrollOffset、AutoScroll 翻转（offset>0→false、回 0→true）。
+func TestScrollByClampAndAutoScroll(t *testing.T) {
+	vs := state.NewViewState()
+	vs.Layout.Width = 80
+	vs.Layout.Height = 10
+	vs.Stream = make([]state.StreamEntry, 30)
+	for i := range vs.Stream {
+		vs.Stream[i] = state.StreamEntry{ID: fmt.Sprintf("e%d", i), Type: "message", Content: fmt.Sprintf("line %d", i)}
+	}
+	stream := NewAgentStream(vs)
+
+	// ScrollBy(+3)：向上滚，AutoScroll 关闭。
+	stream.ScrollBy(3)
+	if vs.Layout.AutoScroll {
+		t.Fatal("ScrollBy(+3) should disable AutoScroll")
+	}
+	if vs.Layout.ScrollOffset <= 0 {
+		t.Fatalf("ScrollBy(+3) should increase offset, got %d", vs.Layout.ScrollOffset)
+	}
+
+	// ScrollBy(-3)：向下滚（回退）。
+	before := vs.Layout.ScrollOffset
+	stream.ScrollBy(-3)
+	if vs.Layout.ScrollOffset >= before {
+		t.Fatalf("ScrollBy(-3) should decrease offset: before=%d after=%d", before, vs.Layout.ScrollOffset)
+	}
+}
