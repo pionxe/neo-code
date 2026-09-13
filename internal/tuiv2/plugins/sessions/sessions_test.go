@@ -4,10 +4,12 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/tuiv2/components"
 	"neo-code/internal/tuiv2/gateway"
 	"neo-code/internal/tuiv2/kernel"
+	"neo-code/internal/tuiv2/plugins/health"
 	"neo-code/internal/tuiv2/state"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -281,10 +283,11 @@ type fakeClient struct {
 	detail         *gateway.SessionDetail
 	loadErr        error
 	subscribeErr   error
+	healthErr      error // Health 探针注入错误（S6 断连恢复测试）
 }
 
 func (c *fakeClient) Health(ctx context.Context) (*gateway.HealthResult, error) {
-	return nil, errFakeUnsupported
+	return nil, c.healthErr
 }
 func (c *fakeClient) ListSessions(ctx context.Context) ([]gateway.SessionSummary, error) {
 	return nil, errFakeUnsupported
@@ -499,5 +502,82 @@ func TestPickerEscWithPendingComponentCmd(t *testing.T) {
 	consumed := o.HandleKey(h, tea.KeyMsg{Type: tea.KeyEsc})
 	if !consumed {
 		t.Fatal("esc consumed")
+	}
+}
+
+// TestGatewayRecoveredTriggersRebind 断连恢复全链路集成（S6 C5，issue #48）：
+// health 插件探针 fail→success 边沿广播 GatewayRecovered → sessions 消费
+// 并重绑活跃会话事件流（SubscribeEvents 被调用、BindEventStream 收到新
+// 通道、不广播 SessionLoaded——守卫④）。运行态/空会话守卫同测。
+func TestGatewayRecoveredTriggersRebind(t *testing.T) {
+	client := &fakeClient{}
+	sessionsPlugin := New()
+	healthPlugin := health.New(health.Config{
+		HealthyInterval: 10 * time.Millisecond,
+		InitialBackoff:  10 * time.Millisecond,
+		MaxBackoff:      50 * time.Millisecond,
+		ProbeTimeout:    5 * time.Millisecond,
+	})
+
+	// 共享 recordingHost：health 探针结果手动驱动，广播路由回 sessions。
+	h := &recordingHost{st: state.NewViewState(), client: client}
+	sessionsPlugin.Init(context.Background(), h)
+	healthPlugin.Init(context.Background(), h)
+
+	// 预置活跃会话（守卫②需要非空）。
+	h.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "s1", Title: "demo"}
+	before := client.subscribeCalls
+
+	// 探针失败（healthErr 注入）：health 不广播恢复（边沿①），sessions 不重绑。
+	client.healthErr = errFakeUnsupported
+	_, healthErr := client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	for _, b := range h.broadcasts {
+		if _, ok := b.(state.GatewayRecovered); ok {
+			t.Fatal("failure edge must not broadcast GatewayRecovered")
+		}
+	}
+
+	// 探针成功（healthErr 清除）：恢复边沿 → 广播 → 手动路由给 sessions → 重绑。
+	client.healthErr = nil
+	h.react = func(msg tea.Msg) { sessionsPlugin.React(h, msg) } // 模拟内核分发
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	// 恢复广播经 react 回调自动路由（上面的 h.react）：重绑必须已发生。
+	if client.subscribeCalls != before+1 {
+		t.Fatalf("subscribeCalls = %d, want +%d", client.subscribeCalls, 1)
+	}
+	if client.subscribeCalls != before+1 {
+		t.Fatalf("subscribeCalls = %d, want +%d", client.subscribeCalls, 1)
+	}
+	if h.bindCount != 1 {
+		t.Fatalf("bindCount = %d, want 1", h.bindCount)
+	}
+	// 守卫④：重绑不得广播 SessionLoaded（恢复不得清空对话流）。
+	for _, b := range h.broadcasts {
+		if _, ok := b.(state.SessionLoaded); ok {
+			t.Fatal("recovery rebind must not broadcast SessionLoaded")
+		}
+	}
+
+	// 守卫②：无活跃会话 → 重绑跳过。
+	h.st.Gateway.ActiveSess = nil
+	h.broadcasts = nil
+	client.subscribeCalls = 0
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr}) // 失败→成功再次边沿
+	if client.subscribeCalls != 0 {
+		t.Fatal("nil ActiveSess must skip rebind")
+	}
+
+	// 守卫③：运行态跳过。
+	h.st.Gateway.ActiveSess = &gateway.SessionSummary{ID: "s1"}
+	h.st.Runtime.Phase = state.RuntimePhaseRunning
+	h.broadcasts = nil
+	client.subscribeCalls = 0
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	if client.subscribeCalls != 0 {
+		t.Fatal("running phase must skip rebind")
 	}
 }
