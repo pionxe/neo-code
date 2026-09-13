@@ -338,8 +338,8 @@ internal/tuiv2/
 ### ADR-003 布局纯函数包
 
 - 决策：布局计算唯一出处 = `layout.Compute` 纯函数；断点逻辑不得散落组件。
-- 状态：✅ 落地（S7，issue #50）。layout 包断点常量具名（MinWidth 20/MinHeight 5/DefaultVisibleLines 8/MinVisibleLines 4/StreamReservedRows 7/StreamHeaderRows 1）；stream 的 streamWidth/visibleLineCount 收编（golden 矩阵零 diff 等价迁移）；statusbar/prompt 切 Render(width) 参数真相源；最小尺寸保护=MinSizeBreached + AmbientStatus 提示段（禁 clamp-up/禁拒渲染）。
-- 已知限制：Inspector 宽屏侧栏维持隐藏——compose 无横向拼接机制，激活产生形变；横向拼接+Inspector 恢复为独立后续项（S7b，含 UI/UX 214-218 三档定义核对）。0x0 截断防线失效与纵向溢出登记已知限制。
+- 状态：✅ 落地（S7，issue #50）。layout 包断点常量具名（MinWidth 20/MinHeight 5/DefaultVisibleLines 8/MinVisibleLines 4/StreamReservedRows 7/StreamHeaderRows 1）；stream 的 streamWidth/visibleLineCount 收编（golden 矩阵零 diff 等价迁移）；statusbar/prompt 切 Render(width) 参数真相源（stream View(width) 穿参 Compute——chat 插件透传，宽参与 Layout 槽同源）；最小尺寸保护=MinSizeBreached + AmbientStatus 提示段（禁 clamp-up/禁拒渲染）。
+- 已知限制：Inspector 宽屏侧栏维持隐藏——compose 无横向拼接机制，激活产生形变；横向拼接+Inspector 恢复为独立后续项（S7b，含 UI/UX 214-218 三档定义核对）。0x0 截断防线失效与纵向溢出登记已知限制。宽度维 MinSizeBreached 提示段在窄终端渲染时会被行截断裁剪（呈现限制，登记）。
 - 证伪信号：组件内再现断点判断 → 收编回 layout。
 
 ### ADR-004 RealClient = 薄翻译层
