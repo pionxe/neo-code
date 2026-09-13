@@ -1362,3 +1362,18 @@ func TestNewRealClientRejectsInvalidAddress(t *testing.T) {
 		t.Fatal("missing HOME should fail construction (default address resolve)")
 	}
 }
+
+// TestTrySendAfterCloseNoPanic 回归测试（PR #47 审计 P0-2）：retire 与
+// closeCh 完成后进入的 trySend 必须安全返回 false——done 守卫在 sendMu
+// 内拦截"关闭后进入"，select{send,<-done} 双就绪随机选中 send 的
+// panic 路径被前置守卫封死。循环放大以覆盖调度随机性。
+func TestTrySendAfterCloseNoPanic(t *testing.T) {
+	s := &realSubscription{ch: make(chan GatewayEvent, 1), done: make(chan struct{})}
+	s.retire()
+	s.closeCh()
+	for i := 0; i < 500; i++ {
+		if s.trySend(GatewayEvent{Type: EventAgentChunk}) {
+			t.Fatal("trySend after close must return false")
+		}
+	}
+}

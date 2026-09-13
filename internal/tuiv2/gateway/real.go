@@ -101,12 +101,18 @@ func (s *realSubscription) closeCh() {
 }
 
 // trySend 尝试投递事件：订阅已 retire 时返回 false（事件丢弃）。
-// 持 sendMu 阻塞发送，done 回退保证 retire 先关 done——阻塞中的
-// trySend 必经回退唤醒，因此通道关闭时不可能有并发发送
-// （无 send-on-closed 竞态）。
+// sendMu 内先做 done 守卫再发送——done 已关闭⇔通道已关闭（closeCh
+// 被 sendMu 挡住），守卫直接返回；done 未关闭⇒closeCh 被挡在 sendMu
+// 外⇒发送安全（杜绝"关闭后进入"的 send-on-closed 竞态——PR #47
+// 审计 P0-2 实测 500 次 234 次 panic）。
 func (s *realSubscription) trySend(event GatewayEvent) bool {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
+	select {
+	case <-s.done:
+		return false
+	default:
+	}
 	select {
 	case s.ch <- event:
 		return true
