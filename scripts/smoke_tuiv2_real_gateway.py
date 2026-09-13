@@ -8,13 +8,19 @@ import os, pty, re, select, signal, subprocess, sys, tempfile, time
 
 ROOT = "/home/pheno/Projects/neo-code"
 WORK = tempfile.mkdtemp(prefix="s5-smoke-")
-os.environ["HOME"] = WORK  # 网关与客户端共享 token 存储
+orig_home = os.environ.get("HOME", "")
+# 网关与客户端运行时共享临时 HOME（token 存储隔离）；
+# go build 仍用原 HOME（模块缓存离线可用，构建与运行环境解耦）。
+os.environ["HOME"] = WORK
 
 print(f"[smoke] workdir: {WORK}")
 
 # 1) 构建两个二进制
+build_env = os.environ.copy()
+build_env["HOME"] = orig_home
+os.environ["HOME"] = WORK  # 运行时 HOME 恢复为临时目录（token 存储隔离）
 for target, out in [("neocode-gateway", f"{WORK}/neocode-gateway"), ("neocode-tuiv2", f"{WORK}/neocode-tuiv2")]:
-    r = subprocess.run(["go", "build", "-mod=mod", "-o", out, f"./cmd/{target}"], cwd=ROOT, capture_output=True)
+    r = subprocess.run(["go", "build", "-mod=mod", "-o", out, f"./cmd/{target}"], cwd=ROOT, capture_output=True, env=build_env)
     if r.returncode != 0:
         print(f"FAIL build {target}: {r.stderr.decode()[:500]}")
         sys.exit(1)
