@@ -72,8 +72,9 @@ func (p *Plugin) runSession(h kernel.Host, args []string) {
 
 // runDelete 删除当前会话：走内核确认服务；确认后经 SessionDeleted 广播
 // 由 React 复用 reducer 既有分支迁移槽（单一出处）。
-// 已知差距：本地合成删除在真实后端重启后会话复活（契约无 deleteSession
-// RPC，ADR-002 ErrUnsupported 语义；后端补 RPC 后接入）。
+// 已知差距：当前为本地合成删除（真实网关已有 gateway.deleteSession RPC，
+// 但 tuiv2 Client 暂未暴露对应方法，S5 RealClient 映射排期接入），
+// 合成事件不落服务端——真实后端重启后会话复活。
 func (p *Plugin) runDelete(h kernel.Host, args []string) {
 	id := p.activeSessionID()
 	if id == "" {

@@ -82,10 +82,10 @@ func (p *Plugin) runCancel(h kernel.Host, args []string) {
 	})
 }
 
-// runCompact 占位：Gateway 契约当前无 compact RPC（ADR-002 ErrUnsupported
-// 范畴），S3 契约收敛后接入。
+// runCompact 占位：真实网关已有 gateway.compact RPC（契约矩阵已列），
+// 但 tuiv2 Client 契约暂未暴露对应方法（S5 RealClient 映射排期接入）。
 func (p *Plugin) runCompact(h kernel.Host, args []string) {
-	h.Notify("compact 尚未接入后端（S3 契约收敛后可用）")
+	h.Notify("compact 尚未接入后端（S5 RealClient 后可用）")
 }
 
 // runRetry 重试最近一次输入。lastText 由用户提交路径填充——prompt 插件
