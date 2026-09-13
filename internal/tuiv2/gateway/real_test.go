@@ -139,9 +139,6 @@ func TestRealClientUnwiredMethodsStayExplicit(t *testing.T) {
 	if _, err := c.SubscribeEvents(ctx, "s1"); !errors.Is(err, errRealNotImplemented) {
 		t.Fatalf("SubscribeEvents err = %v", err)
 	}
-	if _, err := c.GetModel(ctx, "s1"); !errors.Is(err, errRealNotImplemented) {
-		t.Fatalf("GetModel err = %v", err)
-	}
 }
 
 // TestRealSubscriptionCloseOnce 验证订阅条目 close-once：三关闭路径
@@ -440,5 +437,91 @@ func TestAnswerUserQuestionBackfillAndMapping(t *testing.T) {
 	})
 	if params.RequestID != "quest-pending" || params.Status != "answered" || params.Message != "my answer" {
 		t.Fatalf("params = %+v", params)
+	}
+}
+
+// TestListModelsDerivesCurrent 验证 listModels：Current 由
+// selected_model_id 派生、空 ID 跳过、空名回退 ID（S5 审计裁定）。
+func TestListModelsDerivesCurrent(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	mock.mu.Lock()
+	mock.results["gateway.listModels"] = func() {
+		last := mock.calls[len(mock.calls)-1]
+		frame := last.result.(*struct {
+			Payload struct {
+				Models          []realModelEntry `json:"models"`
+				SelectedModelID string           `json:"selected_model_id"`
+			} `json:"payload"`
+		})
+		frame.Payload.Models = []realModelEntry{
+			{ID: " m1 ", Name: "", Provider: "prov-a"},
+			{ID: "", Name: "ghost"},
+			{ID: "m2", Name: "Model Two", Provider: "prov-b"},
+		}
+		frame.Payload.SelectedModelID = "m2"
+	}
+	mock.mu.Unlock()
+
+	models, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("list models: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("models = %+v（空 ID 条目应跳过）", models)
+	}
+	if models[0].ID != "m1" || models[0].Name != "m1" || models[0].Current {
+		t.Fatalf("model0 = %+v", models[0])
+	}
+	if !models[1].Current || models[1].Name != "Model Two" {
+		t.Fatalf("model1 = %+v", models[1])
+	}
+}
+
+// TestSetModelForwardsParams 验证 setSessionModel 参数透传。
+func TestSetModelForwardsParams(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	if err := c.SetModel(context.Background(), "s1", "m2"); err != nil {
+		t.Fatalf("set model: %v", err)
+	}
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.calls) != 1 || mock.calls[0].method != "gateway.setSessionModel" {
+		t.Fatalf("calls = %+v", mock.calls)
+	}
+}
+
+// TestGetModelReadsPayloadModelID 验证 getSessionModel：payload.model_id
+// 为权威真值（SessionModelResult）。
+func TestGetModelReadsPayloadModelID(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	mock.mu.Lock()
+	mock.results["gateway.getSessionModel"] = func() {
+		last := mock.calls[len(mock.calls)-1]
+		last.result.(*struct {
+			Payload struct {
+				ModelID string `json:"model_id"`
+			} `json:"payload"`
+		}).Payload.ModelID = " m-final "
+	}
+	mock.mu.Unlock()
+
+	model, err := c.GetModel(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("get model: %v", err)
+	}
+	if model != "m-final" {
+		t.Fatalf("model = %q", model)
 	}
 }

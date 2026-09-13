@@ -376,17 +376,75 @@ func (c *RealClient) AnswerUserQuestion(ctx context.Context, answer UserQuestion
 	return c.rpc.Call(ctx, "gateway.userQuestionAnswer", params, &frame)
 }
 
-// ListModels 对应 gateway.listModels（S5 分阶段实装）。
+// realModelEntry 是 gateway.listModels 结果条目的本地解码结构（wire 契约）。
+// CapabilityHints 是结构化对象而 tuiv2 ModelInfo.Capabilities 是字符串切片，
+// 词汇不一致且模型选择器未消费——S5 不映射（如实留空，S7/S10 按需扩展）。
+type realModelEntry struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+}
+
+// ListModels 对应 gateway.listModels：模型目录 + 当前选中模型。
+// Current 由 selected_model_id 派生（S5 审计裁定）；空 ID 条目跳过、
+// 空名回退 ID（v1 先例）。
 func (c *RealClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	return nil, errRealNotImplemented
+	var frame struct {
+		Payload struct {
+			Models          []realModelEntry `json:"models"`
+			SelectedModelID string           `json:"selected_model_id"`
+		} `json:"payload"`
+	}
+	if err := c.rpc.Call(ctx, "gateway.listModels", nil, &frame); err != nil {
+		return nil, err
+	}
+	selected := strings.TrimSpace(frame.Payload.SelectedModelID)
+	out := make([]ModelInfo, 0, len(frame.Payload.Models))
+	for _, item := range frame.Payload.Models {
+		modelID := strings.TrimSpace(item.ID)
+		if modelID == "" {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = modelID
+		}
+		out = append(out, ModelInfo{
+			ID:       modelID,
+			Name:     name,
+			Provider: strings.TrimSpace(item.Provider),
+			Current:  selected != "" && modelID == selected,
+		})
+	}
+	return out, nil
 }
 
-// SetModel 对应 gateway.setSessionModel（S5 分阶段实装）。
+// SetModel 对应 gateway.setSessionModel：切换会话模型。
 func (c *RealClient) SetModel(ctx context.Context, sessionID string, modelID string) error {
-	return errRealNotImplemented
+	params := struct {
+		SessionID string `json:"session_id"`
+		ModelID   string `json:"model_id"`
+	}{
+		SessionID: strings.TrimSpace(sessionID),
+		ModelID:   strings.TrimSpace(modelID),
+	}
+	var frame struct{}
+	return c.rpc.Call(ctx, "gateway.setSessionModel", params, &frame)
 }
 
-// GetModel 对应 gateway.getSessionModel（S5 分阶段实装）。
+// GetModel 对应 gateway.getSessionModel：查询会话当前模型
+// （payload 为 SessionModelResult，model_id 为权威真值）。
 func (c *RealClient) GetModel(ctx context.Context, sessionID string) (string, error) {
-	return "", errRealNotImplemented
+	params := struct {
+		SessionID string `json:"session_id"`
+	}{SessionID: strings.TrimSpace(sessionID)}
+	var frame struct {
+		Payload struct {
+			ModelID string `json:"model_id"`
+		} `json:"payload"`
+	}
+	if err := c.rpc.Call(ctx, "gateway.getSessionModel", params, &frame); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(frame.Payload.ModelID), nil
 }
