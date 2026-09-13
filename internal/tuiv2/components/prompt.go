@@ -53,11 +53,10 @@ type PromptCancelMsg struct {
 type CursorBlinkMsg struct{}
 
 // CommandPrompt 渲染命令、消息输入、权限确认和 ask_user 内联交互区域。
+// 非 tea.Model：内核路径下仅为 prompt 插件的渲染委托（S7 真相源统一）。
 type CommandPrompt struct {
 	state *state.ViewState
 }
-
-var _ tea.Model = (*CommandPrompt)(nil)
 
 // NewCommandPrompt 创建命令输入组件。
 func NewCommandPrompt(viewState *state.ViewState) *CommandPrompt {
@@ -70,40 +69,42 @@ func (c *CommandPrompt) Init() tea.Cmd {
 }
 
 // Update 根据当前 InputState.Mode 路由按键，业务动作以 tea.Msg 形式返回给 App。
-func (c *CommandPrompt) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (c *CommandPrompt) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case CursorBlinkMsg:
 		c.state.Input.CursorVisible = !c.state.Input.CursorVisible
-		return c, cursorBlinkCmd()
+		return cursorBlinkCmd()
 	case tea.KeyMsg:
 		switch c.state.Input.Mode {
 		case state.InputStateModePermissionResponse:
-			return c, c.handlePermissionKey(msg)
+			return c.handlePermissionKey(msg)
 		case state.InputStateModeQuestionAnswer:
-			return c, c.handleQuestionKey(msg)
+			return c.handleQuestionKey(msg)
 		default:
-			return c, c.handleInputKey(msg)
+			return c.handleInputKey(msg)
 		}
 	default:
-		return c, nil
+		return nil
 	}
 }
 
 // View 根据输入模式渲染底部 Prompt，保持无边框、内联和定宽安全。
-func (c *CommandPrompt) View() string {
+// width 为唯一宽度真相源（prompt 插件自 kernel Render 参数透传——
+// S7 真相源统一；width<=0 时 80 回退仅防御首帧零值）。
+func (c *CommandPrompt) View(width int) string {
 	lines := []string{theme.MutedStyle().Render("Command Prompt")}
 	switch c.state.Input.Mode {
 	case state.InputStateModePermissionResponse:
-		lines = append(lines, c.permissionLines()...)
+		lines = append(lines, c.permissionLines(width)...)
 	case state.InputStateModeQuestionAnswer:
-		lines = append(lines, c.questionLines()...)
+		lines = append(lines, c.questionLines(width)...)
 	default:
 		lines = append(lines, c.messageLines()...)
 	}
-	lines = append(lines, c.modeLine())
+	lines = append(lines, c.modeLine(width))
 	content := strings.Join(lines, "\n")
-	if c.state.Layout.Width > 0 {
-		return fitBlock(content, c.state.Layout.Width, true)
+	if width > 0 {
+		return fitBlock(content, width, true)
 	}
 	return content
 }
@@ -274,7 +275,7 @@ func (c *CommandPrompt) messageLines() []string {
 }
 
 // permissionLines 渲染权限确认的提示、输入和快捷操作栏。
-func (c *CommandPrompt) permissionLines() []string {
+func (c *CommandPrompt) permissionLines(width int) []string {
 	prompt := c.state.Input.Prompt
 	if prompt == "" {
 		prompt = "permission requested"
@@ -293,7 +294,7 @@ func (c *CommandPrompt) permissionLines() []string {
 }
 
 // questionLines 渲染 ask_user 问题、输入框、选项和快捷操作栏。
-func (c *CommandPrompt) questionLines() []string {
+func (c *CommandPrompt) questionLines(width int) []string {
 	prompt := c.state.Input.Prompt
 	if prompt == "" {
 		prompt = "question"
@@ -304,7 +305,7 @@ func (c *CommandPrompt) questionLines() []string {
 	}
 	if len(c.state.Input.Options) > 0 {
 		lines = append(lines, "")
-		lines = append(lines, c.optionLines()...)
+		lines = append(lines, c.optionLines(width)...)
 	}
 	lines = append(lines, c.renderQuestionHint())
 	return lines
@@ -345,8 +346,8 @@ func (c *CommandPrompt) renderShortcutBar(items []shortcutItem) string {
 }
 
 // optionLines 渲染 ask_user 选项，并让长文本换行后对齐到选项文本起始处。
-func (c *CommandPrompt) optionLines() []string {
-	width := c.contentWidth()
+func (c *CommandPrompt) optionLines(width int) []string {
+	width = c.contentWidth(width)
 	lines := make([]string, 0, len(c.state.Input.Options))
 	for index, option := range c.state.Input.Options {
 		number := strconv.Itoa(index + 1)
@@ -385,26 +386,27 @@ func (c *CommandPrompt) renderQuestionHint() string {
 // 左侧模式指示按当前模式着色：input=BaseStyle(FG)、normal=SubtleStyle、
 // leader=AccentStyle 加粗（不加闪烁，加粗已足够区分）。右侧会话与模型信息
 // 始终用 SubtleStyle。
-func (c *CommandPrompt) modeLine() string {
-	return c.renderModeLine()
+func (c *CommandPrompt) modeLine(width int) string {
+	return c.renderModeLine(width)
 }
 
-// ModeLine 导出 modeLine 渲染，供 App 在 Ex/Search overlay 时复用状态行。
-func (c *CommandPrompt) ModeLine() string {
-	return c.renderModeLine()
+// ModeLine 导出 modeLine 渲染，供 Ex/Search overlay 复用状态行
+// （S7 真相源统一：宽度真值由调用方传入，overlay 侧传其可用宽度）。
+func (c *CommandPrompt) ModeLine(width int) string {
+	return c.renderModeLine(width)
 }
 
 // renderModeLine 是 modeLine 的实际实现，供 modeLine 与 ModeLine 共用。
-func (c *CommandPrompt) renderModeLine() string {
+func (c *CommandPrompt) renderModeLine(width int) string {
 	leftText := fmt.Sprintf("[%s]", inputModeName(c.state.Mode))
 	rightText := strings.TrimSpace(sessionTitle(c.state) + "   " + stringOrDash(c.state.Gateway.ActiveModel))
 	leftStyled := modeIndicatorStyle(c.state.Mode).Render(leftText)
 	rightStyled := theme.SubtleStyle().Render(rightText)
-	width := c.contentWidth()
-	if width <= 0 {
+	avail := c.contentWidth(width)
+	if avail <= 0 {
 		return leftStyled + "   " + rightStyled
 	}
-	gap := width - theme.DisplayWidth(leftText) - theme.DisplayWidth(rightText)
+	gap := avail - theme.DisplayWidth(leftText) - theme.DisplayWidth(rightText)
 	if gap < 1 {
 		return leftStyled + " " + rightStyled
 	}
@@ -549,11 +551,12 @@ func (c *CommandPrompt) setText(text string) {
 }
 
 // contentWidth 返回 Prompt 可用宽度，减一以避免终端自动换行。
-func (c *CommandPrompt) contentWidth() int {
-	if c.state.Layout.Width <= 0 {
+// 宽度真相源=Render 参数（S7 统一）；width<=0 时 80 回退仅防御首帧零值。
+func (c *CommandPrompt) contentWidth(width int) int {
+	if width <= 0 {
 		return 80
 	}
-	return c.state.Layout.Width - 1
+	return width - 1
 }
 
 // cursorBlinkCmd 创建下一次光标闪烁消息。

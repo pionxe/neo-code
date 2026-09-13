@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"neo-code/internal/tuiv2/state"
 	"neo-code/internal/tuiv2/theme"
 )
@@ -14,29 +12,21 @@ import (
 const surfaceName = "ghost-console"
 
 // AmbientStatus 渲染连接状态、会话名、模型名、token 用量和运行态摘要。
+// 非 tea.Model：内核路径下仅为 statusbar 插件的渲染委托（S7 真相源
+// 统一——宽度来自 Render 参数，与 kernel.go 传参同源，修首帧错位）。
 type AmbientStatus struct {
 	state *state.ViewState
 }
-
-var _ tea.Model = (*AmbientStatus)(nil)
 
 // NewAmbientStatus 创建顶部环境状态组件。
 func NewAmbientStatus(viewState *state.ViewState) *AmbientStatus {
 	return &AmbientStatus{state: viewState}
 }
 
-// Init 不启动额外命令，组件只读取共享 ViewState。
-func (c *AmbientStatus) Init() tea.Cmd {
-	return nil
-}
-
-// Update 当前不维护组件私有业务状态，只保留 tea.Model 契约。
-func (c *AmbientStatus) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return c, nil
-}
-
 // View 渲染单行 Ambient Status，不使用边框或药丸标签。
-func (c *AmbientStatus) View() string {
+// width 为唯一宽度真相源（statusbar 插件自 kernel Render 参数透传——
+// S7 真相源统一，消除 Layout.Width 首帧零值错位）。
+func (c *AmbientStatus) View(width int) string {
 	parts := []string{
 		theme.AccentStyle().Render("NEOCODE"),
 		c.phase(),
@@ -59,8 +49,8 @@ func (c *AmbientStatus) View() string {
 		parts = append(parts, theme.AccentStyle().Render(c.state.Notify.Text))
 	}
 	line := strings.Join(parts, "   ")
-	if c.state.Layout.Width > 0 {
-		return fitBlock(line, c.state.Layout.Width, true)
+	if width > 0 {
+		return fitBlock(line, width, true)
 	}
 	return line
 }

@@ -72,7 +72,7 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 		h.Notify("已取消当前输入")
 	case components.CursorBlinkMsg:
 		// 光标闪烁续订：委托组件翻转可见性并取回下一条续订命令。
-		if _, cmd := p.prompt.Update(m); cmd != nil {
+		if cmd := p.prompt.Update(m); cmd != nil {
 			h.GoCmd(cmd)
 		}
 	}
@@ -215,10 +215,10 @@ func errorEvent(err error) gateway.GatewayEvent {
 func (p *Plugin) Region() kernel.RegionID { return kernel.RegionPrompt }
 
 // Render 委托 CommandPrompt 渲染（组件按 Input.Mode 呈现消息/权限/问答
-// 三态视图与模式指示条；宽度契约与 chat 一致：组件读 Layout.Width）。
+// 三态视图与模式指示条；宽度真相源=Render 参数（S7 统一，issue #50）。
 func (p *Plugin) Render(h kernel.Host, width int) string {
 	if p.prompt == nil {
 		return ""
 	}
-	return p.prompt.View()
+	return p.prompt.View(width)
 }
