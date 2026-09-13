@@ -66,8 +66,13 @@ func nextInterval(cfg Config, attempt int) time.Duration {
 	return interval
 }
 
-// probeResultMsg 是单次探针的结果（泵外广播，仅本插件 React 消费）。
-type probeResultMsg struct{ err error }
+// ProbeResultMsg 是单次探针的结果（kernel 广播——当前仅本插件消费；
+// 导出因跨插件集成测试需构造，S5 审计先例：TestFlattenCoverageMatrix）。
+type ProbeResultMsg struct {
+	// Err 是探针错误：nil=健康，非 nil=不健康（健康判据 err!=nil，
+	// HealthResult.OK 是死词表——S6 审计 P2-1）。
+	Err error
+}
 
 // probeTickMsg 是下一次探针的续订信号。
 type probeTickMsg struct{}
@@ -123,7 +128,7 @@ func (p *Plugin) startProbe(h kernel.Host) {
 		probeCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		_, err := client.Health(probeCtx)
-		return probeResultMsg{err: err}
+		return ProbeResultMsg{Err: err}
 	})
 }
 
@@ -152,7 +157,7 @@ func (p *Plugin) stoppedByLock() bool {
 }
 
 // React 消费探针结果与健康事件：
-//   - probeResultMsg：写 Connected 槽（err==nil 判据——HealthResult.OK
+//   - ProbeResultMsg：写 Connected 槽（err==nil 判据——HealthResult.OK
 //     是死词表：fake 错误先返 error、real 恒 true，S6 审计 P2-1）+
 //     边沿触发 Notify + 恢复广播 GatewayRecovered；无条件重武装下一轮
 //     （全分支续订——循环静默死亡防线，S5 审计 P1-b）；
@@ -162,8 +167,8 @@ func (p *Plugin) stoppedByLock() bool {
 //     ApplyGatewayForEvent——S6 审计实例2 注记）。
 func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 	switch m := msg.(type) {
-	case probeResultMsg:
-		healthy := m.err == nil
+	case ProbeResultMsg:
+		healthy := m.Err == nil
 		p.mu.Lock()
 		previous := p.probeState
 		if healthy {
@@ -193,7 +198,7 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 
 		p.st.Gateway.Connected = false
 		if previous != probeStateUnhealthy {
-			h.Notify("网关连接断开：" + m.err.Error())
+			h.Notify("网关连接断开：" + m.Err.Error())
 		}
 		p.scheduleNext(h, nextInterval(p.cfg, attempt))
 	case probeTickMsg:
@@ -207,4 +212,3 @@ func (p *Plugin) React(h kernel.Host, msg tea.Msg) {
 		}
 	}
 }
-

@@ -139,10 +139,10 @@ func TestProbeWritesConnectedAndEdgeNotify(t *testing.T) {
 	p, h := New(testConfig()), &recordingHost{st: state.NewViewState(), client: client}
 	p.Init(context.Background(), h)
 
-	// 首轮探针失败（GoCmd 同步执行 → probeResultMsg 回流 React）。
+	// 首轮探针失败（GoCmd 同步执行 → ProbeResultMsg 回流 React）。
 	client.healthErr = errors.New("connection refused")
 	_, healthErr := client.Health(context.Background())
-	p.React(h, probeResultMsg{err: healthErr})
+	p.React(h, ProbeResultMsg{Err: healthErr})
 	if p.st.Gateway.Connected {
 		t.Fatal("failed probe should write Connected=false")
 	}
@@ -150,7 +150,7 @@ func TestProbeWritesConnectedAndEdgeNotify(t *testing.T) {
 		t.Fatalf("notifies = %v", h.notifies)
 	}
 	// 失败不广播恢复（计数只看 GatewayRecovered 类型——broadcasts 里
-	// 还有 Init 同步探针的 probeResultMsg 与续订 tick 的 probeTickMsg）。
+	// 还有 Init 同步探针的 ProbeResultMsg 与续订 tick 的 probeTickMsg）。
 	if recoveryCount(h) != 0 {
 		t.Fatalf("failure must not broadcast recovery, got %d", recoveryCount(h))
 	}
@@ -158,7 +158,7 @@ func TestProbeWritesConnectedAndEdgeNotify(t *testing.T) {
 	// 探针恢复：Connected=true + 恢复 Notify + GatewayRecovered 广播。
 	client.healthErr = nil
 	_, healthErr = client.Health(context.Background())
-	p.React(h, probeResultMsg{err: healthErr})
+	p.React(h, ProbeResultMsg{Err: healthErr})
 	if !p.st.Gateway.Connected {
 		t.Fatal("recovered probe should write Connected=true")
 	}
@@ -170,7 +170,7 @@ func TestProbeWritesConnectedAndEdgeNotify(t *testing.T) {
 	}
 
 	// 持续健康：无重复广播（边沿触发）。
-	p.React(h, probeResultMsg{})
+	p.React(h, ProbeResultMsg{})
 	if recoveryCount(h) != 1 {
 		t.Fatalf("steady-healthy must not re-broadcast, got %d", recoveryCount(h))
 	}
@@ -207,7 +207,7 @@ func TestCloseStopsRescheduling(t *testing.T) {
 	p.Close(context.Background())
 
 	before := h.goCmds
-	p.React(h, probeResultMsg{err: errors.New("late result")})
+	p.React(h, ProbeResultMsg{Err: errors.New("late result")})
 	if h.goCmds != before {
 		t.Fatal("closed plugin must not reschedule")
 	}
@@ -298,7 +298,7 @@ func TestHealthyProbeWritesConnectedTrue(t *testing.T) {
 	client := &mockClient{}
 	p, h := New(testConfig()), &recordingHost{st: state.NewViewState(), client: client}
 	p.Init(context.Background(), h)
-	p.React(h, probeResultMsg{})
+	p.React(h, ProbeResultMsg{})
 	if !p.st.Gateway.Connected {
 		t.Fatal("first healthy probe should write Connected=true")
 	}
