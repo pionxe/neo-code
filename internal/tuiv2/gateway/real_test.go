@@ -633,13 +633,13 @@ func TestFlattenPhaseChangedValueTranslation(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload":{"from":"plan","to":"execute"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload_version":4,"payload":{"from":"plan","to":"execute"}}}}`)
 	event := recvEvent(t, ch)
 	if event.Type != EventPhaseChanged || event.Payload["phase"] != "running" {
 		t.Fatalf("event = %+v", event)
 	}
 
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload":{"from":"execute","to":"waiting_user_question"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload_version":4,"payload":{"from":"execute","to":"waiting_user_question"}}}}`)
 	event = recvEvent(t, ch)
 	if event.Payload["phase"] != "waiting_user" {
 		t.Fatalf("phase = %v, want waiting_user", event.Payload["phase"])
@@ -660,7 +660,7 @@ func TestFlattenToolResultPascalCaseNormalized(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_result","payload":{"ToolCallID":"t1","Name":"bash","Content":"ok","IsError":false}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_result","payload_version":4,"payload":{"ToolCallID":"t1","Name":"bash","Content":"ok","IsError":false}}}}`)
 	event := recvEvent(t, ch)
 	if event.Type != EventToolResult {
 		t.Fatalf("type = %v", event.Type)
@@ -706,7 +706,7 @@ func TestRequestIDTrackedAndBackfilledEndToEnd(t *testing.T) {
 	}
 
 	// 权限请求事件（带 request_id）→ 泵内登记（扇出前写入）。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"permission_requested","payload":{"request_id":"perm-42","tool_name":"bash","operation":"ls"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"permission_requested","payload_version":4,"payload":{"request_id":"perm-42","tool_name":"bash","operation":"ls"}}}}`)
 	recvEvent(t, ch)
 
 	// 无显式 RequestID 提交 → 回填 perm-42。
@@ -724,7 +724,7 @@ func TestRequestIDTrackedAndBackfilledEndToEnd(t *testing.T) {
 	}
 
 	// resolved 事件清槽 → 再次提交本地报错（防陈旧回填）。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"permission_resolved","payload":{"request_id":"perm-42"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"permission_resolved","payload_version":4,"payload":{"request_id":"perm-42"}}}}`)
 	recvEvent(t, ch)
 	if err := c.ResolvePermission(context.Background(), PermissionDecision{SessionID: "s1"}); err == nil {
 		t.Fatal("stale backfill should be unavailable after resolved")
@@ -745,8 +745,8 @@ func TestNonTuiv2EventDropped(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"budget_checked","payload":{"decision":"allow"}}}}`)
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"token_usage","payload":{"input_tokens":10,"output_tokens":5}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"budget_checked","payload_version":4,"payload":{"decision":"allow"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"token_usage","payload_version":4,"payload":{"input_tokens":10,"output_tokens":5}}}}`)
 
 	event := recvEvent(t, ch)
 	if event.Type != EventTokenUsage {
@@ -802,9 +802,9 @@ func TestQuestionSlotTrackedAndCleared(t *testing.T) {
 	}
 
 	// 交错注入：权限与问答事件分槽登记，互不污染。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"permission_requested","payload":{"request_id":"perm-x","tool_name":"bash"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"permission_requested","payload_version":4,"payload":{"request_id":"perm-x","tool_name":"bash"}}}}`)
 	recvEvent(t, ch)
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_requested","payload":{"title":"标题","description":"描述","options":["a","b"]}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_requested","payload_version":4,"payload":{"title":"标题","description":"描述","options":["a","b"]}}}}`)
 	event := recvEvent(t, ch)
 
 	// P1-1a：title/description → question 键（缺失时 ask_user 文本恒空）。
@@ -838,7 +838,7 @@ func TestUnknownOuterFrameDropped(t *testing.T) {
 	}
 
 	pushNotification(t, mock, `{"session_id":"s1","payload":{"event_type":"something_else","message":"x"}}`)
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"后续事件"}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"后续事件"}}}`)
 	event := recvEvent(t, ch)
 	if event.Type != EventAgentChunk {
 		t.Fatalf("type = %v, want agent_chunk（未知帧不应阻断后续事件）", event.Type)
@@ -859,7 +859,7 @@ func TestToolStartArgumentsNormalizedToInput(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_start","payload":{"name":"bash","arguments":"ls -la"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_start","payload_version":4,"payload":{"name":"bash","arguments":"ls -la"}}}}`)
 	event := recvEvent(t, ch)
 	if event.Type != EventToolStart {
 		t.Fatalf("type = %v", event.Type)
@@ -993,7 +993,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 	// 非事件通知（其他方法）+ 解码失败 + 无订阅事件：均被吸收不致命。
 	mock.notifications <- gatewayclient.Notification{Method: "gateway.ping", Params: json.RawMessage(`{}`)}
 	mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{invalid`)}
-	mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s0","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"ghost"}}}`)}
+	mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s0","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"ghost"}}}`)}
 
 	cases := []struct {
 		name  string
@@ -1002,7 +1002,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 	}{
 		{
 			name:  "tool_chunk→tool_output 字符串包装",
-			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_chunk","payload":"out"}}}`,
+			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_chunk","payload_version":4,"payload":"out"}}}`,
 			check: func(e GatewayEvent) {
 				if e.Type != EventToolOutput || e.Payload["text"] != "out" {
 					t.Fatalf("event = %+v", e)
@@ -1011,7 +1011,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 		},
 		{
 			name:  "run_canceled 同名映射",
-			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"run_canceled","payload":{"phase":"canceled"}}}}`,
+			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"run_canceled","payload_version":4,"payload":{"phase":"canceled"}}}}`,
 			check: func(e GatewayEvent) {
 				if e.Type != EventRunCanceled {
 					t.Fatalf("event = %+v", e)
@@ -1020,7 +1020,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 		},
 		{
 			name:  "error envelope 字符串包装",
-			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"error","payload":"bad"}}}`,
+			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"error","payload_version":4,"payload":"bad"}}}`,
 			check: func(e GatewayEvent) {
 				if e.Type != EventError || e.Payload["text"] != "bad" {
 					t.Fatalf("event = %+v", e)
@@ -1029,7 +1029,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 		},
 		{
 			name:  "user_question_answered 同名映射",
-			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_answered","payload":{"request_id":"q9"}}}}`,
+			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_answered","payload_version":4,"payload":{"request_id":"q9"}}}}`,
 			check: func(e GatewayEvent) {
 				if e.Type != EventUserQuestionAnswered {
 					t.Fatalf("event = %+v", e)
@@ -1038,7 +1038,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 		},
 		{
 			name:  "agent_done→run_finished 派生",
-			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_done","payload":{}}}}`,
+			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_done","payload_version":4,"payload":{}}}}`,
 			check: func(e GatewayEvent) {
 				if e.Type != EventRunFinished {
 					t.Fatalf("event = %+v", e)
@@ -1047,7 +1047,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 		},
 		{
 			name:  "phase stopped→idle",
-			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload":{"to":"stopped"}}}}`,
+			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload_version":4,"payload":{"to":"stopped"}}}}`,
 			check: func(e GatewayEvent) {
 				if e.Payload["phase"] != "idle" {
 					t.Fatalf("phase = %v", e.Payload["phase"])
@@ -1056,7 +1056,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 		},
 		{
 			name:  "phase from 回退 + waiting_permission 直通",
-			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload":{"from":"waiting_permission"}}}}`,
+			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload_version":4,"payload":{"from":"waiting_permission"}}}}`,
 			check: func(e GatewayEvent) {
 				if e.Payload["phase"] != "waiting_permission" {
 					t.Fatalf("phase = %v", e.Payload["phase"])
@@ -1065,7 +1065,7 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 		},
 		{
 			name:  "question description 回退",
-			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_requested","payload":{"description":"desc-only","options":["x"]}}}}`,
+			frame: `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_requested","payload_version":4,"payload":{"description":"desc-only","options":["x"]}}}}`,
 			check: func(e GatewayEvent) {
 				if e.Type != EventUserQuestionRequested || e.Payload["question"] != "desc-only" {
 					t.Fatalf("event = %+v", e)
@@ -1089,40 +1089,50 @@ func TestFlattenCoverageMatrix(t *testing.T) {
 	}
 
 	// 顺序敏感的逐条断言：重放矩阵并以队列校验。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_chunk","payload":"o2"}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_chunk","payload_version":4,"payload":"o2"}}}`)
 	first := recvEvent(t, ch)
 	if first.Type != EventToolOutput || first.Payload["text"] != "o2" {
 		t.Fatalf("first = %+v", first)
 	}
 	// token_usage 无数值键 → payloadIntValue 缺省 0 路径（total=0）。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"token_usage","payload":{}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"token_usage","payload_version":4,"payload":{}}}}`)
 	second := recvEvent(t, ch)
 	if second.Type != EventTokenUsage {
 		t.Fatalf("second = %+v", second)
 	}
 
 	// phase 无 to/from（回退链末端：直接读 phase 键或置空）。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload":{"phase":"waiting_permission"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload_version":4,"payload":{"phase":"waiting_permission"}}}}`)
 	third := recvEvent(t, ch)
 	if third.Payload["phase"] != "waiting_permission" {
 		t.Fatalf("third phase = %v", third.Payload["phase"])
 	}
 
 	// question 双键全缺：question 键不产出（回退链穷尽）。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_requested","payload":{"options":["x"]}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_requested","payload_version":4,"payload":{"options":["x"]}}}}`)
 	fourth := recvEvent(t, ch)
 	if _, has := fourth.Payload["question"]; has {
 		t.Fatalf("question should be absent, got %v", fourth.Payload["question"])
 	}
 
+	// payload_version 错误 → fail fast 转错误事件（契约矩阵硬不兼容）。
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":3,"payload":"x"}}}`)
+	fatal := recvEvent(t, ch)
+	if fatal.Type != EventError {
+		t.Fatalf("type = %v, want EventError (payload_version fail-fast)", fatal.Type)
+	}
+	if msg, _ := fatal.Payload["message"].(string); !strings.Contains(msg, "payload_version") {
+		t.Fatalf("message = %v", fatal.Payload["message"])
+	}
+
 	// 无订阅会话的事件：被吸收（注册表无该会话）。
-	pushNotification(t, mock, `{"session_id":"s-other","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"ghost"}}}`)
+	pushNotification(t, mock, `{"session_id":"s-other","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"ghost"}}}`)
 	// 解码失败帧：被吸收。
 	mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{bad json`)}
 	// 非 gateway.event 通知：被过滤。
 	mock.notifications <- gatewayclient.Notification{Method: "gateway.ping", Params: json.RawMessage(`{}`)}
 	// 吸收完毕后订阅仍可用：注入一条真实事件验证泵存活。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"still-alive"}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"still-alive"}}}`)
 	alive := recvEvent(t, ch)
 	if alive.Payload["text"] != "still-alive" {
 		t.Fatalf("alive = %+v", alive)
@@ -1165,8 +1175,8 @@ func TestDebugLoggingPath(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 	// 非 tuiv2 词汇 → 丢弃 + debug 日志分支。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"budget_checked","payload":{}}}}`)
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"visible"}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"budget_checked","payload_version":4,"payload":{}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"visible"}}}`)
 	recvEvent(t, ch)
 }
 
@@ -1186,7 +1196,7 @@ func TestSubscriptionClosePathsAndEnvelopeEdges(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 	for i := 0; i < realSubBuffer; i++ {
-		mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s-full","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"x"}}}`)}
+		mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s-full","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"x"}}}`)}
 	}
 	// 缓冲已满：泵阻塞在下一条的 send-select 上；顶替订阅 → sub.done 回退。
 	if _, err := c.SubscribeEvents(context.Background(), "s-full"); err != nil {
@@ -1210,7 +1220,7 @@ func TestSubscriptionClosePathsAndEnvelopeEdges(t *testing.T) {
 		t.Fatalf("subscribe close-path: %v", err)
 	}
 	for i := 0; i < realSubBuffer+1; i++ {
-		mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s-close","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"x"}}}`)}
+		mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s-close","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"x"}}}`)}
 	}
 	time.Sleep(100 * time.Millisecond) // 等泵进入满缓冲阻塞
 	done := make(chan error, 1)
@@ -1246,7 +1256,7 @@ func TestSubscriptionClosePathsAndEnvelopeEdges(t *testing.T) {
 	c2.mu.Lock()
 	c2.questReqID["s1"] = "q-old"
 	c2.mu.Unlock()
-	pushNotification(t, mock2, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_answered","payload":{}}}}`)
+	pushNotification(t, mock2, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_answered","payload_version":4,"payload":{}}}}`)
 	recvEvent(t, ch3)
 	c2.mu.Lock()
 	_, still := c2.questReqID["s1"]
@@ -1259,7 +1269,7 @@ func TestSubscriptionClosePathsAndEnvelopeEdges(t *testing.T) {
 	mock2.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s1","payload":null}`)}
 	mock2.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s1","payload":{"event_type":"unknown"}}`)}
 	// 泵存活性验证：后续真实事件仍可达。
-	pushNotification(t, mock2, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"alive"}}}`)
+	pushNotification(t, mock2, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"alive"}}}`)
 	recvEvent(t, ch3)
 }
 
@@ -1281,7 +1291,7 @@ func TestFlattenFinalBranches(t *testing.T) {
 	}
 
 	// 646：带 request_id 的问答请求 → 追踪槽登记。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_requested","payload":{"request_id":"q-live","title":"t"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"user_question_requested","payload_version":4,"payload":{"request_id":"q-live","title":"t"}}}}`)
 	event := recvEvent(t, ch)
 	if event.Type != EventUserQuestionRequested {
 		t.Fatalf("type = %v", event.Type)
@@ -1294,7 +1304,7 @@ func TestFlattenFinalBranches(t *testing.T) {
 	}
 
 	// 696：直连 envelope 形态（runtime_event_type 在顶层，无包裹层）。
-	pushNotification(t, mock, `{"session_id":"s1","payload":{"runtime_event_type":"agent_chunk","payload":"direct-form"}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"direct-form"}}`)
 	event = recvEvent(t, ch)
 	if event.Type != EventAgentChunk || event.Payload["text"] != "direct-form" {
 		t.Fatalf("direct-form event = %+v", event)
@@ -1327,7 +1337,7 @@ func TestPumpSendSelectDoneFallback(t *testing.T) {
 	}
 	// 打满缓冲（128）后再注入 1 条：泵阻塞在第 129 条的 send-select 上。
 	for i := 0; i < realSubBuffer+1; i++ {
-		mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload":"x"}}}`)}
+		mock.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(`{"session_id":"s1","payload":{"payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"x"}}}`)}
 	}
 	time.Sleep(100 * time.Millisecond) // 等泵进入阻塞态
 	// 顶替订阅：旧通道 close → sub.done 就绪 → 泵经回退分支释放。

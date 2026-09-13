@@ -709,6 +709,17 @@ func flattenGatewayEvent(params realFrame) (event GatewayEvent, hasEnvelope bool
 	if !ok {
 		return GatewayEvent{}, true, false
 	}
+	// payload_version 硬校验（契约矩阵：mismatch = 硬不兼容，fail fast；
+	// 对齐 v1 runtimeEventPayloadVersion=4 语义）。
+	if got := payloadIntValue(envelope, "payload_version"); got != 4 {
+		return GatewayEvent{
+			Type:      EventError,
+			SessionID: strings.TrimSpace(params.SessionID),
+			RunID:     strings.TrimSpace(params.RunID),
+			Payload:   map[string]any{"message": fmt.Sprintf("unsupported runtime payload_version: got %d want 4", got)},
+			At:        time.Now(),
+		}, true, true
+	}
 	payload := normalizeEventPayload(eventType, runtimeType, envelope)
 
 	updatedAt := time.Now()
