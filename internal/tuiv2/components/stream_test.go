@@ -28,7 +28,7 @@ func TestAgentStreamRendersEntryTypes(t *testing.T) {
 		{ID: "e", Type: "error", Content: "connection refused", Timestamp: now},
 	}
 
-	view := NewAgentStream(viewState).View()
+	view := NewAgentStream(viewState).View(40)
 	for _, want := range []string{
 		"hello",
 		theme.StreamPrefix("tool_start") + " tool.read_file",
@@ -59,22 +59,22 @@ func TestAgentStreamManualAndAutoScroll(t *testing.T) {
 	if !viewState.Layout.AutoScroll {
 		t.Fatal("AutoScroll default = false, want true")
 	}
-	_, _ = stream.Update(keyMsg("k"))
+	_ = stream.Update(keyMsg("k"))
 	if viewState.Layout.AutoScroll {
 		t.Fatal("AutoScroll after k = true, want false")
 	}
 	if viewState.Layout.ScrollOffset == 0 {
 		t.Fatal("ScrollOffset after k = 0, want > 0")
 	}
-	_, _ = stream.Update(keyMsg("j"))
+	_ = stream.Update(keyMsg("j"))
 	if !viewState.Layout.AutoScroll || viewState.Layout.ScrollOffset != 0 {
 		t.Fatalf("after j at bottom AutoScroll=%t offset=%d, want true/0", viewState.Layout.AutoScroll, viewState.Layout.ScrollOffset)
 	}
-	_, _ = stream.Update(keyMsg("g"))
+	_ = stream.Update(keyMsg("g"))
 	if viewState.Layout.AutoScroll || viewState.Layout.ScrollOffset == 0 {
 		t.Fatalf("after g AutoScroll=%t offset=%d, want false/>0", viewState.Layout.AutoScroll, viewState.Layout.ScrollOffset)
 	}
-	_, _ = stream.Update(keyMsg("G"))
+	_ = stream.Update(keyMsg("G"))
 	if !viewState.Layout.AutoScroll || viewState.Layout.ScrollOffset != 0 {
 		t.Fatalf("after G AutoScroll=%t offset=%d, want true/0", viewState.Layout.AutoScroll, viewState.Layout.ScrollOffset)
 	}
@@ -89,7 +89,7 @@ func TestAgentStreamFullPageScroll(t *testing.T) {
 	stream := NewAgentStream(viewState)
 
 	// Ctrl+B 在底部(自动滚动, offset=0)上翻一页 → offset 增加
-	_, _ = stream.Update(keyMsg("ctrl+b"))
+	_ = stream.Update(keyMsg("ctrl+b"))
 	if viewState.Layout.AutoScroll {
 		t.Fatal("ctrl+b should disable AutoScroll")
 	}
@@ -99,7 +99,7 @@ func TestAgentStreamFullPageScroll(t *testing.T) {
 	}
 
 	// Ctrl+F 下翻一页 → offset 减少
-	_, _ = stream.Update(keyMsg("ctrl+f"))
+	_ = stream.Update(keyMsg("ctrl+f"))
 	if viewState.Layout.ScrollOffset >= offsetAfterB {
 		t.Fatalf("ctrl+f should decrease offset: before=%d after=%d", offsetAfterB, viewState.Layout.ScrollOffset)
 	}
@@ -109,8 +109,8 @@ func TestAgentStreamFullPageScroll(t *testing.T) {
 	emptyVS.Layout.Width = 80
 	emptyVS.Layout.Height = 10
 	emptyStream := NewAgentStream(emptyVS)
-	_, _ = emptyStream.Update(keyMsg("ctrl+f"))
-	_, _ = emptyStream.Update(keyMsg("ctrl+b"))
+	_ = emptyStream.Update(keyMsg("ctrl+f"))
+	_ = emptyStream.Update(keyMsg("ctrl+b"))
 }
 
 func TestAgentStreamWidthIsSafe(t *testing.T) {
@@ -119,7 +119,7 @@ func TestAgentStreamWidthIsSafe(t *testing.T) {
 	viewState.Layout.Height = 10
 	viewState.Stream = []state.StreamEntry{{ID: "long", Type: "message", Content: "这是一段很长很长的中英文 mixed content that must not wrap"}}
 
-	for index, line := range strings.Split(NewAgentStream(viewState).View(), "\n") {
+	for index, line := range strings.Split(NewAgentStream(viewState).View(40), "\n") {
 		if width := theme.DisplayWidth(line); width > 39 {
 			t.Fatalf("line %d width = %d, want <= 39: %q", index, width, line)
 		}
@@ -134,7 +134,7 @@ func TestAgentStreamLargeStreamRenderBudget(t *testing.T) {
 	stream := NewAgentStream(viewState)
 
 	start := time.Now()
-	view := stream.View()
+	view := stream.View(80)
 	// -race 插桩会使耗时放大数倍，墙钟预算仅在正常构建下断言（race_enabled.go）。
 	if !raceEnabled {
 		if elapsed := time.Since(start); elapsed > 16*time.Millisecond {
@@ -155,7 +155,7 @@ func TestAgentStreamTimestampGap(t *testing.T) {
 		{ID: "one", Type: "message", Content: "one", Timestamp: first},
 		{ID: "two", Type: "message", Content: "two", Timestamp: first.Add(6 * time.Minute)},
 	}
-	view := NewAgentStream(viewState).View()
+	view := NewAgentStream(viewState).View(40)
 	if !strings.Contains(view, "12:06") {
 		t.Fatalf("View() missing timestamp gap:\n%s", view)
 	}
@@ -309,7 +309,7 @@ func TestScrollToEntryHeterogeneousVisible(t *testing.T) {
 	stream := NewAgentStream(vs)
 	// 跳到 "multi"（索引 28）——异构场景，旧代码会定位错误
 	stream.ScrollToEntry(28)
-	view := stream.View()
+	view := stream.View(80)
 	if !strings.Contains(view, "multi") {
 		t.Fatalf("heterogeneous: after ScrollToEntry(28), 'multi' not visible.\noffset=%d\nview:\n%s", vs.Layout.ScrollOffset, view)
 	}
@@ -342,7 +342,7 @@ func TestScrollToEntryTargetVisible(t *testing.T) {
 	vs.Stream = numberedEntries(20)
 	stream := NewAgentStream(vs)
 	stream.ScrollToEntry(15)
-	view := stream.View()
+	view := stream.View(80)
 	if !strings.Contains(view, "line 15") {
 		t.Fatalf("after ScrollToEntry(15), target not visible.\noffset=%d\nview:\n%s", vs.Layout.ScrollOffset, view)
 	}
@@ -388,8 +388,8 @@ func TestVirtualEntriesLargeStreamAfterScroll(t *testing.T) {
 			virtual[0].ID, virtual[len(virtual)-1].ID, len(virtual))
 	}
 	// 2) 连续两帧 View 不振荡（ScrollOffset 不被局部 clamp 破坏）
-	v1 := stream.View()
-	v2 := stream.View()
+	v1 := stream.View(80)
+	v2 := stream.View(80)
 	if v1 != v2 {
 		t.Fatal("OSCILLATION: consecutive View() frames differ after ScrollToEntry (ScrollOffset corrupted by local clamp)")
 	}
