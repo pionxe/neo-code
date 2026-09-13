@@ -69,21 +69,50 @@ type RealClient struct {
 	pumpDone  chan struct{}
 }
 
-// realSubscription 是一条会话订阅：下游通道 + close-once。
-// 三条关闭路径可重叠（被顶替 / 调用方 ctx cancel / 客户端 Close），
-// 必须 sync.Once 防双关 panic（S5 审计钉死项）。
+// realSubscription 是一条会话订阅。
+// 关闭协议两阶段（PR #47 审计实测暴露的发送竞态修正）：
+//   - retire()：关闭 done 信号——必须在注册表 mu 内调用（与泵的
+//     send-select 互斥），泵据此从 send 阻塞中经回退分支释放；
+//   - closeCh()：关闭下游通道——必须在 mu 外调用（泵可能在 done
+//     就绪后仍选中缓冲未满的 send 分支，先关通道会 panic）。
+//
+// 两条 once 各自幂等：三关闭路径（顶替/ctx cancel/客户端 Close）
+// 可任意重叠。
 type realSubscription struct {
-	ch   chan GatewayEvent
-	once sync.Once
-	done chan struct{} // 关闭完成信号：ctx watcher 据此停止
+	ch       chan GatewayEvent
+	done     chan struct{} // retire 完成信号：trySend 回退与 watcher 退出
+	retired  sync.Once
+	chClosed sync.Once
+	sendMu   sync.Mutex // 序列化 trySend 与 closeCh（发送竞态守卫）
 }
 
-// close 关闭下游通道与完成信号（幂等）。
-func (s *realSubscription) close() {
-	s.once.Do(func() {
-		close(s.ch)
-		close(s.done)
-	})
+// retire 关闭完成信号（幂等）；调用方须持注册表 mu。
+func (s *realSubscription) retire() {
+	s.retired.Do(func() { close(s.done) })
+}
+
+// closeCh 关闭下游通道（幂等）；持 sendMu 与 trySend 的发送互斥
+// （杜绝并发 close/send 竞态），retire 已关 done——trySend 的阻塞
+// 发送必经回退唤醒，无互锁；调用方须已 retire 且不在注册表 mu 内。
+func (s *realSubscription) closeCh() {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	s.chClosed.Do(func() { close(s.ch) })
+}
+
+// trySend 尝试投递事件：订阅已 retire 时返回 false（事件丢弃）。
+// 持 sendMu 阻塞发送，done 回退保证 retire 先关 done——阻塞中的
+// trySend 必经回退唤醒，因此通道关闭时不可能有并发发送
+// （无 send-on-closed 竞态）。
+func (s *realSubscription) trySend(event GatewayEvent) bool {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	select {
+	case s.ch <- event:
+		return true
+	case <-s.done:
+		return false
+	}
 }
 
 // NewRealClient 创建真实网关客户端并执行 fail-fast 认证连通性检查
@@ -97,7 +126,7 @@ func NewRealClient(options RealClientOptions) (*RealClient, error) {
 	if options.RPCClient != nil {
 		rpc = options.RPCClient
 	} else {
-		options.RPC.DisableAutoSpawn = true
+		options = normalizeRealOptions(options)
 		client, err := gatewayclient.NewGatewayRPCClient(options.RPC)
 		if err != nil {
 			return nil, err
@@ -125,25 +154,41 @@ func NewRealClient(options RealClientOptions) (*RealClient, error) {
 	return c, nil
 }
 
+// normalizeRealOptions 归一装配选项：强制关闭自动拉起（v1 自动拉起是
+// 自我重执行，tuiv2 二进制无 gateway 子命令必然失败——S5 审计 Q5/Q6
+// 裁定的落地行，独立纯函数便于测试钉死）。
+func normalizeRealOptions(options RealClientOptions) RealClientOptions {
+	options.RPC.DisableAutoSpawn = true
+	return options
+}
+
 // Close 释放客户端资源（幂等）；订阅通道由各订阅自身的关闭路径负责。
 func (c *RealClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
+		// 先 retire 全部订阅（trySend 的唯一回退信号），泵才能从满缓冲
+		// 阻塞发送中释放——否则 Close 等 pumpDone 与泵等回退互锁。
+		c.closeSubscriptions()
 		_ = c.rpc.Close()
 		<-c.pumpDone
-		c.closeSubscriptions()
 	})
 	return nil
 }
 
-// closeSubscriptions 关闭全部订阅通道（Close 路径；幂等由 close-once 保证）。
+// closeSubscriptions 关闭全部订阅（Close 路径）：先在 mu 内 retire 全部
+// （含泵 send-select 的回退信号），mu 外再关通道（防发送竞态）。
 func (c *RealClient) closeSubscriptions() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	pending := make([]*realSubscription, 0, len(c.subs))
 	for _, sub := range c.subs {
-		sub.close()
+		sub.retire()
+		pending = append(pending, sub)
 	}
 	c.subs = make(map[string]*realSubscription)
+	c.mu.Unlock()
+	for _, sub := range pending {
+		sub.closeCh()
+	}
 }
 
 // Health 对应 gateway.ping：连接健康检查。
@@ -345,21 +390,25 @@ func (c *RealClient) SubscribeEvents(ctx context.Context, sessionID string) (<-c
 	c.mu.Lock()
 	old := c.subs[sessionID]
 	c.subs[sessionID] = sub // 先注册新
+	if old != nil {
+		old.retire() // mu 内关 done：泵 send-select 立即获得回退信号
+	}
 	c.mu.Unlock()
 	if old != nil {
-		old.close() // 后关旧（顶替语义；close-once 幂等）
+		old.closeCh() // mu 外关旧通道（sendMu 序列化防发送竞态）
 	}
 
-	// 调用方 ctx cancel 路径：注销并关闭订阅。
+	// 调用方 ctx cancel 路径：注销并关闭订阅（retire 在 mu 内）。
 	go func() {
 		select {
 		case <-ctx.Done():
 			c.mu.Lock()
 			if c.subs[sessionID] == sub {
 				delete(c.subs, sessionID)
+				sub.retire()
 			}
 			c.mu.Unlock()
-			sub.close()
+			sub.closeCh()
 		case <-sub.done:
 		}
 	}()
@@ -382,16 +431,18 @@ func (c *RealClient) resolvePermRequestID(sessionID, explicit string) (string, e
 }
 
 // ResolvePermission 对应 gateway.resolvePermission：提交工具权限决策。
-// Decision 映射 Allow→"allow"、否则 "deny"（服务端按小写枚举消费，
-// v1 先例）；RequestID 为空时回填追踪槽（S5 审计协调者裁定）。
+// Decision 映射 Allow→"allow_once"、否则 "reject"（服务端枚举仅接受
+// allow_once/allow_session/reject——protocol/jsonrpc.go:1532 与
+// validate.go:557 双路径强校验，PR #47 审计 P0 实测）；RequestID 为空时
+// 回填追踪槽（S5 审计协调者裁定）。
 func (c *RealClient) ResolvePermission(ctx context.Context, decision PermissionDecision) error {
 	requestID, err := c.resolvePermRequestID(decision.SessionID, decision.RequestID)
 	if err != nil {
 		return err
 	}
-	decisionValue := "deny"
+	decisionValue := "reject"
 	if decision.Allow {
-		decisionValue = "allow"
+		decisionValue = "allow_once"
 	}
 	params := struct {
 		RequestID string `json:"request_id"`
@@ -532,7 +583,7 @@ type realFrame struct {
 }
 
 // runPump 是构造期唯一通知泵：消费共享通知通道，扁平化后按会话扇出。
-// 退出三路径：客户端 Close（closed）/ 通知通道关闭（连接断开）/ 上层取消。
+// 退出两路径：客户端 Close（closed）/ 通知通道关闭（连接断开）。
 func (c *RealClient) runPump() {
 	defer close(c.pumpDone)
 	for {
@@ -571,7 +622,7 @@ func (c *RealClient) dispatchNotification(notification gatewayclient.Notificatio
 		if event.Type == "" {
 			return
 		}
-		sessionID = params.SessionID
+		sessionID = strings.TrimSpace(params.SessionID)
 	} else if !deliverable {
 		c.debugf("drop runtime event（非 tuiv2 词汇，与白名单外 no-op 语义一致）")
 		return
@@ -581,17 +632,16 @@ func (c *RealClient) dispatchNotification(notification gatewayclient.Notificatio
 	// *_resolved 事件清槽防陈旧回填（S5 审计钉死项）。
 	c.trackRequestID(event)
 
+	// 扇出：注册表 mu 内仅做订阅查找（不持 mu 发送——顶替/关闭路径需要
+	// mu，否则泵阻塞发送时构成死锁）；发送交由订阅级 trySend（done 回退
+	// + sendMu 序列化，无发送竞态、无死锁）。
 	c.mu.Lock()
 	sub := c.subs[sessionID]
 	c.mu.Unlock()
 	if sub == nil {
 		return // 无订阅：事件自然消亡（通道生命周期由订阅方管理）
 	}
-	select {
-	case sub.ch <- event:
-	case <-sub.done:
-	case <-c.closed:
-	}
+	sub.trySend(event)
 }
 
 // errorFallbackEvent 将无 envelope 的外层错误帧翻译为 EventError；
@@ -779,6 +829,24 @@ func normalizeEventPayload(eventType EventType, runtimeType string, envelope map
 	}
 
 	switch eventType {
+	case EventUserQuestionRequested:
+		// runtime 键 title/description → state 消费键 question（缺 question
+		// 时 ask_user 问题文本恒空——PR #47 审计 P1-1a）。
+		if _, ok := out["question"]; !ok {
+			if title, ok := out["title"].(string); ok && title != "" {
+				out["question"] = title
+			} else if desc, ok := out["description"].(string); ok {
+				out["question"] = desc
+			}
+		}
+	case EventToolStart:
+		// runtime 键 arguments（JSON 字符串）→ state 消费键 input（缺省时
+		// 工具行无命令摘要——PR #47 审计 P1-1b）。
+		if _, ok := out["input"]; !ok {
+			if args, ok := out["arguments"].(string); ok {
+				out["input"] = args
+			}
+		}
 	case EventPhaseChanged:
 		// phase 值翻译：to（缺省回退 from/phase）→ tuiv2 词表。
 		to, _ := out["to"].(string)
