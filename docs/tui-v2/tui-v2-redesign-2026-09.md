@@ -331,8 +331,8 @@ internal/tuiv2/
 
 ### ADR-002 契约对齐真实 RPC + ErrUnsupported
 
-- 决策：`gateway.Client` 以真实 RPC 文档（docs/reference/gateway-rpc-api.md）为唯一权威收敛；真实网关缺失的能力返回 `ErrUnsupported`，UI 显式降级，后端零改动。
-- 状态：📋 规划（S4）。
+- 决策：`gateway.Client` 以真实 RPC 文档（docs/reference/gateway-rpc-api.md 与 docs/reference/tui-gateway-contract-matrix.md）为唯一权威收敛；真实网关缺失的能力返回 `ErrUnsupported`，UI 显式降级，后端零改动。
+- 状态：✅ 落地（S4，issue #44）。事件词汇收敛（27→23，删 4 对别名+拼写对齐 runtime 权威）+ 词汇权威源三类分组（A=envelope 同名 / B=gateway 层 / C=客户端派生）+ Client 13 方法 RPC 映射标注 + ErrUnsupported 哨兵 + 形状冻结/钉值测试。审计核实：当前 13 方法在真实网关侧全部有已注册实现（ErrUnsupported 为面向未来扩展的契约，零候选方法）；S4 事件词汇与 runtime 对齐使 S5 RealClient 翻译层可机械化。
 - 证伪信号：接真实网关时插件层被迫大改渲染 = 契约泄漏 → 只动 gateway 翻译层。
 
 ### ADR-003 布局纯函数包
