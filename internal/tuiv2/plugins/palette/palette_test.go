@@ -343,3 +343,56 @@ func TestPaletteUpDownAndID(t *testing.T) {
 		t.Fatalf("selected = %d, want 0", o.selected)
 	}
 }
+
+// TestOverlayMouseWheelAndClick 验证面板鼠标交互（S8，issue #52）：
+// 滚轮滚动选项 + 左键点击选择并执行 + 模态消费不穿透。
+func TestOverlayMouseWheelAndClick(t *testing.T) {
+	p, h := New(), newRecordingHost()
+	// 查询命令含可执行命令（触发 c.Run 路径）。
+	h.cmds = []kernel.Command{
+		{Name: "/help", Description: "帮助", Run: func(h kernel.Host, args []string) {}},
+		{Name: "/exit", Description: "退出", Run: func(h kernel.Host, args []string) {}},
+		{Name: "/model", Description: "切换模型"},
+	}
+	// 打开：经 Leader p 绑定。
+	for _, b := range p.Bindings() {
+		b.OnKey(h)
+	}
+	if len(h.overlays) != 1 {
+		t.Fatal("palette overlay should be pushed")
+	}
+	mh, ok := h.overlays[0].(kernel.OverlayMouseHandler)
+	if !ok {
+		t.Fatal("palette overlay should implement OverlayMouseHandler")
+	}
+
+	// 滚轮下 → selected 增（模态消费）。
+	for _, btn := range []tea.MouseButton{tea.MouseButtonWheelDown, tea.MouseButtonWheelDown} {
+		mh.HandleMouse(h, tea.MouseMsg{Button: btn})
+	}
+	// 滚轮上 → selected 减。
+	mh.HandleMouse(h, tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+
+	// 左键点击（Y=2 对齐列表首行）→ 选择并执行 Run + 关闭面板。
+	consumed := mh.HandleMouse(h, tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, Y: 2})
+	if !consumed {
+		t.Fatal("left click should be consumed")
+	}
+	if h.popCount != 1 {
+		t.Fatalf("PopOverlay count = %d, want 1", h.popCount)
+	}
+}
+
+// TestOverlayMouseMotionDropped 验证 Motion/非按键鼠标事件被模态消费不穿透。
+func TestOverlayMouseMotionDropped(t *testing.T) {
+	p, h := New(), newRecordingHost()
+	for _, b := range p.Bindings() {
+		if b.Key == "p" {
+			b.OnKey(h)
+		}
+	}
+	consumed := h.overlays[0].(kernel.OverlayMouseHandler).HandleMouse(h, tea.MouseMsg{Type: tea.MouseMotion, X: 5, Y: 5})
+	if !consumed {
+		t.Fatal("motion should be consumed by modal overlay")
+	}
+}
