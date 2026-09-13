@@ -114,7 +114,7 @@ func TestStreamRenderGolden(t *testing.T) {
 			{ID: "a1", Type: "message", Content: "hi there, this is a fairly long assistant line to exercise wrapping behaviour in narrow terminals", Metadata: map[string]any{"role": "assistant"}},
 		}
 		c := NewAgentStream(st)
-		got := stripANSIForGolden(c.View(tc.width))
+		got := stripANSIForGolden(c.View())
 		if got != tc.want {
 			t.Fatalf("%s: render diff (等价迁移破坏)\n--- got ---\n%q\n--- want ---\n%q", name, got, tc.want)
 		}
