@@ -625,3 +625,39 @@ func TestGatewayRecoveredTriggersRebind(t *testing.T) {
 		t.Fatalf("rebind failure notify = %v", h.notifies)
 	}
 }
+
+// TestPickerOverlayHandleMouseWheel 验证 sessions pickerOverlay HandleMouse
+// 滚轮委托（S8 PR #53 审计 P1-3 补测，issue #52）：WheelUp/WheelDown
+// 委托 picker.Update；Left/Motion 吞掉不委托。
+func TestPickerOverlayHandleMouseWheel(t *testing.T) {
+	client := &fakeClient{}
+	p, h := newTestPluginWithClient(t, client)
+	// 打开 picker（Space s）。
+	for _, b := range p.Bindings() {
+		if b.Key == "s" {
+			b.OnKey(h)
+		}
+	}
+	if len(h.overlays) == 0 {
+		t.Fatal("picker overlay should be pushed")
+	}
+	mh, ok := h.overlays[0].(kernel.OverlayMouseHandler)
+	if !ok {
+		t.Fatal("picker overlay should implement OverlayMouseHandler")
+	}
+
+	// WheelDown → 模态消费。
+	consumed := mh.HandleMouse(h, tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	if !consumed {
+		t.Fatal("wheel down should be consumed by picker overlay")
+	}
+	consumed = mh.HandleMouse(h, tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	if !consumed {
+		t.Fatal("wheel up should be consumed by picker overlay")
+	}
+	// Left/Motion → 模态消费但不委托。
+	consumed = mh.HandleMouse(h, tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, Y: 5})
+	if !consumed {
+		t.Fatal("left click should be consumed (modal)")
+	}
+}
