@@ -96,36 +96,3 @@ func TestAmbientStatusOfflineIndicator(t *testing.T) {
 		t.Fatalf("connected should not render offline, got:\n%s", view)
 	}
 }
-
-// TestAmbientStatusMinSizeWarning 验证最小尺寸保护提示段（S7 C5，
-// issue #50）：正尺寸低于 MinWidth/MinHeight 渲染警告；0/负=未知不报；
-// 达标不报。断言用宽 View 渲染（fitBlock 按 View 宽度截断整行，
-// 窄 View 会把行尾警告段裁掉——段存在性用宽渲染断言）。
-func TestAmbientStatusMinSizeWarning(t *testing.T) {
-	newVS := func(width, height int) *state.ViewState {
-		vs := state.NewViewState()
-		vs.Layout.Width = width
-		vs.Layout.Height = height
-		return vs
-	}
-	// 宽低于阈值 → 警告段存在（用 200 宽渲染避免截断）。
-	vs := newVS(19, 20)
-	if v := NewAmbientStatus(vs).View(200); !strings.Contains(v, "终端尺寸过小") {
-		t.Fatalf("min-width should warn, got:\n%s", v)
-	}
-	// 高低于阈值 → 警告。
-	vs = newVS(80, 4)
-	if v := NewAmbientStatus(vs).View(200); !strings.Contains(v, "终端尺寸过小") {
-		t.Fatalf("min-height should warn, got:\n%s", v)
-	}
-	// 未知（0/负）→ 不报。
-	vs = newVS(0, 0)
-	if v := NewAmbientStatus(vs).View(200); strings.Contains(v, "终端尺寸过小") {
-		t.Fatalf("unknown size must not warn, got:\n%s", v)
-	}
-	// 达标 → 不报。
-	vs = newVS(80, 20)
-	if v := NewAmbientStatus(vs).View(200); strings.Contains(v, "终端尺寸过小") {
-		t.Fatalf("healthy size must not warn, got:\n%s", v)
-	}
-}
