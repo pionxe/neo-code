@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,8 @@ type RealClientOptions struct {
 	RPC gatewayclient.GatewayRPCClientOptions
 	// RPCClient 直接注入已构造的 RPC 客户端（测试用，优先于 RPC 选项）。
 	RPCClient realRPCClient
+	// Debug 开启翻译层的丢弃/异常日志（默认静默丢弃）。
+	Debug bool
 }
 
 // RealClient 是 gateway.Client 的真实网关实现（ADR-004 薄翻译层）：
@@ -58,8 +62,11 @@ type RealClient struct {
 	permReqID  map[string]string // sessionID → 最近 pending 权限请求 ID
 	questReqID map[string]string // sessionID → 最近 pending 问答请求 ID
 
+	debug bool
+
 	closeOnce sync.Once
 	closed    chan struct{}
+	pumpDone  chan struct{}
 }
 
 // realSubscription 是一条会话订阅：下游通道 + close-once。
@@ -68,11 +75,15 @@ type RealClient struct {
 type realSubscription struct {
 	ch   chan GatewayEvent
 	once sync.Once
+	done chan struct{} // 关闭完成信号：ctx watcher 据此停止
 }
 
-// close 关闭下游通道（幂等）。
+// close 关闭下游通道与完成信号（幂等）。
 func (s *realSubscription) close() {
-	s.once.Do(func() { close(s.ch) })
+	s.once.Do(func() {
+		close(s.ch)
+		close(s.done)
+	})
 }
 
 // NewRealClient 创建真实网关客户端并执行 fail-fast 认证连通性检查
@@ -99,8 +110,11 @@ func NewRealClient(options RealClientOptions) (*RealClient, error) {
 		subs:       make(map[string]*realSubscription),
 		permReqID:  make(map[string]string),
 		questReqID: make(map[string]string),
+		debug:      options.Debug,
 		closed:     make(chan struct{}),
+		pumpDone:   make(chan struct{}),
 	}
+	go c.runPump()
 
 	authCtx, cancel := context.WithTimeout(context.Background(), defaultRealAuthTimeout)
 	defer cancel()
@@ -116,8 +130,20 @@ func (c *RealClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
 		_ = c.rpc.Close()
+		<-c.pumpDone
+		c.closeSubscriptions()
 	})
 	return nil
+}
+
+// closeSubscriptions 关闭全部订阅通道（Close 路径；幂等由 close-once 保证）。
+func (c *RealClient) closeSubscriptions() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, sub := range c.subs {
+		sub.close()
+	}
+	c.subs = make(map[string]*realSubscription)
 }
 
 // Health 对应 gateway.ping：连接健康检查。
@@ -297,9 +323,47 @@ func (c *RealClient) CancelRun(ctx context.Context, sessionID string, runID stri
 	return c.rpc.Call(ctx, "gateway.cancel", params, &frame)
 }
 
-// SubscribeEvents 对应 gateway.bindStream + gateway.event（S5 分阶段实装）。
+// SubscribeEvents 对应 gateway.bindStream（事件经 gateway.event 通知推送，
+// 由构造期单泵扇出到本订阅）：绑定会话事件流并返回订阅通道。
+// 生命周期契约与 fake 一致——调用方 ctx cancel 即订阅关闭；同会话
+// 重复订阅为新顶替旧（先注册新后关旧，与 kernel 单流换代语义一致）。
 func (c *RealClient) SubscribeEvents(ctx context.Context, sessionID string) (<-chan GatewayEvent, error) {
-	return nil, errRealNotImplemented
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, errors.New("gateway: session id is empty")
+	}
+	if err := c.rpc.Call(ctx, "gateway.bindStream", struct {
+		SessionID string `json:"session_id"`
+	}{SessionID: sessionID}, &struct{}{}); err != nil {
+		return nil, err
+	}
+
+	sub := &realSubscription{
+		ch:   make(chan GatewayEvent, realSubBuffer),
+		done: make(chan struct{}),
+	}
+	c.mu.Lock()
+	old := c.subs[sessionID]
+	c.subs[sessionID] = sub // 先注册新
+	c.mu.Unlock()
+	if old != nil {
+		old.close() // 后关旧（顶替语义；close-once 幂等）
+	}
+
+	// 调用方 ctx cancel 路径：注销并关闭订阅。
+	go func() {
+		select {
+		case <-ctx.Done():
+			c.mu.Lock()
+			if c.subs[sessionID] == sub {
+				delete(c.subs, sessionID)
+			}
+			c.mu.Unlock()
+			sub.close()
+		case <-sub.done:
+		}
+	}()
+	return sub.ch, nil
 }
 
 // resolvePermRequestID 解析权限请求 ID：显式值优先，空则回填
@@ -447,4 +511,324 @@ func (c *RealClient) GetModel(ctx context.Context, sessionID string) (string, er
 		return "", err
 	}
 	return strings.TrimSpace(frame.Payload.ModelID), nil
+}
+
+// ---------- 事件扁平化（S5 审计裁定的单一翻译点） ----------
+
+// realSubBuffer 是订阅下游通道缓冲：吸收渲染抖动，避免泵阻塞传导为
+// v1 通知队列背压（3s 强断共享连接）的连接级风险（S5 审计钉死项）。
+const realSubBuffer = 128
+
+// realEventChannel 是网关事件通知的方法名（协议常量的本地字符串，
+// tuiv2 不 import 服务端协议包——边界禁 4 放行面仅客户端包）。
+const realEventChannel = "gateway.event"
+
+// realFrame 是 gateway.event 通知 params 的本地解码结构
+// （wire 契约：{type, action, session_id, run_id, payload}）。
+type realFrame struct {
+	SessionID string         `json:"session_id"`
+	RunID     string         `json:"run_id"`
+	Payload   map[string]any `json:"payload"`
+}
+
+// runPump 是构造期唯一通知泵：消费共享通知通道，扁平化后按会话扇出。
+// 退出三路径：客户端 Close（closed）/ 通知通道关闭（连接断开）/ 上层取消。
+func (c *RealClient) runPump() {
+	defer close(c.pumpDone)
+	for {
+		select {
+		case <-c.closed:
+			return
+		case notification, ok := <-c.rpc.Notifications():
+			if !ok {
+				return
+			}
+			if notification.Method != realEventChannel {
+				continue
+			}
+			c.dispatchNotification(notification)
+		}
+	}
+}
+
+// dispatchNotification 将单条 gateway.event 通知翻译并扇出到订阅。
+func (c *RealClient) dispatchNotification(notification gatewayclient.Notification) {
+	var params realFrame
+	if len(notification.Params) == 0 {
+		return
+	}
+	if err := json.Unmarshal(notification.Params, &params); err != nil {
+		c.debugf("gateway.event params decode: %v", err)
+		return
+	}
+	sessionID := strings.TrimSpace(params.SessionID)
+
+	// 无 envelope 的外层错误帧（run_error/ask_error，payload={code,message}）：
+	// 必须消费——否则 run 失败后 UI 恒 running（S5 审计 P0-4）。
+	event, hasEnvelope, deliverable := flattenGatewayEvent(params)
+	if !hasEnvelope {
+		event = c.errorFallbackEvent(params)
+		if event.Type == "" {
+			return
+		}
+		sessionID = params.SessionID
+	} else if !deliverable {
+		c.debugf("drop runtime event（非 tuiv2 词汇，与白名单外 no-op 语义一致）")
+		return
+	}
+
+	// request_id 追踪：泵内扇出前写入（无订阅/换代窗口仍可回填）；
+	// *_resolved 事件清槽防陈旧回填（S5 审计钉死项）。
+	c.trackRequestID(event)
+
+	c.mu.Lock()
+	sub := c.subs[sessionID]
+	c.mu.Unlock()
+	if sub == nil {
+		return // 无订阅：事件自然消亡（通道生命周期由订阅方管理）
+	}
+	select {
+	case sub.ch <- event:
+	case <-sub.done:
+	case <-c.closed:
+	}
+}
+
+// errorFallbackEvent 将无 envelope 的外层错误帧翻译为 EventError；
+// 非 run_error/ask_error 类返回零值（调用方跳过）。
+func (c *RealClient) errorFallbackEvent(params realFrame) GatewayEvent {
+	eventType, _ := params.Payload["event_type"].(string)
+	switch eventType {
+	case "run_error", "ask_error":
+		message, _ := params.Payload["message"].(string)
+		if message == "" {
+			if code, ok := params.Payload["code"].(string); ok {
+				message = code
+			}
+		}
+		return GatewayEvent{
+			Type:      EventError,
+			SessionID: params.SessionID,
+			RunID:     params.RunID,
+			Payload:   map[string]any{"message": message},
+			At:        time.Now(),
+		}
+	default:
+		return GatewayEvent{}
+	}
+}
+
+// trackRequestID 在扇出前登记/清槽 request_id（双槽独立，S5 协调者裁定）。
+func (c *RealClient) trackRequestID(event GatewayEvent) {
+	switch event.Type {
+	case EventPermissionRequested:
+		if id, _ := event.Payload["request_id"].(string); id != "" {
+			c.mu.Lock()
+			c.permReqID[event.SessionID] = id
+			c.mu.Unlock()
+		}
+	case EventPermissionResolved:
+		c.mu.Lock()
+		delete(c.permReqID, event.SessionID)
+		c.mu.Unlock()
+	case EventUserQuestionRequested:
+		if id, _ := event.Payload["request_id"].(string); id != "" {
+			c.mu.Lock()
+			c.questReqID[event.SessionID] = id
+			c.mu.Unlock()
+		}
+	case EventUserQuestionAnswered:
+		c.mu.Lock()
+		delete(c.questReqID, event.SessionID)
+		c.mu.Unlock()
+	}
+}
+
+// flattenGatewayEvent 从通知 payload 提取 runtime envelope 并翻译为
+// tuiv2 事件（S4 三类分组的 A 组同名映射 + 值/键归一化）。
+// 返回值：hasEnvelope=false 表示无 runtime envelope（调用方走外层错误帧
+// 回退）；hasEnvelope=true 且 deliverable=false 表示有 envelope 但事件
+// 不在 tuiv2 词汇内（调用方丢弃——不可扇出空事件）。
+func flattenGatewayEvent(params realFrame) (event GatewayEvent, hasEnvelope bool, deliverable bool) {
+	envelope := extractRuntimeEnvelope(params.Payload)
+	if envelope == nil {
+		return GatewayEvent{}, false, false
+	}
+	runtimeType, _ := envelope["runtime_event_type"].(string)
+	eventType, ok := translateRuntimeEventType(runtimeType)
+	if !ok {
+		return GatewayEvent{}, true, false
+	}
+	payload := normalizeEventPayload(eventType, runtimeType, envelope)
+
+	updatedAt := time.Now()
+	if ts, _ := envelope["timestamp"].(string); ts != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			updatedAt = parsed
+		}
+	}
+	return GatewayEvent{
+		Type:      eventType,
+		SessionID: strings.TrimSpace(params.SessionID),
+		RunID:     strings.TrimSpace(params.RunID),
+		Payload:   payload,
+		At:        updatedAt,
+	}, true, true
+}
+
+// extractRuntimeEnvelope 提取 runtime envelope：支持直接形态
+// （{runtime_event_type,...}）与 gateway 包裹形态（{event_type,payload:{...}}）。
+func extractRuntimeEnvelope(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	if _, ok := payload["runtime_event_type"]; ok {
+		return payload
+	}
+	if nested, ok := payload["payload"].(map[string]any); ok {
+		if _, ok := nested["runtime_event_type"]; ok {
+			return nested
+		}
+	}
+	return nil
+}
+
+// translateRuntimeEventType 将 runtime 事件名映射为 tuiv2 事件常量
+// （S4 已同名对齐的 A 组 + 两个特映射）。返回 ok=false 表示 tuiv2 不消费
+// （丢弃 + debug 日志的集中点——与 ReduceWithoutInput 白名单语义一致）。
+func translateRuntimeEventType(runtimeType string) (EventType, bool) {
+	switch strings.TrimSpace(runtimeType) {
+	case "agent_chunk":
+		return EventAgentChunk, true
+	case "tool_start":
+		return EventToolStart, true
+	case "tool_result":
+		return EventToolResult, true
+	case "tool_chunk":
+		return EventToolOutput, true // runtime 词汇 tool_chunk ↔ tuiv2 tool_output（S4 登记的特映射）
+	case "run_canceled":
+		return EventRunCanceled, true
+	case "token_usage":
+		return EventTokenUsage, true
+	case "phase_changed":
+		return EventPhaseChanged, true
+	case "permission_requested":
+		return EventPermissionRequested, true
+	case "permission_resolved":
+		return EventPermissionResolved, true
+	case "user_question_requested":
+		return EventUserQuestionRequested, true
+	case "user_question_answered":
+		return EventUserQuestionAnswered, true
+	case "error":
+		return EventError, true
+	case "agent_done":
+		return EventRunFinished, true // envelope 结束边界 → C 组 run_finished（派生来源登记）
+	default:
+		return "", false
+	}
+}
+
+// tuiv2 phase 词表值（state.RuntimePhase* 的字符串字面量——gateway 包
+// 不能 import state（会成环：state 依赖本包 DTO），以字面量+出处注释对齐）。
+const (
+	realPhaseIdle        = "idle"
+	realPhaseRunning     = "running"
+	realPhaseWaitingUser = "waiting_user"
+)
+
+// translatePhaseValue 是 phase 值翻译（runtime 词表 → tuiv2 词表）：
+// 直传 execute 会使 chat runCancel 静默失效、statusbar 误渲染 idle
+// （S5 审计 P1-7 双实例证实）；waiting_permission 与 tuiv2 同名直通。
+func translatePhaseValue(value string) string {
+	switch value {
+	case "plan", "execute", "verify", "compacting":
+		return realPhaseRunning
+	case "waiting_user_question":
+		return realPhaseWaitingUser
+	case "stopped":
+		return realPhaseIdle
+	default:
+		return value
+	}
+}
+
+// normalizeEventPayload 按事件做最小键归一化（产出键 = fake fixtures
+// 词表，即 state 消费的 golden 契约——S5 审计裁定的三归一）：
+// 纯字符串 payload 包装 / envelope 顶层键提升 / PascalCase→小写。
+func normalizeEventPayload(eventType EventType, runtimeType string, envelope map[string]any) map[string]any {
+	// 纯字符串 payload（runtime 侧这三类事件 payload 就是字符串）。
+	if raw, ok := envelope["payload"].(string); ok {
+		switch eventType {
+		case EventAgentChunk, EventToolOutput, EventError:
+			return map[string]any{"text": raw}
+		}
+	}
+
+	out := map[string]any{}
+	for key, value := range envelope {
+		if key == "runtime_event_type" || key == "payload_version" {
+			continue // 协议元数据，非业务键
+		}
+		out[strings.ToLower(key)] = normalizeValue(value)
+	}
+	if nested, ok := envelope["payload"].(map[string]any); ok {
+		for key, value := range nested {
+			out[strings.ToLower(key)] = normalizeValue(value)
+		}
+	}
+
+	switch eventType {
+	case EventPhaseChanged:
+		// phase 值翻译：to（缺省回退 from/phase）→ tuiv2 词表。
+		to, _ := out["to"].(string)
+		if to == "" {
+			to, _ = out["from"].(string)
+		}
+		if to == "" {
+			to, _ = out["phase"].(string)
+		}
+		out["phase"] = translatePhaseValue(strings.TrimSpace(to))
+	case EventTokenUsage:
+		// runtime 无 total 键：由 input/output 合成（state 层 total 优先读）。
+		input, output := payloadIntValue(out, "input_tokens", "input"), payloadIntValue(out, "output_tokens", "output")
+		out["total"] = input + output
+	case EventPermissionRequested:
+		// runtime 键 tool_name → state 消费键 tool。
+		if name, ok := out["tool_name"]; ok {
+			out["tool"] = name
+		}
+	}
+	return out
+}
+
+// normalizeValue 递归归一：map 键转小写（PascalCase tools.ToolResult
+// 实测序列化为 {"ToolCallID","Name","Content",...}，state 只读小写键）。
+func normalizeValue(value any) any {
+	typed, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	out := make(map[string]any, len(typed))
+	for key, item := range typed {
+		out[strings.ToLower(key)] = normalizeValue(item)
+	}
+	return out
+}
+
+// payloadIntValue 从归一化后的 map 读取整数值（兼容 float64 JSON 形态）。
+func payloadIntValue(m map[string]any, keys ...string) int {
+	for _, key := range keys {
+		if v, ok := m[key].(float64); ok {
+			return int(v)
+		}
+	}
+	return 0
+}
+
+// debugf 输出翻译层调试日志（RealClientOptions.Debug 开启）。
+func (c *RealClient) debugf(format string, args ...any) {
+	if c.debug {
+		log.Printf("[tuiv2-gateway] "+format, args...)
+	}
 }

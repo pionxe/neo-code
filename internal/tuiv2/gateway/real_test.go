@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	gatewayclient "neo-code/internal/gateway/client"
 )
@@ -127,29 +129,16 @@ func TestRealClientHealthPingsGateway(t *testing.T) {
 	}
 }
 
-// TestRealClientUnwiredMethodsStayExplicit 验证分阶段实装纪律：
-// 未落地方法返回 errRealNotImplemented（显式错误而非静默假成功）。
-func TestRealClientUnwiredMethodsStayExplicit(t *testing.T) {
-	mock := newMockRPC()
-	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
-	if err != nil {
-		t.Fatalf("construct: %v", err)
-	}
-	ctx := context.Background()
-	if _, err := c.SubscribeEvents(ctx, "s1"); !errors.Is(err, errRealNotImplemented) {
-		t.Fatalf("SubscribeEvents err = %v", err)
-	}
-}
-
 // TestRealSubscriptionCloseOnce 验证订阅条目 close-once：三关闭路径
 // （被顶替/ctx cancel/客户端 Close）重叠时不双关（S5 审计钉死项）。
 func TestRealSubscriptionCloseOnce(t *testing.T) {
-	s := &realSubscription{ch: make(chan GatewayEvent, 1)}
+	s := &realSubscription{ch: make(chan GatewayEvent, 1), done: make(chan struct{})}
 	s.close()
-	s.close() // 重叠关闭不得 panic
-	_, open := <-s.ch
-	if open {
-		t.Fatal("subscription channel should be closed")
+	s.close() // 重叠关闭不得 panic（事件/完成信号双通道）
+	_, chOpen := <-s.ch
+	_, doneOpen := <-s.done
+	if chOpen || doneOpen {
+		t.Fatal("subscription channels should be closed")
 	}
 }
 
@@ -523,5 +512,229 @@ func TestGetModelReadsPayloadModelID(t *testing.T) {
 	}
 	if model != "m-final" {
 		t.Fatalf("model = %q", model)
+	}
+}
+
+// pushNotification 向 mock 通知通道注入一条 gateway.event（JSON params）。
+func pushNotification(t *testing.T, m *mockRPC, params string) {
+	t.Helper()
+	m.notifications <- gatewayclient.Notification{Method: "gateway.event", Params: json.RawMessage(params)}
+}
+
+// recvEvent 带超时读取订阅事件。
+func recvEvent(t *testing.T, ch <-chan GatewayEvent) GatewayEvent {
+	t.Helper()
+	select {
+	case event, ok := <-ch:
+		if !ok {
+			t.Fatal("subscription closed unexpectedly")
+		}
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for event")
+		return GatewayEvent{}
+	}
+}
+
+const agentChunkFrame = `{"type":"event","action":"run","session_id":"s1","run_id":"run-1","payload":{"event_type":"run_progress","payload":{"runtime_event_type":"agent_chunk","turn":1,"phase":"execute","timestamp":"2026-09-13T00:00:00Z","payload_version":4,"payload":"你好"}}}`
+
+// TestSubscribeEventsBindsAndReceivesChunk 端到端：bindStream + 单泵扇出 +
+// 纯字符串 payload 包装（agent_chunk → {"text":...}）+ envelope 顶层
+// phase 提升翻译（execute → running）。
+func TestSubscribeEventsBindsAndReceivesChunk(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock, Debug: true})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	defer c.Close()
+
+	ch, err := c.SubscribeEvents(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	// bindStream 已调用。
+	mock.mu.Lock()
+	if len(mock.calls) == 0 || mock.calls[0].method != "gateway.bindStream" {
+		mock.mu.Unlock()
+		t.Fatal("bindStream should be called")
+	}
+	mock.mu.Unlock()
+
+	pushNotification(t, mock, agentChunkFrame)
+	event := recvEvent(t, ch)
+	if event.Type != EventAgentChunk {
+		t.Fatalf("type = %v", event.Type)
+	}
+	if event.Payload["text"] != "你好" {
+		t.Fatalf("payload = %+v", event.Payload)
+	}
+	if event.SessionID != "s1" || event.RunID != "run-1" {
+		t.Fatalf("frame ids = %+v", event)
+	}
+}
+
+// TestSubscribeEventsReplacesOldSubscription 验证同会话重复订阅：新顶替旧
+// 并关闭旧通道（close-once）。
+func TestSubscribeEventsReplacesOldSubscription(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	defer c.Close()
+
+	oldCh, err := c.SubscribeEvents(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("subscribe old: %v", err)
+	}
+	newCh, err := c.SubscribeEvents(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("subscribe new: %v", err)
+	}
+	if _, open := <-oldCh; open {
+		t.Fatal("old subscription should be closed on replacement")
+	}
+	if newCh == nil {
+		t.Fatal("new subscription should be open")
+	}
+}
+
+// TestFlattenPhaseChangedValueTranslation 验证 phase_changed 值翻译：
+// execute→running、waiting_user_question→waiting_user（S5 审计 P1-7）。
+func TestFlattenPhaseChangedValueTranslation(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	defer c.Close()
+	ch, err := c.SubscribeEvents(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload":{"from":"plan","to":"execute"}}}}`)
+	event := recvEvent(t, ch)
+	if event.Type != EventPhaseChanged || event.Payload["phase"] != "running" {
+		t.Fatalf("event = %+v", event)
+	}
+
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"phase_changed","payload":{"from":"execute","to":"waiting_user_question"}}}}`)
+	event = recvEvent(t, ch)
+	if event.Payload["phase"] != "waiting_user" {
+		t.Fatalf("phase = %v, want waiting_user", event.Payload["phase"])
+	}
+}
+
+// TestFlattenToolResultPascalCaseNormalized 验证 tool_result 的 PascalCase
+// 键归一化（tools.ToolResult 实测序列化形态）。
+func TestFlattenToolResultPascalCaseNormalized(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	defer c.Close()
+	ch, err := c.SubscribeEvents(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"tool_result","payload":{"ToolCallID":"t1","Name":"bash","Content":"ok","IsError":false}}}}`)
+	event := recvEvent(t, ch)
+	if event.Type != EventToolResult {
+		t.Fatalf("type = %v", event.Type)
+	}
+	if event.Payload["name"] != "bash" || event.Payload["content"] != "ok" {
+		t.Fatalf("payload = %+v（PascalCase 应归一为小写键）", event.Payload)
+	}
+}
+
+// TestEnvelopeLessErrorFrameConsumed 验证无 envelope 的外层错误帧
+// （run_error，payload={code,message}）被消费为 EventError（S5 审计 P0-4）。
+func TestEnvelopeLessErrorFrameConsumed(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	defer c.Close()
+	ch, err := c.SubscribeEvents(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	pushNotification(t, mock, `{"session_id":"s1","run_id":"run-1","payload":{"event_type":"run_error","message":"boom","code":"internal_error"}}`)
+	event := recvEvent(t, ch)
+	if event.Type != EventError || event.Payload["message"] != "boom" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+// TestRequestIDTrackedAndBackfilledEndToEnd 端到端：泵内追踪 request_id →
+// 提交决策时回填；resolved 清槽后回填不可用（本地报错）。
+func TestRequestIDTrackedAndBackfilledEndToEnd(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	defer c.Close()
+	ch, err := c.SubscribeEvents(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	// 权限请求事件（带 request_id）→ 泵内登记（扇出前写入）。
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"permission_requested","payload":{"request_id":"perm-42","tool_name":"bash","operation":"ls"}}}}`)
+	recvEvent(t, ch)
+
+	// 无显式 RequestID 提交 → 回填 perm-42。
+	if err := c.ResolvePermission(context.Background(), PermissionDecision{SessionID: "s1", Allow: true}); err != nil {
+		t.Fatalf("resolve with backfill: %v", err)
+	}
+	mock.mu.Lock()
+	params := mock.calls[len(mock.calls)-1].params.(struct {
+		RequestID string `json:"request_id"`
+		Decision  string `json:"decision"`
+	})
+	mock.mu.Unlock()
+	if params.RequestID != "perm-42" || params.Decision != "allow" {
+		t.Fatalf("params = %+v", params)
+	}
+
+	// resolved 事件清槽 → 再次提交本地报错（防陈旧回填）。
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"permission_resolved","payload":{"request_id":"perm-42"}}}}`)
+	recvEvent(t, ch)
+	if err := c.ResolvePermission(context.Background(), PermissionDecision{SessionID: "s1"}); err == nil {
+		t.Fatal("stale backfill should be unavailable after resolved")
+	}
+}
+
+// TestNonTuiv2EventDropped 验证非 tuiv2 词汇事件（budget_checked）被
+// 丢弃且不影响后续事件（default 分支集中丢弃）。
+func TestNonTuiv2EventDropped(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	defer c.Close()
+	ch, err := c.SubscribeEvents(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"budget_checked","payload":{"decision":"allow"}}}}`)
+	pushNotification(t, mock, `{"session_id":"s1","payload":{"payload":{"runtime_event_type":"token_usage","payload":{"input_tokens":10,"output_tokens":5}}}}`)
+
+	event := recvEvent(t, ch)
+	if event.Type != EventTokenUsage {
+		t.Fatalf("type = %v, want token_usage after dropped budget_checked", event.Type)
+	}
+	// runtime 无 total 键：由 input+output 合成（S5 审计裁定）。
+	if event.Payload["total"] != 15 {
+		t.Fatalf("total = %v, want 15", event.Payload["total"])
 	}
 }
