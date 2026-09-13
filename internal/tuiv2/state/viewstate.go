@@ -152,8 +152,8 @@ type InputState struct {
 //
 // 槽所有制（issue #23 修订 v2，字段级拆分）：Width/Height 归内核
 // （WindowSizeMsg 分支唯一写者）；ScrollOffset/AutoScroll 归插件 chat
-// （行为流视图状态）；ShowInspector/InspectorWidth 的断点逻辑待 S7
-// 布局包接管后归属 kernel。
+// （行为流视图状态）；ShowInspector/InspectorWidth 的宽屏侧栏断点随
+// layout 包收编（S7；恢复需 compose 横向拼接，登记 S7b，issue #50）。
 type LayoutState struct {
 	Width          int
 	Height         int

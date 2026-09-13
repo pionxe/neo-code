@@ -56,7 +56,7 @@ func (p *Plugin) delegateUpdate(h kernel.Host, msg tea.KeyMsg) {
 	if p.prompt == nil {
 		return
 	}
-	if _, cmd := p.prompt.Update(msg); cmd != nil {
+	if cmd := p.prompt.Update(msg); cmd != nil {
 		h.GoCmd(cmd)
 	}
 }

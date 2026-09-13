@@ -35,11 +35,11 @@ func (p *Plugin) Close(ctx context.Context) {}
 // Region 返回顶部状态栏区域。
 func (p *Plugin) Region() kernel.RegionID { return kernel.RegionStatusBar }
 
-// Render 委托 AmbientStatus 渲染（组件读 Layout.Width 为宽度真相源，
-// Render 的 width 参数本 PR 忽略——S7 布局包接管断点时统一）。
+// Render 委托 AmbientStatus 渲染：width 参数透传为唯一宽度真相源
+// （S7 真相源统一，issue #50——消除 Layout.Width 首帧零值错位）。
 func (p *Plugin) Render(h kernel.Host, width int) string {
 	if p.status == nil {
 		return ""
 	}
-	return p.status.View()
+	return p.status.View(width)
 }

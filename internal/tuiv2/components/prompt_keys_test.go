@@ -63,7 +63,7 @@ func TestCommandPromptPermissionKeyFull(t *testing.T) {
 	vs.Input.Prompt = "允许写入？"
 	p := NewCommandPrompt(vs)
 	// 渲染权限视图
-	if v := p.View(); v == "" {
+	if v := p.View(80); v == "" {
 		t.Fatal("permission view empty")
 	}
 	// y/n/d/a 决策
@@ -71,7 +71,8 @@ func TestCommandPromptPermissionKeyFull(t *testing.T) {
 		vs2 := promptState()
 		vs2.Input.Mode = state.InputStateModePermissionResponse
 		pp := NewCommandPrompt(vs2)
-		_, cmd := pp.Update(keyMsg(decision))
+		var cmd tea.Cmd
+		cmd = pp.Update(keyMsg(decision))
 		if cmd == nil {
 			t.Fatalf("%s should emit PermissionActionMsg", decision)
 		}
@@ -80,7 +81,8 @@ func TestCommandPromptPermissionKeyFull(t *testing.T) {
 	vs3 := promptState()
 	vs3.Input.Mode = state.InputStateModePermissionResponse
 	pp3 := NewCommandPrompt(vs3)
-	_, cmd := pp3.Update(keyMsg("Y"))
+	var cmd tea.Cmd
+	cmd = pp3.Update(keyMsg("Y"))
 	if cmd == nil {
 		t.Fatal("Y should emit PermissionActionMsg")
 	}
@@ -88,7 +90,7 @@ func TestCommandPromptPermissionKeyFull(t *testing.T) {
 	vs4 := promptState()
 	vs4.Input.Mode = state.InputStateModePermissionResponse
 	pp4 := NewCommandPrompt(vs4)
-	_, cmd = pp4.Update(keyType(tea.KeyEsc))
+	cmd = pp4.Update(keyType(tea.KeyEsc))
 	if _, ok := cmd().(PromptCancelMsg); !ok {
 		t.Fatal("esc should emit PromptCancelMsg")
 	}
@@ -108,16 +110,16 @@ func TestCommandPromptQuestionKeyFull(t *testing.T) {
 	vs.Input.Prompt = "选哪个？"
 	vs.Input.Options = []string{"甲", "乙"}
 	p := NewCommandPrompt(vs)
-	if v := p.View(); v == "" {
+	if v := p.View(80); v == "" {
 		t.Fatal("question view empty")
 	}
 	// 空文本回车 -> nil
-	if _, cmd := p.Update(keyType(tea.KeyEnter)); cmd != nil {
+	if cmd := p.Update(keyType(tea.KeyEnter)); cmd != nil {
 		t.Fatal("empty enter should be nil")
 	}
 	// 输入后回车 -> QuestionAnswerMsg
 	p.Update(keyMsg("1"))
-	_, cmd := p.Update(keyType(tea.KeyEnter))
+	cmd := p.Update(keyType(tea.KeyEnter))
 	if cmd == nil {
 		t.Fatal("enter with text should emit QuestionAnswerMsg")
 	}
@@ -128,7 +130,7 @@ func TestCommandPromptQuestionKeyFull(t *testing.T) {
 	vs2 := promptState()
 	vs2.Input.Mode = state.InputStateModeQuestionAnswer
 	pp := NewCommandPrompt(vs2)
-	_, cmd = pp.Update(keyType(tea.KeyEsc))
+	cmd = pp.Update(keyType(tea.KeyEsc))
 	if _, ok := cmd().(PromptCancelMsg); !ok {
 		t.Fatal("esc should emit PromptCancelMsg")
 	}
@@ -150,8 +152,8 @@ func TestCommandPromptInitAndCursorBlink(t *testing.T) {
 			t.Fatal("blink cmd produced nil msg")
 		}
 	}
-	_, cmd := p.Update(CursorBlinkMsg{})
-	if cmd == nil {
+	blinkCmd := p.Update(CursorBlinkMsg{})
+	if blinkCmd == nil {
 		t.Fatal("CursorBlinkMsg should renew blink cmd")
 	}
 }
@@ -161,7 +163,7 @@ func TestCommandPromptMessageLinesHelpers(t *testing.T) {
 	vs.Input.Mode = state.InputStateModeMessage
 	p := NewCommandPrompt(vs)
 	// 普通 message 模式 View
-	if v := p.View(); v == "" {
+	if v := p.View(80); v == "" {
 		t.Fatal("message view empty")
 	}
 	// wrapText：超宽切分
@@ -170,9 +172,8 @@ func TestCommandPromptMessageLinesHelpers(t *testing.T) {
 		t.Fatalf("wrapText should split: %v", wrapped)
 	}
 	wrapText("x", 0) // width<=0 分支
-	// contentWidth 回退
-	vs.Layout.Width = 0
-	if p.contentWidth() != 80 {
+	// contentWidth 回退：宽度真相源=Render 参数（S7），0 → 80 兜底。
+	if p.contentWidth(0) != 80 {
 		t.Fatal("contentWidth fallback wrong")
 	}
 }
@@ -232,17 +233,17 @@ func TestModeLineIndicatorColors(t *testing.T) {
 	vs := promptState()
 	vs.Mode = state.InputModeInput
 	p := NewCommandPrompt(vs)
-	if v := p.modeLine(); v == "" {
+	if v := p.modeLine(80); v == "" {
 		t.Fatal("input modeLine empty")
 	}
 	// normal → SubtleStyle
 	vs.Mode = state.NormalMode
-	if v := p.modeLine(); v == "" {
+	if v := p.modeLine(80); v == "" {
 		t.Fatal("normal modeLine empty")
 	}
 	// leader → AccentStyle 加粗
 	vs.Mode = state.LeaderMode
-	if v := p.modeLine(); v == "" {
+	if v := p.modeLine(80); v == "" {
 		t.Fatal("leader modeLine empty")
 	}
 	// modeIndicatorStyle 返回正确类型（非空 Style，通过是否可 Render 验证）

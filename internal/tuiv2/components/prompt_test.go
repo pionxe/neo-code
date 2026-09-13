@@ -16,17 +16,17 @@ func TestCommandPromptMessageInputSubmitAndMultiline(t *testing.T) {
 	viewState := promptState()
 	prompt := NewCommandPrompt(viewState)
 
-	_, cmd := prompt.Update(keyMsg("hello"))
+	cmd := prompt.Update(keyMsg("hello"))
 	if cmd != nil {
 		t.Fatal("typing returned command, want nil")
 	}
-	_, _ = prompt.Update(keyMsg("shift+enter"))
-	_, _ = prompt.Update(keyMsg("world"))
+	_ = prompt.Update(keyMsg("shift+enter"))
+	_ = prompt.Update(keyMsg("world"))
 	if viewState.Input.Text != "hello\nworld" {
 		t.Fatalf("Input.Text = %q, want multiline text", viewState.Input.Text)
 	}
 
-	_, cmd = prompt.Update(keyType(tea.KeyEnter))
+	cmd = prompt.Update(keyType(tea.KeyEnter))
 	got, ok := cmd().(SubmitMessageMsg)
 	if !ok {
 		t.Fatalf("submit msg = %T, want SubmitMessageMsg", cmd())
@@ -45,7 +45,7 @@ func TestCommandPromptPermissionSingleKeyActions(t *testing.T) {
 	viewState.Input.Prompt = "tool.write_file 请求写入 main.go (2.3k) — 是否允许?"
 	prompt := NewCommandPrompt(viewState)
 
-	view := prompt.View()
+	view := prompt.View(50)
 	for _, want := range []string{
 		theme.StatusSymbol(theme.PhaseWaitingPermission),
 		"tool.write_file 请求写入 main.go",
@@ -57,7 +57,7 @@ func TestCommandPromptPermissionSingleKeyActions(t *testing.T) {
 		}
 	}
 
-	_, cmd := prompt.Update(keyMsg("y"))
+	cmd := prompt.Update(keyMsg("y"))
 	got, ok := cmd().(PermissionActionMsg)
 	if !ok {
 		t.Fatalf("permission msg = %T, want PermissionActionMsg", cmd())
@@ -79,7 +79,7 @@ func TestCommandPromptQuestionAnswerAndOptionWrapping(t *testing.T) {
 	}
 	prompt := NewCommandPrompt(viewState)
 
-	view := prompt.View()
+	view := prompt.View(33)
 	for _, want := range []string{
 		theme.Separator() + " 请选择要使用的模块:",
 		"  1. auth 模块",
@@ -97,8 +97,8 @@ func TestCommandPromptQuestionAnswerAndOptionWrapping(t *testing.T) {
 		}
 	}
 
-	_, _ = prompt.Update(keyMsg("2"))
-	_, cmd := prompt.Update(keyType(tea.KeyEnter))
+	_ = prompt.Update(keyMsg("2"))
+	cmd := prompt.Update(keyType(tea.KeyEnter))
 	got, ok := cmd().(QuestionAnswerMsg)
 	if !ok {
 		t.Fatalf("question msg = %T, want QuestionAnswerMsg", cmd())
@@ -112,14 +112,14 @@ func TestCommandPromptCursorMovementHistoryAndBlink(t *testing.T) {
 	viewState := promptState()
 	prompt := NewCommandPrompt(viewState)
 
-	_, _ = prompt.Update(keyMsg("ab"))
-	_, _ = prompt.Update(keyType(tea.KeyLeft))
-	_, _ = prompt.Update(keyMsg("中"))
+	_ = prompt.Update(keyMsg("ab"))
+	_ = prompt.Update(keyType(tea.KeyLeft))
+	_ = prompt.Update(keyMsg("中"))
 	if viewState.Input.Text != "a中b" {
 		t.Fatalf("Input.Text = %q, want rune-safe insert", viewState.Input.Text)
 	}
 	visible := viewState.Input.CursorVisible
-	_, cmd := prompt.Update(CursorBlinkMsg{})
+	cmd := prompt.Update(CursorBlinkMsg{})
 	if cmd == nil {
 		t.Fatal("CursorBlinkMsg returned nil command")
 	}
@@ -129,11 +129,11 @@ func TestCommandPromptCursorMovementHistoryAndBlink(t *testing.T) {
 
 	viewState.Input.History = []string{"first", "second"}
 	viewState.Mode = state.NormalMode
-	_, _ = prompt.Update(keyType(tea.KeyUp))
+	_ = prompt.Update(keyType(tea.KeyUp))
 	if viewState.Input.Text != "second" {
 		t.Fatalf("history up text = %q, want second", viewState.Input.Text)
 	}
-	_, _ = prompt.Update(keyType(tea.KeyDown))
+	_ = prompt.Update(keyType(tea.KeyDown))
 	if viewState.Input.Text != "" {
 		t.Fatalf("history down text = %q, want empty", viewState.Input.Text)
 	}
@@ -144,7 +144,7 @@ func TestCommandPromptModeLineUsesSessionAndModel(t *testing.T) {
 	viewState.Gateway.ActiveSess = &gateway.SessionSummary{ID: "s1", Title: "ghost-console"}
 	viewState.Gateway.ActiveModel = "claude-sonnet-4-6"
 
-	view := NewCommandPrompt(viewState).View()
+	view := NewCommandPrompt(viewState).View(80)
 	for _, want := range []string{"[input]", "ghost-console", "claude-sonnet-4-6"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("mode line missing %q in:\n%s", want, view)
@@ -156,8 +156,8 @@ func TestCommandPromptCtrlJInsertsNewline(t *testing.T) {
 	viewState := promptState()
 	prompt := NewCommandPrompt(viewState)
 
-	_, _ = prompt.Update(keyMsg("hello"))
-	_, cmd := prompt.Update(keyType(tea.KeyCtrlJ))
+	_ = prompt.Update(keyMsg("hello"))
+	cmd := prompt.Update(keyType(tea.KeyCtrlJ))
 	if cmd != nil {
 		t.Fatalf("ctrl+j returned command %T, want nil", cmd)
 	}

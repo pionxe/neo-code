@@ -138,10 +138,10 @@ func stringOf(payload map[string]any, keys ...string) string {
 func (p *Plugin) Region() kernel.RegionID { return kernel.RegionStream }
 
 // Render 委托 AgentStream 渲染（组件读 Layout.Width 为宽度真相源，
-// Render 的 width 参数本 PR 忽略——S7 布局包接管断点时统一）。
+// Render 的 width 参数透传 stream（S7 真相源统一，issue #50）。
 func (p *Plugin) Render(h kernel.Host, width int) string {
 	if p.stream == nil {
 		return ""
 	}
-	return p.stream.View()
+	return p.stream.View(width)
 }
