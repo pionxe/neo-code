@@ -624,4 +624,15 @@ func TestGatewayRecoveredTriggersRebind(t *testing.T) {
 	if h.notifies[len(h.notifies)-1] != "事件流重绑失败："+errFakeUnsupported.Error() {
 		t.Fatalf("rebind failure notify = %v", h.notifies)
 	}
+
+	// 守卫补充：client==nil → 恢复重绑直接跳过（不发订阅）。
+	sessionsPlugin.client = nil
+	h.broadcasts = nil
+	h.notifies = nil
+	client.subscribeCalls = 0
+	_, healthErr = client.Health(context.Background())
+	healthPlugin.React(h, health.ProbeResultMsg{Err: healthErr})
+	if client.subscribeCalls != 0 {
+		t.Fatal("nil client must skip rebind")
+	}
 }
