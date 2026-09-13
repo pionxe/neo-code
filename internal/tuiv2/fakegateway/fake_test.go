@@ -167,3 +167,24 @@ func mustClient(t *testing.T, scenario string) gateway.Client {
 	}
 	return client
 }
+
+// TestGatewayOfflineScenarioHealthError 路径可达性断言（S6，issue #48
+// 审计实例2 P1-1）：gateway_offline 场景的 scheduled offline 事件在
+// bootstrap 阶段不可达（ListSessions 先失败 → SubscribeEvents 不会被
+// 调用）——场景的真实信号是 Health/ListSessions 错误（bootstrap 错误
+// 路径），本测试钉死该行为，防止误以为 offline 事件可被消费。
+func TestGatewayOfflineScenarioHealthError(t *testing.T) {
+	client, err := New(Config{Scenario: ScenarioGatewayOffline})
+	if err != nil {
+		t.Fatalf("new fake: %v", err)
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	if _, err := client.Health(ctx); err == nil {
+		t.Fatal("gateway_offline scenario Health should fail")
+	}
+	if _, err := client.ListSessions(ctx); err == nil {
+		t.Fatal("gateway_offline scenario ListSessions should fail (bootstrap error path)")
+	}
+}
