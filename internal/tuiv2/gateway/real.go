@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,19 +119,130 @@ func (c *RealClient) Health(ctx context.Context) (*HealthResult, error) {
 	return &HealthResult{OK: true, Status: "ok", Backend: "gateway"}, nil
 }
 
-// ListSessions 对应 gateway.listSessions（S5 分阶段实装）。
+// realSessionSummary 是 gateway.listSessions 结果条目的本地解码结构
+// （wire 契约 json tag 对齐服务端 DTO；tuiv2 不 import 服务端包，
+// 只 import 客户端包——边界禁 4 放行面）。
+type realSessionSummary struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	AgentMode string    `json:"agent_mode"`
+	Model     string    `json:"model"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ListSessions 对应 gateway.listSessions：会话列表。
+// 结果是整帧 MessageFrame，数据在 payload.sessions 下（v1 callFrame 先例）。
 func (c *RealClient) ListSessions(ctx context.Context) ([]SessionSummary, error) {
-	return nil, errRealNotImplemented
+	var frame struct {
+		Payload struct {
+			Sessions []realSessionSummary `json:"sessions"`
+		} `json:"payload"`
+	}
+	if err := c.rpc.Call(ctx, "gateway.listSessions", nil, &frame); err != nil {
+		return nil, err
+	}
+	out := make([]SessionSummary, 0, len(frame.Payload.Sessions))
+	for _, item := range frame.Payload.Sessions {
+		out = append(out, SessionSummary{
+			ID:        strings.TrimSpace(item.ID),
+			Title:     strings.TrimSpace(item.Title),
+			Mode:      strings.TrimSpace(item.AgentMode),
+			Model:     strings.TrimSpace(item.Model),
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return out, nil
 }
 
-// LoadSession 对应 gateway.loadSession（S5 分阶段实装）。
+// realSessionMessage 是会话消息快照条目的本地解码结构（wire 契约）。
+// 服务端消息无 ID/CreatedAt 字段（v1 DTO 实测，S5 审计 Q7 裁定）。
+type realSessionMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	IsError bool   `json:"is_error"`
+}
+
+// realSession 是 gateway.loadSession 结果的本地解码结构（payload 直出）。
+type realSession struct {
+	ID        string               `json:"id"`
+	Title     string               `json:"title"`
+	AgentMode string               `json:"agent_mode"`
+	Model     string               `json:"model"`
+	UpdatedAt time.Time            `json:"updated_at"`
+	Messages  []realSessionMessage `json:"messages"`
+}
+
+// translateSessionMessages 将 v1 会话消息快照翻译为 tuiv2 流条目
+// （S5 审计 Q7 裁定：role user/assistant→message、tool→tool_end——
+// 服务端消息无工具名来源，降级空；IsError→Status；ID 按序号合成，
+// 服务端消息无 ID 字段）。
+func translateSessionMessages(messages []realSessionMessage) []StreamItem {
+	out := make([]StreamItem, 0, len(messages))
+	for i, m := range messages {
+		kind := "message"
+		if m.Role == "tool" {
+			kind = "tool_end"
+		}
+		status := ""
+		if m.IsError {
+			status = "error"
+		}
+		out = append(out, StreamItem{
+			ID:        fmt.Sprintf("real-msg-%d", i+1),
+			Kind:      kind,
+			Role:      m.Role,
+			Text:      m.Content,
+			Status:    status,
+			CreatedAt: time.Now(),
+		})
+	}
+	return out
+}
+
+// LoadSession 对应 gateway.loadSession：全会话快照。
+// 用量恒零：真实网关 Session 快照无用量字段（token 经 token_usage
+// 事件流维护，S5 审计裁定）。
 func (c *RealClient) LoadSession(ctx context.Context, id string) (*SessionDetail, error) {
-	return nil, errRealNotImplemented
+	sessionID := strings.TrimSpace(id)
+	if sessionID == "" {
+		return nil, errors.New("gateway: session id is empty")
+	}
+	params := struct {
+		SessionID string `json:"session_id"`
+	}{SessionID: sessionID}
+	var frame struct {
+		Payload realSession `json:"payload"`
+	}
+	if err := c.rpc.Call(ctx, "gateway.loadSession", params, &frame); err != nil {
+		return nil, err
+	}
+	loaded := frame.Payload
+	return &SessionDetail{
+		Summary: SessionSummary{
+			ID:        strings.TrimSpace(loaded.ID),
+			Title:     strings.TrimSpace(loaded.Title),
+			Mode:      strings.TrimSpace(loaded.AgentMode),
+			Model:     strings.TrimSpace(loaded.Model),
+			UpdatedAt: loaded.UpdatedAt,
+		},
+		Stream: translateSessionMessages(loaded.Messages),
+	}, nil
 }
 
-// CreateSession 对应 gateway.createSession（S5 分阶段实装）。
+// CreateSession 对应 gateway.createSession：服务端返回创建后的会话 ID
+// （frame 级 session_id），摘要其余字段由后续 listSessions 刷新补全。
 func (c *RealClient) CreateSession(ctx context.Context) (*SessionSummary, error) {
-	return nil, errRealNotImplemented
+	var frame struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := c.rpc.Call(ctx, "gateway.createSession", nil, &frame); err != nil {
+		return nil, err
+	}
+	sessionID := strings.TrimSpace(frame.SessionID)
+	if sessionID == "" {
+		return nil, errors.New("gateway: createSession returned empty session id")
+	}
+	return &SessionSummary{ID: sessionID, Title: "New Session"}, nil
 }
 
 // SendMessage 对应 gateway.run（S5 分阶段实装）。
