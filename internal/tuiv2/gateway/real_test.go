@@ -3,37 +3,161 @@ package gateway
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+
+	gatewayclient "neo-code/internal/gateway/client"
 )
 
-// RealClient 是 Phase 20 占位，所有方法应返回保留错误（Close 除外，返回 nil）。
-func TestRealClientReservedErrors(t *testing.T) {
-	c := NewRealClient()
-	ctx := context.Background()
+// mockRPC 是 realRPCClient 的测试实现：记录调用并注入预设结果。
+type mockRPC struct {
+	mu            sync.Mutex
+	authErr       error
+	calls         []mockRPCCall
+	results       map[string]func() // 方法名 → 注入副作用（写 result）
+	notifications chan gatewayclient.Notification
+	authCalls     int
+	closeCalls    int
+}
 
-	checks := []struct {
-		name string
-		fn   func() error
-	}{
-		{"Health", func() error { _, err := c.Health(ctx); return err }},
-		{"ListSessions", func() error { _, err := c.ListSessions(ctx); return err }},
-		{"LoadSession", func() error { _, err := c.LoadSession(ctx, "s"); return err }},
-		{"CreateSession", func() error { _, err := c.CreateSession(ctx); return err }},
-		{"SendMessage", func() error { _, err := c.SendMessage(ctx, "s", "hi"); return err }},
-		{"CancelRun", func() error { return c.CancelRun(ctx, "s", "r") }},
-		{"SubscribeEvents", func() error { _, err := c.SubscribeEvents(ctx, "s"); return err }},
-		{"ResolvePermission", func() error { return c.ResolvePermission(ctx, PermissionDecision{}) }},
-		{"AnswerUserQuestion", func() error { return c.AnswerUserQuestion(ctx, UserQuestionAnswer{}) }},
-		{"ListModels", func() error { _, err := c.ListModels(ctx); return err }},
-		{"SetModel", func() error { return c.SetModel(ctx, "s", "m") }},
-		{"GetModel", func() error { _, err := c.GetModel(ctx, "s"); return err }},
+type mockRPCCall struct {
+	method string
+	params any
+	result any
+}
+
+func (m *mockRPC) Authenticate(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.authCalls++
+	return m.authErr
+}
+
+func (m *mockRPC) Call(ctx context.Context, method string, params any, result any) error {
+	m.mu.Lock()
+	m.calls = append(m.calls, mockRPCCall{method: method, params: params, result: result})
+	fn := m.results[method]
+	m.mu.Unlock()
+	if fn != nil {
+		fn()
 	}
-	for _, ch := range checks {
-		if err := ch.fn(); !errors.Is(err, errRealClientReserved) {
-			t.Fatalf("%s should return errRealClientReserved, got %v", ch.name, err)
-		}
+	return nil
+}
+
+func (m *mockRPC) Notifications() <-chan gatewayclient.Notification {
+	return m.notifications
+}
+
+func (m *mockRPC) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closeCalls++
+	return nil
+}
+
+func newMockRPC() *mockRPC {
+	return &mockRPC{notifications: make(chan gatewayclient.Notification, 8)}
+}
+
+// TestNewRealClientAuthFailsFast 验证构造期 fail-fast：认证失败即返回
+// 错误并释放底层客户端（不留半可用实例，对齐 v1 装配先例）。
+func TestNewRealClientAuthFailsFast(t *testing.T) {
+	mock := newMockRPC()
+	mock.authErr = errors.New("connection refused")
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err == nil || c != nil {
+		t.Fatal("auth failure should abort construction")
 	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close should return nil, got %v", err)
+	if mock.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1 (fail-fast release)", mock.closeCalls)
 	}
 }
+
+// TestNewRealClientAuthSucceeds 验证认证通过后实例可用。
+func TestNewRealClientAuthSucceeds(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	if c == nil || c.rpc == nil {
+		t.Fatal("client should wrap injected rpc")
+	}
+	if mock.authCalls != 1 {
+		t.Fatalf("auth calls = %d, want 1", mock.authCalls)
+	}
+}
+
+// TestRealClientCloseIdempotent 验证 Close 幂等且透传底层释放。
+func TestRealClientCloseIdempotent(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if mock.closeCalls != 1 {
+		t.Fatalf("underlying close calls = %d, want 1 (close-once)", mock.closeCalls)
+	}
+}
+
+// TestRealClientHealthPingsGateway 验证 Health 映射 gateway.ping。
+func TestRealClientHealthPingsGateway(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	health, err := c.Health(context.Background())
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if !health.OK || health.Backend != "gateway" {
+		t.Fatalf("health = %+v", health)
+	}
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.calls) != 1 || mock.calls[0].method != "gateway.ping" {
+		t.Fatalf("calls = %+v", mock.calls)
+	}
+}
+
+// TestRealClientUnwiredMethodsStayExplicit 验证分阶段实装纪律：
+// 未落地方法返回 errRealNotImplemented（显式错误而非静默假成功）。
+func TestRealClientUnwiredMethodsStayExplicit(t *testing.T) {
+	mock := newMockRPC()
+	c, err := NewRealClient(RealClientOptions{RPCClient: mock})
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := c.ListSessions(ctx); !errors.Is(err, errRealNotImplemented) {
+		t.Fatalf("ListSessions err = %v", err)
+	}
+	if _, err := c.SubscribeEvents(ctx, "s1"); !errors.Is(err, errRealNotImplemented) {
+		t.Fatalf("SubscribeEvents err = %v", err)
+	}
+	if err := c.SetModel(ctx, "s1", "m1"); !errors.Is(err, errRealNotImplemented) {
+		t.Fatalf("SetModel err = %v", err)
+	}
+}
+
+// TestRealSubscriptionCloseOnce 验证订阅条目 close-once：三关闭路径
+//（被顶替/ctx cancel/客户端 Close）重叠时不双关（S5 审计钉死项）。
+func TestRealSubscriptionCloseOnce(t *testing.T) {
+	s := &realSubscription{ch: make(chan GatewayEvent, 1)}
+	s.close()
+	s.close() // 重叠关闭不得 panic
+	_, open := <-s.ch
+	if open {
+		t.Fatal("subscription channel should be closed")
+	}
+}
+
+// 编译期锁定：RealClientOptions 复用 v1 RPC 客户端选项（ADR-004 只读复用）。
+var _ = gatewayclient.GatewayRPCClientOptions{}
