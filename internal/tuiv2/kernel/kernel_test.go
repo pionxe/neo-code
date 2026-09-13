@@ -540,7 +540,6 @@ func TestConfirmModalBlocksMouse(t *testing.T) {
 	}
 }
 
-
 // TestMouseWheelEndToEnd 端到端（S8 C2）：kernel.Update(MouseMsg) →
 // dispatchMouse → MouseHandler.HandleMouse → state 槽变化。
 // 通过 MouseHandler 插件直写 ScrollOffset 模拟 stream 滚轮滚动。
@@ -573,12 +572,12 @@ func TestMouseWheelEndToEnd(t *testing.T) {
 }
 
 // stateWritingMouseHandler 是测试用 MouseHandler：直写 ScrollOffset
-//（模拟 stream 滚轮滚动→state 槽变化）。
+// （模拟 stream 滚轮滚动→state 槽变化）。
 type stateWritingMouseHandler struct {
 	st *state.ViewState
 }
 
-func (h *stateWritingMouseHandler) ID() string                       { return "state-writing-mouse" }
+func (h *stateWritingMouseHandler) ID() string                         { return "state-writing-mouse" }
 func (h *stateWritingMouseHandler) Init(ctx context.Context, hst Host) {}
 func (h *stateWritingMouseHandler) Close(ctx context.Context)          {}
 func (h *stateWritingMouseHandler) HandleMouse(hst Host, msg tea.MouseMsg) (consumed bool) {
